@@ -104,6 +104,9 @@ private struct LiveViewShell: View {
                     if let step = model.liveViewGuideStep,
                         model.activePanel == nil,
                         model.displayMode == .live,
+                        // The Edit view owns the screen while it is open; a coach mark on top of
+                        // it would both confuse and steal taps meant for a badge.
+                        model.chromeEditorMode == nil,
                         !model.isRecording
                     {
                         LiveViewGuideOverlay(
@@ -949,12 +952,21 @@ struct BatteryRailModule: View {
                     // the zone ends short of the feed frame, which keeps the gauges off the
                     // image.
                     batteryPill
+                        .chromeEditable(
+                            .batteryIndicators, editing: model.chromeEditorMode
+                        )
                         .position(x: proxy.size.width / 2 - 6, y: CGFloat(layout.pillCenterY))
                 } else {
                     phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
+                        .chromeEditable(
+                            .batteryIndicators, editing: model.chromeEditorMode
+                        )
                         .position(
                             x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
                     cameraBatteryIndicator
+                        .chromeEditable(
+                            .batteryIndicators, editing: model.chromeEditorMode
+                        )
                         .position(
                             x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
                 }

@@ -802,6 +802,22 @@ final class NativeAppModel {
             }
         }
     }
+    /// The DISP mode whose chrome the operator is editing on the monitor itself, or `nil` when the
+    /// monitor is live. While editing, every element the mode owns mounts — hidden ones at 30% —
+    /// with an eye badge on a corner of its bounding box. Session-only.
+    var chromeEditorMode: DispMode?
+    /// The chrome configuration the monitor should render right now.
+    var monitorChrome: DisplayChromeVisibility { preferences.chrome(for: displayMode) }
+    /// Whether `section` mounts on the monitor right now: switched on for the active DISP mode,
+    /// or force-mounted (dimmed, badged) because that mode's chrome is being edited.
+    func chromeSectionMounts(_ section: DisplayChromeVisibility.Section) -> Bool {
+        if let mode = chromeEditorMode, mode == displayMode,
+            DisplayChromeVisibility.isConfigurable(section, in: mode)
+        {
+            return true
+        }
+        return monitorChrome.isVisible(section)
+    }
     /// Operator Setup rail tab and per-tab scroll offsets — session-only; survive dismissing the
     /// panel back to live view without resetting to Link / top-of-page.
     var operatorSettingsTab: OperatorSettingsTab = .link
@@ -5821,13 +5837,24 @@ final class NativeAppModel {
         preferences.cleanViewPinnedTools = OperatorPreferences.defaults.cleanViewPinnedTools
     }
 
-    /// Restores every monitor-chrome section to visible (Display settings).
-    func resetChromeVisibility() {
-        preferences.displayChrome = DisplayChromeVisibility(
-            recReadoutVisible: preferences.displayChrome.recReadoutVisible,
-            codecReadoutVisible: preferences.displayChrome.codecReadoutVisible,
-            mediaReadoutVisible: preferences.displayChrome.mediaReadoutVisible,
-            fpsReadoutVisible: preferences.displayChrome.fpsReadoutVisible)
+    /// Restores one DISP mode's chrome to its stock configuration (Display settings).
+    func resetChromeVisibility(for mode: DispMode) {
+        preferences.resetChrome(for: mode)
+    }
+
+    /// Opens the Edit view on `mode`: the monitor itself, with an eye badge on every chrome
+    /// element the mode owns. Hidden elements stay on screen at 30% while editing so nothing can
+    /// become unreachable. Leaves Settings so the operator sees the real thing.
+    func beginChromeEditing(_ mode: DispMode) {
+        activePanel = nil
+        displayMode = mode
+        chromeEditorMode = mode
+    }
+
+    func endChromeEditing() {
+        chromeEditorMode = nil
+        // The operator may have been editing a mode the DISP key does not cycle through.
+        reconcileDisplayModeAfterDispPreferenceChange()
     }
 
     func resetExposureBarVisibility() {
@@ -8626,8 +8653,9 @@ final class NativeAppModel {
         }
     }
 
-    func toggleChrome(_ section: DisplayChromeVisibility.Section) {
-        preferences.displayChrome.toggle(section)
+    /// Flips one chrome section for one DISP mode (Display settings, and the Edit view's badges).
+    func toggleChrome(_ section: DisplayChromeVisibility.Section, for mode: DispMode) {
+        preferences.toggleChrome(section, for: mode)
     }
 
     func cycleStreamPreset() {

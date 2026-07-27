@@ -866,3 +866,76 @@ private func splitEraConfiguration(
     #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .live))
     #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .clean))
 }
+// MARK: - Edit view badge placement
+
+@Test func editBadgesTakeACornerOfTheirOwnElementAndNeverStackUp() throws {
+    // Real measured landscape boxes from an iPhone 15 Pro (852x393): the four readouts nest inside
+    // the status bar, and the rail and camera-value strip sit flush against the screen edges.
+    let boxes: [MonitorChromeEditLayout.Box] = [
+        .init(section: .statusBar, frame: MonitorModuleFrame(x: 69, y: 16, width: 678, height: 42)),
+        .init(
+            section: .sideRails, frame: MonitorModuleFrame(x: 763, y: 14, width: 83, height: 289)),
+        .init(
+            section: .assistToolbar,
+            frame: MonitorModuleFrame(x: 16, y: 321, width: 344, height: 58)),
+        .init(
+            section: .cameraValues,
+            frame: MonitorModuleFrame(x: 368, y: 321, width: 466, height: 58)),
+        .init(section: .lockButton, frame: MonitorModuleFrame(x: 16, y: 17, width: 40, height: 40)),
+        .init(
+            section: .batteryIndicators,
+            frame: MonitorModuleFrame(x: 8, y: 63, width: 41, height: 35)),
+        .init(section: .recReadout, frame: MonitorModuleFrame(x: 81, y: 23, width: 67, height: 27)),
+        .init(
+            section: .codecReadout, frame: MonitorModuleFrame(x: 377, y: 22, width: 98, height: 30)),
+        .init(
+            section: .mediaReadout, frame: MonitorModuleFrame(x: 485, y: 22, width: 132, height: 30)
+        ),
+        .init(
+            section: .fpsReadout, frame: MonitorModuleFrame(x: 627, y: 22, width: 108, height: 29)),
+    ]
+
+    let frames = MonitorChromeEditLayout.badgeFrames(
+        boxes, viewportWidth: 852, viewportHeight: 393)
+
+    #expect(frames.count == boxes.count, "every measured element must get a badge")
+    for (section, frame) in frames {
+        #expect(frame.x >= 0 && frame.y >= 0, "\(section) badge ran off the top or leading edge")
+        #expect(
+            frame.x + frame.width <= 852 && frame.y + frame.height <= 393,
+            "\(section) badge ran off the trailing or bottom edge")
+        // Still reads as belonging to its element: the centre stays within one badge of the box.
+        let box = try #require(boxes.first { $0.section == section }).frame
+        let pad = MonitorChromeEditLayout.badgeSize
+        #expect(
+            frame.midX >= box.x - pad && frame.midX <= box.x + box.width + pad
+                && frame.midY >= box.y - pad && frame.midY <= box.y + box.height + pad,
+            "\(section) badge drifted away from the element it controls")
+    }
+    // No two badges collide — the readouts nested inside the status bar are the hard case.
+    let all = Array(frames.values)
+    for i in all.indices {
+        for j in all.indices where j > i {
+            let a = all[i]
+            let b = all[j]
+            let apart =
+                a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y
+                || b.y + b.height <= a.y
+            #expect(apart, "two badges overlap at \(a) and \(b)")
+        }
+    }
+}
+
+@Test func editBadgeLayoutSkipsUnmeasuredElements() {
+    let frames = MonitorChromeEditLayout.badgeFrames(
+        [
+            .init(section: .statusBar, frame: MonitorModuleFrame(x: 0, y: 0, width: 0, height: 0)),
+            .init(
+                section: .lockButton, frame: MonitorModuleFrame(x: 16, y: 17, width: 40, height: 40)
+            ),
+        ],
+        viewportWidth: 852, viewportHeight: 393)
+
+    #expect(frames[.statusBar] == nil)
+    #expect(frames[.lockButton] != nil)
+}

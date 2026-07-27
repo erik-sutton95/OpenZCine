@@ -40,25 +40,27 @@ struct MonitorInfoBar: View {
                 padding: EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
             ) {
                 HStack(spacing: 10) {
-                    let chrome = model.preferences.displayChrome
+                    let editing = model.chromeEditorMode
                     if isPhotography {
                         ShotsRemainingReadout()
                         if !compact {
                             imageAreaButton
-                            if chrome.codecReadoutVisible {
+                            if model.chromeSectionMounts(.codecReadout) {
                                 readoutButton(
                                     .stillQuality, icon: "camera.aperture",
                                     value: model.cameraPropertySnapshot.stillQualityCompactLabel
                                         ?? "—"
                                 )
                                 .accessibilityLabel("Image quality")
+                                .chromeEditable(.codecReadout, editing: editing)
                             }
                             // No MEDIA cell in photo mode — the SHOTS readout tap-toggles to the
                             // storage form instead.
                         }
                     } else {
-                        if chrome.recReadoutVisible {
+                        if model.chromeSectionMounts(.recReadout) {
                             RecordChip(state: model.cameraState.recordState)
+                                .chromeEditable(.recReadout, editing: editing)
                         }
                         TimecodeReadout()
                         if !compact {
@@ -66,19 +68,23 @@ struct MonitorInfoBar: View {
                                 .resolution, icon: "video",
                                 value: model.cameraState.resolutionFrameRate
                             )
-                            if chrome.codecReadoutVisible {
+                            if model.chromeSectionMounts(.codecReadout) {
                                 readoutButton(
                                     .codec, icon: "film",
                                     value: MonitorTextFormat.codecCompactLabel(
-                                        model.cameraState.codec))
+                                        model.cameraState.codec)
+                                )
+                                .chromeEditable(.codecReadout, editing: editing)
                             }
-                            if chrome.mediaReadoutVisible {
+                            if model.chromeSectionMounts(.mediaReadout) {
                                 mediaCell
+                                    .chromeEditable(.mediaReadout, editing: editing)
                             }
                         }
                     }
-                    if chrome.fpsReadoutVisible {
+                    if model.chromeSectionMounts(.fpsReadout) {
                         FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
+                            .chromeEditable(.fpsReadout, editing: editing)
                     }
                 }
             }
@@ -824,10 +830,11 @@ struct MonitorSystemCluster: View {
     /// ``MonitorChromePolicy/showsLockControl(mode:preferences:interfaceLocked:)``. Also false in
     /// clean, which is what `.cleanEssentials` already says for the rest of the rail.
     private var showsLock: Bool {
-        MonitorChromePolicy.showsLockControl(
-            mode: model.displayMode,
-            preferences: model.preferences,
-            interfaceLocked: model.interfaceLocked)
+        model.chromeSectionMounts(.lockButton)
+            || MonitorChromePolicy.showsLockControl(
+                mode: model.displayMode,
+                preferences: model.preferences,
+                interfaceLocked: model.interfaceLocked)
     }
 
     @ViewBuilder private var landscapeBody: some View {
@@ -835,6 +842,7 @@ struct MonitorSystemCluster: View {
         case .full:
             if showsLock {
                 lockButton
+                    .chromeEditable(.lockButton, editing: model.chromeEditorMode)
                     .monitorModuleFrame(slots.lock)
             }
             settingsButton
@@ -1180,14 +1188,65 @@ struct MonitorShell: View {
         MonitorChromePolicy.showsChrome(in: model.displayMode)
     }
 
+    /// The drawn bounds of the landscape rail column — settings, media, record and DISP. The zone
+    /// map's `systemCluster` unions the top-left lock button in with these, which makes it span
+    /// the whole screen and useless as an outline; the lock carries its own badge anyway.
+    static func railColumnFrame(_ slots: MonitorSystemSlotFrames) -> MonitorModuleFrame {
+        let column = [slots.settings, slots.media, slots.record, slots.disp]
+        let minX = column.map(\.x).min() ?? 0
+        let minY = column.map(\.y).min() ?? 0
+        let maxX = column.map { $0.x + $0.width }.max() ?? 0
+        let maxY = column.map { $0.y + $0.height }.max() ?? 0
+        return MonitorModuleFrame(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// The rail is force-mounted while editing a mode that has it switched off — dim it so the
+    /// operator sees it is off, and can switch it back on from its badge.
+    private var railEditDimmed: Bool {
+        guard let mode = model.chromeEditorMode,
+            DisplayChromeVisibility.isConfigurable(.sideRails, in: mode)
+        else { return false }
+        return !model.preferences.chrome(for: mode).sideRailsVisible
+    }
+
     var body: some View {
         GeometryReader { proxy in
-            if context.isPortrait {
-                portraitShell(proxy: proxy)
-            } else {
-                landscapeShell(proxy: proxy)
+            Group {
+                if context.isPortrait {
+                    portraitShell(proxy: proxy)
+                } else {
+                    landscapeShell(proxy: proxy)
+                }
+            }
+            // Editing the layout and operating the camera are different modes. One gate makes the
+            // whole monitor inert for the duration — focus box, tap-to-focus, pinch, the MF dial,
+            // the capture pickers, record, DISP — so a stray tap while arranging chrome can never
+            // reach the camera. Only the badges and Done, mounted above this, respond.
+            .allowsHitTesting(model.chromeEditorMode == nil)
+            .coordinateSpace(name: ChromeEditSpace.name)
+            .overlayPreferenceValue(ChromeEditBoundsKey.self) { boxes in
+                if let mode = model.chromeEditorMode {
+                    ChromeEditBadgeLayer(
+                        mode: mode, boxes: boxes,
+                        viewport: CGSize(
+                            width: context.viewportWidth, height: context.viewportHeight)
+                    )
+                    .environment(model)
+                    .ignoresSafeArea()
+                }
             }
         }
+        // The Edit view's own banner. Bottom-centre so it clears both side rails and the top
+        // deck, over everything so "Done" is never behind a dimmed element.
+        .overlay(alignment: .bottom) {
+            if let mode = model.chromeEditorMode {
+                ChromeEditBanner(mode: mode)
+                    .environment(model)
+                    .padding(.bottom, context.isPortrait ? 82 : 88)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: model.chromeEditorMode)
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
         // Scope the fit-mode 2-scope cap to the portrait tree; `initial: true` covers launch.
@@ -1224,7 +1283,7 @@ struct MonitorShell: View {
             horizontalDirection: context.horizontalDirection,
             bottomBarHeight: landscapeBottomBarHeight
         )
-        let chrome = model.preferences.displayChrome
+        let chrome = model.monitorChrome
 
         ZStack(alignment: .topLeading) {
             // Feed base. Command pauses/hides the feed behind a full-screen black base.
@@ -1275,10 +1334,9 @@ struct MonitorShell: View {
                 let railPlan = MonitorChromePolicy.sideRailPlan(
                     mode: model.displayMode, preferences: model.preferences,
                     recordingOrPending: model.isRecordingOrPending)
-                if railPlan.fullRail {
+                if railPlan.fullRail || model.chromeSectionMounts(.sideRails) {
                     canvasLayer {
-                        if MonitorChromePolicy.showsBatteryIndicators(
-                            mode: model.displayMode, preferences: model.preferences),
+                        if model.chromeSectionMounts(.batteryIndicators),
                             let battery = map.batteryCluster
                         {
                             if battery.style == .batteryInline {
@@ -1286,6 +1344,9 @@ struct MonitorShell: View {
                                 // The frame is a nominal band; content hugs its leading edge.
                                 BatteryInlineCluster()
                                     .environment(model)
+                                    .chromeEditable(
+                                        .batteryIndicators, editing: model.chromeEditorMode
+                                    )
                                     .monitorModuleFrame(battery.frame, alignment: .leading)
                             } else {
                                 let phoneTopClearance =
@@ -1297,6 +1358,8 @@ struct MonitorShell: View {
                                     phoneTopClearance: phoneTopClearance
                                 )
                                 .environment(model)
+                                // The module fills the whole tall rail zone; its gauges carry the
+                                // outline and badge themselves so the box is the drawn bounds.
                                 .monitorModuleFrame(battery.frame)
                             }
                         }
@@ -1306,6 +1369,16 @@ struct MonitorShell: View {
                             showsRecordControl: showsChrome || model.isRecordingOrPending
                         )
                         .environment(model)
+                        .opacity(railEditDimmed ? 0.3 : 1)
+                        // The cluster's children place themselves by absolute slot frame, so the
+                        // view has no bounds of its own to outline — and `map.systemCluster`
+                        // unions in the top-left lock button, which spans the whole screen. Draw
+                        // the box on the rail column the operator actually sees.
+                        if model.chromeEditorMode != nil {
+                            Color.clear
+                                .chromeEditable(.sideRails, editing: model.chromeEditorMode)
+                                .monitorModuleFrame(Self.railColumnFrame(map.systemSlots))
+                        }
                     }
                 } else if railPlan.settingsRecovery || railPlan.recordSafety {
                     // A hidden rail keeps the two things it must never take away: the route back
@@ -1348,15 +1421,16 @@ struct MonitorShell: View {
         // (#256). The zone map centers it over the native 16:9 feed; photography recenters it
         // on the rail-anchored photo frame so the pill tracks the visible image, not the old
         // frame's footprint.
-        if chrome.statusBarVisible, !isClean {
+        if model.chromeSectionMounts(.statusBar) {
             let isPhotographyDeck = StillCapturePolicy.prefersPhotographyChrome(
                 selector: model.cameraPropertySnapshot.captureSelector)
             let photoFeed = isPhotographyDeck ? photographyFeedFrame() : nil
             let deckCenterX = photoFeed.map { $0.x + $0.width / 2 } ?? deck.midX
             let deckWidth = photoFeed.map { min(deck.width, $0.width) } ?? deck.width
-            MonitorInfoBar(style: .infoPill, compact: isClean)
+            MonitorInfoBar(style: .infoPill, compact: isClean && model.chromeEditorMode == nil)
                 .environment(model)
                 .liveViewGuideAnchor(.infoBar)
+                .chromeEditable(.statusBar, editing: model.chromeEditorMode)
                 .frame(maxWidth: CGFloat(deckWidth))
                 .position(x: CGFloat(deckCenterX), y: CGFloat(deck.midY))
         }
@@ -1364,11 +1438,11 @@ struct MonitorShell: View {
         // Bottom bars (assist + capture) — live only; clean/lock hide them. In photography
         // the assist tools always move to the lock-side vertical rail (below), handing the
         // whole band to the capture strip.
-        if !isClean {
+        if !isClean || model.chromeEditorMode == .clean {
             let isPhotographyBand = StillCapturePolicy.prefersPhotographyChrome(
                 selector: model.cameraPropertySnapshot.captureSelector)
-            let assistVisible = chrome.assistToolbarVisible && !isPhotographyBand
-            let captureVisible = chrome.cameraValuesVisible
+            let assistVisible = model.chromeSectionMounts(.assistToolbar) && !isPhotographyBand
+            let captureVisible = model.chromeSectionMounts(.cameraValues)
             if let assist = map.assistStrip, let capture = map.captureStrip,
                 assistVisible || captureVisible
             {
@@ -1390,6 +1464,7 @@ struct MonitorShell: View {
                         )
                         .environment(model)
                         .liveViewGuideAnchor(.viewAssist)
+                        .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
                         .frame(
                             maxWidth: captureVisible ? .infinity : CGFloat(assist.frame.width),
                             alignment: .leading
@@ -1401,6 +1476,7 @@ struct MonitorShell: View {
                         MonitorCaptureStrip(fitsWidth: true)
                             .environment(model)
                             .liveViewGuideAnchor(.cameraControls)
+                            .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(1)
                             .frame(maxHeight: .infinity)
@@ -1555,8 +1631,7 @@ struct MonitorShell: View {
 
     /// Reserve the live bottom-bar band in every mode so the right rail never shifts between modes.
     private var landscapeBottomBarHeight: Double {
-        model.preferences.displayChrome.assistToolbarVisible
-            || model.preferences.displayChrome.cameraValuesVisible
+        model.chromeSectionMounts(.assistToolbar) || model.chromeSectionMounts(.cameraValues)
             ? Double(LiveDesign.controlHeight)
             : 0
     }
@@ -1587,7 +1662,7 @@ struct MonitorShell: View {
             horizontalDirection: context.horizontalDirection,
             // Fit-mode assist toolbar (R6): the core emits an `assistStrip` zone only when this is
             // non-zero (and only for fit + live). Fill/clean/command collapse it to nothing.
-            bottomBarHeight: model.preferences.displayChrome.assistToolbarVisible
+            bottomBarHeight: model.chromeSectionMounts(.assistToolbar)
                 ? MonitorPortraitLayout.assistToolbarHeight : 0,
             portraitFeedAspectRatio: isPhotography
                 ? model.cameraPropertySnapshot.photographyFeedAspect : 16.0 / 9.0
@@ -1679,11 +1754,12 @@ struct MonitorShell: View {
                 .offset(x: feed.x, y: feed.y)
             }
 
-            // Overlaid top bar — clean strips it with the rest of the non-critical chrome (#256).
-            if showsChrome {
+            // Overlaid top bar — per-DISP-mode, and clean ships with it off (#256).
+            if model.chromeSectionMounts(.statusBar) {
                 MonitorInfoBar(style: .infoBar)
                     .environment(model)
                     .liveViewGuideAnchor(.infoBar)
+                    .chromeEditable(.statusBar, editing: model.chromeEditorMode)
                     .frame(width: map.infoBar.frame.width, height: map.infoBar.frame.height)
                     .offset(x: map.infoBar.frame.x, y: map.infoBar.frame.y)
             }
@@ -1843,6 +1919,7 @@ struct MonitorShell: View {
                 style: cleanBand ? .cleanEssentials : .full, showsRecordControl: bandShowsRecord
             )
             .environment(model)
+            .chromeEditable(.sideRails, editing: model.chromeEditorMode)
             .frame(
                 width: map.systemCluster.frame.width,
                 height: map.systemCluster.frame.height

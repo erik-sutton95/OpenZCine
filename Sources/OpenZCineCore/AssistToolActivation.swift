@@ -151,6 +151,99 @@ public enum MonitorChromePolicy {
     public static func streamsHeaderOnly(in mode: DispMode) -> Bool { mode == .command }
 }
 
+/// Where the Edit view puts each element's eye badge.
+///
+/// A fixed corner per element does not work: the monitor's elements sit edge to edge and some nest
+/// inside others (the four readouts live in the status bar), so constants put badges on top of one
+/// another and some of them out of reach. This picks, per element, the first corner of its
+/// **measured** box that is fully on screen and clear of every badge already placed, and clamps a
+/// last-resort choice on screen rather than dropping a badge.
+///
+/// Pure geometry, so both shells place badges identically and the rule is unit-testable.
+public enum MonitorChromeEditLayout {
+    /// Diameter of the badge itself. Each shell grows the tap target around it separately.
+    public static let badgeSize: Double = 26
+    /// Breathing room kept between two badges, and between a badge and the viewport edge.
+    public static let badgeGap: Double = 3
+
+    /// One element the operator can badge, at its real drawn bounds.
+    public struct Box: Equatable, Sendable {
+        public let section: DisplayChromeVisibility.Section
+        public let frame: MonitorModuleFrame
+
+        public init(section: DisplayChromeVisibility.Section, frame: MonitorModuleFrame) {
+            self.section = section
+            self.frame = frame
+        }
+    }
+
+    /// Badge frames keyed by section, in the same coordinate space as `boxes`.
+    ///
+    /// `boxes` order is the placement priority: earlier elements get their preferred corner, later
+    /// ones move to the next free one. Unmeasured (zero-sized) boxes are skipped — there is
+    /// nowhere to put their badge yet.
+    public static func badgeFrames(
+        _ boxes: [Box],
+        viewportWidth: Double,
+        viewportHeight: Double,
+        badgeSize: Double = badgeSize
+    ) -> [DisplayChromeVisibility.Section: MonitorModuleFrame] {
+        var placed: [MonitorModuleFrame] = []
+        var result: [DisplayChromeVisibility.Section: MonitorModuleFrame] = [:]
+
+        for box in boxes where box.frame.width > 1 && box.frame.height > 1 {
+            // Clamp first, then test: an element flush against a screen edge has no corner that
+            // fits outright, and rejecting all four would send its badge to the fallback in the
+            // middle of the screen. Nudged along the edge it still reads as that corner's badge.
+            let candidates = corners(of: box.frame, badgeSize: badgeSize).map {
+                clamped($0, viewportWidth: viewportWidth, viewportHeight: viewportHeight)
+            }
+            let choice =
+                candidates.first { candidate in
+                    !placed.contains { overlaps($0, candidate) }
+                } ?? candidates[0]
+            placed.append(choice)
+            result[box.section] = choice
+        }
+        return result
+    }
+
+    /// The four corner positions, centred on the corner so the badge straddles the element's edge:
+    /// top-trailing first (least likely to sit over content), then top-leading, bottom-trailing,
+    /// bottom-leading.
+    private static func corners(of frame: MonitorModuleFrame, badgeSize: Double)
+        -> [MonitorModuleFrame]
+    {
+        let half = badgeSize / 2
+        let centres = [
+            (frame.x + frame.width, frame.y),
+            (frame.x, frame.y),
+            (frame.x + frame.width, frame.y + frame.height),
+            (frame.x, frame.y + frame.height),
+        ]
+        return centres.map {
+            MonitorModuleFrame(x: $0.0 - half, y: $0.1 - half, width: badgeSize, height: badgeSize)
+        }
+    }
+
+    private static func overlaps(_ a: MonitorModuleFrame, _ b: MonitorModuleFrame) -> Bool {
+        a.x < b.x + b.width + badgeGap && b.x < a.x + a.width + badgeGap
+            && a.y < b.y + b.height + badgeGap && b.y < a.y + a.height + badgeGap
+    }
+
+    private static func clamped(
+        _ frame: MonitorModuleFrame, viewportWidth: Double, viewportHeight: Double
+    ) -> MonitorModuleFrame {
+        let maxX = Swift.max(badgeGap, viewportWidth - frame.width - badgeGap)
+        let maxY = Swift.max(badgeGap, viewportHeight - frame.height - badgeGap)
+        return MonitorModuleFrame(
+            x: Swift.min(Swift.max(frame.x, badgeGap), maxX),
+            y: Swift.min(Swift.max(frame.y, badgeGap), maxY),
+            width: frame.width,
+            height: frame.height)
+    }
+}
+
 /// Pure on/off semantics for the live-monitor and playback view-assist tools.
 public enum AssistToolActivation {
     public static func set(
