@@ -3982,12 +3982,20 @@ struct OperatorSettingsPanel: View {
                 help:
                     "Steers the selected stream preset toward smaller frames or more image detail."
             ) {
+                // All three grades the body actually offers. The pair this used to show could not
+                // name the middle one, so a stored `.balanced` displayed as "Size" — the same label
+                // Android wrote as `.latency`, i.e. one label meaning two different bytes across
+                // the two shells.
                 SettingsSegmented(
-                    options: ["Size", "Quality"],
-                    selected: model.preferences.qualityBias == .detail ? "Quality" : "Size"
+                    options: OperatorPreferences.QualityBias.allCases.map(\.settingsLabel),
+                    selected: model.preferences.qualityBias.settingsLabel
                 ) { value in
-                    // ponytail: the 3-way core bias collapses to the mockup's Size/Quality pair.
-                    model.setQualityBias(value == "Quality" ? .detail : .latency)
+                    guard
+                        let bias = OperatorPreferences.QualityBias.allCases.first(where: {
+                            $0.settingsLabel == value
+                        })
+                    else { return }
+                    model.setQualityBias(bias)
                 }
             }
             #if DEBUG

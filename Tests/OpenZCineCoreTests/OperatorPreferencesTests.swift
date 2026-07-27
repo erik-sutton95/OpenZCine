@@ -23,6 +23,34 @@ import Testing
     #expect(OperatorPreferences.defaults.keepScreenAwake)
 }
 
+@Test func qualityBiasOffersAllThreeGradesWithOneLabelEach() {
+    // The control used to have two positions, so "Size" named both .latency and .balanced — and
+    // Android wrote .latency for it while iOS left .balanced in place. One label per grade means
+    // a given label is now the same compression byte on both shells.
+    let labels = OperatorPreferences.QualityBias.allCases.map(\.settingsLabel)
+    #expect(labels.count == 3)
+    #expect(Set(labels).count == 3)
+    #expect(OperatorPreferences.QualityBias.balanced.settingsLabel == "Balanced")
+
+    // Both controls step the same latency-against-detail axis, so they share one vocabulary.
+    #expect(labels == OperatorPreferences.StreamPreset.allCases.map(\.rawValue))
+
+    // Each label round-trips to exactly the grade it names.
+    for bias in OperatorPreferences.QualityBias.allCases {
+        let matched = OperatorPreferences.QualityBias.allCases.filter {
+            $0.settingsLabel == bias.settingsLabel
+        }
+        #expect(matched == [bias])
+    }
+
+    // And the middle grade is a real, distinct byte on the wire — not a UI-only position.
+    let bytes = OperatorPreferences.QualityBias.allCases.map(\.liveViewImageCompression)
+    #expect(Set(bytes).count == 3)
+    #expect(
+        OperatorPreferences.QualityBias.balanced.liveViewImageCompression
+            != OperatorPreferences.QualityBias.latency.liveViewImageCompression)
+}
+
 @Test func operatorPreferencesDefaultToQualityStreamAtTheSizeBias() {
     // A new install asks the body for its largest preview stream. The bias stays on the
     // middle grade, which the operator-facing Size/Quality control reads as "Size".

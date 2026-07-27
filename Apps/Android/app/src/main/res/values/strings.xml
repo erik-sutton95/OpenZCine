@@ -620,7 +620,8 @@
     <string name="preview_preset_quality">Quality</string>
     <string name="preview_bias_latency">Latency</string>
     <string name="preview_bias_detail">Detail</string>
-    <string name="settings_quality_bias_size">Size</string>
+    <string name="settings_quality_bias_fast">Fast</string>
+    <string name="settings_quality_bias_balanced">Balanced</string>
     <string name="settings_quality_bias_quality">Quality</string>
     <string name="settings_health_threshold">Health Threshold</string>
     <string name="settings_reconnect_window">Reconnect Window</string>

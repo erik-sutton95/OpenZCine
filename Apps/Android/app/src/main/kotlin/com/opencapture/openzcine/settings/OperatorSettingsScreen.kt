@@ -768,8 +768,6 @@ private fun LinkRows(
                     activeTransportLabel ?: "Wi-Fi",
                 )
         }
-    // iOS collapses the 3-way core bias to the mockup Size / Quality pair.
-    val qualityBiasSizeSelected = settings.qualityBias != LiveViewQualityBias.DETAIL
     val connectionTitle =
         if (linked && onDisconnect != null) {
             stringResource(R.string.action_disconnect)
@@ -811,19 +809,14 @@ private fun LinkRows(
                 Modifier.selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                AssistChoice(
-                    label = stringResource(R.string.settings_quality_bias_size),
-                    selected = qualityBiasSizeSelected,
-                ) {
-                    settings.qualityBias = LiveViewQualityBias.LATENCY
-                    onInteraction()
-                }
-                AssistChoice(
-                    label = stringResource(R.string.settings_quality_bias_quality),
-                    selected = !qualityBiasSizeSelected,
-                ) {
-                    settings.qualityBias = LiveViewQualityBias.DETAIL
-                    onInteraction()
+                LiveViewQualityBias.entries.forEach { bias ->
+                    AssistChoice(
+                        label = stringResource(bias.settingsLabelResource),
+                        selected = settings.qualityBias == bias,
+                    ) {
+                        settings.qualityBias = bias
+                        onInteraction()
+                    }
                 }
             }
         }

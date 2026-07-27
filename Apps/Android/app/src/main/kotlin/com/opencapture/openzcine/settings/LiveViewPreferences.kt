@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.settings
 
+import com.opencapture.openzcine.R
+
 /** Operator-facing live-view stream-size preference forwarded to Swift policy. */
 public enum class LiveViewStreamPreset(
     /** Stable Swift-wire ordinal; Kotlin must not map this to a Nikon byte. */
@@ -35,6 +37,20 @@ public enum class LiveViewQualityBias(
     /** Prefer preview image detail. */
     DETAIL(2, "Detail"),
     ;
+
+    /**
+     * Operator-facing name, mirroring `OperatorPreferences.QualityBias.settingsLabel` in the
+     * shared core so a label cannot mean one compression byte here and another on iOS — which is
+     * what happened while the control had two positions and "Size" stood for both LATENCY and
+     * BALANCED.
+     */
+    public val settingsLabelResource: Int
+        get() =
+            when (this) {
+                LATENCY -> R.string.settings_quality_bias_fast
+                BALANCED -> R.string.settings_quality_bias_balanced
+                DETAIL -> R.string.settings_quality_bias_quality
+            }
 
     internal companion object {
         fun fromStoredName(value: String?): LiveViewQualityBias? =

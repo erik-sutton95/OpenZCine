@@ -301,6 +301,22 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case balanced = "Balanced"
         case detail = "Detail"
 
+        /// Operator-facing name. Deliberately the same Fast / Balanced / Quality vocabulary as
+        /// ``StreamPreset``: both controls step the same latency-against-detail axis — one by
+        /// frame size, one by compression grade — so naming them differently only invited the
+        /// operator to work out which scale they were on.
+        ///
+        /// Both shells read this, so a label can never mean one compression byte on iPhone and a
+        /// different one on Android — which is what happened while the control had two positions
+        /// and "Size" stood for both `latency` and `balanced`.
+        public var settingsLabel: String {
+            switch self {
+            case .latency: "Fast"
+            case .balanced: "Balanced"
+            case .detail: "Quality"
+            }
+        }
+
         /// `LiveViewImageCompression` byte. The property is a 6-value enum folding two axes —
         /// a grade (Basic / Normal / **Fine**) and a tie-break (size priority vs quality
         /// priority) — so the operator's three steps walk the grades and take the quality-priority
