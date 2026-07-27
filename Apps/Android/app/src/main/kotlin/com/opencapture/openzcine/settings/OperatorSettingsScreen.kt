@@ -2568,6 +2568,22 @@ private fun DisplayRows(
                         title = stringResource(R.string.settings_edit_view),
                         onClick = { onEditView(mode) },
                     )
+                    // The four status-bar readouts. iOS nests their badges inside the deck pill
+                    // in the Edit view; here they stay a grid, because a 26dp badge inside a 28dp
+                    // pill on a phone-density Compose deck is not a reliable touch target.
+                    Text(
+                        stringResource(R.string.settings_live_readouts),
+                        style = chromeStyle(11f, FontWeight.SemiBold),
+                        color = LiveDesign.muted,
+                    )
+                    DisplayToggleGrid(
+                        compact = compact,
+                        entries =
+                            ChromeSection.statusBarReadouts.map { section ->
+                                val toggle = settings.chrome(mode)[section]
+                                DisplayToggleEntry(section.title, toggle.value) { onToggle(toggle) }
+                            },
+                    )
                     if (mode == MonitorDisplayMode.CLEAN) {
                         Text(
                             stringResource(R.string.settings_clean_view_tools),

@@ -2220,6 +2220,7 @@ internal fun MonitorScreen(
                         }
                     },
                     onOpenAssistOptions = openAssistOptions,
+                    onChromeEditBounds = recordChromeEditBounds,
                 )
             } else {
                 if (isCommand) {
@@ -3360,6 +3361,8 @@ private fun PortraitChrome(
     onMoveCommandTile: (CommandTileKind, Int) -> Unit,
     onReorderStarted: () -> Unit,
     onOpenAssistOptions: (AssistTool, Rect) -> Unit,
+    /** Publishes each badgeable element's drawn bounds while the Edit view is open. */
+    onChromeEditBounds: (ChromeSection, Rect) -> Unit = { _, _ -> },
 ) {
     val isPhotography = prefersPhotographyChrome(cameraProperties)
     val context = LocalContext.current
@@ -3371,7 +3374,13 @@ private fun PortraitChrome(
     // Chrome is per DISP mode, so portrait answers to the same switches landscape does — the top
     // bar used to ignore the operator's Status Bar choice entirely.
     val chrome = operatorSettings.chrome(displayMode)
-    if (chrome.statusBar.value) {
+    val chromeEditorMode = operatorSettings.chromeEditorMode
+    val mounts: (ChromeSection) -> Boolean = { section ->
+        (chromeEditorMode == displayMode &&
+            chromeEditorMode != null &&
+            section.isConfigurableIn(chromeEditorMode)) || chrome[section].value
+    }
+    if (mounts(ChromeSection.STATUS_BAR)) {
         PortraitInfoBar(
             timecodeRetention = timecodeRetention,
             sessionState = sessionState,
@@ -3379,10 +3388,20 @@ private fun PortraitChrome(
             // The bar's battery gauge answers to the Monitor Chrome battery switch, like the
             // landscape rail's pair (iOS `InfoBarContent`).
             showsBattery =
-                monitorShowsBatteryIndicators(displayMode, chrome.batteryIndicators.value),
+                monitorShowsBatteryIndicators(
+                    displayMode,
+                    mounts(ChromeSection.BATTERY_INDICATORS),
+                ),
             cameraBatteryPercent = cameraReadouts.batteryPercent,
             cameraExternalPower = cameraReadouts.externalPower,
-            modifier = Modifier.zone(zones.infoBar),
+            modifier =
+                Modifier.zone(zones.infoBar)
+                    .chromeEditable(
+                        ChromeSection.STATUS_BAR,
+                        chromeEditorMode,
+                        operatorSettings,
+                        onChromeEditBounds,
+                    ),
         )
     }
 
@@ -3428,12 +3447,17 @@ private fun PortraitChrome(
             },
             photography = isPhotography,
         )
-    if (!isCommand && chrome.assistToolbar.value) {
+    if (!isCommand && mounts(ChromeSection.ASSIST_TOOLBAR)) {
         zones.assistStrip?.let { strip ->
             AssistToolbar(
                 assist,
                 Modifier.zone(
                     ZoneFrame(strip.x + 12f, strip.y + 4f, strip.width - 24f, strip.height - 8f),
+                ).chromeEditable(
+                    ChromeSection.ASSIST_TOOLBAR,
+                    chromeEditorMode,
+                    operatorSettings,
+                    onChromeEditBounds,
                 ).alpha(if (locked) 0.4f else 1f),
                 visibleTools = photographyAssistTools,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
@@ -3507,10 +3531,16 @@ private fun PortraitChrome(
         }
     }
 
-    if (!isCommand && isFill && chrome.cameraValues.value) {
+    if (!isCommand && isFill && mounts(ChromeSection.CAMERA_VALUES)) {
         zones.captureStrip?.let { strip ->
             Box(
-                Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
+                Modifier.zone(strip)
+                    .chromeEditable(
+                        ChromeSection.CAMERA_VALUES,
+                        chromeEditorMode,
+                        operatorSettings,
+                        onChromeEditBounds,
+                    ).alpha(if (locked) 0.4f else 1f),
                 contentAlignment = Alignment.Center,
             ) {
                 MonitorCaptureStrip(
@@ -3530,12 +3560,12 @@ private fun PortraitChrome(
         }
     }
 
-    if (!isCommand && isFill && chrome.assistToolbar.value) {
+    if (!isCommand && isFill && mounts(ChromeSection.ASSIST_TOOLBAR)) {
         val railFrame =
             portraitFillAssistRailFrame(
                 feed = zones.feed,
                 captureStrip = zones.captureStrip.takeIf {
-                    chrome.cameraValues.value
+                    mounts(ChromeSection.CAMERA_VALUES)
                 },
                 expanded = railExpanded,
             )
@@ -3577,8 +3607,17 @@ private fun PortraitChrome(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.weight(1f))
-        if (monitorShowsLockControl(displayMode, chrome.lockButton.value, locked)) {
-            LockButton(locked, Modifier.size(40.dp), onClick = onLock)
+        if (monitorShowsLockControl(displayMode, mounts(ChromeSection.LOCK_BUTTON), locked)) {
+            LockButton(
+                locked,
+                Modifier.size(40.dp).chromeEditable(
+                    ChromeSection.LOCK_BUTTON,
+                    chromeEditorMode,
+                    operatorSettings,
+                    onChromeEditBounds,
+                ),
+                onClick = onLock,
+            )
             Spacer(Modifier.weight(1f))
         }
         DispButton(

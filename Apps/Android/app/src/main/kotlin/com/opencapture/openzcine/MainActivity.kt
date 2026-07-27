@@ -181,6 +181,8 @@ class MainActivity : ComponentActivity() {
             OperatorSettings(applicationContext).also { settings ->
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
             }
+        // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
+        DemoHarness.chromeEditMode(intent)?.let(operatorSettings::beginChromeEditing)
         setContent {
             // Drop the solid system hold as soon as Compose paints; the only
             // branded splash is LaunchSplashOverlay (rounded logo + wordmark).

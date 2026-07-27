@@ -87,6 +87,10 @@ public enum class ChromeSection(
         /** The sections [mode] lets the operator show or hide, in render order. */
         public fun configurableIn(mode: MonitorDisplayMode): List<ChromeSection> =
             entries.filter { it.isConfigurableIn(mode) }
+
+        /** The four readouts that live inside the status bar. */
+        public val statusBarReadouts: List<ChromeSection> =
+            listOf(REC_READOUT, CODEC_READOUT, MEDIA_READOUT, FPS_READOUT)
     }
 }
 

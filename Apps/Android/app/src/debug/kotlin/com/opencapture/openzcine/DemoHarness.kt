@@ -22,6 +22,7 @@ import com.opencapture.openzcine.pairing.PairingPath
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
@@ -217,6 +218,15 @@ object DemoHarness {
 
     internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? =
         LiveViewGuideStep.debugValue(intent.getStringExtra(EXTRA_LIVE_GUIDE_STEP))
+
+    /**
+     * Opens the Edit view on one DISP mode (`live` / `clean` / `command`) so the eye badges can be
+     * captured headlessly — the editor is only reachable by tapping through Operator Setup.
+     */
+    const val EXTRA_CHROME_EDIT = "zc.demo.chromeEdit"
+
+    internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? =
+        intent.getStringExtra(EXTRA_CHROME_EDIT)?.let { MonitorDisplayMode.fromStoredName(it) }
 
     /** Debug-only standalone settings selector; release builds always return null. */
     internal fun settingsTab(intent: Intent): OperatorSettingsTab? =
