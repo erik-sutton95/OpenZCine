@@ -92,6 +92,55 @@ struct EventDrainTests {
     }
 }
 
+// MARK: - #268 · the body's event queue is polled in EVERY chrome
+
+/// `GetEventEx` (0x941C) is the channel a Nikon body announces a setting change on, and it used to
+/// be polled in photography chrome only — where it had been introduced, for body-fired stills.
+/// Cinema mode, how the ZR is normally shot, was left with no fast path at all: a lens-ring turn
+/// waited for a round-robin that revisits any one property about every 20 s.
+struct DeviceEventQueuePollTests {
+    @Test func aBodySideChangeIsReadableInCinemaChrome() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try PTPIPClientSession.connect(
+            host: "127.0.0.1", port: server.port, timeoutMilliseconds: 2_000)
+        defer { session.disconnect() }
+
+        // The fake body reports `LiveViewSelector = 1`, so one selector read leaves the session
+        // in cinema chrome — the state the old gate refused to poll in.
+        let chrome = session.refreshAndroidPropertySnapshot(.selector)
+        #expect(chrome.properties.captureSelector == .video)
+        #expect(!StillCapturePolicy.prefersPhotographyChrome(selector: .video))
+
+        // One detent of the aperture ring: the aperture plus a dependent.
+        server.queueDeviceEvent(
+            rawEventCode: 0x4006, parameters: [PTPPropertyCode.movieFNumber.rawValue])
+        server.queueDeviceEvent(
+            rawEventCode: 0x4006, parameters: [PTPPropertyCode.exposureIndicateStatus.rawValue])
+
+        let events = session.pollDeviceEvents()
+        #expect(events.map(\.eventCode) == [.devicePropChanged, .devicePropChanged])
+        #expect(
+            events.compactMap(\.changedPropertyCode) == [.movieFNumber, .exposureIndicateStatus])
+        // Parameter1 = 0 clears the body's queue, so the same burst is never re-read.
+        #expect(session.pollDeviceEvents().isEmpty)
+    }
+
+    @Test func aBodyFiredCaptureStillSurfacesOnTheSameQueue() throws {
+        // Widening the gate must not cost the poll its original job. Deciding whether a capture
+        // is actionable belongs to the consumer — `MonitorScreen`'s body-capture sync already
+        // applies the photography test — not to whether the queue gets read at all.
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try PTPIPClientSession.connect(
+            host: "127.0.0.1", port: server.port, timeoutMilliseconds: 2_000)
+        defer { session.disconnect() }
+
+        server.queueDeviceEvent(rawEventCode: 0x4002, parameters: [0x0000_0011])
+        #expect(session.pollDeviceEvents().map(\.eventCode) == [.objectAdded])
+    }
+}
+
 // SAFETY: all mutable collector state is guarded by `condition`.
 private final class EventCollector: @unchecked Sendable {
     private struct TimedOut: Error {}

@@ -1243,31 +1243,52 @@ class SwiftCoreCameraSession internal constructor(
         synchronized(propertyRefreshJobLock) {
             if (!ownsConnectedAttempt(attempt)) return
             pendingEventPropertyCodes += rawPropertyCode
-            eventPropertyRefreshJob?.cancel()
-            eventPropertyRefreshJob =
-                propertyRefreshScope.launch {
-                    delay(propertyEventDebounceMillis.coerceAtLeast(1L))
-                    val propertyCodes =
-                        synchronized(propertyRefreshJobLock) {
-                            if (!ownsConnectedAttempt(attempt)) {
-                                pendingEventPropertyCodes.clear()
-                                emptyList()
-                            } else {
-                                pendingEventPropertyCodes
-                                    .take(MAX_EVENT_PROPERTY_REFRESHES)
-                                    .also { pendingEventPropertyCodes.clear() }
-                            }
+            startEventPropertyRefreshIfIdle(attempt)
+        }
+    }
+
+    /**
+     * Drains up to [MAX_EVENT_PROPERTY_REFRESHES] announcements after the debounce window, then
+     * schedules another pass if the burst overflowed that cap.
+     *
+     * Never restarts a pass that is already pending. Cancel-and-reschedule made this a *resetting*
+     * debounce: a body that keeps announcing — an operator turning an aperture ring — pushed the
+     * read out for as long as the turn lasted, so the value on screen only caught up once the hand
+     * stopped (#268). Overflow stays queued in [LinkedHashSet] announcement order instead of being
+     * discarded; a dropped announcement leaves that readout stale until the ~20 s round-robin
+     * reaches it. Callers hold [propertyRefreshJobLock].
+     */
+    private fun startEventPropertyRefreshIfIdle(attempt: Long) {
+        if (eventPropertyRefreshJob?.isActive == true) return
+        eventPropertyRefreshJob =
+            propertyRefreshScope.launch {
+                delay(propertyEventDebounceMillis.coerceAtLeast(1L))
+                val propertyCodes =
+                    synchronized(propertyRefreshJobLock) {
+                        if (!ownsConnectedAttempt(attempt)) {
+                            pendingEventPropertyCodes.clear()
+                            emptyList()
+                        } else {
+                            pendingEventPropertyCodes
+                                .take(MAX_EVENT_PROPERTY_REFRESHES)
+                                .also { pendingEventPropertyCodes -= it }
                         }
-                    for (rawCode in propertyCodes) {
-                        if (!isActive || !ownsConnectedAttempt(attempt)) break
-                        refreshCameraProperties(
-                            attempt = attempt,
-                            request = SwiftCore.PROPERTY_REFRESH_EVENT,
-                            propertyCode = rawCode,
-                        )
+                    }
+                for (rawCode in propertyCodes) {
+                    if (!isActive || !ownsConnectedAttempt(attempt)) break
+                    refreshCameraProperties(
+                        attempt = attempt,
+                        request = SwiftCore.PROPERTY_REFRESH_EVENT,
+                        propertyCode = rawCode,
+                    )
+                }
+                synchronized(propertyRefreshJobLock) {
+                    eventPropertyRefreshJob = null
+                    if (pendingEventPropertyCodes.isNotEmpty()) {
+                        startEventPropertyRefreshIfIdle(attempt)
                     }
                 }
-        }
+            }
     }
 
     /** Rejects invalid raw-event values without inventing a property identifier. */
@@ -1477,6 +1498,7 @@ class SwiftCoreCameraSession internal constructor(
         const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
         /** Max rate for command RTT StateFlow updates (LV frames fire every present). */
         const val ROUND_TRIP_PUBLISH_INTERVAL_NANOS: Long = 250_000_000L
+        /** Announcements re-read per drain — mirrors the core's `CameraAnnouncedPropertyQueue`. */
         const val MAX_EVENT_PROPERTY_REFRESHES: Int = 4
         const val EVENT_BUFFER_CAPACITY: Int = 64
         const val EVENT_CODE_MASK: Int = 0xFFFF

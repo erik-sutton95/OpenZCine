@@ -2527,7 +2527,7 @@ final class NativeAppModel {
     /// Properties the CAMERA announced as changed (`DevicePropChanged`) and that have not been
     /// re-read yet. Drained ahead of the round-robin so a body-side dial/ring/menu edit lands in
     /// one poll tick instead of a full ~20 s cycle.
-    @ObservationIgnored private var cameraAnnouncedPropertyChanges: Set<PTPPropertyCode> = []
+    @ObservationIgnored private var cameraAnnouncedPropertyChanges = CameraAnnouncedPropertyQueue()
     /// The `LiveViewImageSize` byte last written to the camera, so a thermal/warning step-down only
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
     /// is itself a heat source — see `applyThermalStreamStepDownIfNeeded`).
@@ -4050,15 +4050,14 @@ final class NativeAppModel {
     /// only about every 20 s.
     ///
     /// The event carries no value, so it can only schedule a read — never mutate the snapshot. The
-    /// set is drained one property per poll tick by ``pollNextCameraProperty(session:)``, which
-    /// keeps the announcement on the existing single-flight poll and its cadence instead of racing
-    /// the frame loop for the transaction gate. Bounded by construction: a `Set` of the property
-    /// codes the monitor decodes.
+    /// queue is drained in announcement order, a whole burst per poll tick, by
+    /// ``pollNextCameraProperty(session:)``: that keeps the reads on the existing single-flight
+    /// poll and its cadence instead of racing the frame loop for the transaction gate, while a
+    /// ring detent's dependent announcements can no longer bury the one value the operator is
+    /// watching. Bounded by construction: deduplicated, and only the codes the monitor decodes.
     private func noteCameraAnnouncedPropertyChange(_ event: PTPEvent) {
-        guard let property = event.changedPropertyCode,
-            PTPPropertyCode.isMonitoredChange(property)
-        else { return }
-        cameraAnnouncedPropertyChanges.insert(property)
+        guard let property = event.changedPropertyCode else { return }
+        cameraAnnouncedPropertyChanges.note(property)
     }
 
     /// Syncs the app to a capture fired ON THE CAMERA BODY: pulses the shutter button, runs
@@ -4542,18 +4541,16 @@ final class NativeAppModel {
         if await performNextPendingCameraWrite(session: session) {
             return
         }
-        // Nikon delivers capture events (a shutter fired ON THE BODY → ObjectAdded /
-        // CaptureComplete) through the GetEventEx poll, NOT the PTP-IP event socket the drain
-        // loop reads — so poll it on a brisk cadence in photography chrome and sync the app
-        // (instant playback + shutter-button pulse). Single-flight so it can't stack behind the
-        // transaction gate and jitter the feed.
-        // [verify-on-HW] `DevicePropChanged` is assumed to arrive on the event SOCKET (the drain
-        // handles it in both chromes). If a body turns out to emit it only here, this gate has to
-        // widen to movie chrome too — otherwise cinema mode loses the fast body-change path.
-        if StillCapturePolicy.prefersPhotographyChrome(
-            selector: cameraPropertySnapshot.captureSelector),
-            frameCounter.isMultiple(of: 4), deviceEventPollTask == nil
-        {
+        // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) AND
+        // `DevicePropChanged` through the GetEventEx poll, not the PTP-IP event socket the drain
+        // loop reads — so poll it on a brisk cadence in EVERY chrome. This used to be gated to
+        // photography, where it was introduced for body-fired stills, which left cinema mode — how
+        // the ZR is normally shot — with no fast path for a body-side aperture/ISO/shutter change
+        // at all: it fell back to a round-robin that revisits any one property about every 20 s
+        // (#268). The chrome test lives in each consumer, which already applies it:
+        // `handleBodyFiredCapture` is a no-op outside photography. Single-flight so the poll can't
+        // stack behind the transaction gate and jitter the feed.
+        if frameCounter.isMultiple(of: 4), deviceEventPollTask == nil {
             deviceEventPollTask = Task { [weak self] in
                 defer { self?.deviceEventPollTask = nil }
                 guard let self, self.cameraSession === session else { return }
@@ -5001,7 +4998,7 @@ final class NativeAppModel {
                 )
             }
             // A confirmed write supersedes any queued re-read of the same property.
-            cameraAnnouncedPropertyChanges.remove(pending.write.property)
+            cameraAnnouncedPropertyChanges.cancel(pending.write.property)
             if isShutterModeWrite || isBaseISOWrite || isISOAutoWrite || isFocusModeWrite
                 || isShutterLockWrite
             {
@@ -5241,12 +5238,17 @@ final class NativeAppModel {
                     ? .exposureIndicateLightup : .exposureIndicateStatus)
             guard !Task.isCancelled, cameraSession === session else { return }
         }
-        // A property the CAMERA announced as changed jumps the queue: it is the operator's own
-        // edit on the body, and the round-robin would otherwise take a full cycle to notice. One
-        // per tick keeps this on the existing single-flight cadence, and the round-robin index
-        // does NOT advance so no regular property is skipped.
-        if let announced = cameraAnnouncedPropertyChanges.popFirst() {
-            if session.supportsProperty(announced) {
+        // Properties the CAMERA announced as changed jump the queue: they are the operator's own
+        // edit on the body, and the round-robin would otherwise take a full cycle to notice. The
+        // WHOLE pending burst drains on the tick that sees it, oldest first and capped
+        // (`CameraAnnouncedPropertyQueue.batchLimit`) — one detent of an aperture ring announces
+        // the aperture plus its dependents, and draining one arbitrary entry per tick left the
+        // watched value buried. Maintenance runs once after the batch, not once per read, so the
+        // batch stays a tight run of reads. The round-robin index does NOT advance, so no regular
+        // property is skipped.
+        if !cameraAnnouncedPropertyChanges.isEmpty {
+            for announced in cameraAnnouncedPropertyChanges.nextBatch()
+            where session.supportsProperty(announced) {
                 await readAndApplyCameraProperty(session: session, property: announced)
                 guard !Task.isCancelled, cameraSession === session else { return }
             }

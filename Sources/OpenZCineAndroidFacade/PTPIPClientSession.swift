@@ -3437,22 +3437,24 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     /// Polls the camera's Nikon event queue (`GetEventEx` 0x941C) and returns the events it
     /// held. Nikon bodies deliver capture events (`ObjectAdded` 0x4002, `CaptureComplete`
-    /// 0x400D) through THIS poll, not the PTP-IP event socket the drain reads — so a shutter
-    /// fired ON THE CAMERA BODY only surfaces here. Parameter1 = 0 clears the queue after the
-    /// read so the same events are not seen twice.
+    /// 0x400D) AND `DevicePropChanged` (0x4006) through THIS poll, not the PTP-IP event socket
+    /// the drain reads — so a shutter fired ON THE CAMERA BODY, and a setting changed on the
+    /// body, surface here. Parameter1 = 0 clears the queue after the read so the same events are
+    /// not seen twice.
     ///
-    /// Gated to photography chrome (the only place a body-fired still matters, mirroring the
-    /// iOS poll) and skipped while media mode owns the wire. Acquires the command-lifecycle
-    /// lock non-blockingly so a poll driven off the live-view pump never stacks behind an
-    /// in-flight control write and stalls the feed — the body's queue persists, so the next
-    /// frame's poll picks up whatever a skipped one missed. Empty on a busy/non-OK answer.
+    /// Polled in EVERY chrome. It used to be gated to photography, where it was introduced for
+    /// body-fired stills; that left cinema mode with no fast path for a body-side setting change
+    /// and readouts trailing the ~20 s round-robin (#268). Chrome remains each consumer's test —
+    /// `MonitorScreen`'s body-capture sync already applies it. Skipped while media mode owns the
+    /// wire. Acquires the command-lifecycle lock non-blockingly so a poll driven off the live-view
+    /// pump never stacks behind an in-flight control write and stalls the feed — the body's queue
+    /// persists, so the next frame's poll picks up whatever a skipped one missed. Empty on a
+    /// busy/non-OK answer.
     /// [verify-on-HW: the ZR's real GetEventEx cadence and which capture code(s) it emits]
     public func pollDeviceEvents() -> [PTPEvent] {
         guard commandLifecycleLock.`try`() else { return [] }
         defer { commandLifecycleLock.unlock() }
         guard !isMediaModeActive,
-            StillCapturePolicy.prefersPhotographyChrome(
-                selector: androidPropertySnapshot.captureSelector),
             let result = try? executeTransaction(
                 .getEventEx, parameters: [0], dataPhase: .dataIn),
             result.operationResponse.responseCode == .ok
@@ -4000,10 +4002,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 focusFrameCondition.broadcast()
                 focusFrameCondition.unlock()
                 onFrame(frame, Int64(Self.monotonicNanoseconds()))
-                // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) through
-                // the GetEventEx poll, NOT the PTP-IP event socket the drain reads — so poll the
-                // queue every Nth frame and route captures into the SAME sink the socket drain
-                // feeds. Inline in this serial pump = inherently single-flight, one poll at most.
+                // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) and a
+                // body-side setting change (DevicePropChanged) through the GetEventEx poll, NOT
+                // the PTP-IP event socket the drain reads — so poll the queue every Nth frame, in
+                // every chrome, and route both into the SAME sink the socket drain feeds. Inline
+                // in this serial pump = inherently single-flight, one poll at most.
                 framesSinceDeviceEventPoll += 1
                 if framesSinceDeviceEventPoll >= Self.deviceEventPollFrameStride {
                     framesSinceDeviceEventPoll = 0
