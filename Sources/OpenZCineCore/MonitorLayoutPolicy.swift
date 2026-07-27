@@ -547,19 +547,6 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             height: lockButtonSize
         )
 
-        // Keep the deck centered over the feed while clearing the lock only on compact
-        // classic-notch phones. Every other device retains the established deck inset.
-        let minimumDeckInset =
-            lockButton.x + lockButton.width + topInfoDeckControlGap - feed.x
-        let deckInset =
-            constrained
-            ? topInfoDeckSideInset
-            : usesClassicSideNotch
-                ? max(topInfoDeckSideInset, minimumDeckInset)
-                : topInfoDeckSideInset
-        let deckLeft = feed.x + deckInset
-        let deckRight = feed.x + feed.width - deckInset
-
         // Width-constrained landscape also inlines the battery indicators beside the lock button
         // in the top chrome band instead of stacking them in a leading rail (no side lanes exist).
         let batteryRail =
@@ -577,14 +564,38 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
                 height: chrome.height
             )
 
+        // The lock and the battery rail share the chrome's leading edge. Inset the deck past
+        // whichever reaches furthest in — symmetrically, so the deck stays centered over the feed
+        // and clears the cluster whichever end the chrome direction puts it on. Only bites when
+        // the feed runs under the cluster: flush against the screen edge (a 16:9 viewport, where
+        // the full-height feed leaves no lanes at all) or nearly so (classic-notch phones, which
+        // this used to special-case). Dynamic Island phones already start clear of it.
+        let leadingChromeRight = max(
+            lockButton.x + lockButton.width,
+            batteryRail.x + batteryRail.width
+        )
+        let minimumDeckInset = leadingChromeRight + topInfoDeckControlGap - feed.x
+        let deckInset =
+            constrained
+            ? topInfoDeckSideInset
+            : max(topInfoDeckSideInset, minimumDeckInset)
+        let deckLeft = feed.x + deckInset
+        let deckRight = feed.x + feed.width - deckInset
+
         let layout = MonitorLiveViewModuleLayout(
             feed: feed,
             batteryRail: batteryRail,
-            topInfoDeck: MonitorModuleFrame(
-                x: deckLeft,
-                y: chrome.y,
-                width: max(0, deckRight - deckLeft),
-                height: topInfoDeckHeight
+            topInfoDeck: Self.deckFrameClearingRail(
+                deck: MonitorModuleFrame(
+                    x: deckLeft,
+                    y: chrome.y,
+                    width: max(0, deckRight - deckLeft),
+                    height: topInfoDeckHeight
+                ),
+                rail: rightRailControls,
+                constrained: constrained,
+                horizontalDirection: horizontalDirection,
+                viewportWidth: viewportWidth
             ),
             bottomAssistTools: Self.bottomAssistFrame(
                 in: bottomRegion,
@@ -637,6 +648,48 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             y: defaultFrame.y,
             width: defaultRight - adjustedLeft,
             height: defaultFrame.height
+        )
+    }
+
+    /// Clips the top deck's span so it never runs under the side rail.
+    ///
+    /// The rail only gets a lane of its own when the viewport is wider than the 16:9 feed. At
+    /// exactly 16:9 (a 1920×1080 emulator, a 16:9 tablet, desktop windowing) that lane collapses
+    /// and `rightRailFrame` falls back over the feed's trailing edge — leaving the feed-spanning
+    /// deck, and the DISP-3 dashboard that fills the deck's span, underneath the record / DISP /
+    /// media / settings buttons. A no-op on 19.5:9 and 20:9 phones, where the deck already ends
+    /// before the lane. Unlike the lock cluster, the rail cannot be cleared by a symmetric feed
+    /// inset (the caller's `deckInset`): the rail is centered in its lane rather than pinned to
+    /// the chrome edge, so the clearance it needs does not mirror the lock's. Width-constrained
+    /// (4:3-ish iPad) landscape relocates that chrome into the corners, so it keeps the
+    /// unclipped span.
+    private static func deckFrameClearingRail(
+        deck: MonitorModuleFrame,
+        rail: MonitorModuleFrame,
+        constrained: Bool,
+        horizontalDirection: MonitorHorizontalLayoutDirection,
+        viewportWidth: Double
+    ) -> MonitorModuleFrame {
+        guard !constrained else { return deck }
+
+        // The deck is already in final coordinates (it hangs off the feed, which the caller built
+        // for the requested direction); the rail is mirrored later, so mirror it here to compare.
+        let mirrored = horizontalDirection == .mirrored
+        let rail = mirrored ? rail.mirroredHorizontally(in: viewportWidth) : rail
+        let left =
+            mirrored
+            ? max(deck.x, rail.x + rail.width + topInfoDeckControlGap)
+            : deck.x
+        let right =
+            mirrored
+            ? deck.x + deck.width
+            : min(deck.x + deck.width, rail.x - topInfoDeckControlGap)
+
+        return MonitorModuleFrame(
+            x: left,
+            y: deck.y,
+            width: max(0, right - left),
+            height: deck.height
         )
     }
 
