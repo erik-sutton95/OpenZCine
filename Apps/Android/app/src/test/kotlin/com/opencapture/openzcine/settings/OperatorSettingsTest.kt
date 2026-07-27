@@ -760,4 +760,92 @@ class OperatorSettingsTest {
     fun `version text matches the iOS format`() {
         assertEquals("0.1.117 (42)", appVersionText("0.1.117", 42))
     }
+
+    @Test
+    fun `chrome is configured per DISP mode and clean defaults to a bare image`() {
+        val settings = OperatorSettings(store)
+
+        assertTrue(settings.chrome(MonitorDisplayMode.LIVE).statusBar.value)
+        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).statusBar.value)
+        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).assistToolbar.value)
+        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).cameraValues.value)
+        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).batteryIndicators.value)
+        // The rail is where clean's two essentials live — the DISP key and the rolling record
+        // control — so it stays on even in the bare image.
+        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).sideRails.value)
+        // Switching the bar back on in clean should yield a complete bar.
+        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).fpsReadout.value)
+    }
+
+    @Test
+    fun `toggling one mode's chrome leaves the others alone`() {
+        val settings = OperatorSettings(store)
+
+        settings.toggleChrome(ChromeSection.STATUS_BAR, MonitorDisplayMode.CLEAN)
+        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).statusBar.value)
+        assertTrue(settings.chrome(MonitorDisplayMode.LIVE).statusBar.value)
+
+        settings.toggleChrome(ChromeSection.STATUS_BAR, MonitorDisplayMode.LIVE)
+        assertFalse(settings.chrome(MonitorDisplayMode.LIVE).statusBar.value)
+        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).statusBar.value)
+
+        settings.resetChromeVisibility(MonitorDisplayMode.CLEAN)
+        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).statusBar.value)
+        assertFalse(
+            settings.chrome(MonitorDisplayMode.LIVE).statusBar.value,
+            "resetting one mode must not touch another",
+        )
+    }
+
+    @Test
+    fun `sections a mode does not own are not togglable`() {
+        val settings = OperatorSettings(store)
+
+        assertFalse(ChromeSection.STATUS_BAR.isConfigurableIn(MonitorDisplayMode.COMMAND))
+        assertFalse(ChromeSection.SIDE_RAILS.isConfigurableIn(MonitorDisplayMode.CLEAN))
+        assertFalse(ChromeSection.LOCK_BUTTON.isConfigurableIn(MonitorDisplayMode.CLEAN))
+        assertTrue(ChromeSection.LOCK_BUTTON.isConfigurableIn(MonitorDisplayMode.COMMAND))
+        assertEquals(10, ChromeSection.configurableIn(MonitorDisplayMode.LIVE).size)
+        assertEquals(
+            listOf(
+                ChromeSection.SIDE_RAILS,
+                ChromeSection.LOCK_BUTTON,
+                ChromeSection.BATTERY_INDICATORS,
+            ),
+            ChromeSection.configurableIn(MonitorDisplayMode.COMMAND),
+        )
+
+        settings.toggleChrome(ChromeSection.STATUS_BAR, MonitorDisplayMode.COMMAND)
+        assertTrue(
+            settings.chrome(MonitorDisplayMode.COMMAND).statusBar.value,
+            "a non-owned section must not flip",
+        )
+    }
+
+    @Test
+    fun `command inherits the operator's existing chrome so no monitor changes on update`() {
+        // A store written before chrome went per-mode: only the original global keys exist.
+        store.edit().putBoolean("display.sideRails", false)
+            .putBoolean("display.batteryIndicators", false).apply()
+
+        val settings = OperatorSettings(store)
+
+        assertFalse(settings.chrome(MonitorDisplayMode.LIVE).sideRails.value)
+        assertFalse(settings.chrome(MonitorDisplayMode.COMMAND).sideRails.value)
+        assertFalse(settings.chrome(MonitorDisplayMode.COMMAND).batteryIndicators.value)
+        // Clean still lands on its own documented default, not the inherited one.
+        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).sideRails.value)
+    }
+
+    @Test
+    fun `the chrome editor mode is session only`() {
+        val settings = OperatorSettings(store)
+        assertEquals(null, settings.chromeEditorMode)
+        settings.beginChromeEditing(MonitorDisplayMode.CLEAN)
+        assertEquals(MonitorDisplayMode.CLEAN, settings.chromeEditorMode)
+        settings.endChromeEditing()
+        assertEquals(null, settings.chromeEditorMode)
+        // Nothing was written, so a relaunch never resumes the editor.
+        assertEquals(null, OperatorSettings(store).chromeEditorMode)
+    }
 }

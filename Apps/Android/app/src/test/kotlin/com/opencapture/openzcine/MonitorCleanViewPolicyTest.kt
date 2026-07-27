@@ -154,11 +154,14 @@ class MonitorCleanViewPolicyTest {
     }
 
     @Test
-    fun `battery indicators hide on request and always in clean`() {
-        assertTrue(monitorShowsBatteryIndicators(MonitorDisplayMode.LIVE, batteryIndicatorsVisible = true))
-        assertTrue(monitorShowsBatteryIndicators(MonitorDisplayMode.COMMAND, batteryIndicatorsVisible = true))
-        assertFalse(monitorShowsBatteryIndicators(MonitorDisplayMode.CLEAN, batteryIndicatorsVisible = true))
+    fun `battery indicators answer to the mode's own switch`() {
+        // Chrome is per DISP mode now: the caller passes that mode's flag, and clean's own set
+        // ships with the batteries off — so the policy no longer hard-codes the clean case.
         for (mode in MonitorDisplayMode.entries) {
+            assertTrue(
+                monitorShowsBatteryIndicators(mode, batteryIndicatorsVisible = true),
+                "batteries must show in $mode when that mode has them on",
+            )
             assertFalse(
                 monitorShowsBatteryIndicators(mode, batteryIndicatorsVisible = false),
                 "batteries must stay hidden in $mode",
