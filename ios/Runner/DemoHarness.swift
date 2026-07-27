@@ -396,6 +396,24 @@ enum DemoHarness {
                         }
                     }
                 }
+                if let raw = env["ZC_DEMO_CHROME_HIDE"] {
+                    // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated:
+                    // lock, battery, topbar, rail, toolbar, values) so each hidden state can be
+                    // captured headlessly — simctl cannot drive the Settings switches.
+                    for value in raw.split(separator: ",") {
+                        switch value {
+                        case "lock": model.preferences.displayChrome.lockButtonVisible = false
+                        case "battery":
+                            model.preferences.displayChrome.batteryIndicatorsVisible = false
+                        case "topbar": model.preferences.displayChrome.statusBarVisible = false
+                        case "rail": model.preferences.displayChrome.sideRailsVisible = false
+                        case "toolbar":
+                            model.preferences.displayChrome.assistToolbarVisible = false
+                        case "values": model.preferences.displayChrome.cameraValuesVisible = false
+                        default: break
+                        }
+                    }
+                }
                 if let raw = env["ZC_DEMO_ASSIST_ON"] {
                     // Demo/screenshot affordance: switch one or more assist tools on (comma-separated
                     // raw values, e.g. "FALSE,PEAK,WAVE") so the live monitor tools can be captured.

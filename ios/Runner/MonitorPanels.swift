@@ -4054,11 +4054,57 @@ struct OperatorSettingsPanel: View {
         SettingsGroupCard(
             title: "View Assist toolbar",
             caption:
-                "Drag to reorder; tap the eye to show or hide each tool on the monitor bar, and the pin to keep it visible in clean view (DISP 2).",
+                "Drag to reorder; tap the eye to show or hide each tool on the monitor bar.",
             onReset: { model.resetAssistToolbarPreferences() },
             content: {
                 AssistToolbarOrderStrip()
                     .environment(model)
+            }
+        )
+
+        SettingsGroupCard(
+            title: "Keep in Clean View",
+            caption:
+                "Clean view (DISP 2) shows the image and nothing else. Anything switched on here stays on screen anyway.",
+            onReset: { model.resetCleanViewPins() },
+            content: {
+                CleanViewPinStrip()
+                    .environment(model)
+            }
+        )
+
+        SettingsGroupCard(
+            title: "Monitor Chrome",
+            caption:
+                "Hide parts of the monitor you do not ride. Clean view hides all of it regardless; the lock button stays while controls are locked, since it is the only way to unlock them.",
+            onReset: { model.resetChromeVisibility() },
+            content: {
+                displayToggleGrid([
+                    (
+                        "Top Bar", model.preferences.displayChrome.statusBarVisible,
+                        { model.toggleChrome(.statusBar) }
+                    ),
+                    (
+                        "Side Rail", model.preferences.displayChrome.sideRailsVisible,
+                        { model.toggleChrome(.sideRails) }
+                    ),
+                    (
+                        "Tool Bar", model.preferences.displayChrome.assistToolbarVisible,
+                        { model.toggleChrome(.assistToolbar) }
+                    ),
+                    (
+                        "Camera Values", model.preferences.displayChrome.cameraValuesVisible,
+                        { model.toggleChrome(.cameraValues) }
+                    ),
+                    (
+                        "Lock Button", model.preferences.displayChrome.lockButtonVisible,
+                        { model.toggleChrome(.lockButton) }
+                    ),
+                    (
+                        "Batteries", model.preferences.displayChrome.batteryIndicatorsVisible,
+                        { model.toggleChrome(.batteryIndicators) }
+                    ),
+                ])
             }
         )
 

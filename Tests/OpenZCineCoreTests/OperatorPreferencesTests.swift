@@ -212,6 +212,86 @@ import Testing
     #expect(decoded.codecReadoutVisible)
     #expect(decoded.mediaReadoutVisible)
     #expect(decoded.fpsReadoutVisible)
+    // The lock key and battery cluster were added later still, on the same terms.
+    #expect(decoded.lockButtonVisible)
+    #expect(decoded.batteryIndicatorsVisible)
+}
+
+@Test func lockAndBatteryChromeDefaultVisibleAndRoundTrip() throws {
+    #expect(DisplayChromeVisibility().lockButtonVisible)
+    #expect(DisplayChromeVisibility().batteryIndicatorsVisible)
+    #expect(OperatorPreferences.defaults.displayChrome.lockButtonVisible)
+    #expect(OperatorPreferences.defaults.displayChrome.batteryIndicatorsVisible)
+
+    var chrome = DisplayChromeVisibility()
+    chrome.toggle(.lockButton)
+    chrome.toggle(.batteryIndicators)
+    #expect(!chrome.lockButtonVisible)
+    #expect(!chrome.batteryIndicatorsVisible)
+    let decoded = try JSONDecoder().decode(
+        DisplayChromeVisibility.self, from: try JSONEncoder().encode(chrome))
+    #expect(decoded == chrome)
+}
+
+@Test func hiddenLockKeyStillRendersWhileControlsAreLocked() {
+    // The lock key is the only control that clears the lock on either shell, so hiding it must
+    // never strand an operator who locked first and hid it after.
+    var prefs = OperatorPreferences.defaults
+    prefs.displayChrome.lockButtonVisible = false
+
+    #expect(
+        !MonitorChromePolicy.showsLockControl(
+            mode: .live, preferences: prefs, interfaceLocked: false))
+    #expect(
+        MonitorChromePolicy.showsLockControl(
+            mode: .live, preferences: prefs, interfaceLocked: true))
+    #expect(
+        MonitorChromePolicy.showsLockControl(
+            mode: .command, preferences: prefs, interfaceLocked: true))
+    // Clean strips the whole rail either way — it is not a fourth clean-view exception.
+    #expect(
+        !MonitorChromePolicy.showsLockControl(
+            mode: .clean, preferences: OperatorPreferences.defaults, interfaceLocked: true))
+}
+
+@Test func hidingTheSideRailKeepsSettingsAndTheRollingRecordControl() {
+    var prefs = OperatorPreferences.defaults
+    let full = MonitorChromePolicy.sideRailPlan(
+        mode: .live, preferences: prefs, recordingOrPending: false)
+    #expect(full.fullRail)
+    #expect(!full.settingsRecovery)
+    #expect(!full.recordSafety)
+
+    prefs.displayChrome.sideRailsVisible = false
+    // Settings is the only route back to the toggle that hid the rail.
+    let standby = MonitorChromePolicy.sideRailPlan(
+        mode: .live, preferences: prefs, recordingOrPending: false)
+    #expect(!standby.fullRail)
+    #expect(standby.settingsRecovery)
+    #expect(!standby.recordSafety)
+
+    let rolling = MonitorChromePolicy.sideRailPlan(
+        mode: .live, preferences: prefs, recordingOrPending: true)
+    #expect(rolling.recordSafety)
+
+    // Clean already strips the rail and offers DISP as its way out — no second recovery key.
+    let clean = MonitorChromePolicy.sideRailPlan(
+        mode: .clean, preferences: prefs, recordingOrPending: false)
+    #expect(!clean.settingsRecovery)
+}
+
+@Test func batteryIndicatorsHideOnRequestAndAlwaysInClean() {
+    var prefs = OperatorPreferences.defaults
+    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .live, preferences: prefs))
+    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .command, preferences: prefs))
+    #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .clean, preferences: prefs))
+
+    prefs.displayChrome.batteryIndicatorsVisible = false
+    for mode in DispMode.allCases {
+        #expect(
+            !MonitorChromePolicy.showsBatteryIndicators(mode: mode, preferences: prefs),
+            "batteries must stay hidden in \(mode)")
+    }
 }
 
 @Test func assistConfigurationPersistsThroughJSONRoundTrip() throws {
