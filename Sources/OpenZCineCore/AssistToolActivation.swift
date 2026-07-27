@@ -4,12 +4,15 @@ import Foundation
 /// ask this instead of testing `displayMode == .clean` at each render site — scattered tests are
 /// exactly how scopes, traffic lights and pop-ups survived clean view (#256).
 ///
+/// Each mode owns its own ``DisplayChromeVisibility`` (``OperatorPreferences/chrome(for:)``), so
+/// what a mode shows is configuration, not a hard-coded per-mode branch. The stock configurations:
+///
 /// - `.live` (DISP 1): everything the operator switched on.
-/// - `.clean` (DISP 2): **a bare image**. Every view-assist tool, the status deck, the side rails,
-///   the bottom strips and every non-critical pop-up are hidden. A tool comes back only when the
-///   operator pins it via ``OperatorPreferences/cleanViewPinnedTools`` — that pin is per tool and
-///   off for all 17 by default. Leaving clean restores the prior visibility exactly, because the
-///   pin is a *filter*: clean never mutates the operator's on/off set.
+/// - `.clean` (DISP 2): **a bare image**. Every view-assist tool, the status deck, the bottom
+///   strips and every non-critical pop-up start hidden. A tool comes back only when the operator
+///   lists it in ``OperatorPreferences/cleanViewPinnedTools`` — off for all 17 by default. Leaving
+///   clean restores the prior visibility exactly, because the list is a *filter*: clean never
+///   mutates the operator's on/off set.
 /// - `.command` (DISP 3): the data dashboard owns the screen; there is no feed, so no feed overlay
 ///   or scope renders regardless of pins.
 ///
@@ -56,9 +59,25 @@ public enum MonitorChromePolicy {
         }
     }
 
-    /// Whether non-critical monitor chrome — status deck, side rails, assist/capture strips,
-    /// status readouts — renders. Clean strips all of it; command replaces it with the dashboard.
+    /// Whether `mode` renders the *full* chrome layer — the auxiliary rail keys (Settings, Media)
+    /// and the opaque system band behind them.
+    ///
+    /// Per-element visibility is no longer this call's business: each DISP mode owns its own
+    /// ``DisplayChromeVisibility`` (``OperatorPreferences/chrome(for:)``), and clean simply ships
+    /// with everything off. What survives here is the one rule configuration cannot express —
+    /// clean's rail collapses to its two essentials (the DISP key, and the record control while a
+    /// take is rolling) so the operator always has a way out of the bare image.
     public static func showsChrome(in mode: DispMode) -> Bool { mode != .clean }
+
+    /// Whether `section` renders in `mode` right now. The one read every chrome mount site should
+    /// use, so a mode's configuration cannot drift between shells or orientations.
+    public static func showsSection(
+        _ section: DisplayChromeVisibility.Section,
+        mode: DispMode,
+        preferences: OperatorPreferences
+    ) -> Bool {
+        preferences.chrome(for: mode).isVisible(section)
+    }
 
     /// Whether the rail's lock key renders.
     ///
@@ -73,16 +92,16 @@ public enum MonitorChromePolicy {
         interfaceLocked: Bool
     ) -> Bool {
         guard showsChrome(in: mode) else { return false }
-        return preferences.displayChrome.lockButtonVisible || interfaceLocked
+        return preferences.chrome(for: mode).lockButtonVisible || interfaceLocked
     }
 
-    /// Whether the battery cluster renders. Pure chrome — clean strips it, and the operator may
-    /// hide it in any other mode.
+    /// Whether the battery cluster renders. Pure chrome, configured per DISP mode — clean ships
+    /// with it off, and the operator may hide it in any other mode.
     public static func showsBatteryIndicators(
         mode: DispMode,
         preferences: OperatorPreferences
     ) -> Bool {
-        showsChrome(in: mode) && preferences.displayChrome.batteryIndicatorsVisible
+        preferences.chrome(for: mode).batteryIndicatorsVisible
     }
 
     /// What the side rail still mounts for one chrome/recording state.
@@ -107,7 +126,7 @@ public enum MonitorChromePolicy {
         preferences: OperatorPreferences,
         recordingOrPending: Bool
     ) -> SideRailPlan {
-        let visible = preferences.displayChrome.sideRailsVisible
+        let visible = preferences.chrome(for: mode).sideRailsVisible
         return SideRailPlan(
             fullRail: visible,
             // Clean already strips the rail by design and offers DISP as its way out; a second
@@ -130,6 +149,99 @@ public enum MonitorChromePolicy {
     /// this state keeps the stream at the smallest frame the body offers and skips decode,
     /// display, the wearable relay and scope sampling.
     public static func streamsHeaderOnly(in mode: DispMode) -> Bool { mode == .command }
+}
+
+/// Where the Edit view puts each element's eye badge.
+///
+/// A fixed corner per element does not work: the monitor's elements sit edge to edge and some nest
+/// inside others (the four readouts live in the status bar), so constants put badges on top of one
+/// another and some of them out of reach. This picks, per element, the first corner of its
+/// **measured** box that is fully on screen and clear of every badge already placed, and clamps a
+/// last-resort choice on screen rather than dropping a badge.
+///
+/// Pure geometry, so both shells place badges identically and the rule is unit-testable.
+public enum MonitorChromeEditLayout {
+    /// Diameter of the badge itself. Each shell grows the tap target around it separately.
+    public static let badgeSize: Double = 26
+    /// Breathing room kept between two badges, and between a badge and the viewport edge.
+    public static let badgeGap: Double = 3
+
+    /// One element the operator can badge, at its real drawn bounds.
+    public struct Box: Equatable, Sendable {
+        public let section: DisplayChromeVisibility.Section
+        public let frame: MonitorModuleFrame
+
+        public init(section: DisplayChromeVisibility.Section, frame: MonitorModuleFrame) {
+            self.section = section
+            self.frame = frame
+        }
+    }
+
+    /// Badge frames keyed by section, in the same coordinate space as `boxes`.
+    ///
+    /// `boxes` order is the placement priority: earlier elements get their preferred corner, later
+    /// ones move to the next free one. Unmeasured (zero-sized) boxes are skipped — there is
+    /// nowhere to put their badge yet.
+    public static func badgeFrames(
+        _ boxes: [Box],
+        viewportWidth: Double,
+        viewportHeight: Double,
+        badgeSize: Double = badgeSize
+    ) -> [DisplayChromeVisibility.Section: MonitorModuleFrame] {
+        var placed: [MonitorModuleFrame] = []
+        var result: [DisplayChromeVisibility.Section: MonitorModuleFrame] = [:]
+
+        for box in boxes where box.frame.width > 1 && box.frame.height > 1 {
+            // Clamp first, then test: an element flush against a screen edge has no corner that
+            // fits outright, and rejecting all four would send its badge to the fallback in the
+            // middle of the screen. Nudged along the edge it still reads as that corner's badge.
+            let candidates = corners(of: box.frame, badgeSize: badgeSize).map {
+                clamped($0, viewportWidth: viewportWidth, viewportHeight: viewportHeight)
+            }
+            let choice =
+                candidates.first { candidate in
+                    !placed.contains { overlaps($0, candidate) }
+                } ?? candidates[0]
+            placed.append(choice)
+            result[box.section] = choice
+        }
+        return result
+    }
+
+    /// The four corner positions, centred on the corner so the badge straddles the element's edge:
+    /// top-trailing first (least likely to sit over content), then top-leading, bottom-trailing,
+    /// bottom-leading.
+    private static func corners(of frame: MonitorModuleFrame, badgeSize: Double)
+        -> [MonitorModuleFrame]
+    {
+        let half = badgeSize / 2
+        let centres = [
+            (frame.x + frame.width, frame.y),
+            (frame.x, frame.y),
+            (frame.x + frame.width, frame.y + frame.height),
+            (frame.x, frame.y + frame.height),
+        ]
+        return centres.map {
+            MonitorModuleFrame(x: $0.0 - half, y: $0.1 - half, width: badgeSize, height: badgeSize)
+        }
+    }
+
+    private static func overlaps(_ a: MonitorModuleFrame, _ b: MonitorModuleFrame) -> Bool {
+        a.x < b.x + b.width + badgeGap && b.x < a.x + a.width + badgeGap
+            && a.y < b.y + b.height + badgeGap && b.y < a.y + a.height + badgeGap
+    }
+
+    private static func clamped(
+        _ frame: MonitorModuleFrame, viewportWidth: Double, viewportHeight: Double
+    ) -> MonitorModuleFrame {
+        let maxX = Swift.max(badgeGap, viewportWidth - frame.width - badgeGap)
+        let maxY = Swift.max(badgeGap, viewportHeight - frame.height - badgeGap)
+        return MonitorModuleFrame(
+            x: Swift.min(Swift.max(frame.x, badgeGap), maxX),
+            y: Swift.min(Swift.max(frame.y, badgeGap), maxY),
+            width: frame.width,
+            height: frame.height)
+    }
 }
 
 /// Pure on/off semantics for the live-monitor and playback view-assist tools.

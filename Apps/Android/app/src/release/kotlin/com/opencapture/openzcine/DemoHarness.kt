@@ -7,6 +7,7 @@ import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.OperatorSettingsTab
 
 /**
@@ -39,6 +40,8 @@ object DemoHarness {
 
     /** Release builds cannot force a standalone settings surface. */
     @Suppress("UNUSED_PARAMETER")
+    internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? = null
+
     internal fun settingsTab(intent: Intent): OperatorSettingsTab? = null
 
     /** Release builds cannot auto-open debug surfaces. */

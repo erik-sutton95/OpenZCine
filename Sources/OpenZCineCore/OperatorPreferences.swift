@@ -92,15 +92,62 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     }
 }
 
-/// Visibility preferences for the live monitor chrome.
+/// Visibility preferences for the live monitor chrome. One of these per DISP mode — see
+/// ``OperatorPreferences/chrome(for:)``.
 public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
-    public enum Section: Codable, Equatable, Sendable {
+    public enum Section: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
         case statusBar
         case sideRails
         case assistToolbar
         case cameraValues
         case lockButton
         case batteryIndicators
+        // The four status-bar readouts. Appended after the original six so a stored raw value
+        // never shifts meaning.
+        case recReadout
+        case codecReadout
+        case mediaReadout
+        case fpsReadout
+
+        public var id: String { rawValue }
+
+        /// Operator-facing label. Lives here so both shells and the Edit-view badges name the
+        /// same element the same way.
+        public var title: String {
+            switch self {
+            case .statusBar: "Status Bar"
+            case .sideRails: "Side Rail"
+            case .assistToolbar: "Tool Bar"
+            case .cameraValues: "Camera Values"
+            case .lockButton: "Lock Button"
+            case .batteryIndicators: "Batteries"
+            case .recReadout: "REC"
+            case .codecReadout: "CODEC"
+            case .mediaReadout: "MEDIA"
+            case .fpsReadout: "FPS"
+            }
+        }
+
+        /// The four readouts that live inside the status bar, so a shell can nest their badges.
+        public static let statusBarReadouts: [Section] = [
+            .recReadout, .codecReadout, .mediaReadout, .fpsReadout,
+        ]
+    }
+
+    /// Whether `section` currently renders.
+    public func isVisible(_ section: Section) -> Bool {
+        switch section {
+        case .statusBar: statusBarVisible
+        case .sideRails: sideRailsVisible
+        case .assistToolbar: assistToolbarVisible
+        case .cameraValues: cameraValuesVisible
+        case .lockButton: lockButtonVisible
+        case .batteryIndicators: batteryIndicatorsVisible
+        case .recReadout: recReadoutVisible
+        case .codecReadout: codecReadoutVisible
+        case .mediaReadout: mediaReadoutVisible
+        case .fpsReadout: fpsReadoutVisible
+        }
     }
 
     public init(
@@ -169,6 +216,42 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
             try c.decodeIfPresent(Bool.self, forKey: .batteryIndicatorsVisible) ?? true
     }
 
+    /// DISP 2's stock configuration: clean view is a bare image, so every operator-hideable
+    /// element starts off. `sideRailsVisible` stays on because the rail is where clean's two
+    /// documented essentials live — the DISP key (the way back out) and the record control while a
+    /// take is rolling. The per-readout flags stay on so switching the status bar back on in clean
+    /// yields a complete bar rather than an empty pill.
+    public static let cleanDefaults = DisplayChromeVisibility(
+        statusBarVisible: false,
+        sideRailsVisible: true,
+        assistToolbarVisible: false,
+        cameraValuesVisible: false,
+        lockButtonVisible: false,
+        batteryIndicatorsVisible: false)
+
+    /// Whether `section` is configurable for `mode`. Command (DISP 3) replaces the feed with the
+    /// dashboard, so it only owns the rail cluster; clean's rail renders its two essentials
+    /// regardless, so its lock and rail keys are not the operator's to move.
+    public static func isConfigurable(_ section: Section, in mode: DispMode) -> Bool {
+        switch mode {
+        case .live:
+            return true
+        case .clean:
+            // The rail renders clean's two essentials whatever the operator does, and
+            // `.cleanEssentials` carries no lock key to reveal — see ``MonitorChromePolicy``.
+            return section != .sideRails && section != .lockButton
+        case .command:
+            // No feed, so no status bar, no readouts and no strips — only the rail cluster.
+            return section == .sideRails || section == .lockButton
+                || section == .batteryIndicators
+        }
+    }
+
+    /// The sections `mode` lets the operator show or hide, in render order.
+    public static func configurableSections(in mode: DispMode) -> [Section] {
+        Section.allCases.filter { isConfigurable($0, in: mode) }
+    }
+
     public mutating func toggle(_ section: Section) {
         switch section {
         case .statusBar:
@@ -183,6 +266,14 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
             lockButtonVisible.toggle()
         case .batteryIndicators:
             batteryIndicatorsVisible.toggle()
+        case .recReadout:
+            recReadoutVisible.toggle()
+        case .codecReadout:
+            codecReadoutVisible.toggle()
+        case .mediaReadout:
+            mediaReadoutVisible.toggle()
+        case .fpsReadout:
+            fpsReadoutVisible.toggle()
         }
     }
 }
@@ -245,7 +336,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         qualityBias: QualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
         scopeActivationOrder: [MonitorAssistTool] = [],
-        cleanViewPinnedTools: Set<MonitorAssistTool> = []
+        cleanViewPinnedTools: Set<MonitorAssistTool> = [],
+        cleanChrome: DisplayChromeVisibility = .cleanDefaults,
+        commandChrome: DisplayChromeVisibility = DisplayChromeVisibility()
     ) {
         self.dispOrder = dispOrder
         self.enabledDispModes = Self.normalizedEnabledDispModes(enabledDispModes)
@@ -266,6 +359,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.portraitFeedAspect = portraitFeedAspect
         self.scopeActivationOrder = scopeActivationOrder
         self.cleanViewPinnedTools = cleanViewPinnedTools
+        self.cleanChrome = cleanChrome
+        self.commandChrome = commandChrome
     }
 
     /// Stock defaults — forwards to ``defaults``.
@@ -276,6 +371,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var dispOrder: [DispMode]
     /// DISP modes included when the monitor DISP key cycles layouts. Order follows ``dispOrder``.
     public var enabledDispModes: Set<DispMode>
+    /// DISP 1's chrome. Predates the per-mode split, so it keeps its original key and an older
+    /// saved blob loads straight into it — see ``chrome(for:)``.
     public var displayChrome: DisplayChromeVisibility
     public var assistToolbarOrder: [MonitorAssistTool]
     /// Exposure-analysis buttons shown on the bottom assist toolbar (independent of on/off state).
@@ -298,9 +395,48 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
     /// newest activation. Drives the portrait-fit recency-based 2-scope display selection.
     public var scopeActivationOrder: [MonitorAssistTool]
-    /// View-assist tools the operator pinned to survive clean view (DISP 2). Empty by default —
-    /// clean is a bare image out of the box; see ``MonitorChromePolicy``.
+    /// The view-assist tools DISP 2 shows. Empty by default — clean is a bare image out of the
+    /// box; see ``MonitorChromePolicy``.
     public var cleanViewPinnedTools: Set<MonitorAssistTool>
+    /// DISP 2's chrome. Defaults to ``DisplayChromeVisibility/cleanDefaults`` — the bare image.
+    public var cleanChrome: DisplayChromeVisibility
+    /// DISP 3's chrome. Command replaces the feed with the dashboard, so only the rail cluster
+    /// (rail, lock, batteries) is meaningful here.
+    public var commandChrome: DisplayChromeVisibility
+
+    /// The chrome configuration `mode` renders. Each DISP mode owns its own set, so the operator
+    /// can build a full DISP 1, a bare DISP 2 and a stripped DISP 3 independently.
+    public func chrome(for mode: DispMode) -> DisplayChromeVisibility {
+        switch mode {
+        case .live: displayChrome
+        case .clean: cleanChrome
+        case .command: commandChrome
+        }
+    }
+
+    public mutating func setChrome(_ chrome: DisplayChromeVisibility, for mode: DispMode) {
+        switch mode {
+        case .live: displayChrome = chrome
+        case .clean: cleanChrome = chrome
+        case .command: commandChrome = chrome
+        }
+    }
+
+    /// Flips one chrome section for one DISP mode. Sections the mode does not own are ignored —
+    /// see ``DisplayChromeVisibility/isConfigurable(_:in:)``.
+    public mutating func toggleChrome(
+        _ section: DisplayChromeVisibility.Section, for mode: DispMode
+    ) {
+        guard DisplayChromeVisibility.isConfigurable(section, in: mode) else { return }
+        var chrome = chrome(for: mode)
+        chrome.toggle(section)
+        setChrome(chrome, for: mode)
+    }
+
+    /// Restores one DISP mode's chrome to its stock configuration.
+    public mutating func resetChrome(for mode: DispMode) {
+        setChrome(Self.defaults.chrome(for: mode), for: mode)
+    }
 
     /// The ≤2 scope tools the portrait-fit stacked zone displays: the two most recently
     /// activated (per ``scopeActivationOrder``), shown in canonical ``MonitorAssistTool/scopeTools``
@@ -324,6 +460,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case recordConfirmationEnabled, recordHoldEnabled, bluetoothShutterEnabled, hapticsEnabled,
             keepScreenAwake, streamPreset, qualityBias, portraitFeedAspect, scopeActivationOrder
         case cleanViewPinnedTools
+        case cleanChrome, commandChrome
     }
 
     public init(from decoder: any Decoder) throws {
@@ -397,6 +534,16 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         cleanViewPinnedTools =
             try Self.decodeAssistToolSetIfPresent(from: container, forKey: .cleanViewPinnedTools)
             ?? []
+        // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
+        // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
+        // the documented bare image, and DISP 3 inherits the old global set so a rail or battery
+        // cluster the operator had hidden stays hidden there. Nobody's monitor changes on update.
+        cleanChrome =
+            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .cleanChrome)
+            ?? .cleanDefaults
+        commandChrome =
+            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .commandChrome)
+            ?? displayChrome
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -418,6 +565,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(portraitFeedAspect, forKey: .portraitFeedAspect)
         try container.encode(scopeActivationOrder, forKey: .scopeActivationOrder)
         try container.encode(cleanViewPinnedTools, forKey: .cleanViewPinnedTools)
+        try container.encode(cleanChrome, forKey: .cleanChrome)
+        try container.encode(commandChrome, forKey: .commandChrome)
     }
 
     /// Live-monitor assist visibility. Prefer ``visibleAssistTools(for:)`` when the context is known.
@@ -451,7 +600,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         // can still drop to Balanced or Fast for latency. Quality bias stays at the body-default
         // middle ground, which the Size/Quality control reads as "Size".
         streamPreset: .quality,
-        qualityBias: .balanced
+        qualityBias: .balanced,
+        cleanChrome: .cleanDefaults,
+        commandChrome: DisplayChromeVisibility()
     )
 
     /// Whether `tool` should appear on the bottom assist toolbar (LUT is always shown).

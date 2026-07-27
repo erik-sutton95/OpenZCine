@@ -274,24 +274,131 @@ import Testing
         mode: .live, preferences: prefs, recordingOrPending: true)
     #expect(rolling.recordSafety)
 
-    // Clean already strips the rail and offers DISP as its way out — no second recovery key.
+    // Clean keeps its own rail configuration: hiding DISP 1's rail must not touch DISP 2, whose
+    // rail carries the way out of the bare image.
     let clean = MonitorChromePolicy.sideRailPlan(
         mode: .clean, preferences: prefs, recordingOrPending: false)
+    #expect(clean.fullRail)
     #expect(!clean.settingsRecovery)
 }
 
-@Test func batteryIndicatorsHideOnRequestAndAlwaysInClean() {
+// MARK: - Per-DISP-mode chrome
+
+@Test func chromeIsConfiguredPerDispModeAndDefaultsToABareClean() {
+    let prefs = OperatorPreferences.defaults
+
+    #expect(prefs.chrome(for: .live) == DisplayChromeVisibility())
+    #expect(prefs.chrome(for: .clean) == DisplayChromeVisibility.cleanDefaults)
+    #expect(prefs.chrome(for: .command) == DisplayChromeVisibility())
+
+    // Clean's stock look: bare image, but the rail still carries the DISP key out of it.
+    #expect(!prefs.chrome(for: .clean).statusBarVisible)
+    #expect(!prefs.chrome(for: .clean).assistToolbarVisible)
+    #expect(!prefs.chrome(for: .clean).cameraValuesVisible)
+    #expect(!prefs.chrome(for: .clean).batteryIndicatorsVisible)
+    #expect(prefs.chrome(for: .clean).sideRailsVisible)
+}
+
+@Test func togglingOneModesChromeLeavesTheOthersAlone() {
+    var prefs = OperatorPreferences.defaults
+    prefs.toggleChrome(.statusBar, for: .clean)
+
+    #expect(prefs.chrome(for: .clean).statusBarVisible)
+    #expect(prefs.chrome(for: .live).statusBarVisible)
+    prefs.toggleChrome(.statusBar, for: .live)
+    #expect(!prefs.chrome(for: .live).statusBarVisible)
+    #expect(prefs.chrome(for: .clean).statusBarVisible)
+
+    prefs.resetChrome(for: .clean)
+    #expect(!prefs.chrome(for: .clean).statusBarVisible)
+    #expect(!prefs.chrome(for: .live).statusBarVisible, "resetting one mode must not touch another")
+}
+
+@Test func sectionsAModeDoesNotOwnAreNotToggleable() {
+    // Command has no feed, so no status bar to reveal; clean's rail renders its two essentials
+    // whatever the operator does, and `.cleanEssentials` carries no lock key.
+    #expect(!DisplayChromeVisibility.isConfigurable(.statusBar, in: .command))
+    #expect(!DisplayChromeVisibility.isConfigurable(.sideRails, in: .clean))
+    #expect(!DisplayChromeVisibility.isConfigurable(.lockButton, in: .clean))
+    #expect(DisplayChromeVisibility.isConfigurable(.lockButton, in: .command))
+    #expect(DisplayChromeVisibility.configurableSections(in: .live).count == 10)
+    #expect(
+        DisplayChromeVisibility.configurableSections(in: .command) == [
+            .sideRails, .lockButton, .batteryIndicators,
+        ])
+
+    var prefs = OperatorPreferences.defaults
+    prefs.toggleChrome(.statusBar, for: .command)
+    #expect(prefs.chrome(for: .command).statusBarVisible, "a non-owned section must not flip")
+}
+
+@Test func olderPayloadsMigrateTheGlobalChromeOntoDisp1AndDisp3() throws {
+    // The single stored set was the global one. It becomes DISP 1's, DISP 3 inherits it so a
+    // hidden rail stays hidden on the dashboard, and DISP 2 lands on the documented bare image.
+    var prefs = OperatorPreferences.defaults
+    prefs.displayChrome.sideRailsVisible = false
+    prefs.displayChrome.batteryIndicatorsVisible = false
+    var dict = try #require(
+        try JSONSerialization.jsonObject(with: try JSONEncoder().encode(prefs)) as? [String: Any])
+    dict.removeValue(forKey: "cleanChrome")
+    dict.removeValue(forKey: "commandChrome")
+
+    let decoded = try JSONDecoder().decode(
+        OperatorPreferences.self, from: try JSONSerialization.data(withJSONObject: dict))
+
+    #expect(decoded.chrome(for: .live) == prefs.displayChrome)
+    #expect(decoded.chrome(for: .command) == prefs.displayChrome)
+    #expect(decoded.chrome(for: .clean) == DisplayChromeVisibility.cleanDefaults)
+    // The rest of the blob survives — a missing new key never resets the preferences.
+    #expect(decoded.dispOrder == OperatorPreferences.defaults.dispOrder)
+    #expect(decoded.streamPreset == OperatorPreferences.defaults.streamPreset)
+}
+
+@Test func perModeChromeRoundTrips() throws {
+    var prefs = OperatorPreferences.defaults
+    prefs.toggleChrome(.statusBar, for: .clean)
+    prefs.toggleChrome(.fpsReadout, for: .clean)
+    prefs.toggleChrome(.sideRails, for: .command)
+
+    let decoded = try JSONDecoder().decode(
+        OperatorPreferences.self, from: try JSONEncoder().encode(prefs))
+
+    #expect(decoded.chrome(for: .clean).statusBarVisible)
+    #expect(!decoded.chrome(for: .clean).fpsReadoutVisible)
+    #expect(!decoded.chrome(for: .command).sideRailsVisible)
+    #expect(decoded.chrome(for: .live) == DisplayChromeVisibility())
+}
+
+@Test func aBareCleanRendersNothingItWasNotToldTo() {
+    let prefs = OperatorPreferences.defaults
+    for section in DisplayChromeVisibility.Section.allCases
+    where section != .sideRails
+        && !DisplayChromeVisibility.Section.statusBarReadouts
+            .contains(section)
+    {
+        #expect(
+            !MonitorChromePolicy.showsSection(section, mode: .clean, preferences: prefs),
+            "\(section) must be off in stock clean view")
+        #expect(
+            MonitorChromePolicy.showsSection(section, mode: .live, preferences: prefs),
+            "\(section) must be on in stock live view")
+    }
+}
+
+@Test func batteryIndicatorsHideOnRequestPerDispMode() {
     var prefs = OperatorPreferences.defaults
     #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .live, preferences: prefs))
     #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .command, preferences: prefs))
+    // Clean ships bare, so its own configuration already has them off.
     #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .clean, preferences: prefs))
 
-    prefs.displayChrome.batteryIndicatorsVisible = false
     for mode in DispMode.allCases {
-        #expect(
-            !MonitorChromePolicy.showsBatteryIndicators(mode: mode, preferences: prefs),
-            "batteries must stay hidden in \(mode)")
+        prefs.toggleChrome(.batteryIndicators, for: mode)
     }
+    #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .live, preferences: prefs))
+    #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .command, preferences: prefs))
+    // Clean's toggle flipped the other way — the point of per-mode chrome.
+    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .clean, preferences: prefs))
 }
 
 @Test func assistConfigurationPersistsThroughJSONRoundTrip() throws {
@@ -758,4 +865,77 @@ private func splitEraConfiguration(
     #expect(MonitorChromePolicy.streamsHeaderOnly(in: .command))
     #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .live))
     #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .clean))
+}
+// MARK: - Edit view badge placement
+
+@Test func editBadgesTakeACornerOfTheirOwnElementAndNeverStackUp() throws {
+    // Real measured landscape boxes from an iPhone 15 Pro (852x393): the four readouts nest inside
+    // the status bar, and the rail and camera-value strip sit flush against the screen edges.
+    let boxes: [MonitorChromeEditLayout.Box] = [
+        .init(section: .statusBar, frame: MonitorModuleFrame(x: 69, y: 16, width: 678, height: 42)),
+        .init(
+            section: .sideRails, frame: MonitorModuleFrame(x: 763, y: 14, width: 83, height: 289)),
+        .init(
+            section: .assistToolbar,
+            frame: MonitorModuleFrame(x: 16, y: 321, width: 344, height: 58)),
+        .init(
+            section: .cameraValues,
+            frame: MonitorModuleFrame(x: 368, y: 321, width: 466, height: 58)),
+        .init(section: .lockButton, frame: MonitorModuleFrame(x: 16, y: 17, width: 40, height: 40)),
+        .init(
+            section: .batteryIndicators,
+            frame: MonitorModuleFrame(x: 8, y: 63, width: 41, height: 35)),
+        .init(section: .recReadout, frame: MonitorModuleFrame(x: 81, y: 23, width: 67, height: 27)),
+        .init(
+            section: .codecReadout, frame: MonitorModuleFrame(x: 377, y: 22, width: 98, height: 30)),
+        .init(
+            section: .mediaReadout, frame: MonitorModuleFrame(x: 485, y: 22, width: 132, height: 30)
+        ),
+        .init(
+            section: .fpsReadout, frame: MonitorModuleFrame(x: 627, y: 22, width: 108, height: 29)),
+    ]
+
+    let frames = MonitorChromeEditLayout.badgeFrames(
+        boxes, viewportWidth: 852, viewportHeight: 393)
+
+    #expect(frames.count == boxes.count, "every measured element must get a badge")
+    for (section, frame) in frames {
+        #expect(frame.x >= 0 && frame.y >= 0, "\(section) badge ran off the top or leading edge")
+        #expect(
+            frame.x + frame.width <= 852 && frame.y + frame.height <= 393,
+            "\(section) badge ran off the trailing or bottom edge")
+        // Still reads as belonging to its element: the centre stays within one badge of the box.
+        let box = try #require(boxes.first { $0.section == section }).frame
+        let pad = MonitorChromeEditLayout.badgeSize
+        #expect(
+            frame.midX >= box.x - pad && frame.midX <= box.x + box.width + pad
+                && frame.midY >= box.y - pad && frame.midY <= box.y + box.height + pad,
+            "\(section) badge drifted away from the element it controls")
+    }
+    // No two badges collide — the readouts nested inside the status bar are the hard case.
+    let all = Array(frames.values)
+    for i in all.indices {
+        for j in all.indices where j > i {
+            let a = all[i]
+            let b = all[j]
+            let apart =
+                a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y
+                || b.y + b.height <= a.y
+            #expect(apart, "two badges overlap at \(a) and \(b)")
+        }
+    }
+}
+
+@Test func editBadgeLayoutSkipsUnmeasuredElements() {
+    let frames = MonitorChromeEditLayout.badgeFrames(
+        [
+            .init(section: .statusBar, frame: MonitorModuleFrame(x: 0, y: 0, width: 0, height: 0)),
+            .init(
+                section: .lockButton, frame: MonitorModuleFrame(x: 16, y: 17, width: 40, height: 40)
+            ),
+        ],
+        viewportWidth: 852, viewportHeight: 393)
+
+    #expect(frames[.statusBar] == nil)
+    #expect(frames[.lockButton] != nil)
 }

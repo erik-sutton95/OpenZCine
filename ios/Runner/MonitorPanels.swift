@@ -3630,6 +3630,9 @@ struct OperatorSettingsPanel: View {
     @State private var externalLinkErrorMessage: String?
     @State private var pendingInternetDestination: SettingsInternetDestination?
     @State private var isPreparingDiagnostics = false
+    /// Which DISP section on the Display tab is open. All three start collapsed — the tab is a
+    /// short list of modes at a glance, and you open the one you want to set up.
+    @State private var expandedDispSection: DispMode?
     /// Standalone setup is already a root cover, so its report flow is presented above that cover.
     /// Camera-backed setup uses the root-owned presentation instead, which survives an AP hop.
     @State private var standaloneBugReportPresented = false
@@ -4050,86 +4053,13 @@ struct OperatorSettingsPanel: View {
 
     }
 
+    /// The Display tab is one card per DISP mode: each mode owns what it shows, and each opens on
+    /// tap. Collapsed, the whole tab reads as "DISP 1, DISP 2, DISP 3, button order" instead of
+    /// ~50 controls in one scroll.
     @ViewBuilder private var displayRows: some View {
-        SettingsGroupCard(
-            title: "View Assist toolbar",
-            caption:
-                "Drag to reorder; tap the eye to show or hide each tool on the monitor bar.",
-            onReset: { model.resetAssistToolbarPreferences() },
-            content: {
-                AssistToolbarOrderStrip()
-                    .environment(model)
-            }
-        )
-
-        SettingsGroupCard(
-            title: "Keep in Clean View",
-            caption:
-                "Clean view (DISP 2) shows the image and nothing else. Anything switched on here stays on screen anyway.",
-            onReset: { model.resetCleanViewPins() },
-            content: {
-                CleanViewPinStrip()
-                    .environment(model)
-            }
-        )
-
-        SettingsGroupCard(
-            title: "Monitor Chrome",
-            caption:
-                "Hide parts of the monitor you do not ride. Clean view hides all of it regardless; the lock button stays while controls are locked, since it is the only way to unlock them.",
-            onReset: { model.resetChromeVisibility() },
-            content: {
-                displayToggleGrid([
-                    (
-                        "Top Bar", model.preferences.displayChrome.statusBarVisible,
-                        { model.toggleChrome(.statusBar) }
-                    ),
-                    (
-                        "Side Rail", model.preferences.displayChrome.sideRailsVisible,
-                        { model.toggleChrome(.sideRails) }
-                    ),
-                    (
-                        "Tool Bar", model.preferences.displayChrome.assistToolbarVisible,
-                        { model.toggleChrome(.assistToolbar) }
-                    ),
-                    (
-                        "Camera Values", model.preferences.displayChrome.cameraValuesVisible,
-                        { model.toggleChrome(.cameraValues) }
-                    ),
-                    (
-                        "Lock Button", model.preferences.displayChrome.lockButtonVisible,
-                        { model.toggleChrome(.lockButton) }
-                    ),
-                    (
-                        "Batteries", model.preferences.displayChrome.batteryIndicatorsVisible,
-                        { model.toggleChrome(.batteryIndicators) }
-                    ),
-                ])
-            }
-        )
-
-        SettingsGroupCard(
-            title: "Live Status Readouts", caption: "Hide readouts you do not ride during a take."
-        ) {
-            displayToggleGrid([
-                (
-                    "REC", model.preferences.displayChrome.recReadoutVisible,
-                    { model.preferences.displayChrome.recReadoutVisible.toggle() }
-                ),
-                (
-                    "CODEC", model.preferences.displayChrome.codecReadoutVisible,
-                    { model.preferences.displayChrome.codecReadoutVisible.toggle() }
-                ),
-                (
-                    "MEDIA", model.preferences.displayChrome.mediaReadoutVisible,
-                    { model.preferences.displayChrome.mediaReadoutVisible.toggle() }
-                ),
-                (
-                    "FPS", model.preferences.displayChrome.fpsReadoutVisible,
-                    { model.preferences.displayChrome.fpsReadoutVisible.toggle() }
-                ),
-            ])
-        }
+        dispSectionCard(.live)
+        dispSectionCard(.clean)
+        dispSectionCard(.command)
 
         SettingsGroupCard(
             title: "DISP Button Order",
@@ -4140,6 +4070,74 @@ struct OperatorSettingsPanel: View {
                     .environment(model)
             }
         )
+    }
+
+    @ViewBuilder private func dispSectionCard(_ mode: DispMode) -> some View {
+        SettingsGroupCard(
+            title: "DISP \(dispNumber(mode)) · \(mode.title)",
+            caption: dispCaption(mode),
+            onReset: { model.resetChromeVisibility(for: mode) },
+            expansion: Binding(
+                get: { expandedDispSection == mode },
+                set: { expandedDispSection = $0 ? mode : nil }),
+            content: {
+                dispSectionBody(mode)
+            }
+        )
+    }
+
+    @ViewBuilder private func dispSectionBody(_ mode: DispMode) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Command is a fixed dashboard grid, not the live chrome — there is no live view
+            // to place badges on, so it gets the plain list.
+            if mode == .command {
+                displayToggleGrid(chromeToggles(for: mode))
+            } else {
+                SettingsActionPill(title: "Edit view") { model.beginChromeEditing(mode) }
+                    .accessibilityHint(
+                        "Opens the monitor with an eye on each element you can show or hide")
+                if mode == .clean {
+                    Text("View assists that stay on in clean view")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(LiveDesign.muted)
+                    CleanViewPinStrip()
+                        .environment(model)
+                } else {
+                    Text("Tool bar buttons — drag to reorder, tap the eye to show or hide")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(LiveDesign.muted)
+                    AssistToolbarOrderStrip()
+                        .environment(model)
+                }
+            }
+        }
+    }
+
+    private func dispNumber(_ mode: DispMode) -> Int {
+        (DispMode.allCases.firstIndex(of: mode) ?? 0) + 1
+    }
+
+    private func dispCaption(_ mode: DispMode) -> String {
+        switch mode {
+        case .live:
+            "The full monitor. Set what it shows in Edit view, and which tools reach the tool bar."
+        case .clean:
+            "A bare image. Anything you switch on here survives clean view; the DISP key always stays so you can get back out."
+        case .command:
+            "The data dashboard — no feed, so no image assists. Only the side rail is on screen."
+        }
+    }
+
+    private func chromeToggles(for mode: DispMode)
+        -> [(title: String, isOn: Bool, action: () -> Void)]
+    {
+        DisplayChromeVisibility.configurableSections(in: mode).map { section in
+            (
+                section.title,
+                model.preferences.chrome(for: mode).isVisible(section),
+                { model.toggleChrome(section, for: mode) }
+            )
+        }
     }
 
     /// Marketing version + build number from the bundle, e.g. "0.2.0 (9)", matching what

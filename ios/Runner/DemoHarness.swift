@@ -171,6 +171,15 @@ enum DemoHarness {
 
 #if DEBUG
     extension DemoHarness {
+        /// The DISP mode a capture is aimed at: the Edit view's mode when one is named, else the
+        /// mode the run launches into.
+        static func demoDispMode(_ env: [String: String]) -> DispMode? {
+            if let raw = env["ZC_DEMO_CHROME_EDIT"], let mode = DispMode(rawValue: raw) {
+                return mode
+            }
+            return env["ZC_DEMO_DISP"].flatMap(DispMode.init(rawValue:))
+        }
+
         /// Stages the model from the launch environment (`SIMCTL_CHILD_ZC_DEMO_*` via
         /// `simctl launch`). No effect in normal launches.
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {
@@ -399,20 +408,28 @@ enum DemoHarness {
                 if let raw = env["ZC_DEMO_CHROME_HIDE"] {
                     // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated:
                     // lock, battery, topbar, rail, toolbar, values) so each hidden state can be
-                    // captured headlessly — simctl cannot drive the Settings switches.
+                    // captured headlessly — simctl cannot drive the Settings switches. Applies to
+                    // the DISP mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else DISP 1.
+                    let target = Self.demoDispMode(env) ?? model.displayMode
+                    var chrome = model.preferences.chrome(for: target)
                     for value in raw.split(separator: ",") {
                         switch value {
-                        case "lock": model.preferences.displayChrome.lockButtonVisible = false
-                        case "battery":
-                            model.preferences.displayChrome.batteryIndicatorsVisible = false
-                        case "topbar": model.preferences.displayChrome.statusBarVisible = false
-                        case "rail": model.preferences.displayChrome.sideRailsVisible = false
-                        case "toolbar":
-                            model.preferences.displayChrome.assistToolbarVisible = false
-                        case "values": model.preferences.displayChrome.cameraValuesVisible = false
+                        case "lock": chrome.lockButtonVisible = false
+                        case "battery": chrome.batteryIndicatorsVisible = false
+                        case "topbar": chrome.statusBarVisible = false
+                        case "rail": chrome.sideRailsVisible = false
+                        case "toolbar": chrome.assistToolbarVisible = false
+                        case "values": chrome.cameraValuesVisible = false
                         default: break
                         }
                     }
+                    model.preferences.setChrome(chrome, for: target)
+                }
+                if let mode = Self.demoDispMode(env), env["ZC_DEMO_CHROME_EDIT"] != nil {
+                    // Demo/screenshot affordance: open the Edit view on one DISP mode
+                    // (ZC_DEMO_CHROME_EDIT=live|clean|command). simctl cannot tap the Settings
+                    // button, and the eye badges only exist while the editor is up.
+                    model.beginChromeEditing(mode)
                 }
                 if let raw = env["ZC_DEMO_ASSIST_ON"] {
                     // Demo/screenshot affordance: switch one or more assist tools on (comma-separated

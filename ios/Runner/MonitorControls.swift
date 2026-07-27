@@ -335,43 +335,76 @@ struct SettingsGroupCard<Content: View>: View {
     let title: String
     let caption: String
     var onReset: (() -> Void)? = nil
+    /// When bound, the card collapses to its header and the whole header toggles it. Long tabs
+    /// (Display carries three DISP sections) read as a short list of sections this way instead of
+    /// one unbroken scroll of controls.
+    var expansion: Binding<Bool>? = nil
     @ViewBuilder let content: Content
 
     init(
         title: String, caption: String, onReset: (() -> Void)? = nil,
+        expansion: Binding<Bool>? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.caption = caption
         self.onReset = onReset
+        self.expansion = expansion
         self.content = content()
     }
 
+    private var isExpanded: Bool { expansion?.wrappedValue ?? true }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold, design: .default))
-                        .foregroundStyle(LiveDesign.text)
-                    // Wraps rather than truncating: a card whose caption has to explain a rule
-                    // (clean view, monitor chrome) loses the explanation to a `…` at one line.
-                    Text(caption)
-                        .font(.system(size: 11.5, weight: .regular, design: .default))
-                        .foregroundStyle(LiveDesign.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+            if let expansion {
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) { expansion.wrappedValue.toggle() }
+                } label: {
+                    header
                 }
-                Spacer(minLength: 0)
-                if let onReset {
-                    SettingsResetButton(action: onReset)
-                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            } else {
+                header
             }
-            content
+            if isExpanded {
+                content
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .liquidGlass(
             in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .default))
+                    .foregroundStyle(LiveDesign.text)
+                // Wraps rather than truncating: a card whose caption has to explain a rule
+                // (clean view, monitor chrome) loses the explanation to a `…` at one line.
+                Text(caption)
+                    .font(.system(size: 11.5, weight: .regular, design: .default))
+                    .foregroundStyle(LiveDesign.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if let onReset, isExpanded {
+                SettingsResetButton(action: onReset)
+            }
+            if expansion != nil {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(LiveDesign.muted)
+                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                    .frame(width: 28, height: 28)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -1494,5 +1527,192 @@ struct WhiteBalanceTintPad: View {
             CGFloat(range.lowerBound)
             + clamped * CGFloat(range.upperBound - range.lowerBound)
         return Int(value.rounded())
+    }
+}
+// MARK: - Edit view (per-DISP chrome)
+
+/// The measured bounds of every badgeable monitor element, in the Edit view's coordinate space.
+///
+/// Boxes are *measured*, never derived from the zone map: a zone frame is a layout budget, and
+/// several elements draw inset within theirs (the deck pill, the battery chips, the rail column).
+/// An outline drawn from the budget would highlight the wrong thing.
+struct ChromeEditBoundsKey: PreferenceKey {
+    static let defaultValue: [DisplayChromeVisibility.Section: CGRect] = [:]
+
+    static func reduce(
+        value: inout [DisplayChromeVisibility.Section: CGRect],
+        nextValue: () -> [DisplayChromeVisibility.Section: CGRect]
+    ) {
+        // Union, not last-wins: an element can draw as several pieces (the two battery gauges), and
+        // its badge belongs on the corner of all of them, not of whichever reported last.
+        value.merge(nextValue()) { existing, next in existing.union(next) }
+    }
+}
+
+enum ChromeEditSpace {
+    static let name = "monitor.chromeEdit"
+}
+
+/// Marks a monitor element as editable: while the Edit view is open on a mode that owns
+/// `section`, the element is outlined, dimmed to 30% when hidden, and publishes its drawn bounds
+/// so the badge layer can place one eye on it. Outside the editor this is a no-op.
+///
+/// The badge itself is deliberately **not** here — badges are laid out together, in one overlay
+/// above everything, so they can avoid each other and stay tappable.
+extension View {
+    func chromeEditable(
+        _ section: DisplayChromeVisibility.Section,
+        editing mode: DispMode?
+    ) -> some View {
+        modifier(ChromeEditable(section: section, mode: mode))
+    }
+}
+
+struct ChromeEditable: ViewModifier {
+    @Environment(NativeAppModel.self) private var model
+    let section: DisplayChromeVisibility.Section
+    let mode: DispMode?
+
+    func body(content: Content) -> some View {
+        if let mode, DisplayChromeVisibility.isConfigurable(section, in: mode) {
+            let on = model.preferences.chrome(for: mode).isVisible(section)
+            content
+                .opacity(on ? 1 : 0.3)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: ChromeEditBoundsKey.self,
+                            value: [section: proxy.frame(in: .named(ChromeEditSpace.name))])
+                    }
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(
+                            on ? LiveDesign.accent.opacity(0.75) : LiveDesign.muted.opacity(0.75),
+                            style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                        )
+                        .padding(-2)
+                }
+        } else {
+            content
+        }
+    }
+}
+
+/// One eye badge. Tapping it shows or hides that element **for the DISP mode being edited** — not
+/// globally.
+///
+/// A hidden element keeps rendering at 30% for as long as the editor is open, and keeps this
+/// badge, which is the whole point: switching something off must never put it out of reach of
+/// switching back on. Outside the editor a hidden element is simply gone.
+struct ChromeEditBadge: View {
+    @Environment(NativeAppModel.self) private var model
+    let section: DisplayChromeVisibility.Section
+    let mode: DispMode
+
+    var body: some View {
+        let on = model.preferences.chrome(for: mode).isVisible(section)
+        Button {
+            OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+            model.toggleChrome(section, for: mode)
+        } label: {
+            Image(systemName: on ? "eye.fill" : "eye.slash.fill")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(on ? LiveDesign.background : LiveDesign.text)
+                .frame(
+                    width: CGFloat(MonitorChromeEditLayout.badgeSize),
+                    height: CGFloat(MonitorChromeEditLayout.badgeSize)
+                )
+                .background(on ? LiveDesign.accent : Color.black.opacity(0.9), in: Circle())
+                .overlay(Circle().strokeBorder(LiveDesign.text.opacity(0.55), lineWidth: 1))
+        }
+        .buttonStyle(.zcTapTarget)
+        // A 26pt disc is well under the 44pt minimum, and these sit over live chrome where a near
+        // miss would otherwise fall through to the element behind.
+        .minTapTarget()
+        .accessibilityLabel(section.title)
+        .accessibilityValue(on ? "Shown" : "Hidden")
+        .accessibilityHint("Shows or hides this on \(mode.title)")
+        .accessibilityIdentifier("monitor.chromeEdit.\(section.rawValue)")
+    }
+}
+
+/// Every eye badge, laid out together above the monitor so no two collide and each stays
+/// tappable. Placement comes from `MonitorChromeEditLayout` in the core, so both shells agree.
+struct ChromeEditBadgeLayer: View {
+    @Environment(NativeAppModel.self) private var model
+    let mode: DispMode
+    let boxes: [DisplayChromeVisibility.Section: CGRect]
+    /// The **physical** viewport, not the measurement space's own frame. The space belongs to the
+    /// safe-area-inset shell frame (734pt wide on a 852pt iPhone 15 Pro landscape) while the
+    /// chrome draws full-bleed past it, so clamping badges to the space's bounds pulled them off
+    /// their corners and into the middle of the strips. Measured coordinates already match
+    /// physical ones — only the size differs.
+    let viewport: CGSize
+
+    var body: some View {
+        let frames = MonitorChromeEditLayout.badgeFrames(
+            // Section order is the placement priority: the containers first, the readouts nested
+            // inside the status bar last, so the big boxes keep their preferred corner.
+            DisplayChromeVisibility.Section.allCases.compactMap { section in
+                boxes[section].map {
+                    MonitorChromeEditLayout.Box(
+                        section: section,
+                        frame: MonitorModuleFrame(
+                            x: $0.minX, y: $0.minY, width: $0.width, height: $0.height))
+                }
+            },
+            viewportWidth: Double(viewport.width),
+            viewportHeight: Double(viewport.height)
+        )
+        ZStack(alignment: .topLeading) {
+            ForEach(DisplayChromeVisibility.Section.allCases) { section in
+                if let frame = frames[section] {
+                    ChromeEditBadge(section: section, mode: mode)
+                        .environment(model)
+                        .position(x: CGFloat(frame.midX), y: CGFloat(frame.midY))
+                }
+            }
+        }
+    }
+}
+
+/// The Edit view's own chrome: names the mode being edited and gets the operator back out. Floats
+/// bottom-centre over the feed, clear of the rails on both sides.
+struct ChromeEditBanner: View {
+    @Environment(NativeAppModel.self) private var model
+    let mode: DispMode
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "eye")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(LiveDesign.accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Editing \(mode.title)")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                Text("Tap an eye to show or hide it")
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+            Button {
+                model.endChromeEditing()
+            } label: {
+                Text("Done")
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(LiveDesign.background)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(LiveDesign.accent, in: Capsule())
+            }
+            .buttonStyle(.zcTapTarget)
+            .accessibilityIdentifier("monitor.chromeEdit.done")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .liquidGlass(in: Capsule())
+        .accessibilityIdentifier("monitor.chromeEdit.banner")
     }
 }
