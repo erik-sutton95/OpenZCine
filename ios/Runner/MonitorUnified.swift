@@ -1167,6 +1167,22 @@ struct MonitorScopes: View {
 /// rails + scopes; `.command` = `CommandMonitor` + rails, feed unmounted. `displayChrome.*`
 /// preference toggles gate each region. The portrait map already encodes per-mode zones
 /// (nil / zero-height), so the portrait branch reads visibility straight off the map.
+/// Where the shared bottom band pins its content.
+///
+/// The landscape assist toolbar and camera-values strip live in ONE full-width band, so alignment
+/// is the only thing keeping each on its own side. Leading is correct while the assist strip is
+/// present to fill the space — but with it hidden, leading dragged the camera values across to the
+/// left edge, so an operator who configured DISP 2 with only the values on watched them move the
+/// moment they closed the Edit view (the editor cannot show this: it renders with both mounted).
+/// Each side now stays where the operator arranged it.
+enum MonitorBottomBandAlignment {
+    static func alignment(photography: Bool, assistVisible: Bool) -> Alignment {
+        // Photography centres its single shared strip under the centred feed.
+        if photography && !assistVisible { return .center }
+        return assistVisible ? .leading : .trailing
+    }
+}
+
 struct MonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     let context: LiveViewLayoutContext
@@ -1498,7 +1514,8 @@ struct MonitorShell: View {
                 // assist-then-strip leading flow).
                 .frame(
                     width: CGFloat(width), height: CGFloat(assist.frame.height),
-                    alignment: isPhotographyBand && !assistVisible ? .center : .leading
+                    alignment: MonitorBottomBandAlignment.alignment(
+                        photography: isPhotographyBand, assistVisible: assistVisible)
                 )
                 .position(
                     x: CGFloat(leftX + width / 2),

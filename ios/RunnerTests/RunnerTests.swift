@@ -1415,6 +1415,21 @@ extension RunnerTests {
         XCTAssertFalse(model.showsMFDriveScrub)
     }
 
+    /// The camera-values strip must not migrate to the left edge when the assist toolbar is
+    /// hidden — an operator who configures DISP 2 with only the values on would see them move as
+    /// soon as they left the Edit view, which renders with both bars mounted.
+    func testBottomBandKeepsEachStripOnItsOwnSide() {
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: false, assistVisible: true),
+            .leading, "with both bars up the assist strip fills the space and values land trailing")
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: false, assistVisible: false),
+            .trailing, "values alone must stay on the right, not slide to the left edge")
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: true, assistVisible: false),
+            .center, "photography centres its shared strip under the centred feed")
+    }
+
     /// #272: no focus-drive exit path may leave focus commands owned. Cancelling with nothing in
     /// flight, twice, and with no session must all be no-ops that leave the dial usable.
     @MainActor
