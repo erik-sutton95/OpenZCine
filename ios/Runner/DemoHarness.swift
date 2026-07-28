@@ -33,6 +33,9 @@ enum DemoHarness {
     /// `ZC_DEMO_CPU_FEED=1` forces the old `UIImageView` feed path back, for an A/B against the
     /// default GPU-native renderer. See `FeedRenderMode`.
     static let forceCPUFeed = flag("ZC_DEMO_CPU_FEED")
+    /// `ZC_DEMO_FEED_SCALER=lanczos` forces the Lanczos fallback over MetalFX Spatial, for an A/B
+    /// of the feed upscaler on a device that supports both. See `MetalLiveView.Coordinator`.
+    static let forceLanczosFeedScaler = value("ZC_DEMO_FEED_SCALER") == "lanczos"
     /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
     /// rasterizer — the baseline for pixel-diff look-regression checks.
     static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")

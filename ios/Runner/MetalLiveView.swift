@@ -5,6 +5,13 @@ import SwiftUI
 import UIKit
 import os
 
+// MetalFX is a device-only framework — there is no `MetalFX.framework` in the iOS Simulator SDK,
+// so an unconditional import breaks `just ios-build` and `just ios-test`. Every use below is behind
+// the same check, with a `false`-returning stub for the simulator that routes to Lanczos.
+#if canImport(MetalFX)
+    import MetalFX
+#endif
+
 /// Selects the live-view feed renderer. GPU-native `MetalLiveView` by default, falling back to the
 /// `UIImageView` path (`LiveFrameView`) on any device without Metal or after a render failure.
 ///
@@ -79,7 +86,9 @@ struct MetalLiveView: UIViewRepresentable {
         let view = MTKView(frame: .zero, device: context.coordinator.device)
         view.delegate = context.coordinator
         // CI never writes the layer drawable directly — we blit from an intermediate texture — but
-        // keep the layer writable so future paths (or debugging) can sample the drawable if needed.
+        // both upscalers in `draw(in:)` do, from a compute kernel, so the drawable texture needs
+        // `.shaderWrite`. `framebufferOnly = false` is what grants it (there is no `usage` knob on
+        // `CAMetalLayer`), and the MPS path already depended on it — do not set this back to true.
         view.framebufferOnly = false
         if let metalLayer = view.layer as? CAMetalLayer {
             metalLayer.framebufferOnly = false
@@ -108,11 +117,18 @@ struct MetalLiveView: UIViewRepresentable {
         let device: MTLDevice
         private let commandQueue: MTLCommandQueue
         private let baker: MetalFeedFrameBaker
-        /// Upscales the source-resolution bake to the drawable — see `MetalFeedFrameBaker.bakeSize`.
-        /// A blit encoder cannot scale, and a fullscreen quad would need a new `.metal` file in the
-        /// target; MPS needs neither and is already linked (`ScopeTraceMetalView`). Bilinear because
-        /// that is what Core Image's own affine upscale did, so the image reads the same.
-        private lazy var scaler = MPSImageBilinearScale(device: device)
+        /// Fallback upscale from the source-resolution bake to the drawable — see
+        /// `MetalFeedFrameBaker.bakeSize`. A blit encoder cannot scale, and a fullscreen quad would
+        /// need a new `.metal` file in the target; MPS needs neither and is already linked
+        /// (`ScopeTraceMetalView`).
+        ///
+        /// Lanczos, not the bilinear this started as. Bilinear was chosen only to match what Core
+        /// Image's own affine upscale did, and at the ratio actually in play — a ~1024×471 bake
+        /// presented at 2868×1320, so 2.8× linear — it is the weakest kernel available for the job.
+        /// Lanczos costs a few more taps on one pass over the drawable and resolves real edges
+        /// noticeably better. It does ring slightly on JPEG block boundaries; MetalFX below handles
+        /// that case better, and this is what runs when MetalFX cannot.
+        private lazy var lanczos = MPSImageLanczosScale(device: device)
         private var currentImage: UIImage?
         private var currentEffects = LiveImageEffects()
         private var lastDrawableSize: CGSize = .zero
@@ -202,10 +218,13 @@ struct MetalLiveView: UIViewRepresentable {
                             destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
                         blit.endEncoding()
                     }
-                } else {
-                    // The bake already carries the drawable's aspect, so a full-source-to-full-
-                    // destination scale is uniform — no `scaleTransform` and no letterbox needed.
-                    scaler.encode(
+                } else if !encodeSpatialUpscale(
+                    from: baked, to: target, commandBuffer: commandBuffer)
+                {
+                    // MetalFX declined — simulator, pre-A13, or a downscale. The bake already
+                    // carries the drawable's aspect, so a full-source-to-full-destination scale is
+                    // uniform — no `scaleTransform` and no letterbox needed.
+                    lanczos.encode(
                         commandBuffer: commandBuffer, sourceTexture: baked,
                         destinationTexture: target
                     )
@@ -218,6 +237,97 @@ struct MetalLiveView: UIViewRepresentable {
                 #endif
             }
         }
+
+        #if canImport(MetalFX)
+            /// Identifies the exact scale a `MTLFXSpatialScaler` was built for. MetalFX bakes the
+            /// input and output dimensions into the object, so any change means a new one.
+            private struct SpatialScalerKey: Equatable {
+                let inputWidth: Int
+                let inputHeight: Int
+                let outputWidth: Int
+                let outputHeight: Int
+                let pixelFormat: MTLPixelFormat
+            }
+
+            /// Cached MetalFX Spatial upscaler and the input→output pair it was built for.
+            private var spatialScaler: MTLFXSpatialScaler?
+            private var spatialScalerKey: SpatialScalerKey?
+            /// Whether to try MetalFX at all: A13+ only (iOS 17 still runs on A12), and latched off
+            /// after a creation failure so a device that refuses it does not retry every frame.
+            private lazy var spatialScalingSupported =
+                !DemoHarness.forceLanczosFeedScaler
+                && MTLFXSpatialScalerDescriptor.supportsDevice(device)
+
+            /// Encodes the bake→drawable upscale through MetalFX Spatial, or returns `false` when
+            /// the device or the scale direction rules it out and Lanczos should run instead.
+            ///
+            /// MetalFX Spatial is the same class of edge-aware spatial upscaler as FSR1, shipped in
+            /// the OS, and a much better fit for a 2.8× blow-up than any fixed kernel. It is *not*
+            /// the temporal family (FSR2/DLSS/STP): those need per-pixel motion vectors and a
+            /// jittered projection from a renderer, neither of which exists for a camera JPEG.
+            ///
+            /// Constructing a scaler allocates internal buffers, so one is built per (feed size,
+            /// drawable size) — that pair changes on rotation or a stream-preset switch, not per
+            /// frame.
+            private func encodeSpatialUpscale(
+                from source: MTLTexture, to target: MTLTexture, commandBuffer: MTLCommandBuffer
+            ) -> Bool {
+                guard spatialScalingSupported else { return false }
+                // MetalFX only upscales. `bakeSize` clamps a source that out-resolves the panel
+                // down to the drawable, which is the demo-stills case — Lanczos takes that one.
+                guard target.width > source.width, target.height > source.height else {
+                    return false
+                }
+
+                let key = SpatialScalerKey(
+                    inputWidth: source.width, inputHeight: source.height,
+                    outputWidth: target.width, outputHeight: target.height,
+                    pixelFormat: target.pixelFormat)
+                if key != spatialScalerKey {
+                    let descriptor = MTLFXSpatialScalerDescriptor()
+                    descriptor.inputWidth = source.width
+                    descriptor.inputHeight = source.height
+                    descriptor.outputWidth = target.width
+                    descriptor.outputHeight = target.height
+                    descriptor.colorTextureFormat = source.pixelFormat
+                    descriptor.outputTextureFormat = target.pixelFormat
+                    // The bake renders through an sRGB working space into BGRA8 — gamma-encoded
+                    // content, not linear light. Saying otherwise mis-weights its edge detection.
+                    descriptor.colorProcessingMode = .perceptual
+
+                    guard let scaler = descriptor.makeSpatialScaler(device: device) else {
+                        // Latch off rather than retrying every frame; the feed stays on Lanczos.
+                        spatialScalingSupported = false
+                        spatialScaler = nil
+                        spatialScalerKey = nil
+                        Logger(subsystem: "OpenZCine", category: "LiveView").error(
+                            "MetalFX spatial scaler unavailable — feed upscale uses Lanczos.")
+                        return false
+                    }
+                    spatialScaler = scaler
+                    spatialScalerKey = key
+                    // MetalFX is device-only, so this is the only way to confirm from a build which
+                    // upscaler the feed actually selected — the simulator can never exercise it.
+                    Logger(subsystem: "OpenZCine", category: "LiveView").info(
+                        """
+                        Feed upscale: MetalFX Spatial \
+                        \(source.width, privacy: .public)×\(source.height, privacy: .public) → \
+                        \(target.width, privacy: .public)×\(target.height, privacy: .public)
+                        """)
+                }
+                guard let spatialScaler else { return false }
+                spatialScaler.colorTexture = source
+                spatialScaler.outputTexture = target
+                spatialScaler.encode(commandBuffer: commandBuffer)
+                return true
+            }
+        #else
+            /// Simulator stub — the iOS Simulator SDK has no MetalFX, so the feed upscales with
+            /// Lanczos there. Device builds take the real path above.
+            private func encodeSpatialUpscale(
+                from _: MTLTexture, to _: MTLTexture, commandBuffer _: MTLCommandBuffer
+            ) -> Bool { false }
+        #endif
 
         private func scheduleBake() {
             guard let image = currentImage, lastDrawableSize.width > 0, lastDrawableSize.height > 0
