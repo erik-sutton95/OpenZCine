@@ -211,4 +211,93 @@ public enum LUTResolution {
     ) -> LUTSelection? {
         visibleTools.contains(.lut) ? selected : nil
     }
+
+    /// The 50/50 Log-vs-LUT comparison to render, or `nil` when it is switched off or there is no
+    /// grade to compare against.
+    ///
+    /// Resolved once, here, for the same reason ``active(visibleTools:selected:)`` is: a shell that
+    /// tested the preference on its own would eventually show the divider and the half labels over
+    /// a frame with no LUT in it, or keep the split alive in a DISP mode that dropped the tool.
+    /// `visibleTools` is already the mode-filtered set (`MonitorChromePolicy.visibleTools`), so
+    /// clean view carries the comparison exactly when the operator pinned the LUT into it.
+    public static func splitComparison(
+        visibleTools: Set<MonitorAssistTool>,
+        preferences: OperatorPreferences
+    ) -> SplitComparisonOrientation? {
+        guard preferences.splitComparisonEnabled, visibleTools.contains(.lut) else { return nil }
+        return preferences.splitComparisonOrientation
+    }
+}
+
+/// How a 50/50 Log-vs-LUT comparison divides the monitor image.
+public enum SplitComparisonOrientation: String, CaseIterable, Codable, Equatable, Sendable,
+    Identifiable
+{
+    /// Vertical boundary — Log on the left, LUT on the right.
+    case vertical = "Left / Right"
+    /// Horizontal boundary — Log on the top, LUT on the bottom.
+    case horizontal = "Top / Bottom"
+
+    public var id: String { rawValue }
+}
+
+/// The 50/50 Log-vs-LUT split — an immediate before/after for judging a monitoring look without
+/// toggling the LUT off and on.
+///
+/// **The boundary is the centre of the visible image rectangle**, never the centre of the surface:
+/// letterbox, pillarbox and monitor chrome are all outside it. Every renderer already establishes
+/// that rectangle before the grade runs — iOS bakes a centred crop of the source at the drawable's
+/// aspect (`MetalFeedFrameBaker.bakeSize`), Android sets the GL viewport to `liveFeedContentRect`
+/// and the Vulkan viewport to the letterboxed content rect — so each one splits in its own feed
+/// space at the halfway line and inherits a correct boundary through fit/fill, de-squeeze, crop
+/// and orientation changes for free. Fit and fill both centre the image, so the halfway line of
+/// the feed and the halfway line of what the operator sees are the same line.
+///
+/// Monitor-only: the split lives in the display pipeline and never reaches the camera or recorded
+/// media.
+public enum SplitComparison {
+    /// Edge label for the ungraded half.
+    public static let logLabel = "LOG"
+    /// Edge label for the graded half.
+    public static let lutLabel = "LUT"
+
+    /// Whether a point in normalized feed space is on the graded side.
+    ///
+    /// `x`/`y` run `0...1` across the **visible image rectangle**, origin at its top-left. This is
+    /// the definition each fragment shader transcribes; the shells' rect-based helpers below agree
+    /// with it by construction.
+    public static func isGradedSide(
+        x: Double, y: Double, orientation: SplitComparisonOrientation
+    ) -> Bool {
+        switch orientation {
+        case .vertical: x >= 0.5
+        case .horizontal: y >= 0.5
+        }
+    }
+
+    /// The graded (LUT) half of the visible image rectangle, in the shell's own top-left space.
+    public static func lutHalf(
+        of feed: MonitorModuleFrame, orientation: SplitComparisonOrientation
+    ) -> MonitorModuleFrame {
+        switch orientation {
+        case .vertical:
+            MonitorModuleFrame(
+                x: feed.midX, y: feed.y, width: feed.width / 2, height: feed.height)
+        case .horizontal:
+            MonitorModuleFrame(
+                x: feed.x, y: feed.midY, width: feed.width, height: feed.height / 2)
+        }
+    }
+
+    /// The ungraded (Log) half — the exact complement of ``lutHalf(of:orientation:)``.
+    public static func logHalf(
+        of feed: MonitorModuleFrame, orientation: SplitComparisonOrientation
+    ) -> MonitorModuleFrame {
+        switch orientation {
+        case .vertical:
+            MonitorModuleFrame(x: feed.x, y: feed.y, width: feed.width / 2, height: feed.height)
+        case .horizontal:
+            MonitorModuleFrame(x: feed.x, y: feed.y, width: feed.width, height: feed.height / 2)
+        }
+    }
 }

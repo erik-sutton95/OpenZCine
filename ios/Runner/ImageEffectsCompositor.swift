@@ -19,6 +19,9 @@ enum ImageEffectsCompositor {
         var limitsWeightCubeData: Data?
         var peaking: PeakingSettings?
         var zebra: ZebraSettings?
+        /// Set only when the base cube IS the operator's LUT — a false-colour base is the
+        /// monitoring image itself and has no ungraded half to compare against.
+        var splitComparison: SplitComparisonOrientation?
 
         var needsComposition: Bool {
             baseCubeData != nil || limitsPaintCubeData != nil || peaking != nil || zebra != nil
@@ -35,6 +38,7 @@ enum ImageEffectsCompositor {
         var limitsDimension: Int?
         var limitsPaint: Data?
         var limitsWeight: Data?
+        var split: SplitComparisonOrientation?
 
         if let falseColor = effects.falseColor, falseColor.scale == .limits {
             // Limits keeps the monitor's normal look between the zones: the base stays the
@@ -42,6 +46,7 @@ enum ImageEffectsCompositor {
             if let lut = effects.lut, let cube = lutCube(lut) {
                 dimension = cube.size
                 data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
+                split = effects.splitComparison
             }
             let key = falseColorCacheKey(falseColor)
             if let paint = LUTCubeCache.cube(
@@ -69,6 +74,7 @@ enum ImageEffectsCompositor {
         } else if let lut = effects.lut, let cube = lutCube(lut) {
             dimension = cube.size
             data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
+            split = effects.splitComparison
         }
 
         return ResolvedEffects(
@@ -78,7 +84,8 @@ enum ImageEffectsCompositor {
             limitsPaintCubeData: limitsPaint,
             limitsWeightCubeData: limitsWeight,
             peaking: effects.peaking,
-            zebra: effects.zebra
+            zebra: effects.zebra,
+            splitComparison: split
         )
     }
 
@@ -95,7 +102,11 @@ enum ImageEffectsCompositor {
             // encoded working space it gamma-encodes a second time and shoves every pixel into
             // the clip zones.
             output =
-                applyBaseCube(to: source, dimension: dimension, cubeData: cubeData) ?? source
+                applyBaseCube(to: source, dimension: dimension, cubeData: cubeData).map {
+                    splitting(
+                        $0, over: source, extent: extent,
+                        orientation: effects.splitComparison)
+                } ?? source
         }
 
         if let dimension = effects.limitsCubeDimension,
@@ -125,6 +136,44 @@ enum ImageEffectsCompositor {
             output = applyZebra(over: output, source: source, settings: zebra, extent: extent)
         }
         return output
+    }
+
+    // MARK: - 50/50 Log vs LUT comparison
+
+    /// Restricts `graded` to the LUT half of a 50/50 comparison and lets the untouched `source`
+    /// show through the other half. Returns `graded` unchanged when the comparison is off.
+    ///
+    /// One crop and one pointwise composite — no second decode and no second pipeline. The crop is
+    /// what keeps it free: Core Image propagates it back through the region of interest, so the
+    /// cube is only ever evaluated over the half that shows it and the graph costs *less* with the
+    /// comparison on than without. (`encode` cost in this pipeline is per-node, not per-pixel, and
+    /// `CISourceOverCompositing` is pointwise, so Core Image concatenates it into the neighbouring
+    /// pass rather than adding one.)
+    ///
+    /// `extent` is the frame's own rect and the boundary is its centre. Every present path centres
+    /// the frame as a whole — the Metal bake takes a centred crop at the drawable's aspect
+    /// (`MetalFeedFrameBaker.bakeSize`), the fallbacks are `.scaleAspectFill`, and de-squeeze is a
+    /// `.scaleEffect` about the centre — so the middle of the frame is the middle of the visible
+    /// image rectangle on screen, with letterbox, pillarbox and chrome all outside it.
+    ///
+    /// Core Image's y axis points **up**, so the operator's top half is the high-y half.
+    static func splitting(
+        _ graded: CIImage, over source: CIImage, extent: CGRect,
+        orientation: SplitComparisonOrientation?
+    ) -> CIImage {
+        guard let orientation, extent.width > 0, extent.height > 0 else { return graded }
+        let half: CGRect =
+            switch orientation {
+            case .vertical:
+                CGRect(
+                    x: extent.midX, y: extent.minY,
+                    width: extent.width / 2, height: extent.height)
+            case .horizontal:
+                CGRect(
+                    x: extent.minX, y: extent.minY,
+                    width: extent.width, height: extent.height / 2)
+            }
+        return graded.cropped(to: half).composited(over: source.cropped(to: extent))
     }
 
     // MARK: - Base look (LUT or false colour)

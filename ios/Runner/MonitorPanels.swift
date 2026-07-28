@@ -2776,6 +2776,7 @@ struct LUTPickerContent: View {
             }
             tabContent
                 .frame(height: contentHeight)
+            splitComparisonControls
         }
         .onAppear {
             model.refreshCustomLUTs()
@@ -2810,6 +2811,45 @@ struct LUTPickerContent: View {
             Button("OK") { deletionErrorMessage = nil }
         } message: {
             Text(deletionErrorMessage ?? "The LUT could not be deleted.")
+        }
+    }
+
+    /// The 50/50 Log-vs-LUT comparison: an off-by-default toggle, and its orientation revealed
+    /// only while it is on. The orientation itself stays persisted either way, so switching the
+    /// comparison off and back on returns to the operator's own choice.
+    @ViewBuilder private var splitComparisonControls: some View {
+        VStack(spacing: 10) {
+            Button {
+                model.preferences.splitComparisonEnabled.toggle()
+                OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+                // Comparison is meaningless with the grade off, so switching it on switches the
+                // tool on — the same rule the category tabs follow.
+                if model.preferences.splitComparisonEnabled {
+                    model.setAssist(.lut, visible: true)
+                }
+            } label: {
+                ToggleRow(
+                    title: "50/50 Comparison",
+                    isOn: model.preferences.splitComparisonEnabled)
+            }
+            .buttonStyle(.zcTapTarget)
+            if model.preferences.splitComparisonEnabled {
+                SegmentedButtons(
+                    items: SplitComparisonOrientation.allCases.map(\.rawValue),
+                    selected: model.preferences.splitComparisonOrientation.rawValue
+                ) { raw in
+                    guard let next = SplitComparisonOrientation(rawValue: raw) else { return }
+                    model.preferences.splitComparisonOrientation = next
+                    OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+                }
+                Text(
+                    model.preferences.splitComparisonOrientation == .vertical
+                        ? "Log left, LUT right." : "Log top, LUT bottom."
+                )
+                .font(.system(size: 12))
+                .foregroundStyle(LiveDesign.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 

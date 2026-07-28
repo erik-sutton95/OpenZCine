@@ -79,6 +79,9 @@ struct LiveImageEffects: Equatable, Sendable {
     var falseColor: FalseColorSettings?
     var peaking: PeakingSettings?
     var zebra: ZebraSettings?
+    /// When set, `lut` grades only its half of the frame (see ``SplitComparison``). Never affects
+    /// `isIdentity`: with no LUT there is nothing to compare, so the split alone changes nothing.
+    var splitComparison: SplitComparisonOrientation?
 
     var isIdentity: Bool {
         lut == nil && falseColor == nil && peaking == nil && zebra == nil
@@ -265,7 +268,9 @@ extension NativeAppModel {
                     midtoneIRE: assistConfiguration.zebra.midtoneIRE,
                     midtoneColor: assistConfiguration.zebra.midtoneColor,
                     curve: exposureSignalMapping.curve,
-                    clipNative: exposureSignalMapping.clipNative) : nil)
+                    clipNative: exposureSignalMapping.clipNative) : nil,
+            splitComparison: LUTResolution.splitComparison(
+                visibleTools: visible, preferences: preferences))
     }
 
     var liveImageEffects: LiveImageEffects {
@@ -453,7 +458,9 @@ final class LiveFrameProcessor {
             // LUT, or the untouched feed), then composite the crush/clip paint on top through a
             // zone-weight mask. Both limits cubes measure the raw code values in `input`.
             if let lut = effects.lut {
-                output = applyBaseCube(to: input, key: lut.cacheKey) { self.cube(for: lut) }
+                output = ImageEffectsCompositor.splitting(
+                    applyBaseCube(to: input, key: lut.cacheKey) { self.cube(for: lut) },
+                    over: input, extent: extent, orientation: effects.splitComparison)
             }
             let mappingKey = "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
             let paint = applyBaseCube(to: input, key: "limitsPaint:\(mappingKey)") {
@@ -477,7 +484,11 @@ final class LiveFrameProcessor {
                 FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
             }
         } else if let lut = effects.lut {
-            output = applyBaseCube(to: input, key: lut.cacheKey) { self.cube(for: lut) }
+            // Grade only the LUT half when a 50/50 comparison is on. Peaking and zebra below still
+            // measure `input`, so the assists read the same across the boundary.
+            output = ImageEffectsCompositor.splitting(
+                applyBaseCube(to: input, key: lut.cacheKey) { self.cube(for: lut) },
+                over: input, extent: extent, orientation: effects.splitComparison)
         }
 
         if let peaking = effects.peaking {

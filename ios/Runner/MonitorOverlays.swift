@@ -795,6 +795,13 @@ struct FeedAlignedAssists: View {
                 if visible.contains(.crosshair) {
                     FeedCrosshairView(feed: feed)
                 }
+                // Drawn once over the whole feed like every other framing aid, from the same rect
+                // — so the divider lands exactly on the boundary the grade was split at.
+                if let split = LUTResolution.splitComparison(
+                    visibleTools: visible, preferences: model.preferences)
+                {
+                    FeedSplitComparisonMarks(orientation: split, feed: feed)
+                }
                 if visible.contains(.level) && model.assistConfiguration.level.enabled {
                     FeedLevelView(
                         style: model.assistConfiguration.level.style, feed: feed,
@@ -1283,6 +1290,68 @@ struct FeedCrosshairView: View {
             Rectangle().fill(Color.white.opacity(0.65)).frame(width: 40, height: 1.4)
         }
         .position(x: feed.midX, y: feed.midY)
+    }
+}
+
+/// The 50/50 Log-vs-LUT comparison's divider and its two half labels.
+///
+/// Presentation only — the grade itself is split in the feed pipeline (`LiveFrameProcessor` /
+/// `ImageEffectsCompositor.splitting`). Both draw at the centre of the same feed rect, so the
+/// hairline sits on the real boundary rather than near it.
+///
+/// The labels hug the divider at one edge instead of sitting in the middle of each half: the
+/// operator is judging the image, and a caption over the subject is exactly what "without
+/// permanently obscuring the image" rules out. They ride the LUT tool's own visibility (see
+/// `LUTResolution.splitComparison`), so clean view carries them only where the operator pinned the
+/// tool in.
+struct FeedSplitComparisonMarks: View {
+    let orientation: SplitComparisonOrientation
+    let feed: CGRect
+
+    /// Gap from the label's edge of the feed, and from the divider.
+    private let inset: CGFloat = 12
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white.opacity(0.5))
+                .frame(
+                    width: orientation == .vertical ? 1 : feed.width,
+                    height: orientation == .vertical ? feed.height : 1
+                )
+                .position(x: feed.midX, y: feed.midY)
+            label(SplitComparison.logLabel)
+                .position(logPosition)
+            label(SplitComparison.lutLabel)
+                .position(lutPosition)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .kerning(0.8)
+            .foregroundStyle(Color.white.opacity(0.92))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.black.opacity(0.45), in: Capsule())
+    }
+
+    /// Log side: left of a vertical divider, above a horizontal one.
+    private var logPosition: CGPoint {
+        switch orientation {
+        case .vertical: CGPoint(x: feed.midX - 26, y: feed.maxY - 18)
+        case .horizontal: CGPoint(x: feed.minX + 34, y: feed.midY - inset - 6)
+        }
+    }
+
+    /// LUT side: right of a vertical divider, below a horizontal one.
+    private var lutPosition: CGPoint {
+        switch orientation {
+        case .vertical: CGPoint(x: feed.midX + 26, y: feed.maxY - 18)
+        case .horizontal: CGPoint(x: feed.minX + 34, y: feed.midY + inset + 6)
+        }
     }
 }
 
