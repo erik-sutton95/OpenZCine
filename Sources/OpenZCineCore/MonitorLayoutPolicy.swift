@@ -768,7 +768,17 @@ public struct MonitorSideRailControlLayout: Equatable, Sendable {
         let mediaCenterY =
             (settingsCenterY + auxiliaryButtonSize / 2 + recordCenterY - recordButtonSize / 2) / 2
         let bottomBarTop = max(0, railHeight - max(0, bottomBarHeight))
-        let displayCenterY = (recordCenterY + recordButtonSize / 2 + bottomBarTop) / 2
+        // With a bottom bar present the DISP key splits the gap between the record button and the
+        // bar, so it reads as part of the rail. With the bar hidden — clean view with the strips
+        // switched off — splitting the gap leaves it floating in the middle of the freed space
+        // with nothing to relate to, so it drops into the bottom corner instead. Clamped clear of
+        // the record button, which matters on a short rail where the corner would collide.
+        let dispHalf = displayButtonHeight / 2
+        let clearOfRecord = recordCenterY + recordButtonSize / 2 + dispHalf
+        let displayCenterY =
+            bottomBarHeight > 0
+            ? (recordCenterY + recordButtonSize / 2 + bottomBarTop) / 2
+            : max(clearOfRecord, railHeight - dispHalf)
 
         return MonitorSideRailControlLayout(
             settingsCenterX: recordCenterX,
