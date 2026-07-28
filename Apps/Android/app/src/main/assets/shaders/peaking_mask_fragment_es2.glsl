@@ -13,7 +13,7 @@
 //     vp1 = SUM over dy of w(dy - 1) * g(x+dx, y+dy)   -- blur centred on row y+1
 //   then folded each into the four quad positions with the horizontal weights w(dx) and
 //   w(dx-1). Those two sums depend on the COLUMN alone, so the blur pass computes them
-//   per pixel and hands both over in one texel (RG and BA, 16 bits each). What is left
+//   per pixel and hands both over in one texel (xy and zw, 16 bits each). What is left
 //   here is the horizontal fold, unchanged and exact — the same four `b**` values, from 8
 //   reads rather than 64 taps.
 //
@@ -137,8 +137,8 @@ void main() {
     for (int col = 0; col < 8; col++) {
         float dx = float(col) - 3.0;
         vec4 rows = texture2D(uPeakingBlur, centre + vec2(dx, 0.0) * texel);
-        float vp0 = unpack16(rows.rg);
-        float vp1 = unpack16(rows.ba);
+        float vp0 = unpack16(rows.xy);
+        float vp1 = unpack16(rows.zw);
         float wx0 = peakingTapWeight(dx);
         float wx1 = peakingTapWeight(dx - 1.0);
         b00 += wx0 * vp0;

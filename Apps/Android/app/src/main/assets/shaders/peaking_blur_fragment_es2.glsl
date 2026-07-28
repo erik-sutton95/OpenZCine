@@ -2,7 +2,7 @@
 
 // Pass 1 of 3 of focus peaking: the VERTICAL half of the separable re-blur, once per
 // source pixel. One texel carries both rows the operator's 2x2 quad needs —
-// RG = the blur centred on this row, BA = the blur centred on the row below — each
+// xy = the blur centred on this row, zw = the blur centred on the row below — each
 // packed to 16 bits.
 //
 // Why this pass exists at all. The detector's re-blur is separable, but writing it fused
