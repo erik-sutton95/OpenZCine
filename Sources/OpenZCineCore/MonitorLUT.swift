@@ -220,12 +220,32 @@ public enum LUTResolution {
     /// a frame with no LUT in it, or keep the split alive in a DISP mode that dropped the tool.
     /// `visibleTools` is already the mode-filtered set (`MonitorChromePolicy.visibleTools`), so
     /// clean view carries the comparison exactly when the operator pinned the LUT into it.
+    /// - Parameter muted: the on-feed quick key's session state — see
+    ///   ``showsSplitComparisonKey(visibleTools:preferences:)``. Not a preference: an A/B while
+    ///   judging a look should not survive the take.
     public static func splitComparison(
         visibleTools: Set<MonitorAssistTool>,
-        preferences: OperatorPreferences
+        preferences: OperatorPreferences,
+        muted: Bool = false
     ) -> SplitComparisonOrientation? {
-        guard preferences.splitComparisonEnabled, visibleTools.contains(.lut) else { return nil }
+        guard preferences.splitComparisonEnabled, !muted, visibleTools.contains(.lut) else {
+            return nil
+        }
         return preferences.splitComparisonOrientation
+    }
+
+    /// Whether the on-feed 50/50 quick key mounts.
+    ///
+    /// Judging a look is an A/B the operator repeats, and reopening the LUT pop-up for each flip
+    /// defeats the feature — so the key lives on the feed once the comparison is armed. It follows
+    /// the *armed* preference, not the muted state, or the first tap would delete the only control
+    /// that undoes it. Like the divider and the labels it rides the LUT tool's own visibility, so
+    /// clean view carries it exactly where the operator pinned the tool.
+    public static func showsSplitComparisonKey(
+        visibleTools: Set<MonitorAssistTool>,
+        preferences: OperatorPreferences
+    ) -> Bool {
+        preferences.splitComparisonEnabled && visibleTools.contains(.lut)
     }
 }
 

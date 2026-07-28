@@ -516,6 +516,7 @@
     <string name="focus_resetting">Resetting focus point to center</string>
     <string name="focus_reset_moving">Reset focus point unavailable while moving focus</string>
     <string name="focus_reset">Reset focus point to center</string>
+    <string name="split_comparison_key">Show or hide the 50/50 Log and LUT comparison</string>
     <string name="record_start_title">Start recording?</string>
     <string name="record_stop_title">Stop recording?</string>
     <string name="record_start_message">Send the record command to the camera.</string>

@@ -80,6 +80,10 @@ object DemoHarness {
     @Suppress("UNUSED_PARAMETER")
     fun assistEffects(intent: Intent): FeedEffects? = null
 
+    /** Always null: release builds cannot arm the 50/50 comparison from an intent. */
+    @Suppress("UNUSED_PARAMETER")
+    fun splitComparison(intent: Intent): FeedSplitOrientation? = null
+
     /** Always null: the debug scope toggle does not exist in release builds. */
     @Suppress("UNUSED_PARAMETER")
     fun scopeKind(intent: Intent): ScopeKind? = null

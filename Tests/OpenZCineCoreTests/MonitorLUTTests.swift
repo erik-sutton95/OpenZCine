@@ -210,6 +210,29 @@ func cubeIsFinite(look: MonitorLUT) {
     #expect(LUTResolution.splitComparison(visibleTools: pinned, preferences: preferences) != nil)
 }
 
+@Test func theOnFeedQuickKeySurvivesItsOwnTap() {
+    // The key mutes the comparison; if it followed the muted state instead of the armed one, the
+    // first tap would remove the only control that undoes it.
+    var preferences = OperatorPreferences.defaults
+    preferences.splitComparisonEnabled = true
+    let tools: Set<MonitorAssistTool> = [.lut]
+
+    #expect(
+        LUTResolution.splitComparison(visibleTools: tools, preferences: preferences, muted: false)
+            == .vertical)
+    #expect(
+        LUTResolution.splitComparison(visibleTools: tools, preferences: preferences, muted: true)
+            == nil)
+    #expect(LUTResolution.showsSplitComparisonKey(visibleTools: tools, preferences: preferences))
+
+    // Disarmed from the pop-up, or with no grade on screen, the key goes with the feature.
+    preferences.splitComparisonEnabled = false
+    #expect(!LUTResolution.showsSplitComparisonKey(visibleTools: tools, preferences: preferences))
+    preferences.splitComparisonEnabled = true
+    #expect(
+        !LUTResolution.showsSplitComparisonKey(visibleTools: [.peaking], preferences: preferences))
+}
+
 @Test func splitHalvesTileTheVisibleImageRectAndMeetAtItsCentre() {
     // A pillarboxed feed: the image sits inset inside its surface, so a boundary taken from the
     // surface (or from 0) lands off-centre. The non-zero origin is the whole point of this case.

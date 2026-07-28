@@ -91,6 +91,37 @@ internal fun focusResetButtonBaseFrame(
 }
 
 /**
+ * The 50/50 quick key's slot: the focus-reset lane, one key higher when that key is mounted.
+ *
+ * Sharing the lane rather than claiming a corner of its own is what keeps it off the DISP key
+ * (bottom-right of the rail with no bottom bar), the MF focus dial and the collapsed portrait
+ * assist rail — all of which already own a corner.
+ */
+internal fun splitComparisonKeyFrame(
+    feed: ZoneFrame,
+    isPortrait: Boolean,
+    bottomChromeInset: Float,
+    focusResetMounted: Boolean,
+    widthDp: Float,
+    heightDp: Float,
+): ZoneFrame {
+    val lane = focusResetButtonBaseFrame(feed, isPortrait, bottomChromeInset)
+    val lift = if (focusResetMounted) FOCUS_RESET_BUTTON_SIZE_DP + FOCUS_RESET_PANEL_GAP_DP else 0f
+    // Right-aligned in portrait (the lane hugs the trailing edge there), leading-aligned in
+    // landscape — so a key wider than the round reset button grows away from the feed edge.
+    val x = if (isPortrait) lane.x + lane.width - widthDp else lane.x
+    return clampScopeFrame(
+        ZoneFrame(
+            x = x,
+            y = lane.y + (FOCUS_RESET_BUTTON_SIZE_DP - heightDp) / 2f - lift,
+            width = widthDp,
+            height = heightDp,
+        ),
+        feed,
+    )
+}
+
+/**
  * Lifts the focus-reset affordance above overlapping movable analysis panels.
  *
  * Panels are considered from lowest to highest so a crowded stack is climbed one panel at a time.

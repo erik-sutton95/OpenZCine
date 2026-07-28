@@ -2831,8 +2831,10 @@ struct LUTPickerContent: View {
                 model.preferences.splitComparisonEnabled.toggle()
                 OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
                 // Comparison is meaningless with the grade off, so switching it on switches the
-                // tool on — the same rule the category tabs follow.
+                // tool on — the same rule the category tabs follow. Arming also clears the on-feed
+                // key's mute, so the split is showing when the operator comes back to the image.
                 if model.preferences.splitComparisonEnabled {
+                    model.splitComparisonMuted = false
                     model.setAssist(.lut, visible: true)
                 }
             } label: {

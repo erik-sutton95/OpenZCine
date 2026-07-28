@@ -798,7 +798,8 @@ struct FeedAlignedAssists: View {
                 // Drawn once over the whole feed like every other framing aid, from the same rect
                 // — so the divider lands exactly on the boundary the grade was split at.
                 if let split = LUTResolution.splitComparison(
-                    visibleTools: visible, preferences: model.preferences)
+                    visibleTools: visible, preferences: model.preferences,
+                    muted: model.splitComparisonMuted)
                 {
                     FeedSplitComparisonMarks(orientation: split, feed: feed)
                 }
@@ -1325,14 +1326,16 @@ struct FeedSplitComparisonMarks: View {
         .allowsHitTesting(false)
     }
 
+    /// Deliberately tiny and unfilled: the split itself already says which half is which, so these
+    /// only confirm it. A drop shadow rather than a capsule fill — the graded half can be far
+    /// darker or far brighter than the log half depending on the look, and a shadow reads over
+    /// both where one fixed fill colour reads over neither.
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .kerning(0.8)
-            .foregroundStyle(Color.white.opacity(0.92))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(Color.black.opacity(0.45), in: Capsule())
+            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+            .kerning(0.5)
+            .foregroundStyle(Color.white.opacity(0.85))
+            .shadow(color: .black.opacity(0.8), radius: 1.5, y: 0.5)
     }
 
     /// Where the pair sits along the divider, as a fraction of the feed rather than a constant:
@@ -1344,9 +1347,9 @@ struct FeedSplitComparisonMarks: View {
     private var logPosition: CGPoint {
         switch orientation {
         case .vertical:
-            CGPoint(x: feed.midX - 26, y: feed.minY + feed.height * alongDivider)
+            CGPoint(x: feed.midX - 16, y: feed.minY + feed.height * alongDivider)
         case .horizontal:
-            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY - 18)
+            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY - 10)
         }
     }
 
@@ -1354,9 +1357,9 @@ struct FeedSplitComparisonMarks: View {
     private var lutPosition: CGPoint {
         switch orientation {
         case .vertical:
-            CGPoint(x: feed.midX + 26, y: feed.minY + feed.height * alongDivider)
+            CGPoint(x: feed.midX + 16, y: feed.minY + feed.height * alongDivider)
         case .horizontal:
-            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY + 18)
+            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY + 10)
         }
     }
 }

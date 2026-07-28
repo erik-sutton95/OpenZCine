@@ -16,6 +16,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -457,33 +458,48 @@ private fun FramingGuideLabel(frame: LocalFramingGuideFrame) {
 @Composable
 private fun SplitComparisonLabels(rect: FramingAssistRect, orientation: FeedSplitOrientation) {
     val density = LocalDensity.current
-    val gap = with(density) { 26.dp.toPx() }
-    val edge = with(density) { 12.dp.toPx() }
     val logOffset: Offset
     val lutOffset: Offset
+    // Matches the iOS placement: a fraction of the way along the divider, which clears the status
+    // deck in landscape and in portrait without knowing which chrome is mounted.
     if (orientation == FeedSplitOrientation.VERTICAL) {
-        val y = rect.bottom - edge - with(density) { 18.dp.toPx() }
-        logOffset = Offset(rect.centerX - gap - with(density) { 24.dp.toPx() }, y)
-        lutOffset = Offset(rect.centerX + gap, y)
+        val y = rect.top + rect.height * ALONG_DIVIDER
+        logOffset = Offset(rect.centerX - with(density) { 30.dp.toPx() }, y)
+        lutOffset = Offset(rect.centerX + with(density) { 8.dp.toPx() }, y)
     } else {
-        val x = rect.left + edge
-        logOffset = Offset(x, rect.centerY - with(density) { 26.dp.toPx() })
-        lutOffset = Offset(x, rect.centerY + with(density) { 8.dp.toPx() })
+        val x = rect.left + rect.width * ALONG_DIVIDER
+        logOffset = Offset(x, rect.centerY - with(density) { 15.dp.toPx() })
+        lutOffset = Offset(x, rect.centerY + with(density) { 4.dp.toPx() })
     }
     SplitComparisonLabel(FeedSplitOrientation.LOG_LABEL, logOffset)
     SplitComparisonLabel(FeedSplitOrientation.LUT_LABEL, lutOffset)
 }
 
+/** Where along the divider the label pair sits, as a fraction of the visible image. */
+private const val ALONG_DIVIDER = 0.16f
+
+/**
+ * Deliberately tiny and unfilled: the split itself already says which half is which, so these only
+ * confirm it. A drop shadow rather than a filled chip — the graded half can be far darker or far
+ * brighter than the log half depending on the look, and a shadow reads over both where one fixed
+ * fill colour reads over neither.
+ */
 @Composable
 private fun SplitComparisonLabel(text: String, offset: Offset) {
     Text(
         text = text,
-        style = chromeStyle(10f, FontWeight.Bold, mono = true).copy(letterSpacing = 0.8.sp),
-        color = Color.White.copy(alpha = 0.92f),
-        modifier =
-            Modifier.offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }
-                .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(5.dp))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+        style =
+            chromeStyle(8f, FontWeight.SemiBold, mono = true).copy(
+                letterSpacing = 0.5.sp,
+                shadow =
+                    Shadow(
+                        color = Color.Black.copy(alpha = 0.8f),
+                        offset = Offset(0f, 1f),
+                        blurRadius = 3f,
+                    ),
+            ),
+        color = Color.White.copy(alpha = 0.85f),
+        modifier = Modifier.offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) },
     )
 }
 

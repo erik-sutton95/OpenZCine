@@ -1410,6 +1410,15 @@ struct MonitorShell: View {
         .ignoresSafeArea(.container, edges: .all)
     }
 
+    /// Whether the on-feed 50/50 quick key mounts, in either orientation. The rule itself is in
+    /// shared core so both shells agree; the extra two clauses are the ones every on-feed key
+    /// carries (a locked interface takes no input, and the chrome editor owns the screen).
+    private var splitComparisonKeyMounts: Bool {
+        LUTResolution.showsSplitComparisonKey(
+            visibleTools: model.renderedLiveAssistTools, preferences: model.preferences)
+            && !model.interfaceLocked && model.chromeEditorMode == nil
+    }
+
     /// The live/clean chrome: full-width info deck and the bottom assist/capture strips. Every
     /// region is per-DISP-mode configuration now — no mode branches here.
     @ViewBuilder private func landscapeChrome(
@@ -1553,10 +1562,13 @@ struct MonitorShell: View {
             // while a tracked box drifts through centre). Hidden while locked, and with the focus
             // box — it recentres that box, so it is part of the same element.
             // Battery-rail-relative x, scope-panel-clearance y (`focusResetButtonClearY`).
-            if model.chromeSectionMounts(.focusBox), model.isFocusResetAvailable,
-                !model.interfaceLocked, model.chromeEditorMode == nil,
-                let battery = map.batteryCluster
-            {
+            //
+            // The 50/50 comparison key shares this lane and stacks directly above it (see below),
+            // which is why the geometry is one expression read by both.
+            let focusResetMounted =
+                model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
+                && !model.interfaceLocked && model.chromeEditorMode == nil
+            if let battery = map.batteryCluster, focusResetMounted || splitComparisonKeyMounts {
                 let rail = battery.frame
                 let size: CGFloat = 40
                 // Inline battery (iPad) sits in the top band, so its frame no longer marks the
@@ -1580,20 +1592,34 @@ struct MonitorShell: View {
                     map.assistStrip.map { CGFloat($0.frame.y) - 30 }
                     ?? CGFloat(context.viewportHeight) - 40
                 let y = model.focusResetButtonClearY(centerX: x, baseY: baseY, size: size)
-                Button {
-                    model.resetFocusPoint()
-                } label: {
-                    Image(systemName: "dot.viewfinder")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                        .frame(width: size, height: size)
-                        .background(.black.opacity(0.55), in: Circle())
-                        .overlay(Circle().strokeBorder(LiveDesign.hairline, lineWidth: 1))
+                if focusResetMounted {
+                    Button {
+                        model.resetFocusPoint()
+                    } label: {
+                        Image(systemName: "dot.viewfinder")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(LiveDesign.text)
+                            .frame(width: size, height: size)
+                            .background(.black.opacity(0.55), in: Circle())
+                            .overlay(Circle().strokeBorder(LiveDesign.hairline, lineWidth: 1))
+                    }
+                    .buttonStyle(.zcTapTarget)
+                    .position(x: x, y: y)
+                    .animation(.easeOut(duration: 0.2), value: y)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
-                .buttonStyle(.zcTapTarget)
-                .position(x: x, y: y)
-                .animation(.easeOut(duration: 0.2), value: y)
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
+
+                // 50/50 quick key: hides and restores the armed comparison without reopening the
+                // LUT pop-up, because judging a look is an A/B the operator repeats. Stacks above
+                // the recenter key in the same lane, and takes the lane on its own when that key
+                // is away.
+                if splitComparisonKeyMounts {
+                    SplitComparisonKey()
+                        .environment(model)
+                        .position(x: x, y: y - (focusResetMounted ? size + 10 : 0))
+                        .animation(.easeOut(duration: 0.2), value: y)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
             }
 
             // MF focus-by-wire scrub: beside the right system rail whenever the operator has
@@ -1902,6 +1928,26 @@ struct MonitorShell: View {
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
 
+            // 50/50 quick key — the portrait counterpart. Stacks above the recenter key in the
+            // same bottom-RIGHT lane, and takes the lane on its own when that key is away. Not
+            // bottom-left: the collapsed assist rail already owns that corner in portrait.
+            if model.displayMode != .command, splitComparisonKeyMounts {
+                let size: CGFloat = 40
+                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let bottomClearance = isFill ? controlsHeight + 10 : 10
+                let recenterMounted =
+                    model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
+                    && !model.interfaceLocked && model.chromeEditorMode == nil
+                SplitComparisonKey()
+                    .environment(model)
+                    .offset(
+                        x: feed.x + feed.width - size - 10,
+                        y: feed.y + feed.height - size - bottomClearance
+                            - (recenterMounted ? size + 10 : 0)
+                    )
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+
             // Bottom system band. The opaque glass draws only when the band still carries a
             // control — an empty band over the letterbox is just a black stripe. Every control is
             // configured per DISP mode and capture side. `context.viewportHeight` is the restored
@@ -1969,6 +2015,39 @@ struct MonitorShell: View {
         panel.managesOwnAppearance
             ? .asymmetric(insertion: .identity, removal: .opacity)
             : .opacity.combined(with: .scale(scale: 0.98))
+    }
+}
+
+/// On-feed key that hides and restores the armed 50/50 Log-vs-LUT comparison.
+///
+/// The comparison is armed in the LUT pop-up and stays armed; this only mutes it, which is why
+/// tapping it never makes the key itself disappear. Judging a look means flipping the split back
+/// and forth, and a trip through the pop-up for each flip is the thing the comparison exists to
+/// avoid.
+struct SplitComparisonKey: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        Button {
+            model.splitComparisonMuted.toggle()
+            OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+        } label: {
+            Text("50/50")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(model.splitComparisonMuted ? LiveDesign.muted : LiveDesign.accent)
+                .frame(width: 44, height: 30)
+                .background(.black.opacity(0.55), in: Capsule())
+                .overlay(
+                    Capsule().strokeBorder(
+                        model.splitComparisonMuted
+                            ? LiveDesign.hairline : LiveDesign.accentDim, lineWidth: 1))
+        }
+        .buttonStyle(.zcTapTarget)
+        // Interactive glass ripples past the Button's real hit-test; every small round control
+        // here carries this for the same reason.
+        .minTapTarget()
+        .accessibilityLabel("50/50 comparison")
+        .accessibilityValue(model.splitComparisonMuted ? "Hidden" : "Shown")
     }
 }
 

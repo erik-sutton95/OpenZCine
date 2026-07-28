@@ -177,9 +177,14 @@ class MainActivity : ComponentActivity() {
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
+        val debugSplitComparison = DemoHarness.splitComparison(intent)
         val operatorSettings =
             OperatorSettings(applicationContext).also { settings ->
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
+                debugSplitComparison?.let {
+                    settings.splitComparisonOrientation = it
+                    settings.splitComparisonEnabled.value = true
+                }
             }
         // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
         DemoHarness.chromeEditMode(intent)?.let(operatorSettings::beginChromeEditing)

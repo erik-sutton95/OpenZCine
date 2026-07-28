@@ -167,6 +167,17 @@ object DemoHarness {
             else -> null
         }
 
+    /** String intent extra arming the 50/50 Log-vs-LUT comparison: `vertical` or `horizontal`. */
+    const val EXTRA_SPLIT = "zc.split"
+
+    /** Debug-only comparison override, for deterministic split screenshots. */
+    fun splitComparison(intent: Intent): FeedSplitOrientation? =
+        when (intent.getStringExtra(EXTRA_SPLIT)) {
+            "vertical" -> FeedSplitOrientation.VERTICAL
+            "horizontal" -> FeedSplitOrientation.HORIZONTAL
+            else -> null
+        }
+
     /**
      * Explicit debug image-assist override, distinct from mutable runtime
      * toolbar state. `null` means a normal launch must restore preferences;

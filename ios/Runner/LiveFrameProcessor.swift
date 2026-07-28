@@ -270,7 +270,7 @@ extension NativeAppModel {
                     curve: exposureSignalMapping.curve,
                     clipNative: exposureSignalMapping.clipNative) : nil,
             splitComparison: LUTResolution.splitComparison(
-                visibleTools: visible, preferences: preferences))
+                visibleTools: visible, preferences: preferences, muted: splitComparisonMuted))
     }
 
     var liveImageEffects: LiveImageEffects {

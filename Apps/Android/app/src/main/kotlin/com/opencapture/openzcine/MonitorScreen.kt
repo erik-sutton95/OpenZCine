@@ -204,6 +204,10 @@ internal fun Modifier.zone(frame: ZoneFrame): Modifier =
  */
 internal const val IOS_ISLAND_LANE_DP = 59f
 
+/** The on-feed 50/50 quick key, matching the iOS pill. */
+private const val SPLIT_KEY_WIDTH_DP = 44f
+private const val SPLIT_KEY_HEIGHT_DP = 30f
+
 /**
  * The bottom inset handed to the portrait zone map while Android's system bars
  * are hidden. The SM-A127F reports a zero bottom inset in sticky immersive
@@ -1689,9 +1693,22 @@ internal fun MonitorScreen(
         // leaving clean restores everything exactly.
         // The 50/50 comparison is an operator preference rather than a toolbar toggle, so it joins
         // the effect set here; `FeedEffects.activeSplitComparison` then keeps it tied to the LUT.
+        //
+        // `splitComparisonMuted` is the on-feed quick key's own state — session-only and
+        // deliberately not persisted: it is one half of an A/B while judging a look, not a
+        // setting. The armed preference is what mounts the key, so muting never removes it.
+        var splitComparisonMuted by remember { mutableStateOf(false) }
+        // Arming the comparison from the LUT popup clears the mute, so the split is showing when
+        // the operator comes back to the image.
+        LaunchedEffect(operatorSettings.splitComparisonEnabled.value) {
+            if (operatorSettings.splitComparisonEnabled.value) splitComparisonMuted = false
+        }
         val renderedEffects =
             renderedFeedEffects(
-                assist.effects.copy(splitComparison = operatorSettings.activeSplitComparison),
+                assist.effects.copy(
+                    splitComparison =
+                        operatorSettings.activeSplitComparison?.takeUnless { splitComparisonMuted },
+                ),
                 effectiveDisplayMode,
                 cleanViewPins,
             )
@@ -2836,6 +2853,50 @@ internal fun MonitorScreen(
                         Modifier.size(17.dp),
                     )
                 }
+            }
+        }
+
+        // 50/50 quick key: hides and restores the armed comparison without reopening the LUT
+        // popup, because judging a look is an A/B the operator repeats. Mounted by the ARMED
+        // preference — muting must never remove the only control that undoes it — and it rides the
+        // LUT's own visibility, so clean view carries it exactly where the operator pinned the
+        // tool. Same rule as `LUTResolution.showsSplitComparisonKey` on iOS.
+        if (renderedEffects.lut != null &&
+            operatorSettings.splitComparisonEnabled.value &&
+            !locked &&
+            chromeEditorMode == null
+        ) {
+            val bottomChromeInset =
+                with(density) { levelGaugeBottomChromeInset.toDp().value }
+            val keyFrame =
+                splitComparisonKeyFrame(
+                    feed = effectiveFeed,
+                    isPortrait = isPortrait,
+                    bottomChromeInset = bottomChromeInset,
+                    focusResetMounted = focusResetVisible,
+                    widthDp = SPLIT_KEY_WIDTH_DP,
+                    heightDp = SPLIT_KEY_HEIGHT_DP,
+                )
+            val splitKeyDescription = stringResource(R.string.split_comparison_key)
+            Box(
+                Modifier
+                    .zone(keyFrame)
+                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    .border(
+                        1.dp,
+                        if (splitComparisonMuted) LiveDesign.hairline else LiveDesign.accentDim,
+                        CircleShape,
+                    )
+                    .chromeClickable { splitComparisonMuted = !splitComparisonMuted }
+                    .testTag("split_comparison_key")
+                    .semantics { contentDescription = splitKeyDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "50/50",
+                    style = chromeStyle(11f, FontWeight.Bold),
+                    color = if (splitComparisonMuted) LiveDesign.muted else LiveDesign.accent,
+                )
             }
         }
         } // end sceneLayer (feed + chrome under popups)
