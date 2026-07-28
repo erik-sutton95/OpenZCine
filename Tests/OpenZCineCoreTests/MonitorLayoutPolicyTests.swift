@@ -657,6 +657,26 @@ import Testing
             < 0.0001)
 }
 
+@Test func sideRailDisplayDropsToTheCornerWithNoBottomBar() {
+    // Clean view with the strips switched off: splitting the gap would leave the DISP key
+    // floating in the middle of the freed space with nothing to relate to, so it sits in the
+    // bottom corner instead.
+    let railHeight = 390.0
+    let bare = MonitorSideRailControlLayout.fit(railWidth: 120, railHeight: railHeight)
+
+    #expect(abs(bare.displayBottom - railHeight) < 0.0001)
+    #expect(bare.displayTop > bare.recordBottom, "must not collide with the record button")
+
+    // With a bar present it keeps splitting the gap, so it still reads as part of the rail.
+    let barred = MonitorSideRailControlLayout.fit(
+        railWidth: 120, railHeight: railHeight, bottomBarHeight: 54)
+    #expect(barred.displayBottom < bare.displayBottom)
+
+    // A rail too short for the corner keeps the key clear of record rather than overlapping it.
+    let cramped = MonitorSideRailControlLayout.fit(railWidth: 120, railHeight: 200)
+    #expect(cramped.displayTop >= cramped.recordBottom)
+}
+
 @Test func batteryRailPlacesIndicatorsAroundSideNotch() {
     let layout = MonitorBatteryRailLayout.fit(railHeight: 390)
 
