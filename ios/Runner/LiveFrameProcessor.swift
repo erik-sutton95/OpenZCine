@@ -79,10 +79,37 @@ struct LiveImageEffects: Equatable, Sendable {
     var falseColor: FalseColorSettings?
     var peaking: PeakingSettings?
     var zebra: ZebraSettings?
+    /// Softens JPEG block steps before the look. Display path only — see `outputCIImage`.
+    var blockSmoothing: BlockSmoothingSettings?
+    /// Masks whatever block structure survives, after the look.
+    var blockDither: BlockDitherSettings?
 
     var isIdentity: Bool {
         lut == nil && falseColor == nil && peaking == nil && zebra == nil
+            && blockSmoothing == nil && blockDither == nil
     }
+}
+
+/// Variance-gated smoothing of flat areas, to soften JPEG block steps.
+///
+/// Trial values are driven from the demo harness so they can be swept on hardware without a
+/// rebuild — these are the only numbers in the feature and none of them have been calibrated
+/// against a real camera frame yet.
+struct BlockSmoothingSettings: Equatable, Sendable {
+    /// Tap offset in pixels. 2 gives a 5 px span from 9 taps — enough to ramp an 8 px block step.
+    var radius: Double = 2
+    /// Neighbourhood mean-absolute-deviation, in levels out of 255, at which the filter fully
+    /// disengages. Below this a region counts as flat; above it, detail is left alone.
+    var gateLevels: Double = 5
+    /// How far toward the local mean a fully-flat region is pulled, 0…1.
+    var strength: Double = 0.8
+}
+
+/// Masking noise added after the look to break up residual block periodicity.
+struct BlockDitherSettings: Equatable, Sendable {
+    /// Peak-to-peak amplitude in levels out of 255. Wants to be comparable to the block step it is
+    /// masking — a few levels, not a visible grain overlay.
+    var levels: Double = 3
 }
 
 /// False colour replaces the creative look with flat exposure-zone colours, so it carries which
@@ -265,7 +292,13 @@ extension NativeAppModel {
                     midtoneIRE: assistConfiguration.zebra.midtoneIRE,
                     midtoneColor: assistConfiguration.zebra.midtoneColor,
                     curve: exposureSignalMapping.curve,
-                    clipNative: exposureSignalMapping.clipNative) : nil)
+                    clipNative: exposureSignalMapping.clipNative) : nil,
+            blockSmoothing: DemoHarness.blockSmoothStrength.map { strength in
+                BlockSmoothingSettings(
+                    gateLevels: DemoHarness.blockSmoothGateLevels ?? 5,
+                    strength: strength)
+            },
+            blockDither: DemoHarness.blockDitherLevels.map { BlockDitherSettings(levels: $0) })
     }
 
     var liveImageEffects: LiveImageEffects {
@@ -447,13 +480,30 @@ final class LiveFrameProcessor {
         else { return nil }
         let extent = input.extent
 
-        var output = input
+        // The block filters run on the DISPLAY path only. `input` stays the pristine decode because
+        // three things below measure it rather than show it: zebras would under-report clipping if
+        // handed smoothed code values, false colour would mis-assign exposure zones, and peaking —
+        // which measures blur RADIUS since 15d1186 — would end up measuring its own smoothing.
+        // Splitting here is what lets the operator see a deblocked image while every assist keeps
+        // reading what the sensor actually sent, so none of them need recalibrating.
+        //
+        // Smoothing goes BEFORE the look on purpose: blocking is uniform in the encoded domain, and
+        // a shadow-lifting tone curve amplifies it non-uniformly. Filter it where it is still flat.
+        // Dither goes AFTER, for the opposite reason — see `applyDither`.
+        var display = input
+        if let smoothing = effects.blockSmoothing {
+            display = ImageEffectsCompositor.applyFlatSmoothing(
+                to: input, settings: smoothing, extent: extent)
+        }
+
+        var output = display
         if let falseColor = effects.falseColor, falseColor.scale == .limits {
             // Limits keeps the monitor's normal look between the zones: grade first (the selected
             // LUT, or the untouched feed), then composite the crush/clip paint on top through a
-            // zone-weight mask. Both limits cubes measure the raw code values in `input`.
+            // zone-weight mask. Both limits cubes measure the raw code values in `input`; only the
+            // graded background the operator looks at comes off the smoothed `display`.
             if let lut = effects.lut {
-                output = applyBaseCube(to: input, key: lut.cacheKey) { self.cube(for: lut) }
+                output = applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) }
             }
             let mappingKey = "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
             let paint = applyBaseCube(to: input, key: "limitsPaint:\(mappingKey)") {
@@ -477,7 +527,15 @@ final class LiveFrameProcessor {
                 FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
             }
         } else if let lut = effects.lut {
-            output = applyBaseCube(to: input, key: lut.cacheKey) { self.cube(for: lut) }
+            output = applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) }
+        }
+
+        // After the look — the noise has to sit in the same space as the artifact it masks, and the
+        // tone curve has already stretched both. Before the overlays, so peaking and zebra paint
+        // stays clean rather than picking up grain.
+        if let dither = effects.blockDither {
+            output = ImageEffectsCompositor.applyDither(
+                to: output, settings: dither, extent: extent)
         }
 
         if let peaking = effects.peaking {
