@@ -11,6 +11,7 @@ import java.nio.ByteBuffer
 
 private const val FEED_EFFECTS_VERTEX_SHADER = "shaders/playback_feed_vertex_es2.glsl"
 private const val FEED_EFFECTS_FRAGMENT_SHADER = "shaders/playback_feed_fragment_es2.glsl"
+private const val PEAKING_BLUR_FRAGMENT_SHADER = "shaders/peaking_blur_fragment_es2.glsl"
 private const val PEAKING_MASK_FRAGMENT_SHADER = "shaders/peaking_mask_fragment_es2.glsl"
 
 /**
@@ -21,12 +22,16 @@ private const val PEAKING_MASK_FRAGMENT_SHADER = "shaders/peaking_mask_fragment_
  * Android render paths. Callers own the input texture, output framebuffer,
  * viewport, and GL thread.
  *
- * Peaking is two passes, and both live in here rather than at the three call sites:
- * pass 1 renders the detector into an offscreen mask at SOURCE resolution, pass 2
- * closes that mask and composites. [draw] saves and restores the caller's framebuffer
- * and viewport around pass 1, so the contract above is unchanged — callers still own
- * the output framebuffer and never learn the mask exists. See
- * `peaking_mask_fragment_es2.glsl` for why the detector cannot stay inline.
+ * Peaking is three passes, and all of them live in here rather than at the three call
+ * sites: pass 1 takes the vertical half of the separable re-blur, pass 2 folds the
+ * horizontal half and writes the finished detector mask (both at SOURCE resolution), and
+ * pass 3 closes that mask and composites. [draw] saves and restores the caller's
+ * framebuffer and viewport around the offscreen passes, so the contract above is
+ * unchanged — callers still own the output framebuffer and never learn the mask exists.
+ *
+ * Splitting the re-blur is what makes the feature affordable: 20 taps per source pixel
+ * against 68 for the fused form, for an identical result. See
+ * `peaking_blur_fragment_es2.glsl` for the algebra and the measurement.
  */
 internal class FeedEffectsGlProgram(
     context: Context,
@@ -38,13 +43,20 @@ internal class FeedEffectsGlProgram(
     private val limitsPaintCube = uploadCube(plan.limitsPaintCube)
     private val limitsWeightCube = uploadCube(plan.limitsWeightCube)
 
-    /** Pass 1, built only when peaking is on — it is the whole cost of the feature. */
+    /** Passes 1 and 2, built only when peaking is on — they are the cost of the feature. */
+    private val blurProgram =
+        if (plan.effects.peaking) {
+            GlProgram(context, FEED_EFFECTS_VERTEX_SHADER, PEAKING_BLUR_FRAGMENT_SHADER)
+        } else {
+            null
+        }
     private val maskProgram =
         if (plan.effects.peaking) {
             GlProgram(context, FEED_EFFECTS_VERTEX_SHADER, PEAKING_MASK_FRAGMENT_SHADER)
         } else {
             null
         }
+    private var blurTarget: PeakingMaskTarget? = null
     private var maskTarget: PeakingMaskTarget? = null
 
     /**
@@ -62,6 +74,14 @@ internal class FeedEffectsGlProgram(
         )
         program.setFloatsUniform("uFlipInputY", flag(flipInputVertically))
         bindStaticUniforms(plan)
+        blurProgram?.let { blur ->
+            blur.setBufferAttribute(
+                "aFramePosition",
+                GlUtil.getNormalizedCoordinateBounds(),
+                GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE,
+            )
+            blur.setFloatsUniform("uFlipInputY", flag(flipInputVertically))
+        }
         maskProgram?.let { mask ->
             mask.setBufferAttribute(
                 "aFramePosition",
@@ -109,30 +129,53 @@ internal class FeedEffectsGlProgram(
     }
 
     /**
-     * Renders the detector into the offscreen mask and returns its texture, restoring the
-     * caller's framebuffer and viewport before it returns. Returns the stub when peaking is
-     * off, so the composite always has a bound sampler.
+     * Runs the two offscreen detector passes and returns the finished mask texture,
+     * restoring the caller's framebuffer and viewport before it returns. Returns the stub
+     * when peaking is off, so the composite always has a bound sampler.
      */
     private fun renderPeakingMask(
         inputTexture: Int,
         sourceWidth: Float,
         sourceHeight: Float,
     ): Int {
+        val blur = blurProgram ?: return maskStub()
         val mask = maskProgram ?: return maskStub()
         val width = sourceWidth.toInt().coerceAtLeast(1)
         val height = sourceHeight.toInt().coerceAtLeast(1)
-        val target = peakingMaskTarget(width, height)
+        val sourceSize = floatArrayOf(width.toFloat(), height.toFloat())
 
         // The caller owns the output framebuffer and viewport; borrow and hand them back.
+        //
+        // READ BEFORE ALLOCATING, always. Creating a target has to bind its own framebuffer to
+        // attach the texture, and does not put the previous binding back — so asking for the
+        // targets first captures the freshly made FBO as "previous" and the composite then
+        // renders into the mask instead of onto the screen. That is a black feed under live
+        // chrome on every frame that allocates, alternating with good frames once the targets
+        // cache: the flicker, and the feed that never updates.
         val previousFramebuffer = IntArray(1)
         GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, previousFramebuffer, 0)
         val previousViewport = IntArray(4)
         GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, previousViewport, 0)
 
-        GlUtil.focusFramebufferUsingCurrentContext(target.framebufferId, width, height)
+        val blurPass = peakingBlurTarget(width, height)
+        val maskPass = peakingMaskTarget(width, height)
+
+        // Pass 1 — the vertical half of the re-blur, both of the quad's rows per texel.
+        GlUtil.focusFramebufferUsingCurrentContext(blurPass.framebufferId, width, height)
+        blur.use()
+        blur.setSamplerTexIdUniform("uTexSampler", inputTexture, 0)
+        blur.setFloatsUniform("uSourceSize", sourceSize)
+        blur.bindAttributesAndUniforms()
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GlUtil.checkGlError()
+
+        // Pass 2 — the horizontal fold, the operator and the ramps. Still needs the source
+        // itself: the fine gradient is measured on raw pixels, never on the re-blur.
+        GlUtil.focusFramebufferUsingCurrentContext(maskPass.framebufferId, width, height)
         mask.use()
         mask.setSamplerTexIdUniform("uTexSampler", inputTexture, 0)
-        mask.setFloatsUniform("uSourceSize", floatArrayOf(width.toFloat(), height.toFloat()))
+        mask.setSamplerTexIdUniform("uPeakingBlur", blurPass.textureId, 1)
+        mask.setFloatsUniform("uSourceSize", sourceSize)
         mask.bindAttributesAndUniforms()
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GlUtil.checkGlError()
@@ -144,7 +187,7 @@ internal class FeedEffectsGlProgram(
             previousViewport[2],
             previousViewport[3],
         )
-        return target.textureId
+        return maskPass.textureId
     }
 
     private fun maskStub(): Int {
@@ -159,15 +202,37 @@ internal class FeedEffectsGlProgram(
             existing.release()
             maskTarget = null
         }
+        return createSourceSizedTarget(width, height).also { maskTarget = it }
+    }
+
+    /** Same size and format as the mask: it holds the vertical re-blur, 16 bits per row. */
+    private fun peakingBlurTarget(width: Int, height: Int): PeakingMaskTarget {
+        blurTarget?.let { existing ->
+            if (existing.width == width && existing.height == height) return existing
+            existing.release()
+            blurTarget = null
+        }
+        return createSourceSizedTarget(width, height).also { blurTarget = it }
+    }
+
+    /**
+     * RGBA8, deliberately: the blur pass packs each value across two channels to get 16
+     * bits, because a half-float target throws on an ES2 context and that throw tears down
+     * the live GPU surface. See `peaking_blur_fragment_es2.glsl`.
+     */
+    private fun createSourceSizedTarget(width: Int, height: Int): PeakingMaskTarget {
         val textureId = GlUtil.createTexture(width, height, /* useHighPrecisionColorComponents= */ false)
         val framebufferId = GlUtil.createFboForTexture(textureId)
-        return PeakingMaskTarget(textureId, framebufferId, width, height).also { maskTarget = it }
+        return PeakingMaskTarget(textureId, framebufferId, width, height)
     }
 
     /** Releases only textures and program state owned by this adapter. */
     fun release() {
         program.delete()
+        blurProgram?.delete()
         maskProgram?.delete()
+        blurTarget?.release()
+        blurTarget = null
         maskTarget?.release()
         maskTarget = null
         if (maskStubTexture != 0) {

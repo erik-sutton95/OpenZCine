@@ -1,7 +1,24 @@
 #version 100
 
-// Pass 1 of focus peaking: the detector, evaluated ONCE PER SOURCE PIXEL into an
-// offscreen mask. R = the painted stroke's opacity, G = the dark hairline's.
+// Pass 2 of 3 of focus peaking: the HORIZONTAL half of the re-blur, the operator, and the
+// ramps — evaluated ONCE PER SOURCE PIXEL into an offscreen mask.
+// R = the painted stroke's opacity, G = the dark hairline's.
+//
+// The vertical half already ran in `peaking_blur_fragment_es2.glsl`, which is why this
+// reads 8 texels instead of walking a 64-tap neighbourhood. The algebra of that split,
+// once, because it is the reason two shaders exist:
+//
+//   the fused loop accumulated, per column dx,
+//     vp0 = SUM over dy of w(dy)     * g(x+dx, y+dy)   -- blur centred on row y
+//     vp1 = SUM over dy of w(dy - 1) * g(x+dx, y+dy)   -- blur centred on row y+1
+//   then folded each into the four quad positions with the horizontal weights w(dx) and
+//   w(dx-1). Those two sums depend on the COLUMN alone, so the blur pass computes them
+//   per pixel and hands both over in one texel (RG and BA, 16 bits each). What is left
+//   here is the horizontal fold, unchanged and exact — the same four `b**` values, from 8
+//   reads rather than 64 taps.
+//
+// w(offset) is zero beyond |offset| >= 3.5, so vp1 at row y is identically the centred
+// blur at row y+1; nothing is approximated by carrying it in the same texel.
 //
 // Split out of the composite shader for one reason. iOS closes the finished stroke
 // (`Peaking.maskClosingRadius`), which rejoins the dashes a strict noise gate punches
@@ -26,6 +43,9 @@
 precision highp float;
 
 uniform sampler2D uTexSampler;
+// The vertical halves from pass 1, already on this pass's own grid — sampled straight,
+// with no flip: `uFlipInputY` belongs to reads of the SOURCE, and pass 1 has applied it.
+uniform sampler2D uPeakingBlur;
 uniform float uFlipInputY;
 uniform vec2 uSourceSize;
 uniform float uPeakingRatioThreshold;
@@ -72,6 +92,12 @@ float peakingTapWeight(float offset) {
         : 0.0;
 }
 
+// Inverse of `pack16` in the blur pass: the high byte plus the low byte's 1/255 share.
+// NB `packed` is a reserved word in GLSL ES 1.00, so the pair cannot be named that.
+float unpack16(vec2 pair) {
+    return pair.x + pair.y / 255.0;
+}
+
 // The operator: a squared Roberts cross over the 2x2 quad anchored at the pixel,
 // reproducing `CIEdges`. SQUARED — a 0.2 step gives 0.08, a 0.4 step 0.32 — which is the
 // domain every threshold in `Peaking` lives in.
@@ -101,25 +127,18 @@ void main() {
     vec2 texel = 1.0 / sourceSize;
     vec2 centre = (floor(vTexSamplingCoord * sourceSize) + 0.5) * texel;
 
-    // Separable re-blur and the operator's two quads over ONE shared 8x8 source
-    // neighbourhood. `vp0`/`vp1` are the vertical halves at the quad's two rows, and the
-    // four `b**` accumulate the horizontal half straight into the re-blurred values the
-    // coarse operator needs — so the whole kernel holds a handful of floats and needs no
-    // local array. 68 source taps in total.
+    // The horizontal fold. Columns -3..+4 are what the two horizontal weights between them
+    // reach, and each read already carries both of the quad's rows, so the four `b**` come
+    // out of 8 texels. Same values as the fused 8x8 loop, a third of the bandwidth.
     float b00 = 0.0;
     float b10 = 0.0;
     float b01 = 0.0;
     float b11 = 0.0;
     for (int col = 0; col < 8; col++) {
         float dx = float(col) - 3.0;
-        float vp0 = 0.0;
-        float vp1 = 0.0;
-        for (int row = 0; row < 8; row++) {
-            float dy = float(row) - 3.0;
-            float g = sourceGrey(centre + vec2(dx, dy) * texel);
-            vp0 += peakingTapWeight(dy) * g;
-            vp1 += peakingTapWeight(dy - 1.0) * g;
-        }
+        vec4 rows = texture2D(uPeakingBlur, centre + vec2(dx, 0.0) * texel);
+        float vp0 = unpack16(rows.rg);
+        float vp1 = unpack16(rows.ba);
         float wx0 = peakingTapWeight(dx);
         float wx1 = peakingTapWeight(dx - 1.0);
         b00 += wx0 * vp0;
