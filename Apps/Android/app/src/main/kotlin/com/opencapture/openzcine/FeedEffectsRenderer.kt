@@ -283,6 +283,11 @@ class FeedEffectsRenderer private constructor(
             uploadCube(shader, "limitsPaintCube", "limitsPaintSize", plan.limitsPaintCube)
             uploadCube(shader, "limitsWeightCube", "limitsWeightSize", plan.limitsWeightCube)
             shader.setFloatUniform("limitsOn", if (plan.limitsReady) 1f else 0f)
+            shader.setFloatUniform("splitOn", if (plan.splitComparison != null) 1f else 0f)
+            shader.setFloatUniform(
+                "splitVertical",
+                if (plan.splitComparison == FeedSplitOrientation.VERTICAL) 1f else 0f,
+            )
 
             shader.setFloatUniform("peakingOn", if (plan.effects.peaking) 1f else 0f)
             shader.setFloatUniform(
@@ -374,6 +379,10 @@ private val EFFECTS_AGSL =
     uniform float2 dstOffset;          // letterbox origin, canvas px
     uniform float srcScale;            // canvas px -> bitmap px
     uniform float2 sourceSize;         // decoded frame extent, bitmap px
+    // 50/50 Log-vs-LUT comparison: 1 = on, and 1 = a vertical boundary (Log left, LUT right)
+    // against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
+    uniform float splitOn;
+    uniform float splitVertical;
 
     uniform float peakingOn;
     uniform float3 peakingColor;
@@ -488,7 +497,13 @@ private val EFFECTS_AGSL =
     half4 main(float2 fragCoord) {
         float2 src = (fragCoord - dstOffset) * srcScale;
         float3 source = float3(feed.eval(src).rgb);
-        float3 color = grade(source);
+        // `src` is in SOURCE bitmap pixels with a top-left origin, so the halfway line of
+        // `sourceSize` is the centre of the image itself — fit shows all of it and fill shows a
+        // centred crop of it, and neither letterbox nor chrome is inside this coordinate space at
+        // all. Exactly `SplitComparison.isGradedSide` from shared core, denormalized.
+        bool graded = splitOn < 0.5
+            || (splitVertical > 0.5 ? src.x >= sourceSize.x * 0.5 : src.y >= sourceSize.y * 0.5);
+        float3 color = graded ? grade(source) : source;
 
         if (limitsOn > 0.5) {
             color = mix(color, limitsPaint(source), limitsWeight(source));

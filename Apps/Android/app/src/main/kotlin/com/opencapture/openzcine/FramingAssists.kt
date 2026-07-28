@@ -16,6 +16,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -203,6 +204,12 @@ internal fun LocalFramingAssistOverlay(
     presentationState: LiveFeedPresentationState? = null,
     feedRect: FramingAssistRect? = null,
     aspectFill: Boolean = false,
+    /**
+     * The active 50/50 Log-vs-LUT comparison, or `null`. Drawn here rather than in its own
+     * overlay so the divider and the shader's boundary come from the same `presentationRect`.
+     * Already mode-filtered by the caller — it follows the LUT's own clean-view pin.
+     */
+    splitComparison: FeedSplitOrientation? = null,
     modifier: Modifier = Modifier,
 ) {
     val accessibilitySummary = localFramingAssistAccessibilitySummary(configuration)
@@ -279,10 +286,12 @@ internal fun LocalFramingAssistOverlay(
                 if (plan.drawsPhiGrid) drawGridFractions(plan.presentationRect, listOf(0.382f, 0.618f))
                 if (plan.drawsDiagonalGrid) drawDiagonalGrid(plan.presentationRect)
                 if (plan.drawsCenterCrosshair) drawCentreCrosshair(plan.presentationRect)
+                splitComparison?.let { drawSplitDivider(plan.presentationRect, it) }
             }
             plan.guideFrames.forEach { frame ->
                 FramingGuideLabel(frame)
             }
+            splitComparison?.let { SplitComparisonLabels(plan.presentationRect, it) }
         }
     }
 }
@@ -438,6 +447,84 @@ private fun FramingGuideLabel(frame: LocalFramingGuideFrame) {
                 .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(5.dp))
                 .padding(horizontal = 6.dp, vertical = 2.dp),
     )
+}
+
+/**
+ * The 50/50 comparison's two half labels, hugging the divider at one edge of the image.
+ *
+ * Not centred in each half on purpose: the operator is judging the picture, and a caption over the
+ * subject is exactly what "without permanently obscuring the image" rules out.
+ */
+@Composable
+private fun SplitComparisonLabels(rect: FramingAssistRect, orientation: FeedSplitOrientation) {
+    val density = LocalDensity.current
+    val logOffset: Offset
+    val lutOffset: Offset
+    // Matches the iOS placement: a fraction of the way along the divider, which clears the status
+    // deck in landscape and in portrait without knowing which chrome is mounted.
+    if (orientation == FeedSplitOrientation.VERTICAL) {
+        val y = rect.top + rect.height * ALONG_DIVIDER
+        logOffset = Offset(rect.centerX - with(density) { 30.dp.toPx() }, y)
+        lutOffset = Offset(rect.centerX + with(density) { 8.dp.toPx() }, y)
+    } else {
+        val x = rect.left + rect.width * ALONG_DIVIDER
+        logOffset = Offset(x, rect.centerY - with(density) { 15.dp.toPx() })
+        lutOffset = Offset(x, rect.centerY + with(density) { 4.dp.toPx() })
+    }
+    SplitComparisonLabel(FeedSplitOrientation.LOG_LABEL, logOffset)
+    SplitComparisonLabel(FeedSplitOrientation.LUT_LABEL, lutOffset)
+}
+
+/** Where along the divider the label pair sits, as a fraction of the visible image. */
+private const val ALONG_DIVIDER = 0.16f
+
+/**
+ * Deliberately tiny and unfilled: the split itself already says which half is which, so these only
+ * confirm it. A drop shadow rather than a filled chip — the graded half can be far darker or far
+ * brighter than the log half depending on the look, and a shadow reads over both where one fixed
+ * fill colour reads over neither.
+ */
+@Composable
+private fun SplitComparisonLabel(text: String, offset: Offset) {
+    Text(
+        text = text,
+        style =
+            chromeStyle(8f, FontWeight.SemiBold, mono = true).copy(
+                letterSpacing = 0.5.sp,
+                shadow =
+                    Shadow(
+                        color = Color.Black.copy(alpha = 0.8f),
+                        offset = Offset(0f, 1f),
+                        blurRadius = 3f,
+                    ),
+            ),
+        color = Color.White.copy(alpha = 0.85f),
+        modifier = Modifier.offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) },
+    )
+}
+
+/**
+ * The hairline at the comparison boundary — the centre of the visible image rectangle, the same
+ * line the fragment shader grades on one side of.
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSplitDivider(
+    rect: FramingAssistRect,
+    orientation: FeedSplitOrientation,
+) {
+    val width = 1.dp.toPx()
+    if (orientation == FeedSplitOrientation.VERTICAL) {
+        drawRect(
+            color = Color.White.copy(alpha = 0.5f),
+            topLeft = Offset(rect.centerX - width / 2f, rect.top),
+            size = Size(width, rect.height),
+        )
+    } else {
+        drawRect(
+            color = Color.White.copy(alpha = 0.5f),
+            topLeft = Offset(rect.left, rect.centerY - width / 2f),
+            size = Size(rect.width, width),
+        )
+    }
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFrameGuide(

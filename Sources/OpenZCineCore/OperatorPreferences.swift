@@ -484,7 +484,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         commandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoDisplayChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoCleanChrome: DisplayChromeVisibility = .cleanDefaults,
-        photoCommandChrome: DisplayChromeVisibility = DisplayChromeVisibility()
+        photoCommandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
+        splitComparisonEnabled: Bool = false,
+        splitComparisonOrientation: SplitComparisonOrientation = .vertical
     ) {
         self.dispOrder = dispOrder
         self.enabledDispModes = Self.normalizedEnabledDispModes(enabledDispModes)
@@ -510,6 +512,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.photoDisplayChrome = photoDisplayChrome
         self.photoCleanChrome = photoCleanChrome
         self.photoCommandChrome = photoCommandChrome
+        self.splitComparisonEnabled = splitComparisonEnabled
+        self.splitComparisonOrientation = splitComparisonOrientation
     }
 
     /// Stock defaults — forwards to ``defaults``.
@@ -559,6 +563,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var photoDisplayChrome: DisplayChromeVisibility
     public var photoCleanChrome: DisplayChromeVisibility
     public var photoCommandChrome: DisplayChromeVisibility
+    /// Whether the LUT tool renders as a 50/50 Log-vs-LUT comparison. Off by default — see
+    /// ``SplitComparison``.
+    public var splitComparisonEnabled: Bool
+    /// Which way the comparison divides the image. Persisted independently of
+    /// ``splitComparisonEnabled`` so switching the comparison off and on again keeps the
+    /// operator's choice.
+    public var splitComparisonOrientation: SplitComparisonOrientation
 
     /// The chrome configuration `mode` renders on the `capture` side of the camera. Each pair owns
     /// its own set, so the operator can build a full DISP 1, a bare DISP 2 and a stripped DISP 3
@@ -628,6 +639,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case cleanChrome, commandChrome
         case cleanChromeV2
         case photoDisplayChrome, photoCleanChrome, photoCommandChrome
+        case splitComparisonEnabled, splitComparisonOrientation
     }
 
     public init(from decoder: any Decoder) throws {
@@ -729,6 +741,14 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         photoCommandChrome =
             try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCommandChrome)
             ?? commandChrome
+        // The 50/50 comparison postdates every stored blob. Absent means "never chosen", which is
+        // the documented default: comparison off, and a vertical boundary the first time it is
+        // switched on.
+        splitComparisonEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .splitComparisonEnabled) ?? false
+        splitComparisonOrientation =
+            try container.decodeIfPresent(
+                SplitComparisonOrientation.self, forKey: .splitComparisonOrientation) ?? .vertical
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -755,6 +775,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(photoDisplayChrome, forKey: .photoDisplayChrome)
         try container.encode(photoCleanChrome, forKey: .photoCleanChrome)
         try container.encode(photoCommandChrome, forKey: .photoCommandChrome)
+        try container.encode(splitComparisonEnabled, forKey: .splitComparisonEnabled)
+        try container.encode(splitComparisonOrientation, forKey: .splitComparisonOrientation)
     }
 
     /// Live-monitor assist visibility. Prefer ``visibleAssistTools(for:)`` when the context is known.
@@ -793,7 +815,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         commandChrome: DisplayChromeVisibility(),
         photoDisplayChrome: DisplayChromeVisibility(),
         photoCleanChrome: .cleanDefaults,
-        photoCommandChrome: DisplayChromeVisibility()
+        photoCommandChrome: DisplayChromeVisibility(),
+        splitComparisonEnabled: false,
+        splitComparisonOrientation: .vertical
     )
 
     /// Whether `tool` should appear on the bottom assist toolbar (LUT is always shown).

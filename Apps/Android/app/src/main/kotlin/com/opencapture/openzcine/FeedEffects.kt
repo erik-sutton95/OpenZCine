@@ -80,6 +80,35 @@ internal object ExposureCurveOrdinals {
     val range = RED_LOG3G10..HLG
 }
 
+/**
+ * How the 50/50 Log-vs-LUT comparison divides the monitor image — the Kotlin mirror of the shared
+ * core's `SplitComparisonOrientation`.
+ *
+ * The boundary is the centre of the **visible image rectangle**, never of the surface: every
+ * backend already sets its viewport to the fitted content rect (`liveFeedContentRect` on GLES,
+ * the letterbox clamp in `live_feed_vk_renderer.cpp`), so splitting at the halfway line of feed
+ * space excludes pillarbox, letterbox and monitor chrome by construction.
+ */
+enum class FeedSplitOrientation(val label: String) {
+    /** Vertical boundary — Log on the left, LUT on the right. */
+    VERTICAL("Left / Right"),
+
+    /** Horizontal boundary — Log on the top, LUT on the bottom. */
+    HORIZONTAL("Top / Bottom"),
+    ;
+
+    internal companion object {
+        /** Edge label for the ungraded half — `SplitComparison.logLabel` in shared core. */
+        const val LOG_LABEL: String = "LOG"
+
+        /** Edge label for the graded half — `SplitComparison.lutLabel` in shared core. */
+        const val LUT_LABEL: String = "LUT"
+
+        fun fromStoredName(value: String?): FeedSplitOrientation? =
+            entries.firstOrNull { it.name == value }
+    }
+}
+
 /** iOS `Peaking.Sensitivity`, with ordinals owned by the Swift facade. */
 enum class FeedPeakingSensitivity(val wireOrdinal: Int, val label: String) {
     LOW(0, "Low"),
@@ -155,7 +184,17 @@ data class FeedEffects(
     val falseColor: FeedFalseColorScale? = null,
     val peaking: Boolean = false,
     val zebra: Boolean = false,
+    /** The operator's 50/50 comparison choice, carried even while there is no LUT to apply it to. */
+    val splitComparison: FeedSplitOrientation? = null,
 ) {
+    /**
+     * The comparison actually rendered. Derived rather than stored so it can never outlive the
+     * grade: a mode filter that drops [lut] (clean view without a LUT pin) drops the split with
+     * it, exactly as `LUTResolution.splitComparison` does on iOS.
+     */
+    val activeSplitComparison: FeedSplitOrientation?
+        get() = splitComparison?.takeIf { lut != null }
+
     /** True when the feed renders untouched — the renderer skips the GPU chain. */
     val isIdentity: Boolean
         get() = lut == null && falseColor == null && !peaking && !zebra

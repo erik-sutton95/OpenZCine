@@ -806,6 +806,10 @@ final class NativeAppModel {
     /// monitor is live. While editing, every element the mode owns mounts — hidden ones at 30% —
     /// with an eye badge on a corner of its bounding box. Session-only.
     var chromeEditorMode: DispMode?
+    /// Whether the on-feed 50/50 key has the armed comparison momentarily hidden. Session-only and
+    /// deliberately not a preference: it is one half of an A/B, not a setting — see
+    /// ``LUTResolution/showsSplitComparisonKey(visibleTools:preferences:)``.
+    var splitComparisonMuted = false
     /// Which capture side of the camera the monitor is laying out for. The body owns this — the
     /// app follows its mode dial — so it is read, never stored.
     var captureLayoutMode: CaptureLayoutMode { isPhotographyMode ? .photo : .video }

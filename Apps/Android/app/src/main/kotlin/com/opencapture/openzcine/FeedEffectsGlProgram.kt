@@ -182,6 +182,13 @@ internal class FeedEffectsGlProgram(
     private fun bindStaticUniforms(plan: FeedEffectsRenderPlan) {
         val configuration = plan.configuration
         program.setFloatsUniform("uLutSize", floatArrayOf(baseCube.cubeSize.toFloat()))
+        // Both are always set, even off: `setFloatsUniform` throws on a uniform GLSL dead-stripped
+        // for being unreferenced, and on the live path that throw drops the whole GPU surface.
+        program.setFloatsUniform("uSplitOn", flag(plan.splitComparison != null))
+        program.setFloatsUniform(
+            "uSplitVertical",
+            flag(plan.splitComparison == FeedSplitOrientation.VERTICAL),
+        )
         program.setFloatsUniform(
             "uLimitsPaintSize",
             floatArrayOf(limitsPaintCube.cubeSize.toFloat()),

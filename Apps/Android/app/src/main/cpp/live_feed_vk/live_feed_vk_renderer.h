@@ -55,6 +55,8 @@ bool LiveFeedVk_SetPlan(
     bool zebraMidtoneOn,
     float zebraMidtone,
     const float* zebraMidtoneColor3,
-    bool aspectFill);
+    bool aspectFill,
+    bool splitOn,
+    bool splitVertical);
 
 }  // extern "C"
