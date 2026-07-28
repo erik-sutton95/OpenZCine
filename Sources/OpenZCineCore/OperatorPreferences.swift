@@ -164,7 +164,7 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
             case .railMedia: "Media"
             case .railSettings: "Settings"
             case .railDisp: "DISP"
-            case .focusBox: "Focus Box"
+            case .focusBox: "AF Box"
             }
         }
 
@@ -345,6 +345,11 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
     /// only so a stored value can expand into the four rail controls.
     public static func isConfigurable(_ section: Section, in mode: DispMode) -> Bool {
         if section == .sideRails { return false }
+        // The DISP key is never hideable, in any mode or configuration. It was briefly offered as
+        // a switch with the feed swipe as the fallback, but an escape route the operator has to
+        // already know about is not an escape route — hiding the only visible way to change mode
+        // is a trap whatever else is on screen.
+        if section == .railDisp { return false }
         switch mode {
         case .live, .clean:
             return true

@@ -29,9 +29,10 @@ import Foundation
 /// **No mode can be locked from the inside.** Every rail control is now the operator's to hide,
 /// so two of them carry guarantees instead (see ``sideRailPlan(mode:preferences:capture:interfaceLocked:recordingOrPending:)``):
 /// the record control returns while a take is rolling, and the Settings key returns when no
-/// enabled DISP mode still carries one. The DISP key needs no guarantee because the feed swipe
-/// (down → clean, up → live) changes mode without it. The lock key returns while the interface is
-/// locked, because it is the only control that clears the lock.
+/// enabled DISP mode still carries one. The DISP key is not among them: it is never hideable at
+/// all, in any mode or configuration, because it is the only visible way to change mode and the
+/// feed swipe is not an escape route for an operator who does not already know about it. The lock
+/// key returns while the interface is locked, because it is the only control that clears the lock.
 public enum MonitorChromePolicy {
     /// Whether `tool` renders right now: switched on for `context`, and permitted by `mode`.
     public static func isToolVisible(
@@ -147,7 +148,8 @@ public enum MonitorChromePolicy {
                 mode: mode, preferences: preferences, capture: capture,
                 interfaceLocked: interfaceLocked),
             batteries: chrome.batteryIndicatorsVisible,
-            disp: chrome.railDispVisible,
+            // Always on. Not a stored preference the operator can reach — see `isConfigurable`.
+            disp: true,
             record: chrome.railRecordVisible || recordingOrPending,
             media: chrome.railMediaVisible,
             settings: chrome.railSettingsVisible || !settingsReachable)

@@ -95,7 +95,7 @@ public enum class ChromeSection(
     RAIL_MEDIA("Media", "railMedia"),
     RAIL_SETTINGS("Settings", "railSettings"),
     RAIL_DISP("DISP", "railDisp"),
-    FOCUS_BOX("Focus Box", "focusBox"),
+    FOCUS_BOX("AF Box", "focusBox"),
     ;
 
     /**
@@ -109,6 +109,10 @@ public enum class ChromeSection(
     public fun isConfigurableIn(mode: MonitorDisplayMode): Boolean =
         when {
             this == SIDE_RAILS -> false
+            // Never hideable, in any mode or configuration — it is the only visible way to
+            // change mode, and a feed swipe the operator has to already know about is not an
+            // escape route. Mirrors the core's `isConfigurable`.
+            this == RAIL_DISP -> false
             mode == MonitorDisplayMode.COMMAND ->
                 this == LOCK_BUTTON || this == BATTERY_INDICATORS || this in railControls
             else -> true
@@ -767,7 +771,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         return SideRailPlan(
             lock = chrome.lockButton.value || interfaceLocked,
             batteries = chrome.batteryIndicators.value,
-            disp = chrome.railDisp.value,
+            disp = true, // Always on — not a preference the operator can reach.
+
             record = chrome.railRecord.value || recordingOrPending,
             media = chrome.railMedia.value,
             settings = chrome.railSettings.value || !settingsReachable,

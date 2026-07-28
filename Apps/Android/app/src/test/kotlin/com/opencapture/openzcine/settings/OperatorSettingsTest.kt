@@ -825,7 +825,7 @@ class OperatorSettingsTest {
                 interfaceLocked = false,
                 recordingOrPending = false,
             )
-        assertFalse(stripped.disp, "the feed swipe is the DISP key's way out")
+        assertTrue(stripped.disp, "the DISP key is never hideable — it is the only way to change mode")
         assertFalse(stripped.media)
         assertFalse(stripped.record, "standby record is the operator's to hide")
         assertTrue(stripped.settings, "Settings is the only route back to these switches")
@@ -902,7 +902,10 @@ class OperatorSettingsTest {
             ChromeSection.configurableIn(MonitorDisplayMode.CLEAN),
         )
         assertTrue(ChromeSection.LOCK_BUTTON.isConfigurableIn(MonitorDisplayMode.COMMAND))
-        assertEquals(16, ChromeSection.configurableIn(MonitorDisplayMode.LIVE).size)
+        // 15, not 16: the DISP key is never offered anywhere.
+        assertFalse(ChromeSection.RAIL_DISP.isConfigurableIn(MonitorDisplayMode.LIVE))
+        assertFalse(ChromeSection.RAIL_DISP.isConfigurableIn(MonitorDisplayMode.CLEAN))
+        assertEquals(15, ChromeSection.configurableIn(MonitorDisplayMode.LIVE).size)
         assertEquals(
             listOf(
                 ChromeSection.LOCK_BUTTON,
@@ -910,7 +913,6 @@ class OperatorSettingsTest {
                 ChromeSection.RAIL_RECORD,
                 ChromeSection.RAIL_MEDIA,
                 ChromeSection.RAIL_SETTINGS,
-                ChromeSection.RAIL_DISP,
             ),
             ChromeSection.configurableIn(MonitorDisplayMode.COMMAND),
         )

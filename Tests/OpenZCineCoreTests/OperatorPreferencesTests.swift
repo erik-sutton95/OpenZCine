@@ -23,6 +23,33 @@ import Testing
     #expect(OperatorPreferences.defaults.keepScreenAwake)
 }
 
+@Test func theDispKeyCanNeverBeHidden() {
+    // The only visible way to change mode. It was briefly a switch with the feed swipe as the
+    // fallback; an escape route the operator has to already know about is not an escape route.
+    for mode in DispMode.allCases {
+        #expect(!DisplayChromeVisibility.isConfigurable(.railDisp, in: mode))
+        #expect(!DisplayChromeVisibility.configurableSections(in: mode).contains(.railDisp))
+    }
+
+    // And it renders even with every stored flag off, in every mode and capture side.
+    var preferences = OperatorPreferences.defaults
+    for mode in DispMode.allCases {
+        for capture in CaptureLayoutMode.allCases {
+            var chrome = preferences.chrome(for: mode, capture: capture)
+            for section in DisplayChromeVisibility.Section.allCases
+            where chrome.isVisible(section) {
+                chrome.toggle(section)
+            }
+            preferences.setChrome(chrome, for: mode, capture: capture)
+
+            let plan = MonitorChromePolicy.sideRailPlan(
+                mode: mode, preferences: preferences, capture: capture,
+                interfaceLocked: false, recordingOrPending: false)
+            #expect(plan.disp, "DISP key vanished in \(mode)/\(capture)")
+        }
+    }
+}
+
 @Test func qualityBiasOffersAllThreeGradesWithOneLabelEach() {
     // The control used to have two positions, so "Size" named both .latency and .balanced — and
     // Android wrote .latency for it while iOS left .balanced in place. One label per grade means
@@ -313,7 +340,7 @@ import Testing
     let stripped = MonitorChromePolicy.sideRailPlan(
         mode: .live, preferences: prefs, capture: .video, interfaceLocked: false,
         recordingOrPending: false)
-    #expect(!stripped.disp, "the feed swipe is the DISP key's way out, so it needs no guarantee")
+    #expect(stripped.disp, "the DISP key is never hideable — it is the only way to change mode")
     #expect(!stripped.media)
     #expect(!stripped.record, "standby record is the operator's to hide")
     #expect(stripped.settings, "Settings is the only route back to these switches")
@@ -412,7 +439,10 @@ import Testing
             == DisplayChromeVisibility.configurableSections(in: .live))
     #expect(DisplayChromeVisibility.isConfigurable(.lockButton, in: .clean))
     for section in DisplayChromeVisibility.Section.railControls {
-        #expect(DisplayChromeVisibility.isConfigurable(section, in: .clean))
+        #expect(
+            DisplayChromeVisibility.isConfigurable(section, in: .clean)
+                == DisplayChromeVisibility.isConfigurable(section, in: .live),
+            "clean and live must offer the same elements, including the ones neither offers")
     }
 }
 
@@ -425,10 +455,12 @@ import Testing
     #expect(!DisplayChromeVisibility.isConfigurable(.sideRails, in: .clean))
     #expect(!DisplayChromeVisibility.isConfigurable(.sideRails, in: .command))
     #expect(DisplayChromeVisibility.isConfigurable(.lockButton, in: .command))
-    #expect(DisplayChromeVisibility.configurableSections(in: .live).count == 16)
+    // 15, not 16: the DISP key is never offered anywhere (see `theDispKeyCanNeverBeHidden`).
+    #expect(DisplayChromeVisibility.configurableSections(in: .live).count == 15)
+    #expect(!DisplayChromeVisibility.isConfigurable(.railDisp, in: .live))
     #expect(
         DisplayChromeVisibility.configurableSections(in: .command) == [
-            .lockButton, .batteryIndicators, .railRecord, .railMedia, .railSettings, .railDisp,
+            .lockButton, .batteryIndicators, .railRecord, .railMedia, .railSettings,
         ])
 
     var prefs = OperatorPreferences.defaults
