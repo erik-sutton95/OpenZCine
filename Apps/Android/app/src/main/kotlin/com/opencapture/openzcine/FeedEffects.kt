@@ -6,11 +6,21 @@ import com.opencapture.openzcine.lut.StoredLutSelection
 /**
  * Built-in monitor looks. [wireOrdinal] mirrors `FeedEffectsWire.look` in the
  * Swift facade — the core generates each look's cube, Kotlin only uploads it.
+ *
+ * [credit] mirrors `MonitorLUT.credit`: null for the looks derived from published math in this
+ * repo, and the contributor's line for a community-contributed table (see THIRD-PARTY-NOTICES.md).
  */
-enum class FeedLut(val id: String, val wireOrdinal: Int, val label: String) {
+enum class FeedLut(
+    val id: String,
+    val wireOrdinal: Int,
+    val label: String,
+    val credit: String? = null,
+) {
     LOG3G10_709("log3g10", 0, "Log3G10→709"),
     NLOG_709("nlog", 1, "N-Log→709"),
-    MONO("mono", 2, "Mono");
+    MONO("mono", 2, "Mono"),
+    R3D_NE_MONITOR("r3d_ne", 3, "R3D NE Monitor", "Contributed by Wang Yuehua"),
+    ;
 
     companion object {
         fun fromId(id: String): FeedLut? = entries.firstOrNull { it.id == id }

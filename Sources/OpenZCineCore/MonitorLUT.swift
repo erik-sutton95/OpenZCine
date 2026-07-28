@@ -11,17 +11,31 @@ public enum LUTCategory: String, CaseIterable, Codable, Equatable, Sendable, Ide
 
 /// A selectable monitor look applied to the live view as a 3D LUT.
 ///
-/// Every look is generated procedurally — no proprietary assets are bundled. The creative look
-/// (Mono) comes from simple in-gamut math; the log→display conversions (N-Log and Log3G10 →
-/// Rec.709) are generated from their published transfer functions and gamut matrices, so
-/// operators who don't want a vendor's official LUTs still get an accurate monitoring image. There
-/// is no "none" look — the LUT is switched off via the assist-bar toggle, not a menu entry.
+/// No proprietary assets are bundled. The creative look (Mono) comes from simple in-gamut math;
+/// the log→display conversions (N-Log and Log3G10 → Rec.709) are generated from their published
+/// transfer functions and gamut matrices, so operators who don't want a vendor's official LUTs
+/// still get an accurate monitoring image. `R3D NE Monitor` is the one look that is a table rather
+/// than a formula: it was contributed for inclusion here (see ``credit`` and
+/// `THIRD-PARTY-NOTICES.md`) and travels as a base64 UInt16 blob in the shared core, so both
+/// shells decode the same numbers with no per-platform resource plumbing. There is no "none"
+/// look — the LUT is switched off via the assist-bar toggle, not a menu entry.
 public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
     case log3G10Rec709 = "Log3G10→709"
     case nLogRec709 = "N-Log→709"
     case monochrome = "Mono"
+    case r3dNEMonitor = "R3D NE Monitor"
 
     public var id: String { rawValue }
+
+    /// Who contributed this look, credited beside it in the picker — `nil` for the looks generated
+    /// from published math in this repo. The drum is one narrow line, so the shells render this as
+    /// a caption under it rather than lengthening the label.
+    public var credit: String? {
+        switch self {
+        case .log3G10Rec709, .nLogRec709, .monochrome: nil
+        case .r3dNEMonitor: "Contributed by Wang Yuehua"
+        }
+    }
 
     /// Generates the look as a `size³` red-fastest cube (`index = r + g·size + b·size²`).
     ///
@@ -62,6 +76,13 @@ public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Iden
         case .monochrome:
             let y = Self.luma(r, g, b)
             return (y, y, y)
+        case .r3dNEMonitor:
+            // Sampling the embedded table here (rather than special-casing `cube(size:)`) keeps one
+            // generation path for every look. At the table's own 33³ grid the lattice coordinates
+            // are exact integers, so the trilinear weights collapse to 1 and `cube()` reproduces
+            // the contributor's samples verbatim; any other size resamples from them.
+            let mapped = Self.contributedTableCube.map(red: r, green: g, blue: b)
+            return (mapped.red, mapped.green, mapped.blue)
         }
     }
 

@@ -169,6 +169,7 @@ class FeedEffectsTest {
         assertEquals(0, FeedLut.LOG3G10_709.wireOrdinal)
         assertEquals(1, FeedLut.NLOG_709.wireOrdinal)
         assertEquals(2, FeedLut.MONO.wireOrdinal)
+        assertEquals(3, FeedLut.R3D_NE_MONITOR.wireOrdinal)
         assertEquals(0, FeedFalseColorScale.STOPS.wireOrdinal)
         assertEquals(1, FeedFalseColorScale.IRE.wireOrdinal)
         assertEquals(2, FeedFalseColorScale.LIMITS.wireOrdinal)

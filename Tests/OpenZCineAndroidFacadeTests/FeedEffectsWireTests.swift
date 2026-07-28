@@ -200,7 +200,8 @@ struct FeedEffectsWireTests {
 
     @Test("Unknown ordinals and unsupported sizes are rejected")
     func unknownOrdinalsAreRejected() {
-        #expect(FeedEffectsWire.bakedLUT(lookOrdinal: 3, size: 33) == nil)
+        // 0–3 are the built-in looks; 4 is the first ordinal no `FeedLut` case claims.
+        #expect(FeedEffectsWire.bakedLUT(lookOrdinal: 4, size: 33) == nil)
         #expect(FeedEffectsWire.bakedLUT(lookOrdinal: 0, size: 65) == nil)
         #expect(FeedEffectsWire.bakedFalseColor(scaleOrdinal: 2, curveOrdinal: 0) == nil)
         #expect(FeedEffectsWire.bakedFalseColor(scaleOrdinal: 0, curveOrdinal: 5) == nil)

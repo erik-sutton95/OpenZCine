@@ -985,6 +985,7 @@ private fun feedLutLabel(lut: FeedLut): String =
             FeedLut.LOG3G10_709 -> R.string.lut_log_709
             FeedLut.NLOG_709 -> R.string.lut_nlog_709
             FeedLut.MONO -> R.string.lut_mono
+            FeedLut.R3D_NE_MONITOR -> R.string.lut_r3d_ne_monitor
         },
     )
 

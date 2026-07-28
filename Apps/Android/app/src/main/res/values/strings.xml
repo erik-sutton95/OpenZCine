@@ -715,6 +715,7 @@
     <string name="lut_log_709">LOG→709</string>
     <string name="lut_nlog_709">N-LOG</string>
     <string name="lut_mono">MONO</string>
+    <string name="lut_r3d_ne_monitor">R3D NE</string>
     <string name="peaking_low">LOW</string>
     <string name="peaking_medium">MED</string>
     <string name="peaking_high">HIGH</string>

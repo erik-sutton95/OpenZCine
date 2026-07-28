@@ -36,8 +36,8 @@ import Testing
 
 @Test func builtInOrderLeadsWithCameraMatchedConversions() {
     // The two camera-matched log conversions lead the picker; Mono (the sole remaining creative
-    // look, now that Teal/Orange is retired) stays last.
-    #expect(MonitorLUT.allCases == [.log3G10Rec709, .nLogRec709, .monochrome])
+    // look, now that Teal/Orange is retired) then the contributed table follow.
+    #expect(MonitorLUT.allCases == [.log3G10Rec709, .nLogRec709, .monochrome, .r3dNEMonitor])
 }
 
 @Test func rgbaComponentsInterleaveOpaqueAlpha() {
@@ -170,6 +170,57 @@ func cubeIsFinite(look: MonitorLUT) {
         #expect(value >= previous - 1e-5)
         previous = value
     }
+}
+
+// MARK: - The contributed, table-backed look
+
+@Test func contributedTableMatchesItsGeneratorChecksum() {
+    // `scripts/generate-builtin-lut-table.rb` prints this checksum; a truncated, hand-edited or
+    // re-encoded blob changes it. Both shells decode these same bytes, so this covers iOS and
+    // Android at once.
+    let bytes = MonitorLUT.contributedTableBytes()
+    #expect(bytes.count == 33 * 33 * 33 * 3 * 2)
+    #expect(MonitorLUT.fnv1a64(bytes) == MonitorLUT.contributedTableChecksum)
+}
+
+@Test func contributedLookDecodesToAnInGamut33Cube() {
+    let cube = MonitorLUT.r3dNEMonitor.cube()
+    #expect(cube.size == 33)
+    #expect(cube.rgb.count == 33 * 33 * 33 * 3)
+    #expect(cube.rgb.allSatisfy { $0 >= 0 && $0 <= 1 })
+    // A display transform, not a pass-through: black holds and encoded white lifts to near-white.
+    // (This look rolls its highlight off to ~0.93 rather than clipping at 1.0, so no ≈1.0 assert.)
+    #expect(Array(cube.rgb.prefix(3)).allSatisfy { $0 == 0 })
+    #expect(Array(cube.rgb.suffix(3)).allSatisfy { $0 > 0.85 })
+}
+
+@Test func contributedLookAt33IsTheContributorsOwnSamples() {
+    // 65 = 2·32 + 1, so the 65³ → 33³ reduction took exact source indices (stride 2, no
+    // interpolation); sampling the table at its own grid then gives trilinear weights of 1. Both
+    // steps together mean the picker applies the contributed numbers verbatim.
+    let cube = MonitorLUT.r3dNEMonitor.cube()
+    #expect(cube.rgb == MonitorLUT.contributedTableCube.rgb)
+
+    // One asymmetric lattice point read straight out of the source .cube — an r/b transposition
+    // anywhere in the generator or the decoder would survive the endpoint checks but not this.
+    let flat = 8 + 16 * 33 + 24 * 33 * 33
+    let sample = Array(cube.rgb[(flat * 3)..<(flat * 3 + 3)])
+    #expect(abs(sample[0] - 0.020_005) < 1e-5)
+    #expect(abs(sample[1] - 0.409_628) < 1e-5)
+    #expect(abs(sample[2] - 0.931_960) < 1e-5)
+}
+
+@Test func contributedLookResamplesOntoOtherGridSizes() {
+    // Nothing ships at another size today, but `cube(size:)` is public and the Android facade takes
+    // the size over JNI, so the table has to answer for a grid it was not authored on.
+    let coarse = MonitorLUT.r3dNEMonitor.cube(size: 17)
+    #expect(coarse.rgb.count == 17 * 17 * 17 * 3)
+    #expect(coarse.rgb.allSatisfy { $0 >= 0 && $0 <= 1 })
+}
+
+@Test func onlyTheContributedLookCarriesACreditLine() {
+    #expect(MonitorLUT.r3dNEMonitor.credit == "Contributed by Wang Yuehua")
+    #expect(MonitorLUT.allCases.filter { $0.credit != nil } == [.r3dNEMonitor])
 }
 
 // MARK: - 50/50 Log vs LUT comparison

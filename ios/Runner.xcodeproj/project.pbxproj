@@ -31,6 +31,7 @@
 		7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */; };
 		7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */; };
 		354E32F45664AA90999EF23C /* MonitorLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */; };
+		8B68EB70E5AA9908E04B81BE /* MonitorLUTContributedTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCDBE14234AFC0870DD4C4A4 /* MonitorLUTContributedTable.swift */; };
 		3B2081943B1D2A36C4DA228C /* ScopeSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A11 /* ScopeSampler.swift */; };
 		3B2081943B1D2A36C4DA228D /* AudioLevelMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */; };
 		3C4D5E6F708192A3B4C5D6E7 /* ScopeDisplayScale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F708192A3B4C5D6 /* ScopeDisplayScale.swift */; };
@@ -193,6 +194,7 @@
 		0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InternetReachability.swift; sourceTree = "<group>"; };
 		1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackAssists.swift; sourceTree = "<group>"; };
 		1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorLUT.swift; path = ../Sources/OpenZCineCore/MonitorLUT.swift; sourceTree = SOURCE_ROOT; };
+		DCDBE14234AFC0870DD4C4A4 /* MonitorLUTContributedTable.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorLUTContributedTable.swift; path = ../Sources/OpenZCineCore/MonitorLUTContributedTable.swift; sourceTree = SOURCE_ROOT; };
 		255DC60AACB3D2B7FFF2AF19 /* ExposureScale.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExposureScale.swift; path = ../Sources/OpenZCineCore/ExposureScale.swift; sourceTree = SOURCE_ROOT; };
 		2B3C4D5E6F708192A3B4C5D6 /* ScopeDisplayScale.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ScopeDisplayScale.swift; path = ../Sources/OpenZCineCore/ScopeDisplayScale.swift; sourceTree = SOURCE_ROOT; };
 		2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDelivery.swift; sourceTree = "<group>"; };
@@ -500,6 +502,7 @@
 				4A371B3334DBAAA71593727B /* AssistToolActivation.swift */,
 				C08D59A4E8FE339FD74256B9 /* CubeLUT.swift */,
 				1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */,
+				DCDBE14234AFC0870DD4C4A4 /* MonitorLUTContributedTable.swift */,
 				FC0D15A11A2B3C4D5E6F7002 /* MonitorDisplayToneMap.swift */,
 				50E264D06796DCA124FB4D87 /* LUTLibrary.swift */,
 				255DC60AACB3D2B7FFF2AF19 /* ExposureScale.swift */,
@@ -762,6 +765,7 @@
 				6A455A5E5D850A48FD899BF4 /* AssistToolActivation.swift in Sources */,
 				7182A6D4C55420DE0C30F08E /* CubeLUT.swift in Sources */,
 				354E32F45664AA90999EF23C /* MonitorLUT.swift in Sources */,
+				8B68EB70E5AA9908E04B81BE /* MonitorLUTContributedTable.swift in Sources */,
 				FC0D15A11A2B3C4D5E6F7001 /* MonitorDisplayToneMap.swift in Sources */,
 				157EA76CF9AF666C94A66343 /* LUTLibrary.swift in Sources */,
 				CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */,
