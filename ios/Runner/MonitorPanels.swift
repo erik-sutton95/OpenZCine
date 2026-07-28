@@ -2759,11 +2759,15 @@ struct LUTPickerContent: View {
     }
 
     /// Fixed height of the region below the tabs so the popup is the same size on every tab.
-    private let contentHeight: CGFloat = 180
+    ///
+    /// Landscape is ~400pt tall and this panel had no headroom left, so the 50/50 row below is
+    /// paid for out of the drum rather than added to the panel — at 180 the panel's own header
+    /// and the category tabs went off the top of the screen.
+    private let contentHeight: CGFloat = 146
     private let footerHeight: CGFloat = 44
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             SegmentedButtons(
                 items: LUTCategory.allCases.map(\.rawValue),
                 selected: category.rawValue
@@ -2814,11 +2818,15 @@ struct LUTPickerContent: View {
         }
     }
 
-    /// The 50/50 Log-vs-LUT comparison: an off-by-default toggle, and its orientation revealed
-    /// only while it is on. The orientation itself stays persisted either way, so switching the
+    /// The 50/50 Log-vs-LUT comparison: an off-by-default toggle, with its orientation revealed
+    /// beside it only while it is on. The orientation stays persisted either way, so switching the
     /// comparison off and back on returns to the operator's own choice.
+    ///
+    /// One row, not a stacked toggle-then-picker: landscape is ~400pt tall and this panel already
+    /// spends most of it on the drum, so the two-row version pushed the category tabs off the top
+    /// of the screen.
     @ViewBuilder private var splitComparisonControls: some View {
-        VStack(spacing: 10) {
+        HStack(spacing: 10) {
             Button {
                 model.preferences.splitComparisonEnabled.toggle()
                 OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
@@ -2828,9 +2836,24 @@ struct LUTPickerContent: View {
                     model.setAssist(.lut, visible: true)
                 }
             } label: {
-                ToggleRow(
-                    title: "50/50 Comparison",
-                    isOn: model.preferences.splitComparisonEnabled)
+                HStack(spacing: 8) {
+                    Image(
+                        systemName: model.preferences.splitComparisonEnabled
+                            ? "checkmark.circle.fill" : "circle"
+                    )
+                    .foregroundStyle(
+                        model.preferences.splitComparisonEnabled
+                            ? LiveDesign.accent : LiveDesign.muted)
+                    Text("50/50")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(LiveDesign.text)
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(
+                    model.preferences.splitComparisonEnabled
+                        ? LiveDesign.accentDim : LiveDesign.glassBright,
+                    in: Capsule())
             }
             .buttonStyle(.zcTapTarget)
             if model.preferences.splitComparisonEnabled {
@@ -2842,13 +2865,8 @@ struct LUTPickerContent: View {
                     model.preferences.splitComparisonOrientation = next
                     OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
                 }
-                Text(
-                    model.preferences.splitComparisonOrientation == .vertical
-                        ? "Log left, LUT right." : "Log top, LUT bottom."
-                )
-                .font(.system(size: 12))
-                .foregroundStyle(LiveDesign.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Spacer(minLength: 0)
             }
         }
     }

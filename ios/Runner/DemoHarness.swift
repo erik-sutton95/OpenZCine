@@ -16,6 +16,8 @@ enum DemoHarness {
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
     /// first downloaded clip (read in `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
+    /// `ZC_DEMO_SPLIT=vertical|horizontal` stages the 50/50 Log-vs-LUT comparison.
+    static let splitComparison = value("ZC_DEMO_SPLIT")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
@@ -291,6 +293,20 @@ enum DemoHarness {
                     } else if let look = MonitorLUT(rawValue: raw) {
                         model.assistConfiguration.selectedLUT = .builtIn(look)
                         model.setAssist(.lut, visible: true)
+                    }
+                }
+                if let raw = env["ZC_DEMO_SPLIT"] {
+                    // Demo/screenshot affordance: stage the 50/50 Log-vs-LUT comparison.
+                    // `vertical` / `horizontal`; anything else switches it off.
+                    let orientation: SplitComparisonOrientation? =
+                        switch raw {
+                        case "vertical": .vertical
+                        case "horizontal": .horizontal
+                        default: nil
+                        }
+                    model.preferences.splitComparisonEnabled = orientation != nil
+                    if let orientation {
+                        model.preferences.splitComparisonOrientation = orientation
                     }
                 }
                 if let path = env["ZC_DEMO_RED_ZIP"] {

@@ -1308,9 +1308,6 @@ struct FeedSplitComparisonMarks: View {
     let orientation: SplitComparisonOrientation
     let feed: CGRect
 
-    /// Gap from the label's edge of the feed, and from the divider.
-    private let inset: CGFloat = 12
-
     var body: some View {
         ZStack {
             Rectangle()
@@ -1338,19 +1335,28 @@ struct FeedSplitComparisonMarks: View {
             .background(Color.black.opacity(0.45), in: Capsule())
     }
 
+    /// Where the pair sits along the divider, as a fraction of the feed rather than a constant:
+    /// the same number then clears the status deck in landscape (~400pt tall) and in portrait, and
+    /// on a tablet, without knowing which chrome is mounted.
+    private var alongDivider: CGFloat { 0.16 }
+
     /// Log side: left of a vertical divider, above a horizontal one.
     private var logPosition: CGPoint {
         switch orientation {
-        case .vertical: CGPoint(x: feed.midX - 26, y: feed.maxY - 18)
-        case .horizontal: CGPoint(x: feed.minX + 34, y: feed.midY - inset - 6)
+        case .vertical:
+            CGPoint(x: feed.midX - 26, y: feed.minY + feed.height * alongDivider)
+        case .horizontal:
+            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY - 18)
         }
     }
 
     /// LUT side: right of a vertical divider, below a horizontal one.
     private var lutPosition: CGPoint {
         switch orientation {
-        case .vertical: CGPoint(x: feed.midX + 26, y: feed.maxY - 18)
-        case .horizontal: CGPoint(x: feed.minX + 34, y: feed.midY + inset + 6)
+        case .vertical:
+            CGPoint(x: feed.midX + 26, y: feed.minY + feed.height * alongDivider)
+        case .horizontal:
+            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY + 18)
         }
     }
 }
