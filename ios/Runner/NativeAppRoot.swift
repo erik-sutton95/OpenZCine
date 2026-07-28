@@ -4311,7 +4311,8 @@ final class NativeAppModel {
             deliveredFirstFrame = true
             consecutiveStartFailures = 0
             isStreamRecovering = false
-            watchdog.recordGoodFrame(at: Date())
+            watchdog.recordGoodFrame(
+                at: Date(), signature: LiveFrameSignature.of(firstFrame.jpeg))
             lastGoodFrameAt = Date()
             consecutiveBadLiveFrames = 0
             frameRate.recordFrame(at: CACurrentMediaTime())
@@ -4422,7 +4423,10 @@ final class NativeAppModel {
                 if let image = decoded, let cleanFrame {
                     frameCounter += 1
                     frameRate.recordFrame(at: CACurrentMediaTime())
-                    watchdog.recordGoodFrame(at: Date())
+                    // Signed with the payload, so a body that wedges into replaying one cached
+                    // JPEG is read as the stall it is instead of a healthy stream (#283).
+                    watchdog.recordGoodFrame(
+                        at: Date(), signature: LiveFrameSignature.of(frame.jpeg))
                     lastGoodFrameAt = Date()
                     consecutiveBadLiveFrames = 0
                     measuredLiveViewFPS = frameRate.displayFPS
@@ -4499,7 +4503,9 @@ final class NativeAppModel {
                 watchdog.check(at: Date())
                 lastGoodFrameAt = watchdog.lastGoodFrameAt
                 if watchdog.status == .stalled {
-                    return .stalled(reason: "no good frame")
+                    return .stalled(
+                        reason: watchdog.isRepeatingLastFrame
+                            ? "same frame replayed" : "no good frame")
                 }
             }
             return .taskCancelled
