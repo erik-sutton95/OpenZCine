@@ -2877,6 +2877,10 @@ struct MediaPlayerView: View {
     @State private var isMuted = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
+    /// What we managed to learn about the clip's capture rate; drives whether conform is offered.
+    @State private var conformSource = ConformPreview.Source()
+    /// The selected conform target, or nil for real-time playback (the default, always).
+    @State private var conformTarget: Double?
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var reachedEnd = false
@@ -3263,7 +3267,7 @@ struct MediaPlayerView: View {
 
     private func resumePlaybackIfNeeded() {
         if wasPlayingBeforeDelivery {
-            player.play()
+            startPlayback()
             isPlaying = true
             wasPlayingBeforeDelivery = false
         }
@@ -3606,7 +3610,7 @@ struct MediaPlayerView: View {
     private var playbackTransportBar: some View {
         VStack(spacing: 6) {
             HStack(spacing: PlaybackChrome.scrubberRowSpacing) {
-                Text(timeLabel(isScrubbing ? scrubTime : currentTime))
+                Text(conformedLabel(isScrubbing ? scrubTime : currentTime))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(LiveDesign.muted)
                     .frame(width: 40, alignment: .leading)
@@ -3647,12 +3651,12 @@ struct MediaPlayerView: View {
                         isScrubbing = false
                         clearEndStateIfSeeking(to: time)
                         if wasPlayingBeforeScrub {
-                            player.play()
+                            startPlayback()
                             isPlaying = true
                         }
                     }
                 )
-                Text(timeLabel(duration))
+                Text(conformedLabel(duration))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(LiveDesign.muted)
                     .frame(width: 40, alignment: .trailing)
@@ -3681,6 +3685,7 @@ struct MediaPlayerView: View {
                 actionToggle("speaker.slash.fill", "speaker.wave.2.fill", on: isMuted) {
                     toggleMute()
                 }
+                conformButton
                 cleanViewButton
                 viewAssistButton
                 shareButton
@@ -3735,6 +3740,66 @@ struct MediaPlayerView: View {
                     }
             }
         }
+    }
+
+    /// Conform preview: play a high-frame-rate clip at the rate the edit will conform it to.
+    ///
+    /// Real time is the default and always the first item — this is a preview transform, and the
+    /// menu should never leave an operator unsure whether they are looking at the clip or at an
+    /// interpretation of it. When the clip cannot be conformed the control states WHY rather than
+    /// vanishing, because a missing control reads as a missing feature.
+    private var conformButton: some View {
+        let availability = ConformPreview.availability(for: conformSource)
+        return Menu {
+            Button {
+                conformTarget = nil
+                applyMute()
+                if isPlaying { startPlayback() }
+            } label: {
+                Label("Real time", systemImage: conformTarget == nil ? "checkmark" : "")
+            }
+            ForEach(availability.targets, id: \.self) { target in
+                Button {
+                    conformTarget = target
+                    applyMute()
+                    if isPlaying { startPlayback() }
+                } label: {
+                    Label(
+                        ConformPreview.label(
+                            captureRate: conformSource.captureRate ?? 0, targetRate: target),
+                        systemImage: conformTarget == target ? "checkmark" : "")
+                }
+            }
+            if let reason = availability.unavailableReason {
+                Section { Text(reason) }
+            }
+            if conformTarget != nil {
+                Section { Text(ConformPreview.audioLabel) }
+            }
+        } label: {
+            Image(systemName: "timelapse")
+                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
+                .foregroundStyle(
+                    conformTarget != nil
+                        ? LiveDesign.accent
+                        : (availability.isAvailable ? LiveDesign.text : LiveDesign.faint)
+                )
+                .frame(
+                    width: PlaybackChrome.actionButtonSize.width,
+                    height: PlaybackChrome.actionButtonSize.height
+                )
+                .background(
+                    conformTarget != nil ? LiveDesign.accentDim : Color.clear,
+                    in: RoundedRectangle(
+                        cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+                )
+                .liquidGlass(
+                    in: RoundedRectangle(
+                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
+                    interactive: true)
+        }
+        .disabled(!availability.isAvailable)
+        .accessibilityLabel("Conform preview")
     }
 
     /// Hides every non-critical control, leaving the frame alone.
@@ -4012,7 +4077,7 @@ struct MediaPlayerView: View {
         player.replaceCurrentItem(with: item)
         observePlaybackEnd(for: item)
         player.automaticallyWaitsToMinimizeStalling = false
-        player.isMuted = isMuted
+        player.isMuted = isMuted || conformTarget != nil
         playbackScopeController.stop()
         syncPlaybackScopeSampling()
         Task {
@@ -4020,6 +4085,13 @@ struct MediaPlayerView: View {
                 guard generation == playerLoadGeneration else { return }
                 videoDisplaySize = size
             }
+        }
+        conformTarget = nil
+        conformSource = ConformPreview.Source()
+        Task {
+            let probed = await loadConformSource(from: asset)
+            guard generation == playerLoadGeneration else { return }
+            conformSource = probed
         }
         let interval = CMTime(seconds: isScrubbing ? 0.05 : 0.2, preferredTimescale: 600)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
@@ -4037,8 +4109,40 @@ struct MediaPlayerView: View {
         // audio, negligible cost); polling below follows the toggle.
         audioMeterController.attach(to: item)
         syncPlaybackAudioMetering()
-        player.play()
+        startPlayback()
         isPlaying = true
+    }
+
+    /// What the asset can tell us about how it was shot.
+    ///
+    /// The container's nominal rate is all a proxy MP4 carries, so that is the capture rate here —
+    /// with one guard. If the track's own minimum frame duration disagrees with that nominal rate,
+    /// the file is not constant-rate and no single conform factor is correct, so it is marked
+    /// variable and the feature refuses rather than showing a plausible wrong speed.
+    ///
+    /// `isAlreadyConformed` stays false: a file the camera already conformed reports its PLAYBACK
+    /// rate here with nothing generic to distinguish it, so detecting it needs vendor metadata off
+    /// a real high-frame-rate recording. Until that is confirmed on hardware the honest position is
+    /// that we cannot tell, which means an in-camera slow-motion clip would be offered a conform it
+    /// should not be. [verify-on-HW]
+    private func loadConformSource(from asset: AVURLAsset) async -> ConformPreview.Source {
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first else {
+            return ConformPreview.Source()
+        }
+        guard let nominal = try? await track.load(.nominalFrameRate), nominal.isFinite, nominal > 0
+        else { return ConformPreview.Source() }
+        let rate = Double(nominal)
+        guard let minimum = try? await track.load(.minFrameDuration), minimum.isValid,
+            minimum.seconds > 0
+        else {
+            // No per-frame timing to cross-check against; take the nominal rate at face value.
+            return ConformPreview.Source(captureRate: rate)
+        }
+        // A constant-rate track's shortest frame is 1/rate. Anything materially shorter means the
+        // clip runs faster somewhere than its nominal rate claims.
+        let impliedPeak = 1 / minimum.seconds
+        let varies = impliedPeak > rate * 1.05
+        return ConformPreview.Source(captureRate: rate, isVariableFrameRate: varies)
     }
 
     private func teardownPlayer() {
@@ -4152,7 +4256,25 @@ struct MediaPlayerView: View {
 
     private func togglePlay() {
         isPlaying.toggle()
-        isPlaying ? player.play() : player.pause()
+        isPlaying ? startPlayback() : player.pause()
+    }
+
+    /// Real seconds shown on the conformed timeline: a 6 s clip at 40% reads 15 s.
+    private func conformedLabel(_ seconds: Double) -> String {
+        timeLabel(ConformPreview.conformedDuration(sourceSeconds: seconds, speed: conformSpeed))
+    }
+
+    /// Playback rate for the active conform, or 1 in real time.
+    private var conformSpeed: Double {
+        guard let target = conformTarget, let rate = conformSource.captureRate else { return 1 }
+        return ConformPreview.speed(captureRate: rate, targetRate: target)
+    }
+
+    /// Starts playback at the conform rate. Setting a non-zero `rate` IS play, so this replaces
+    /// `player.play()` everywhere — calling `play()` would snap back to 1x and silently drop the
+    /// conform the operator selected.
+    private func startPlayback() {
+        player.rate = Float(conformSpeed)
     }
 
     /// Tap on the video frame toggles transport; at end-of-clip restarts from the beginning.
@@ -4234,7 +4356,7 @@ struct MediaPlayerView: View {
         isFrameScrubbing = false
         clearEndStateIfSeeking(to: scrubTime)
         if wasPlayingBeforeScrub {
-            player.play()
+            startPlayback()
             isPlaying = true
         }
         suppressNextPlaybackTap = true
@@ -4244,7 +4366,7 @@ struct MediaPlayerView: View {
         reachedEnd = false
         currentTime = 0
         player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-        player.play()
+        startPlayback()
         isPlaying = true
     }
 
@@ -4256,7 +4378,13 @@ struct MediaPlayerView: View {
 
     private func toggleMute() {
         isMuted.toggle()
-        player.isMuted = isMuted
+        applyMute()
+    }
+
+    /// A conform preview forces silence regardless of the mute toggle, so unmuting during one
+    /// cannot produce audio at the wrong speed.
+    private func applyMute() {
+        player.isMuted = isMuted || conformTarget != nil
     }
 
     /// Installs one `AVVideoComposition` per clip; assist toggles only mutate `playbackEffectsBox`.

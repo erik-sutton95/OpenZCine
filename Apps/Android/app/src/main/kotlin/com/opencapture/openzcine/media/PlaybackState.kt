@@ -116,6 +116,67 @@ internal fun playbackChromeVisibilityForSwipe(
     return verticalDeltaDp < 0f
 }
 
+/**
+ * Slow-motion conform preview, mirroring `ConformPreview` in shared core — see that file for why
+ * capture rate, target rate and playback clock are kept as three separate values, and why an
+ * untrustworthy source refuses rather than guesses.
+ */
+internal val CONFORM_TARGET_RATES = listOf(23.976, 24.0, 25.0, 29.97, 30.0)
+
+/**
+ * A target must be at least this much slower, RELATIVELY, to count as a conform: the 1000/1001
+ * pulldown pairs differ by 0.1% and are the same shooting rate, while 24 against 25 differs by 4%
+ * and is a real conform. An absolute tolerance cannot separate those.
+ */
+internal const val CONFORM_FLOOR = 0.99
+
+internal data class ConformAvailability(
+    val targets: List<Double>,
+    val unavailableReason: String?,
+) {
+    val isAvailable: Boolean
+        get() = targets.isNotEmpty()
+}
+
+internal fun conformPreviewAvailability(
+    captureRate: Double?,
+    variableFrameRate: Boolean,
+): ConformAvailability {
+    if (captureRate == null || !captureRate.isFinite() || captureRate <= 0.0) {
+        return ConformAvailability(emptyList(), "Frame rate unavailable for this clip")
+    }
+    if (variableFrameRate) {
+        return ConformAvailability(
+            emptyList(),
+            "Variable frame rate — conform preview unavailable",
+        )
+    }
+    val targets = CONFORM_TARGET_RATES.filter { it < captureRate * CONFORM_FLOOR }
+    return if (targets.isEmpty()) {
+        ConformAvailability(emptyList(), "Not a high-frame-rate clip")
+    } else {
+        ConformAvailability(targets, null)
+    }
+}
+
+/** Target rate over capture rate; 1.0 in real time, so the player runs untouched. */
+internal fun conformPreviewSpeed(captureRate: Double?, target: Double?): Double {
+    if (captureRate == null || target == null) return 1.0
+    if (!captureRate.isFinite() || captureRate <= 0.0 || target <= 0.0) return 1.0
+    return target / captureRate
+}
+
+/** Cycles Real time -> each offered target -> Real time. */
+internal fun nextConformTarget(current: Double?, targets: List<Double>): Double? {
+    if (targets.isEmpty()) return null
+    val index = targets.indexOfFirst { it == current }
+    return when {
+        current == null -> targets.first()
+        index < 0 || index == targets.lastIndex -> null
+        else -> targets[index + 1]
+    }
+}
+
 /** How long the clean-view hint stays up; iOS uses the same 1.8s. */
 internal const val PLAYBACK_CLEAN_VIEW_HINT_MILLIS = 1_800L
 

@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VolumeOff
@@ -812,6 +813,11 @@ private fun ProgressivePlayer(
     var pan by remember(entry) { mutableStateOf(PlaybackPan()) }
     var viewport by remember(entry) { mutableStateOf(IntSize.Zero) }
     var videoSize by remember(entry) { mutableStateOf(VideoSize.UNKNOWN) }
+    // Conform preview: what the track says it was shot at, and the target the operator picked.
+    // Real time (null) is always the default — this is a preview transform, never the clip.
+    var conformCaptureRate by remember(entry) { mutableStateOf<Float?>(null) }
+    var conformVariableRate by remember(entry) { mutableStateOf(false) }
+    var conformTarget by remember(entry) { mutableStateOf<Double?>(null) }
     var videoColorMode by
         remember(entry, player) {
             mutableStateOf(selectedPlaybackVideoColorMode(player.currentTracks))
@@ -861,6 +867,21 @@ private fun ProgressivePlayer(
     fun restoreChrome() {
         cleanViewHintShownAt = 0L
         onChromeVisibleChanged(true)
+    }
+
+    val conformAvailability =
+        conformPreviewAvailability(conformCaptureRate?.toDouble(), conformVariableRate)
+    val conformSpeed =
+        conformPreviewSpeed(conformCaptureRate?.toDouble(), conformTarget)
+
+    // The conform is a clock change, so it rides on the player's speed rather than on the media.
+    LaunchedEffect(conformSpeed) {
+        player.setPlaybackSpeed(conformSpeed.toFloat())
+    }
+    // Audio at 40% without pitch correction still SOUNDS like audio, just wrong — the request
+    // rules that out, so a conform forces silence regardless of the mute toggle.
+    LaunchedEffect(conformTarget, audioMode) {
+        player.volume = if (conformTarget != null) 0f else audioMode.volume
     }
 
     fun togglePlayback(showFlash: Boolean = false) {
@@ -974,6 +995,12 @@ private fun ProgressivePlayer(
 
                 override fun onTracksChanged(tracks: Tracks) {
                     videoColorMode = selectedPlaybackVideoColorMode(tracks)
+                    // The container's nominal rate is all a proxy MP4 carries. `NO_VALUE` means
+                    // the demuxer never established one, which the policy treats as unknown and
+                    // refuses — better than conforming against a guess.
+                    val rate = selectedPlaybackVideoFrameRate(tracks)
+                    conformCaptureRate = rate
+                    if (rate == null) conformTarget = null
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -1586,6 +1613,22 @@ private fun ProgressivePlayer(
                             onClick = {
                                 audioMode = audioMode.toggled()
                                 player.volume = audioMode.volume
+                            },
+                        )
+                        // Conform preview cycles Real time -> each offered target -> Real time.
+                        // A cycle rather than a menu because the list is short and ordered, and
+                        // the current state is spelled out in full on the transport above.
+                        PlaybackIconButton(
+                            icon = Icons.Filled.SlowMotionVideo,
+                            contentDescription =
+                                conformAvailability.unavailableReason
+                                    ?: "Conform preview",
+                            enabled = conformAvailability.isAvailable,
+                            highlighted = conformTarget != null,
+                            action = true,
+                            onClick = {
+                                conformTarget =
+                                    nextConformTarget(conformTarget, conformAvailability.targets)
                             },
                         )
                         // The swipe-down gesture has always hidden the chrome, but an

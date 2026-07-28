@@ -4,6 +4,7 @@ package com.opencapture.openzcine.media
 
 import androidx.media3.common.C
 import androidx.media3.common.ColorInfo
+import androidx.media3.common.Format
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 
@@ -34,6 +35,24 @@ internal fun selectedPlaybackVideoColorMode(tracks: Tracks): PlaybackVideoColorM
         }
     }
     return if (selectedVideoFound) PlaybackVideoColorMode.SDR else PlaybackVideoColorMode.UNKNOWN
+}
+
+/**
+ * The selected video track's frame rate, or null when the demuxer never established one.
+ *
+ * Feeds the conform preview's capture rate. Null is meaningful: `ConformPreview` refuses rather
+ * than conforming against a guess, because a preview at the wrong speed is worse than none.
+ */
+internal fun selectedPlaybackVideoFrameRate(tracks: Tracks): Float? {
+    for (group in tracks.groups) {
+        if (group.type != C.TRACK_TYPE_VIDEO) continue
+        for (index in 0 until group.length) {
+            if (!group.isTrackSelected(index)) continue
+            val rate = group.getTrackFormat(index).frameRate
+            if (rate != Format.NO_VALUE.toFloat() && rate > 0f && !rate.isNaN()) return rate
+        }
+    }
+    return null
 }
 
 /** Image-effect capability for the API 33 AGSL path and the API 29–32 SDR GLES fallback. */
