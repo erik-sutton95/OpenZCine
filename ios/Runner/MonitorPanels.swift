@@ -2900,27 +2900,45 @@ struct LUTPickerContent: View {
         model.setAssist(.lut, visible: true)
     }
 
+    /// Height reserved under the built-in drum for the contributor credit. Always reserved, never
+    /// conditional: a line that appears only on the contributed look would resize the drum mid-scroll.
+    private let creditHeight: CGFloat = 16
+
+    /// The look the built-in drum is currently on — `nil` while a stored LUT is applied.
+    private var selectedBuiltIn: MonitorLUT? {
+        guard case .builtIn(let look) = model.assistConfiguration.selectedLUT else { return nil }
+        return look
+    }
+
     @ViewBuilder private var tabContent: some View {
         switch category {
         case .builtIn:
-            AccentDrumWheel(
-                options: MonitorLUT.allCases.map(\.rawValue),
-                selection: Binding(
-                    get: {
-                        if case .builtIn(let look) = model.assistConfiguration.selectedLUT {
-                            return look.rawValue
+            VStack(spacing: 0) {
+                AccentDrumWheel(
+                    options: MonitorLUT.allCases.map(\.rawValue),
+                    selection: Binding(
+                        get: {
+                            selectedBuiltIn?.rawValue
+                                ?? MonitorLUT.allCases.first?.rawValue ?? ""
+                        },
+                        set: { name in
+                            guard let look = MonitorLUT(rawValue: name) else { return }
+                            model.assistConfiguration.selectedLUT = .builtIn(look)
+                            // Picking a look turns the LUT on; the bar toggle is the only "off".
+                            model.setAssist(.lut, visible: true)
                         }
-                        return MonitorLUT.allCases.first?.rawValue ?? ""
-                    },
-                    set: { name in
-                        guard let look = MonitorLUT(rawValue: name) else { return }
-                        model.assistConfiguration.selectedLUT = .builtIn(look)
-                        // Picking a look turns the LUT on; the bar toggle is the only "off".
-                        model.setAssist(.lut, visible: true)
-                    }
-                ),
-                wheelHeight: contentHeight
-            )
+                    ),
+                    wheelHeight: contentHeight - creditHeight
+                )
+                // Community-contributed looks are credited here rather than in the label — the drum
+                // is one narrow monospaced line and a name would push the look's own name out.
+                Text(selectedBuiltIn?.credit ?? "")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(LiveDesign.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(height: creditHeight)
+            }
         case .custom:
             customTab
         case .red:

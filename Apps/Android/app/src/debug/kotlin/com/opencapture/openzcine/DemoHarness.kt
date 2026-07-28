@@ -72,7 +72,7 @@ import kotlinx.coroutines.flow.flow
  * Feed effects (needs API 33 + the staged Swift core; combine freely):
  * ```
  * --es zc.assist lut,falsecolor,peaking,zebra   which effects are on
- * --es zc.lut log3g10|nlog|mono                 built-in look (default log3g10)
+ * --es zc.lut log3g10|nlog|mono|r3d_ne          built-in look (default log3g10)
  * --es zc.fc.scale stops|ire                    false-colour scale (default stops)
  * --es zc.portraitAspect fit|fill               persisted portrait feed presentation
  * ```

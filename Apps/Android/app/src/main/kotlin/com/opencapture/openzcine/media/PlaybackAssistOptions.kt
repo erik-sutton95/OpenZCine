@@ -512,7 +512,7 @@ private fun LutOptions(
     }
 
     when (category) {
-        LutPopupCategory.BUILT_IN ->
+        LutPopupCategory.BUILT_IN -> {
             LutDrumWheel(
                 entries =
                     FeedLut.entries.map { lut ->
@@ -530,6 +530,25 @@ private fun LutOptions(
                     },
                 onDeleteRequest = null,
             )
+            // iOS `LUTPickerContent`: community-contributed looks are credited under the drum, not
+            // inside the label — the drum row is one narrow monospaced line and a name would push
+            // the look's own name out of it. The drum's height is fixed, so nothing shifts when the
+            // credit appears and disappears with the selection.
+            (actions.sharedAssistState.selectedLut as? FeedLutSelection.BuiltIn)
+                ?.value
+                ?.credit
+                ?.let { credit ->
+                    Text(
+                        credit,
+                        style = chromeStyle(10.5f, FontWeight.Medium),
+                        color = LiveDesign.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
+        }
         LutPopupCategory.RED -> {
             // iOS filters on raw file name tokens (REC709 / REC2020), not display text.
             val redEntries =

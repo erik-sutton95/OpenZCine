@@ -27,12 +27,13 @@ public enum FeedEffectsWire {
     public static let renderConfigurationFieldCount = 22
 
     /// Built-in look ordinals, mirroring `FeedLut` in Kotlin:
-    /// 0 = Log3G10→709, 1 = N-Log→709, 2 = Mono.
+    /// 0 = Log3G10→709, 1 = N-Log→709, 2 = Mono, 3 = R3D NE Monitor.
     static func look(_ ordinal: Int) -> MonitorLUT? {
         switch ordinal {
         case 0: .log3G10Rec709
         case 1: .nLogRec709
         case 2: .monochrome
+        case 3: .r3dNEMonitor
         default: nil
         }
     }
