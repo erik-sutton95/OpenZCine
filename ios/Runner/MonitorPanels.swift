@@ -5778,11 +5778,31 @@ struct MFDriveVerticalScrub: View {
     @State private var lastDragY: CGFloat?
     @State private var isDragging = false
 
-    /// Drag-to-pulse gain — deliberately gentle so a full sweep is a controllable focus pull.
-    private static let pulsesPerPoint = 4
+    /// Drag-to-pulse gain at the slow end of the ramp.
+    ///
+    /// Was 4, which a real video pull found too coarse to trim focus with: at 4, and with the
+    /// speed ramp reaching ×3 after only a 12pt/frame move, a careful nudge already moved the lens
+    /// further than the operator wanted. 2 makes a slow drag genuinely fine and keeps the flick
+    /// useful — see `speedRampDivisor`.
+    ///
+    /// ponytail: this is a calibration knob, not a derived constant. It is tuned against how a
+    /// focus-by-wire lens actually travels, which no test can tell us — raise it if a full sweep
+    /// cannot cross the range on a real body, lower it if trimming still overshoots.
+    private static let pulsesPerPoint = 2
+    /// Points of per-frame travel that buy one extra multiple of gain, up to `maxSpeedFactor`.
+    /// Larger divisor = the ramp needs a more deliberate flick, so slow drags stay in the fine band.
+    private static let speedRampDivisor: CGFloat = 14
+    private static let maxSpeedFactor: CGFloat = 4
     /// Drum geometry: one tick every `pulsesPerTick` pulses, `tickSpacing` points apart.
     private static let tickSpacing: CGFloat = 11
     private static let pulsesPerTick: CGFloat = 220
+
+    /// Pulses for one drag frame. Extracted so the gain curve is unit-testable — the sensitivity
+    /// is the whole point of this control and a real pull found the old curve too coarse.
+    static func pulses(forDelta delta: CGFloat) -> Int {
+        let speedFactor = min(1 + abs(delta) / speedRampDivisor, maxSpeedFactor)
+        return Int(delta * CGFloat(pulsesPerPoint) * speedFactor)
+    }
 
     var body: some View {
         VStack(spacing: 5) {
@@ -5803,6 +5823,15 @@ struct MFDriveVerticalScrub: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 6)
         .liquidGlass(in: Capsule())
+        // AF-F re-focuses continuously, so a pull is overridden as fast as it lands. Drawn dimmed
+        // and inert rather than hidden: the dial disappearing when the operator changes focus mode
+        // reads as a bug, while a greyed one says "wrong mode for this", which is the truth.
+        .opacity(model.mfDriveScrubIsInert ? 0.55 : 1)  // matches the Android strip
+        .allowsHitTesting(!model.mfDriveScrubIsInert)
+        .accessibilityHint(
+            model.mfDriveScrubIsInert
+                ? "Unavailable in AF-F. The camera refocuses continuously in this mode." : ""
+        )
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 2)
@@ -5810,11 +5839,10 @@ struct MFDriveVerticalScrub: View {
                     isDragging = true
                     let delta = (lastDragY ?? value.startLocation.y) - value.location.y
                     lastDragY = value.location.y
-                    // Upward drag drives toward infinity. Ring-like speed response: a slow
-                    // drag steps finely, a flick multiplies travel (up to ×3, gentle ramp).
-                    let speedFactor = min(1 + abs(delta) / 6, 3)
+                    // Upward drag drives toward infinity. Ring-like speed response: a slow drag
+                    // steps finely, a deliberate flick multiplies travel.
                     model.driveManualFocus(
-                        pulses: Int(delta * CGFloat(Self.pulsesPerPoint) * speedFactor))
+                        pulses: Self.pulses(forDelta: delta))
                 }
                 .onEnded { _ in
                     lastDragY = nil

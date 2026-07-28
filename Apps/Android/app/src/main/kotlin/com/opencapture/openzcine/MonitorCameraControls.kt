@@ -2068,7 +2068,20 @@ internal fun CaptureWbGlyph(icon: CaptureWbIcon, tint: Color, modifier: Modifier
  * Drag-to-pulse gain per dp — deliberately gentle so a full strip sweep is a controllable focus
  * pull, not a slam to the stop (was 24/dp, ~6-8× too twitchy on a real lens).
  */
-internal const val MF_DRIVE_PULSES_PER_DP = 4
+/**
+ * Drag-to-pulse gain at the slow end of the ramp — mirrors iOS `MFDriveVerticalScrub.pulsesPerPoint`.
+ *
+ * Was 4, which a real video pull found too coarse to trim focus with. Calibration knob, not a
+ * derived constant: raise it if a full sweep cannot cross the range on a real body, lower it if
+ * trimming still overshoots. Keep it in step with iOS.
+ */
+internal const val MF_DRIVE_PULSES_PER_DP = 2
+
+/** Dp of per-frame travel that buys one extra multiple of gain. Larger = slower drags stay fine. */
+internal const val MF_DRIVE_SPEED_RAMP_DP = 14f
+
+/** Ceiling on the flick multiplier. */
+internal const val MF_DRIVE_MAX_SPEED_FACTOR = 4f
 
 /** The vertical strip's touch width; the visual capsule is slimmer inside. */
 internal const val MF_DRIVE_STRIP_WIDTH_DP = 44f
@@ -2125,10 +2138,11 @@ internal fun MFDriveStrip(
                     change.consume()
                     // Screen-up is negative y; up drives toward infinity (+).
                     // Ring-like speed response: a slow drag steps finely, a
-                    // flick multiplies travel (up to ×3, gentle ramp) — iOS speedFactor.
+                    // deliberate flick multiplies travel — mirrors the iOS gain curve.
                     val deltaDp = -dragAmount.y.toDp().value
                     val speedFactor =
-                        (1f + kotlin.math.abs(deltaDp) / 6f).coerceAtMost(3f)
+                        (1f + kotlin.math.abs(deltaDp) / MF_DRIVE_SPEED_RAMP_DP)
+                            .coerceAtMost(MF_DRIVE_MAX_SPEED_FACTOR)
                     val pulses =
                         (deltaDp * MF_DRIVE_PULSES_PER_DP * speedFactor).toInt()
                     if (pulses != 0) onDrive(pulses)

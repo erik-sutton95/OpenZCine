@@ -229,3 +229,33 @@ internal object ChromeEditLayout {
             a.top < b.top + badgeSize + BADGE_GAP_DP &&
             b.top < a.top + badgeSize + BADGE_GAP_DP
 }
+
+/**
+ * Whether the on-feed focus dial can drive the lens in the body's current focus mode.
+ *
+ * Kotlin mirror of `MFDriveEligibility` in the shared core — the rule lives there; this only
+ * transcribes it, the way the rest of this file mirrors core monitor policy.
+ */
+internal enum class MfDriveEligibility {
+    /** No dial: no focus mode read yet, or MF, where the lens ring owns focus. */
+    UNAVAILABLE,
+
+    /** Dial mounted but inert and dimmed: AF-F re-focuses continuously, overriding any drive. */
+    BLOCKED_BY_CONTINUOUS_AF,
+
+    /** AF-S and AF-C hold focus between acquisitions, so a pull sticks. */
+    DRIVABLE,
+}
+
+/**
+ * Resolves dial eligibility from the body's reported focus mode.
+ *
+ * Refusals are not a factor: `Device_Busy` (STM lens initialising) and `Access_Denied` (AF
+ * settling) are always transient, so nothing about a refusal makes a lens undrivable.
+ */
+internal fun mfDriveEligibility(focusMode: String?): MfDriveEligibility =
+    when (focusMode) {
+        null, "MF" -> MfDriveEligibility.UNAVAILABLE
+        "AF-F" -> MfDriveEligibility.BLOCKED_BY_CONTINUOUS_AF
+        else -> MfDriveEligibility.DRIVABLE
+    }

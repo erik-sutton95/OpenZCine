@@ -279,6 +279,36 @@ public enum PTPResponseCode: UInt16, Sendable {
 /// interactive AF tap pre-empts an in-flight drive rather than queueing behind it.
 ///
 /// Mirrored in Kotlin by `MFDriveController` (same numbers, same rule).
+/// Whether the on-feed focus dial can drive the lens in the body's current focus mode.
+///
+/// One rule for both shells: the shells had the mode test inline and could only express
+/// show-or-hide, which meant AF-F offered a dial that silently did nothing.
+public enum MFDriveEligibility: Equatable, Sendable {
+    /// Not offered. No focus mode read yet, or the body is in **MF**, where the lens ring owns
+    /// focus and the dial would be a second, competing control.
+    case unavailable
+    /// Offered but inert, and drawn as such. **AF-F** is full-time servo AF: the body re-focuses
+    /// continuously, so a drive is overridden as fast as it lands. Showing a live dial there reads
+    /// as a broken dial rather than as the wrong mode for one.
+    case blockedByContinuousAF
+    /// Drivable — **AF-S** and **AF-C** hold focus between acquisitions, so a pull sticks.
+    case drivable
+
+    /// Resolves eligibility from the body's reported movie/stills focus mode.
+    ///
+    /// Refusals are NOT a factor here: `Device_Busy` (STM lens still initialising) and
+    /// `Access_Denied` (AF still settling) are always transient, so nothing about a refusal makes
+    /// a lens undrivable and this never latches.
+    public static func resolve(focusMode: String?) -> MFDriveEligibility {
+        guard let focusMode else { return .unavailable }
+        switch focusMode {
+        case "MF": return .unavailable
+        case "AF-F": return .blockedByContinuousAF
+        default: return .drivable
+        }
+    }
+}
+
 public enum MFDriveChannelBudget: Sendable {
     /// Readiness polls inside ONE drive before it stops waiting and frees the channel. The lens
     /// keeps moving on the body; the app just stops owning the transaction gate to watch it.

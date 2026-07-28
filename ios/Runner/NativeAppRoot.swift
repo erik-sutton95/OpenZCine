@@ -6795,11 +6795,19 @@ final class NativeAppModel {
     /// Both chromes: a focus pull is a video move as much as a stills one, so the only gate is the
     /// operator's own toggle (default off) plus the focus mode.
     /// [verify-on-HW: whether continuous AF fights the drive in AF-C vs AF-S]
-    var showsMFDriveScrub: Bool {
-        guard mfDriveScrubEnabled, let mode = cameraPropertySnapshot.focusMode
-        else { return false }
-        return mode != "MF" && isConnected && !isDemoSession && activePanel == nil
+    /// Eligibility for the on-feed focus dial in the body's current focus mode.
+    var mfDriveEligibility: MFDriveEligibility {
+        MFDriveEligibility.resolve(focusMode: cameraPropertySnapshot.focusMode)
     }
+
+    var showsMFDriveScrub: Bool {
+        guard mfDriveScrubEnabled, mfDriveEligibility != .unavailable else { return false }
+        return isConnected && !isDemoSession && activePanel == nil
+    }
+
+    /// True while the dial is on screen but cannot drive — AF-F re-focuses continuously, so the
+    /// dial is drawn dimmed and ignores gestures rather than accepting pulls that go nowhere.
+    var mfDriveScrubIsInert: Bool { mfDriveEligibility == .blockedByContinuousAF }
 
     @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
     /// Bumped by `cancelManualFocusDrive()` so a superseded drive can neither keep running nor

@@ -343,3 +343,33 @@ struct SavedCameraRecordAuthorityTests {
             Set(presentation.keys).isSubset(of: ["customName", "borderColor", "icon", "wifiSSID"]))
     }
 }
+
+@Suite("Focus dial eligibility")
+struct MFDriveEligibilityTests {
+    @Test func afFIsOfferedButInertWhileMFIsNotOfferedAtAll() {
+        // AF-F is full-time servo AF: a drive is overridden as fast as it lands, so the dial is
+        // drawn dimmed rather than hidden — a dial that vanishes on a mode change reads as a bug.
+        #expect(MFDriveEligibility.resolve(focusMode: "AF-F") == .blockedByContinuousAF)
+        // MF: the lens ring owns focus, so a dial would be a second competing control.
+        #expect(MFDriveEligibility.resolve(focusMode: "MF") == .unavailable)
+        // Nothing read yet — offer nothing rather than guess.
+        #expect(MFDriveEligibility.resolve(focusMode: nil) == .unavailable)
+    }
+
+    @Test func afSAndAfCHoldFocusSoAPullSticks() {
+        for mode in ["AF-S", "AF-C"] {
+            #expect(MFDriveEligibility.resolve(focusMode: mode) == .drivable)
+        }
+        // Every mode the movie picker offers resolves to something — no silent default.
+        for mode in PTPCameraPropertyDecoders.movieFocusModePickerOptions {
+            let resolved = MFDriveEligibility.resolve(focusMode: mode)
+            if mode == "MF" {
+                #expect(resolved == .unavailable)
+            } else if mode == "AF-F" {
+                #expect(resolved == .blockedByContinuousAF)
+            } else {
+                #expect(resolved == .drivable)
+            }
+        }
+    }
+}
