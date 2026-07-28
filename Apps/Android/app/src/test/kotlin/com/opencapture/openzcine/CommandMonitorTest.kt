@@ -107,7 +107,7 @@ class CommandMonitorTest {
                                 whiteBalanceValues =
                                     listOf("Natural auto", "Sunny", "5600K"),
                                 focusModes = listOf("AF-S", "AF-C", "MF"),
-                                focusAreas = listOf("Wide-L", "Subject"),
+                                focusAreas = listOf("Wide-L", "Subject tracking"),
                                 focusSubjects = listOf("People", "Airplane"),
                                 audioSensitivities = listOf("Auto", "12", "20"),
                                 audioInputs = listOf("Microphone", "Line"),
@@ -151,7 +151,10 @@ class CommandMonitorTest {
 
         val mode = assertNotNull(presentation.tiles.first { it.kind == CommandTileKind.MODE }.request)
         assertEquals(CameraControl.EXPOSURE_MODE, mode.control)
-        assertContains(mode.options, "U3")
+        // This snapshot advertises no `ExposureProgramMode` enum, so the drum gets the
+        // conservative ladder — and a body that never said it has user banks is never offered
+        // them (#274; the reported Zf).
+        assertEquals(listOf("Auto", "P", "A", "S", "M"), mode.options)
 
         val codec = presentation.tiles.first { it.kind == CommandTileKind.CODEC }
         assertEquals("R3D NE", codec.value)
@@ -456,7 +459,7 @@ class CommandMonitorTest {
                 snapshot =
                     CameraPropertySnapshot(
                         focusMode = "AF-C",
-                        focusArea = "Subject",
+                        focusArea = "Subject tracking",
                         focusSubject = "People",
                         audioSensitivity = "12",
                         audioInput = "Line",
@@ -466,7 +469,7 @@ class CommandMonitorTest {
                         controlCapabilities =
                             CameraControlCapabilities(
                                 focusModes = listOf("AF-S", "AF-C", "MF"),
-                                focusAreas = listOf("Wide-L", "Subject"),
+                                focusAreas = listOf("Wide-L", "Subject tracking"),
                                 focusSubjects = listOf("People", "Airplane"),
                                 audioSensitivities = listOf("Auto", "12", "20"),
                                 audioInputs = listOf("Microphone", "Line"),

@@ -23,6 +23,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -804,13 +808,30 @@ public fun SettingsGroupCard(
     caption: String,
     onReset: (() -> Unit)? = null,
     captionMaxLines: Int = 2,
+    /**
+     * When non-null the card collapses to its header and the whole header toggles it. Long tabs
+     * (Display carries three DISP sections) read as a short list of sections this way instead of
+     * one unbroken scroll of controls.
+     */
+    expanded: Boolean? = null,
+    onExpandToggle: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    val isExpanded = expanded ?: true
     Column(
         Modifier.fillMaxWidth().glass(ChromeShape).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(11.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(
+            Modifier.then(
+                if (expanded != null && onExpandToggle != null) {
+                    Modifier.settingsClickable(role = Role.Button, onClick = onExpandToggle)
+                } else {
+                    Modifier
+                }
+            ),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -821,8 +842,17 @@ public fun SettingsGroupCard(
                     color = LiveDesign.text,
                 )
                 Spacer(Modifier.weight(1f))
-                if (onReset != null) {
+                if (onReset != null && isExpanded) {
                     SettingsResetButton(onClick = onReset)
+                }
+                if (expanded != null) {
+                    Icon(
+                        imageVector =
+                            if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = LiveDesign.muted,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
             Text(
@@ -832,7 +862,9 @@ public fun SettingsGroupCard(
                 maxLines = captionMaxLines,
             )
         }
-        content()
+        if (isExpanded) {
+            content()
+        }
     }
 }
 

@@ -11,17 +11,31 @@ public enum LUTCategory: String, CaseIterable, Codable, Equatable, Sendable, Ide
 
 /// A selectable monitor look applied to the live view as a 3D LUT.
 ///
-/// Every look is generated procedurally — no proprietary assets are bundled. The creative look
-/// (Mono) comes from simple in-gamut math; the log→display conversions (N-Log and Log3G10 →
-/// Rec.709) are generated from their published transfer functions and gamut matrices, so
-/// operators who don't want a vendor's official LUTs still get an accurate monitoring image. There
-/// is no "none" look — the LUT is switched off via the assist-bar toggle, not a menu entry.
+/// No proprietary assets are bundled. The creative look (Mono) comes from simple in-gamut math;
+/// the log→display conversions (N-Log and Log3G10 → Rec.709) are generated from their published
+/// transfer functions and gamut matrices, so operators who don't want a vendor's official LUTs
+/// still get an accurate monitoring image. `R3D NE Monitor` is the one look that is a table rather
+/// than a formula: it was contributed for inclusion here (see ``credit`` and
+/// `THIRD-PARTY-NOTICES.md`) and travels as a base64 UInt16 blob in the shared core, so both
+/// shells decode the same numbers with no per-platform resource plumbing. There is no "none"
+/// look — the LUT is switched off via the assist-bar toggle, not a menu entry.
 public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
     case log3G10Rec709 = "Log3G10→709"
     case nLogRec709 = "N-Log→709"
     case monochrome = "Mono"
+    case r3dNEMonitor = "R3D NE Monitor"
 
     public var id: String { rawValue }
+
+    /// Who contributed this look, credited beside it in the picker — `nil` for the looks generated
+    /// from published math in this repo. The drum is one narrow line, so the shells render this as
+    /// a caption under it rather than lengthening the label.
+    public var credit: String? {
+        switch self {
+        case .log3G10Rec709, .nLogRec709, .monochrome: nil
+        case .r3dNEMonitor: "Contributed by Wang Yuehua"
+        }
+    }
 
     /// Generates the look as a `size³` red-fastest cube (`index = r + g·size + b·size²`).
     ///
@@ -62,6 +76,13 @@ public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Iden
         case .monochrome:
             let y = Self.luma(r, g, b)
             return (y, y, y)
+        case .r3dNEMonitor:
+            // Sampling the embedded table here (rather than special-casing `cube(size:)`) keeps one
+            // generation path for every look. At the table's own 33³ grid the lattice coordinates
+            // are exact integers, so the trilinear weights collapse to 1 and `cube()` reproduces
+            // the contributor's samples verbatim; any other size resamples from them.
+            let mapped = Self.contributedTableCube.map(red: r, green: g, blue: b)
+            return (mapped.red, mapped.green, mapped.blue)
         }
     }
 
@@ -210,5 +231,114 @@ public enum LUTResolution {
         selected: LUTSelection
     ) -> LUTSelection? {
         visibleTools.contains(.lut) ? selected : nil
+    }
+
+    /// The 50/50 Log-vs-LUT comparison to render, or `nil` when it is switched off or there is no
+    /// grade to compare against.
+    ///
+    /// Resolved once, here, for the same reason ``active(visibleTools:selected:)`` is: a shell that
+    /// tested the preference on its own would eventually show the divider and the half labels over
+    /// a frame with no LUT in it, or keep the split alive in a DISP mode that dropped the tool.
+    /// `visibleTools` is already the mode-filtered set (`MonitorChromePolicy.visibleTools`), so
+    /// clean view carries the comparison exactly when the operator pinned the LUT into it.
+    /// - Parameter muted: the on-feed quick key's session state — see
+    ///   ``showsSplitComparisonKey(visibleTools:preferences:)``. Not a preference: an A/B while
+    ///   judging a look should not survive the take.
+    public static func splitComparison(
+        visibleTools: Set<MonitorAssistTool>,
+        preferences: OperatorPreferences,
+        muted: Bool = false
+    ) -> SplitComparisonOrientation? {
+        guard preferences.splitComparisonEnabled, !muted, visibleTools.contains(.lut) else {
+            return nil
+        }
+        return preferences.splitComparisonOrientation
+    }
+
+    /// Whether the on-feed 50/50 quick key mounts.
+    ///
+    /// Judging a look is an A/B the operator repeats, and reopening the LUT pop-up for each flip
+    /// defeats the feature — so the key lives on the feed once the comparison is armed. It follows
+    /// the *armed* preference, not the muted state, or the first tap would delete the only control
+    /// that undoes it. Like the divider and the labels it rides the LUT tool's own visibility, so
+    /// clean view carries it exactly where the operator pinned the tool.
+    public static func showsSplitComparisonKey(
+        visibleTools: Set<MonitorAssistTool>,
+        preferences: OperatorPreferences
+    ) -> Bool {
+        preferences.splitComparisonEnabled && visibleTools.contains(.lut)
+    }
+}
+
+/// How a 50/50 Log-vs-LUT comparison divides the monitor image.
+public enum SplitComparisonOrientation: String, CaseIterable, Codable, Equatable, Sendable,
+    Identifiable
+{
+    /// Vertical boundary — Log on the left, LUT on the right.
+    case vertical = "Left / Right"
+    /// Horizontal boundary — Log on the top, LUT on the bottom.
+    case horizontal = "Top / Bottom"
+
+    public var id: String { rawValue }
+}
+
+/// The 50/50 Log-vs-LUT split — an immediate before/after for judging a monitoring look without
+/// toggling the LUT off and on.
+///
+/// **The boundary is the centre of the visible image rectangle**, never the centre of the surface:
+/// letterbox, pillarbox and monitor chrome are all outside it. Every renderer already establishes
+/// that rectangle before the grade runs — iOS bakes a centred crop of the source at the drawable's
+/// aspect (`MetalFeedFrameBaker.bakeSize`), Android sets the GL viewport to `liveFeedContentRect`
+/// and the Vulkan viewport to the letterboxed content rect — so each one splits in its own feed
+/// space at the halfway line and inherits a correct boundary through fit/fill, de-squeeze, crop
+/// and orientation changes for free. Fit and fill both centre the image, so the halfway line of
+/// the feed and the halfway line of what the operator sees are the same line.
+///
+/// Monitor-only: the split lives in the display pipeline and never reaches the camera or recorded
+/// media.
+public enum SplitComparison {
+    /// Edge label for the ungraded half.
+    public static let logLabel = "LOG"
+    /// Edge label for the graded half.
+    public static let lutLabel = "LUT"
+
+    /// Whether a point in normalized feed space is on the graded side.
+    ///
+    /// `x`/`y` run `0...1` across the **visible image rectangle**, origin at its top-left. This is
+    /// the definition each fragment shader transcribes; the shells' rect-based helpers below agree
+    /// with it by construction.
+    public static func isGradedSide(
+        x: Double, y: Double, orientation: SplitComparisonOrientation
+    ) -> Bool {
+        switch orientation {
+        case .vertical: x >= 0.5
+        case .horizontal: y >= 0.5
+        }
+    }
+
+    /// The graded (LUT) half of the visible image rectangle, in the shell's own top-left space.
+    public static func lutHalf(
+        of feed: MonitorModuleFrame, orientation: SplitComparisonOrientation
+    ) -> MonitorModuleFrame {
+        switch orientation {
+        case .vertical:
+            MonitorModuleFrame(
+                x: feed.midX, y: feed.y, width: feed.width / 2, height: feed.height)
+        case .horizontal:
+            MonitorModuleFrame(
+                x: feed.x, y: feed.midY, width: feed.width, height: feed.height / 2)
+        }
+    }
+
+    /// The ungraded (Log) half — the exact complement of ``lutHalf(of:orientation:)``.
+    public static func logHalf(
+        of feed: MonitorModuleFrame, orientation: SplitComparisonOrientation
+    ) -> MonitorModuleFrame {
+        switch orientation {
+        case .vertical:
+            MonitorModuleFrame(x: feed.x, y: feed.y, width: feed.width / 2, height: feed.height)
+        case .horizontal:
+            MonitorModuleFrame(x: feed.x, y: feed.y, width: feed.width, height: feed.height / 2)
+        }
     }
 }

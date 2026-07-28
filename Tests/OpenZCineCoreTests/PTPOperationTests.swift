@@ -120,3 +120,32 @@ import Testing
     // parser clamps to what the bytes can hold and returns only those.
     #expect(PTPStorageIDs.parse(le32(0xFFFF_FFFF) + le32(0x0001_0001)) == [0x0001_0001])
 }
+
+// MARK: - Focus-drive command-channel budget (#272)
+
+@Test func focusDriveRefusalRunIsBoundedByWallClockNotIterations() {
+    // The regression: refusals were budgeted by count (16), but a single drive already costs an
+    // activation plus a readiness poll loop — so the "bounded" retry owned the camera command
+    // channel for tens of seconds, and `ChangeAfArea` answered busy the whole time. The rule is
+    // wall clock and it must actually close.
+    #expect(MFDriveChannelBudget.shouldRetryRefusal(elapsedSeconds: 0))
+    #expect(MFDriveChannelBudget.shouldRetryRefusal(elapsedSeconds: 1.0))
+    #expect(
+        !MFDriveChannelBudget.shouldRetryRefusal(
+            elapsedSeconds: MFDriveChannelBudget.refusalRetrySeconds))
+    #expect(!MFDriveChannelBudget.shouldRetryRefusal(elapsedSeconds: 30))
+}
+
+@Test func focusDriveCannotOwnTheCommandChannelLongEnoughToBlockTouchAF() {
+    // A tap-to-focus queued behind a drive has to reach the body while the operator still
+    // believes the tap did something — seconds, not the ~50 s the old count-based budget allowed.
+    #expect(MFDriveChannelBudget.worstCaseChannelSeconds < 3)
+    // And a run of refusals must always end sooner than one drive's own poll ceiling, so a
+    // refusing body can never chain the two into an unbounded hold.
+    #expect(
+        MFDriveChannelBudget.refusalRetrySeconds
+            < Double(MFDriveChannelBudget.readinessPollLimit)
+            * MFDriveChannelBudget.readinessPollIntervalSeconds)
+    // Retry pacing has to leave the channel idle between attempts, not spin on it.
+    #expect(MFDriveChannelBudget.refusalRetryIntervalSeconds > 0)
+}

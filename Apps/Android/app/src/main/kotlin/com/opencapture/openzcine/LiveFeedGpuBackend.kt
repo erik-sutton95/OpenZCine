@@ -244,6 +244,8 @@ internal class VulkanLiveFeedBackend(
                 plan.configuration.midtoneCode,
                 plan.configuration.midtoneColor,
                 aspectFill,
+                plan.splitComparison != null,
+                plan.splitComparison == FeedSplitOrientation.VERTICAL,
             )
         if (!ok) {
             renderFailed = true
@@ -326,5 +328,7 @@ internal object VulkanLiveFeedNative {
         zebraMidtone: Float,
         zebraMidtoneColor: FloatArray,
         aspectFill: Boolean,
+        splitOn: Boolean,
+        splitVertical: Boolean,
     ): Boolean
 }

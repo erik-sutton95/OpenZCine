@@ -57,7 +57,7 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(properties.exposureMode == "M")
         #expect(properties.lens == "24-70mm f/2.8")
         #expect(properties.focusMode == "AF-C")
-        #expect(properties.focusArea == "Subject")
+        #expect(properties.focusArea == "Subject tracking")
         #expect(properties.focusSubject == "People")
         #expect(properties.microphoneSensitivity == "Auto")
         #expect(properties.microphoneLevel == "12")

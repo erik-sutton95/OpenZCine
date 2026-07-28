@@ -212,6 +212,7 @@ public enum ScopeFrameWire {
     private static let log3G10MonitorCube = MonitorLUT.log3G10Rec709.cube()
     private static let nLogMonitorCube = MonitorLUT.nLogRec709.cube()
     private static let monochromeMonitorCube = MonitorLUT.monochrome.cube()
+    private static let r3dNEMonitorCube = MonitorLUT.r3dNEMonitor.cube()
 
     /// Lock-protected native handles for the process's active vectorscope
     /// samplers. Each Compose collector registers once when its LUT selection
@@ -237,6 +238,7 @@ public enum ScopeFrameWire {
         case 0: cube = log3G10MonitorCube
         case 1: cube = nLogMonitorCube
         case 2: cube = monochromeMonitorCube
+        case 3: cube = r3dNEMonitorCube
         default:
             cube = packedRGBA.flatMap { unpackedVectorCube(packedRGBA: $0, size: size) }
         }

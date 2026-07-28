@@ -12,9 +12,18 @@ internal object FocusPickerPolicy {
     /** iOS FOCUS → AF Mode drum (MF first, base AF-F). */
     val afModeOptions: List<String> = listOf("MF", "AF-S", "AF-C", "AF-F")
 
-    /** iOS FOCUS → Area drum. */
+    /**
+     * iOS FOCUS → Area drum.
+     *
+     * `Subject tracking` is the AF-**area** mode at `0x8033`, spelled the way the
+     * body spells it in video — a different Nikon setting from the adjacent
+     * subject-*detection* drum, and from stills' `3D tracking` (`0x8012`). The
+     * label has to match the core decoder exactly: the facade hands these across
+     * as decoded strings, so a stale spelling here silently fails [isAreaLabel]
+     * (#274).
+     */
     val areaOptions: List<String> =
-        listOf("Single", "Wide-S", "Wide-L", "Auto", "Subject")
+        listOf("Single", "Wide-S", "Wide-L", "Auto", "Subject tracking")
 
     /** iOS FOCUS → Subject drum. */
     val subjectOptions: List<String> =

@@ -3,6 +3,7 @@ import test from "node:test";
 import { deflateSync, inflateSync } from "node:zlib";
 
 import {
+  ACTIVITY_EVENTS,
   AmbiguousIssueCreationError,
   canonicalizePng,
   createAppJwt,
@@ -16,6 +17,7 @@ import {
   ServiceUnavailableError,
   validateReport,
   validateV2Report,
+  validateV2Submission,
 } from "../src/worker.mjs";
 
 const REPORT_RETRY_UUID = "123e4567-e89b-12d3-a456-426614174000";
@@ -621,15 +623,23 @@ test("rejects malformed PNGs at the R2 storage boundary", async () => {
   }
 });
 
-test("v2 rejects arbitrary activity text and oversized uploads after rate limiting", async () => {
+test("v2 strips arbitrary activity text and rejects oversized uploads after rate limiting", async () => {
   const worker = createWorker();
-  const { env, state } = fakeEnvironment();
+  let receivedSubmission;
+  const { env, state } = fakeEnvironment({
+    onRelayFetch(_url, options) {
+      receivedSubmission = JSON.parse(options.body);
+    },
+  });
 
   const arbitraryLog = await worker.fetch(
-    await v2ReportRequest({ report: validV2Report({ activityLog: ["Bob's iPhone"] }) }),
+    await v2ReportRequest({
+      report: validV2Report({ activityLog: ["app.launched", "Bob's iPhone"] }),
+    }),
     env,
   );
-  assert.equal(arbitraryLog.status, 400);
+  assert.equal(arbitraryLog.status, 201);
+  assert.deepEqual(receivedSubmission.report.activityLog, ["app.launched"]);
 
   const oversizedScreenshot = await worker.fetch(
     await v2ReportRequest({ screenshots: [{ bytes: new Uint8Array(1_048_577) }] }),
@@ -637,18 +647,78 @@ test("v2 rejects arbitrary activity text and oversized uploads after rate limiti
   );
   assert.equal(oversizedScreenshot.status, 400);
   assert.equal(state.limitCalls, 2);
-  assert.equal(state.relayCalls, 0);
+  assert.equal(state.relayCalls, 1);
+
+  // Malformed entries are dropped; only shape-valid unknowns are worth bucketing.
+  assert.deepEqual(
+    validateV2Report(
+      validV2Report({
+        activityLog: [
+          "error.connection.failed: Bob's iPhone",
+          "Bob's iPhone",
+          `${"a".repeat(65)}`,
+          "app.launched",
+          42,
+          null,
+        ],
+      }),
+    ).activityLog,
+    ["app.launched"],
+  );
+
+  // An oversized log is still a client-contract violation, not version skew.
   assert.throws(
-    () => validateV2Report(validV2Report({ activityLog: ["not-a-closed-event"] })),
+    () => validateV2Report(validV2Report({ activityLog: Array(201).fill("app.launched") })),
     InvalidRequestError,
   );
   assert.throws(
-    () =>
-      validateV2Report(
-        validV2Report({ activityLog: ["error.connection.failed: Bob's iPhone"] }),
-      ),
+    () => validateV2Report(validV2Report({ activityLog: "app.launched" })),
     InvalidRequestError,
   );
+});
+
+test("v2 keeps a report whose activity log carries a code the relay has not learned", async () => {
+  const worker = createWorker();
+  let receivedSubmission;
+  const { env } = fakeEnvironment({
+    onRelayFetch(_url, options) {
+      receivedSubmission = JSON.parse(options.body);
+    },
+  });
+
+  const response = await worker.fetch(
+    await v2ReportRequest({
+      report: validV2Report({
+        summary: "Scanner never finds the camera",
+        activityLog: ["connection.path.camera-ap", "camera.write.slow", "some.future.code"],
+      }),
+    }),
+    env,
+  );
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(receivedSubmission.report.activityLog, [
+    "connection.path.camera-ap",
+    "camera.write.slow",
+    "diagnostics.unrecognized-event",
+  ]);
+  assert.equal(receivedSubmission.report.summary, "Scanner never finds the camera");
+  assert.equal(receivedSubmission.report.frequency, "sometimes");
+  assert.equal(receivedSubmission.report.context.platform, "ios");
+
+  // The bucket survives the Durable Object round-trip, which revalidates its own normalized output.
+  const rendered = renderV2Issue(validateV2Submission(receivedSubmission));
+  assert.match(rendered.body, /connection\.path\.camera-ap/u);
+  assert.match(rendered.body, /diagnostics\.unrecognized-event/u);
+  assert.equal(rendered.body.includes("some.future.code"), false);
+});
+
+test("every allowlisted activity code satisfies the shape the relay enforces", () => {
+  const codes = validateV2Report(
+    validV2Report({ activityLog: [...ACTIVITY_EVENTS] }),
+  ).activityLog;
+
+  assert.deepEqual(codes, [...ACTIVITY_EVENTS]);
 });
 
 test("v2 issue rendering uses opaque fixed media URLs and a privacy-filtered activity section", async () => {

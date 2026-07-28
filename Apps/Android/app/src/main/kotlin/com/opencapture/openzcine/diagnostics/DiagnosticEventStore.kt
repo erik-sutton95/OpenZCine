@@ -55,6 +55,13 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     // feed and queued writes stall behind it. The property name rides the connection
     // log, not the vocabulary.
     PROPERTY_WRITE_SLOW("camera.write.slow"),
+
+    // Camera-AP credential scanner: on-device OCR could not run. The two codes
+    // separate a recoverable state from a device/build that will never manage
+    // it, so a report distinguishes "retry helped" from "OCR is impossible here".
+    // The exception type and its stack stay in local logcat, never in a report.
+    SCANNER_RECOGNIZER_UNAVAILABLE("error.scanner.recognizer.unavailable"),
+    SCANNER_RECOGNIZER_UNSUPPORTED("error.scanner.recognizer.unsupported"),
     ;
 
     companion object {
@@ -88,6 +95,8 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "eventChannelEnded",
                 "eventChannelCleanupFailed",
                 -> CONNECTION_EVENT_CHANNEL_ENDED
+                "failed.scannerRecognizer" -> SCANNER_RECOGNIZER_UNAVAILABLE
+                "failed.scannerRecognizerUnsupported" -> SCANNER_RECOGNIZER_UNSUPPORTED
                 "liveViewFailed" -> LIVE_VIEW_FAILED
                 "liveViewStalled" -> LIVE_VIEW_STALLED
                 "propertyWriteSlow" -> PROPERTY_WRITE_SLOW

@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.MFDriveOutcome
+import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
@@ -9,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -28,7 +30,9 @@ import kotlinx.coroutines.launch
 internal class MFDriveController(
     private val session: CameraSession,
     /** Injectable pacing for tests. */
-    private val retryDelayMillis: Long = 80L,
+    private val retryDelayMillis: Long = RETRY_DELAY_MILLIS,
+    /** Injectable clock so the refusal budget is testable on a virtual scheduler. */
+    private val elapsedMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val _atEnd = MutableStateFlow<Int?>(null)
 
@@ -71,9 +75,21 @@ internal class MFDriveController(
 
     private var pendingPulses = 0
     private var driveJob: Job? = null
-    private var retries = 0
+    private var refusalRunStartedAt: Long? = null
     private var nearPulses: Int? = null
     private var infinityPulses: Int? = null
+
+    /**
+     * Drops the in-flight drive and everything queued behind it, freeing `cameraCommandMutex`
+     * immediately. An AF-point tap is interactive and must win — queueing it behind a retrying
+     * drive is what left tap-to-focus dead until a shutter release (iOS `cancelManualFocusDrive`).
+     */
+    fun cancel() {
+        pendingPulses = 0
+        refusalRunStartedAt = null
+        driveJob?.cancel()
+        driveJob = null
+    }
 
     /** Re-arms the relative position (call when the strip appears / lens or mode changes). */
     fun resetDial() {
@@ -117,7 +133,10 @@ internal class MFDriveController(
     }
 
     private suspend fun drain() {
-        while (pendingPulses != 0) {
+        // `isActive` as well as the queue: a cancelled drive can still be parked in a
+        // NonCancellable native call, and it must not resume alongside its replacement — two
+        // drains sharing the command channel is the ownership bug this whole path is about.
+        while (pendingPulses != 0 && coroutineContext.isActive) {
             val pending = pendingPulses
             pendingPulses = 0
             val outcome =
@@ -130,13 +149,13 @@ internal class MFDriveController(
             when (outcome) {
                 MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> {
                     // Position already advanced optimistically on the drag (in drive()).
-                    retries = 0
+                    refusalRunStartedAt = null
                     continue
                 }
                 MFDriveOutcome.EndOfTravel -> {
                     // Pin this end at the current (optimistic) position so the relative position
                     // calibrates and the dial clamps here on further drives toward it.
-                    retries = 0
+                    refusalRunStartedAt = null
                     if (pending < 0) {
                         nearPulses = _netPulses.value
                         _atEnd.value = -1
@@ -154,13 +173,20 @@ internal class MFDriveController(
                     // or that the focus mode slipped back to MF (the body refuses a remote drive in
                     // MF). Surface one message and leave the strip up so the next gesture retries.
                     _driveStats.value = _driveStats.value.let { (ok, busy) -> ok to busy + 1 }
-                    if (retries < MAX_RETRIES) {
-                        retries += 1
-                        pendingPulses += pending
+                    val startedAt = refusalRunStartedAt ?: elapsedMillis().also {
+                        refusalRunStartedAt = it
+                    }
+                    if (elapsedMillis() - startedAt < REFUSAL_RETRY_BUDGET_MILLIS) {
+                        // Back off FIRST, requeue after: a cancel during the backoff throws out
+                        // of delay(), so a superseded run can never leave its pulses behind for
+                        // the drive that replaces it.
                         delay(retryDelayMillis)
+                        pendingPulses += pending
                         continue
                     }
-                    retries = 0
+                    // Give the command channel back: the next gesture retries from a clean slate,
+                    // and a tap-to-focus waiting on cameraCommandMutex goes through now.
+                    refusalRunStartedAt = null
                     pendingPulses = 0
                     onRefusalExhausted?.invoke(
                         if (outcome.rawResponseCode == INVALID_STATUS_RESPONSE) {
@@ -176,11 +202,21 @@ internal class MFDriveController(
         }
     }
 
-    private companion object {
+    internal companion object {
         const val MAX_PULSES = 32767
 
-        /** Bounded refusal retries per run before surfacing once. */
-        const val MAX_RETRIES = 16
+        /**
+         * Wall clock a run of refusals may keep retrying before it gives up and frees
+         * `cameraCommandMutex`. Mirrors Swift `MFDriveChannelBudget.refusalRetrySeconds`.
+         *
+         * Deliberately NOT an iteration count: one drive already costs an activation plus a
+         * bounded readiness poll, so "16 retries" was tens of seconds of channel ownership —
+         * during which `changeAfArea` could not run at all.
+         */
+        const val REFUSAL_RETRY_BUDGET_MILLIS = 1_200L
+
+        /** Mirrors Swift `MFDriveChannelBudget.refusalRetryIntervalSeconds`. */
+        const val RETRY_DELAY_MILLIS = 80L
 
         /** Standard busy answer on the shared channel. */
         const val DEVICE_BUSY_RESPONSE = 0x2019

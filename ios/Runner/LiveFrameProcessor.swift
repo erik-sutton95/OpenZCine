@@ -83,6 +83,9 @@ struct LiveImageEffects: Equatable, Sendable {
     var blockSmoothing: BlockSmoothingSettings?
     /// Masks whatever block structure survives, after the look.
     var blockDither: BlockDitherSettings?
+    /// When set, `lut` grades only its half of the frame (see ``SplitComparison``). Never affects
+    /// `isIdentity`: with no LUT there is nothing to compare, so the split alone changes nothing.
+    var splitComparison: SplitComparisonOrientation?
 
     var isIdentity: Bool {
         lut == nil && falseColor == nil && peaking == nil && zebra == nil
@@ -298,7 +301,9 @@ extension NativeAppModel {
                     gateLevels: DemoHarness.blockSmoothGateLevels ?? 5,
                     strength: strength)
             },
-            blockDither: DemoHarness.blockDitherLevels.map { BlockDitherSettings(levels: $0) })
+            blockDither: DemoHarness.blockDitherLevels.map { BlockDitherSettings(levels: $0) },
+            splitComparison: LUTResolution.splitComparison(
+                visibleTools: visible, preferences: preferences, muted: splitComparisonMuted))
     }
 
     var liveImageEffects: LiveImageEffects {
@@ -503,7 +508,9 @@ final class LiveFrameProcessor {
             // zone-weight mask. Both limits cubes measure the raw code values in `input`; only the
             // graded background the operator looks at comes off the smoothed `display`.
             if let lut = effects.lut {
-                output = applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) }
+                output = ImageEffectsCompositor.splitting(
+                    applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) },
+                    over: display, extent: extent, orientation: effects.splitComparison)
             }
             let mappingKey = "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
             let paint = applyBaseCube(to: input, key: "limitsPaint:\(mappingKey)") {
@@ -527,7 +534,12 @@ final class LiveFrameProcessor {
                 FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
             }
         } else if let lut = effects.lut {
-            output = applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) }
+            // Grade only the LUT half when a 50/50 comparison is on. Peaking and zebra below still
+            // measure `input`, so the assists read the same across the boundary. Both halves come
+            // off `display`, so the comparison varies the grade and nothing else.
+            output = ImageEffectsCompositor.splitting(
+                applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) },
+                over: display, extent: extent, orientation: effects.splitComparison)
         }
 
         // After the look — the noise has to sit in the same space as the artifact it masks, and the

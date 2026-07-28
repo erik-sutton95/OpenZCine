@@ -15,6 +15,12 @@ regexes = [
   '''123e4567-e89b-12d3-a456-426614174000''',
   # Second fixed RFC 4122 UUID used only to test a distinct retry history.
   '''223e4567-e89b-12d3-a456-426614174000''',
+  # Operator-preference storage keys. They are named `<AREA>_..._KEY = "dotted.path.vN"`, which is
+  # the exact shape `generic-api-key` looks for, and a longer camel-cased one crosses its entropy
+  # threshold where its shorter neighbours do not. Deliberately anchored to the dotted-path form
+  # these keys use rather than allowlisting the `_KEY` name, so a real credential assigned to a
+  # `_KEY` constant is still caught.
+  '''^(assist|display|link|media|monitor|scope)\.[A-Za-z0-9.]+\.v[0-9]+$''',
 ]
 paths = [
   # This config talks about secret patterns on purpose.

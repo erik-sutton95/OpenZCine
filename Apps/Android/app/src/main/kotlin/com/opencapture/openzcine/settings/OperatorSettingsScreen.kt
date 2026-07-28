@@ -326,6 +326,7 @@ internal fun OperatorSettingsScreen(
                         onInteraction = emitHaptic,
                         compact = true,
                         onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
+                        onClose = onClose,
                         modifier = Modifier.weight(1f),
                     )
                 } else {
@@ -358,6 +359,7 @@ internal fun OperatorSettingsScreen(
                             onInteraction = emitHaptic,
                             compact = false,
                             onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
+                            onClose = onClose,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -596,6 +598,8 @@ private fun SettingsContentPane(
     onInteraction: () -> Unit,
     compact: Boolean,
     onReportProblem: () -> Unit,
+    /** Dismisses Operator Setup — the Edit view is the monitor, so the panel steps aside. */
+    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(
@@ -610,6 +614,15 @@ private fun SettingsContentPane(
         // Storage card complete in that window rather than leaving its clear
         // result half-hidden below a scroll edge.
         val condensed = maxHeight < 300.dp
+        // Which capture side the body is actually in — the Display tab opens on that layout.
+        val paneCameraProperties =
+            if (session == null) null else session.cameraProperties.collectAsState().value
+        val liveCaptureMode =
+            if (paneCameraProperties != null && prefersPhotographyChrome(paneCameraProperties)) {
+                CaptureLayoutMode.PHOTO
+            } else {
+                CaptureLayoutMode.VIDEO
+            }
         Column(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(if (condensed) 6.dp else 10.dp),
@@ -686,6 +699,13 @@ private fun SettingsContentPane(
                                     onInteraction,
                                     scrollState,
                                     viewportBounds,
+                                    liveCaptureMode = liveCaptureMode,
+                                    onEditView = { mode ->
+                                        // The Edit view IS the monitor, so Operator Setup steps
+                                        // aside for it.
+                                        settings.beginChromeEditing(mode)
+                                        onClose()
+                                    },
                                 )
                             OperatorSettingsTab.STORAGE ->
                                 StorageRows(
@@ -758,8 +778,6 @@ private fun LinkRows(
                     activeTransportLabel ?: "Wi-Fi",
                 )
         }
-    // iOS collapses the 3-way core bias to the mockup Size / Quality pair.
-    val qualityBiasSizeSelected = settings.qualityBias != LiveViewQualityBias.DETAIL
     val connectionTitle =
         if (linked && onDisconnect != null) {
             stringResource(R.string.action_disconnect)
@@ -801,19 +819,14 @@ private fun LinkRows(
                 Modifier.selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                AssistChoice(
-                    label = stringResource(R.string.settings_quality_bias_size),
-                    selected = qualityBiasSizeSelected,
-                ) {
-                    settings.qualityBias = LiveViewQualityBias.LATENCY
-                    onInteraction()
-                }
-                AssistChoice(
-                    label = stringResource(R.string.settings_quality_bias_quality),
-                    selected = !qualityBiasSizeSelected,
-                ) {
-                    settings.qualityBias = LiveViewQualityBias.DETAIL
-                    onInteraction()
+                LiveViewQualityBias.entries.forEach { bias ->
+                    AssistChoice(
+                        label = stringResource(bias.settingsLabelResource),
+                        selected = settings.qualityBias == bias,
+                    ) {
+                        settings.qualityBias = bias
+                        onInteraction()
+                    }
                 }
             }
         }
@@ -972,6 +985,7 @@ private fun feedLutLabel(lut: FeedLut): String =
             FeedLut.LOG3G10_709 -> R.string.lut_log_709
             FeedLut.NLOG_709 -> R.string.lut_nlog_709
             FeedLut.MONO -> R.string.lut_mono
+            FeedLut.R3D_NE_MONITOR -> R.string.lut_r3d_ne_monitor
         },
     )
 
@@ -2518,46 +2532,130 @@ private fun DisplayRows(
     onInteraction: () -> Unit,
     parentScrollState: ScrollState,
     viewportBounds: Rect?,
+    liveCaptureMode: CaptureLayoutMode,
+    onEditView: (MonitorDisplayMode) -> Unit,
 ) {
-    // iOS Display: View Assist toolbar, Live Status Readouts, DISP Button Order.
-    // Reset lives in each card header (iOS SettingsGroupCard onReset).
+    // One card per DISP mode: each mode owns what it shows, and each opens on tap. Collapsed, the
+    // whole tab is four short rows instead of ~50 controls in one scroll (iOS `displayRows`).
+    //
+    // Video and photo keep separate layouts, and the switch for that is ONE segmented control at
+    // the top — six stacked DISP cards would double the longest tab in the app to express one bit.
+    var expandedSection by rememberSaveable { mutableStateOf<MonitorDisplayMode?>(null) }
+    var pickedCapture by rememberSaveable { mutableStateOf<CaptureLayoutMode?>(null) }
+    val capture = pickedCapture ?: liveCaptureMode
     SettingsGroupCard(
-        title = stringResource(R.string.settings_assist_toolbar),
-        caption = stringResource(R.string.settings_assist_toolbar_caption),
-        onReset = {
-            settings.resetAssistToolbarPreferences()
-            onInteraction()
-        },
+        title = stringResource(R.string.settings_layout_for),
+        caption = stringResource(R.string.settings_layout_for_help),
+        captionMaxLines = 3,
     ) {
-        AssistToolbarOrderList(
-            settings = settings,
-            onInteraction = onInteraction,
-            parentScrollState = parentScrollState,
-            viewportBounds = viewportBounds,
-        )
+        SettingsSegmented(
+            options = CaptureLayoutMode.entries.map { it.title },
+            selected = capture.title,
+        ) { value ->
+            CaptureLayoutMode.entries.firstOrNull { it.title == value }?.let {
+                pickedCapture = it
+                onInteraction()
+            }
+        }
     }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_live_readouts),
-        caption = stringResource(R.string.settings_live_readouts_caption),
-    ) {
-        DisplayToggleGrid(
-            compact = compact,
-            entries =
-                listOf(
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_rec), settings.recReadoutVisible.value) {
-                        onToggle(settings.recReadoutVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_codec), settings.codecReadoutVisible.value) {
-                        onToggle(settings.codecReadoutVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_media), settings.mediaReadoutVisible.value) {
-                        onToggle(settings.mediaReadoutVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_fps), settings.fpsReadoutVisible.value) {
-                        onToggle(settings.fpsReadoutVisible)
-                    },
-                ),
-        )
+    MonitorDisplayMode.entries.forEach { mode ->
+        SettingsGroupCard(
+            title = "DISP ${mode.ordinal + 1} · ${stringResource(mode.labelResource())}",
+            caption = stringResource(dispSectionCaption(mode)),
+            onReset = {
+                settings.resetChromeVisibility(mode, capture)
+                onInteraction()
+            },
+            // The caption IS the mode's explanation here — never let it truncate.
+            captionMaxLines = Int.MAX_VALUE,
+            expanded = expandedSection == mode,
+            onExpandToggle = {
+                expandedSection = if (expandedSection == mode) null else mode
+                onInteraction()
+            },
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Command is a fixed dashboard grid, not the live chrome — there is no live view
+                // to place badges on, so it gets the plain list. So does the capture side the body
+                // is not currently in: badges belong on the real thing, not on a stand-in.
+                if (mode == MonitorDisplayMode.COMMAND || capture != liveCaptureMode) {
+                    if (mode != MonitorDisplayMode.COMMAND) {
+                        Text(
+                            stringResource(
+                                R.string.settings_layout_for_other_side,
+                                capture.title.lowercase(),
+                            ),
+                            style = chromeStyle(11f, FontWeight.SemiBold),
+                            color = LiveDesign.muted,
+                        )
+                    }
+                    DisplayToggleGrid(
+                        compact = compact,
+                        entries =
+                            ChromeSection.configurableIn(mode).map { section ->
+                                val toggle = settings.chrome(mode, capture)[section]
+                                DisplayToggleEntry(section.title, toggle.value) {
+                                    onToggle(toggle)
+                                }
+                            },
+                    )
+                } else {
+                    SettingsActionPill(
+                        title = stringResource(R.string.settings_edit_view),
+                        onClick = { onEditView(mode) },
+                    )
+                    // The status-bar cells. iOS nests their badges inside the deck pill in the Edit
+                    // view; here they stay a grid, because a 26dp badge inside a 28dp pill on a
+                    // phone-density Compose deck is not a reliable touch target.
+                    Text(
+                        stringResource(R.string.settings_live_readouts),
+                        style = chromeStyle(11f, FontWeight.SemiBold),
+                        color = LiveDesign.muted,
+                    )
+                    DisplayToggleGrid(
+                        compact = compact,
+                        entries =
+                            ChromeSection.statusBarReadouts.map { section ->
+                                val toggle = settings.chrome(mode, capture)[section]
+                                DisplayToggleEntry(section.title, toggle.value) { onToggle(toggle) }
+                            },
+                    )
+                    if (mode == MonitorDisplayMode.CLEAN) {
+                        Text(
+                            stringResource(R.string.settings_clean_view_tools),
+                            style = chromeStyle(11f, FontWeight.SemiBold),
+                            color = LiveDesign.muted,
+                        )
+                        DisplayToggleGrid(
+                            compact = compact,
+                            entries =
+                                // Canonical tool order, not the operator's toolbar order — the
+                                // keep list should not reshuffle itself under them when they drag
+                                // the toolbar (iOS `CleanViewPinStrip`).
+                                AssistTool.entries.map { tool ->
+                                    val title = stringResource(tool.titleResource())
+                                    DisplayToggleEntry(title, settings.isPinnedToCleanView(tool)) {
+                                        settings.toggleCleanViewPin(tool)
+                                        onInteraction()
+                                    }
+                                },
+                        )
+                    } else {
+                        Text(
+                            stringResource(R.string.settings_assist_toolbar_caption),
+                            style = chromeStyle(11f, FontWeight.SemiBold),
+                            color = LiveDesign.muted,
+                        )
+                        AssistToolbarOrderList(
+                            settings = settings,
+                            onInteraction = onInteraction,
+                            parentScrollState = parentScrollState,
+                            viewportBounds = viewportBounds,
+                        )
+                    }
+                }
+            }
+        }
     }
     SettingsGroupCard(
         title = stringResource(R.string.settings_disp_order),
@@ -2570,6 +2668,14 @@ private fun DisplayRows(
         DisplayModeOrderList(settings, onInteraction)
     }
 }
+
+@StringRes
+private fun dispSectionCaption(mode: MonitorDisplayMode): Int =
+    when (mode) {
+        MonitorDisplayMode.LIVE -> R.string.settings_disp_live_caption
+        MonitorDisplayMode.CLEAN -> R.string.settings_disp_clean_caption
+        MonitorDisplayMode.COMMAND -> R.string.settings_disp_command_caption
+    }
 
 private const val FOUR_COLUMN_DISPLAY_TOGGLE_MIN_WIDTH_DP: Float = 480f
 

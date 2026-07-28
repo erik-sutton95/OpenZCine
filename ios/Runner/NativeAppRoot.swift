@@ -110,10 +110,15 @@ enum PreferencesStore {
 
     private static let mfScrubEnabledKey = "mfDriveScrubEnabled"
 
-    /// Whether the live-view focus scrub strip is enabled (default on) — operator toggle in the
-    /// FOCUS popup.
+    /// Whether the live-view focus scrub strip is enabled — operator toggle in the FOCUS popup,
+    /// available in video and photo mode, **default off**.
+    ///
+    /// The absent-key fallback IS the migration: the key is only ever written by the toggle's
+    /// `didSet`, so "no key" means the operator never chose, and they land on the new default.
+    /// An operator who deliberately switched the dial on has `true` stored and keeps it; one who
+    /// switched it off has `false` stored and keeps that. No migration record needed.
     static func loadMFScrubEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: mfScrubEnabledKey) as? Bool ?? true
+        UserDefaults.standard.object(forKey: mfScrubEnabledKey) as? Bool ?? false
     }
 
     static func saveMFScrubEnabled(_ enabled: Bool) {
@@ -578,6 +583,9 @@ final class NativeAppModel {
     /// overwrites — so the progress sheet can show real progress instead of a frozen "Connecting".
     var connectionStageDetail = ""
     @ObservationIgnored private var connectionProgressShowsFailure = false
+    /// Whether an established session dropped and is being recovered behind a preserved monitor.
+    /// Drives the recovery affordance over the held frame (`MonitorRecoveryOverlay`).
+    private(set) var sessionRecovery: SessionRecoveryState = .idle
     var cameraHost = "192.168.1.1"
     var connectionMessage = "Join your camera's Wi‑Fi network, then come back here to connect."
     var connectedIdentity: NativeCameraIdentity?
@@ -662,7 +670,19 @@ final class NativeAppModel {
     var pendingHopShareResumeClips: [MediaClip]?
     /// Where to return after the hop: the camera's host + AP SSID captured before leaving.
     @ObservationIgnored private var internetHopReturn: (host: String, ssid: String)?
-    var displayMode: DispMode = .live
+    var displayMode: DispMode = .live {
+        didSet {
+            guard displayMode != oldValue else { return }
+            // Clean view defers transient pop-ups (#256): a picker or assist drawer opened in
+            // DISP 1 must not ride into the bare image. Full-screen destinations the operator
+            // navigated to deliberately (Settings, Media) are not pop-ups and stay put.
+            if !MonitorChromePolicy.allowsPopups(in: displayMode),
+                activePanel?.coversFullScreen == false
+            {
+                dismissActivePanel()
+            }
+        }
+    }
     /// Operator interface lock (the top-left lock button). When on, the monitor's controls — pickers,
     /// assist tools, DISP, tap-to-focus — are inert so nothing changes by accident on set. Record and
     /// the lock itself stay live. Session-only; never persisted, so a relaunch is always unlocked.
@@ -724,8 +744,19 @@ final class NativeAppModel {
     }
     /// Codecs the camera advertises (`MovFileType` descriptor) — the only codec values we'll write.
     var cameraFileTypeModes: [PTPCameraFileTypeMode] = []
+    /// The advertised codecs as picker rows: one per family, carrying the bit depths the body
+    /// offers for it so the CODEC drum can flank the row with a depth choice (#276 follow-up).
+    var codecFamilies: [PTPCameraCodecFamily] {
+        PTPCameraPropertyDecoders.codecFamilies(cameraFileTypeModes)
+    }
     /// Codec labels for the codec picker, in the camera's advertised order.
-    var codecOptions: [String] { cameraFileTypeModes.map(\.label) }
+    var codecOptions: [String] { codecFamilies.map(\.label) }
+    /// The advertised codec mode the body is currently on — the source of the CODEC picker's
+    /// selected bit depth. Nil until the descriptor and the readback agree.
+    var activeCodecMode: PTPCameraFileTypeMode? {
+        PTPCameraPropertyDecoders.fileTypeMode(
+            forFileType: cameraPropertySnapshot.fileType, in: cameraFileTypeModes)
+    }
     /// Camera-advertised option lists for the moded AF / shutter / WB-preset settings, keyed by PTP
     /// property. Read once per poll cycle; an absent or empty entry means the picker keeps its
     /// hardcoded fallback. Reading the real values lets the pickers track whatever the connected body
@@ -769,6 +800,56 @@ final class NativeAppModel {
             if (oldValue?.coversFullScreen ?? false) != (activePanel?.coversFullScreen ?? false) {
                 updateBluetoothShutter()
             }
+        }
+    }
+    /// The DISP mode whose chrome the operator is editing on the monitor itself, or `nil` when the
+    /// monitor is live. While editing, every element the mode owns mounts — hidden ones at 30% —
+    /// with an eye badge on a corner of its bounding box. Session-only.
+    var chromeEditorMode: DispMode?
+    /// Whether the on-feed 50/50 key has the armed comparison momentarily hidden. Session-only and
+    /// deliberately not a preference: it is one half of an A/B, not a setting — see
+    /// ``LUTResolution/showsSplitComparisonKey(visibleTools:preferences:)``.
+    var splitComparisonMuted = false
+    /// Which capture side of the camera the monitor is laying out for. The body owns this — the
+    /// app follows its mode dial — so it is read, never stored.
+    var captureLayoutMode: CaptureLayoutMode { isPhotographyMode ? .photo : .video }
+    /// The chrome configuration the monitor should render right now.
+    var monitorChrome: DisplayChromeVisibility {
+        preferences.chrome(for: displayMode, capture: captureLayoutMode)
+    }
+    /// Which side-rail controls mount right now, guarantees applied.
+    var monitorSideRailPlan: MonitorChromePolicy.SideRailPlan {
+        MonitorChromePolicy.sideRailPlan(
+            mode: displayMode, preferences: preferences, capture: captureLayoutMode,
+            interfaceLocked: interfaceLocked, recordingOrPending: isRecordingOrPending)
+    }
+    /// Whether `section` mounts on the monitor right now: switched on for the active DISP mode,
+    /// or force-mounted (dimmed, badged) because that mode's chrome is being edited.
+    func chromeSectionMounts(_ section: DisplayChromeVisibility.Section) -> Bool {
+        if let mode = chromeEditorMode, mode == displayMode,
+            DisplayChromeVisibility.isConfigurable(section, in: mode)
+        {
+            return true
+        }
+        return monitorChrome.isVisible(section)
+    }
+    /// Whether a side-rail control mounts: its plan entry, or force-mounted while editing.
+    func railControlMounts(
+        _ section: DisplayChromeVisibility.Section, plan: MonitorChromePolicy.SideRailPlan
+    ) -> Bool {
+        if chromeEditorMode == displayMode, chromeEditorMode != nil,
+            DisplayChromeVisibility.isConfigurable(section, in: displayMode)
+        {
+            return true
+        }
+        switch section {
+        case .railRecord: return plan.record
+        case .railMedia: return plan.media
+        case .railSettings: return plan.settings
+        case .railDisp: return plan.disp
+        case .lockButton: return plan.lock
+        case .batteryIndicators: return plan.batteries
+        default: return chromeSectionMounts(section)
         }
     }
     /// Operator Setup rail tab and per-tab scroll offsets — session-only; survive dismissing the
@@ -891,12 +972,19 @@ final class NativeAppModel {
     @ObservationIgnored private var thumbnailWaiters: [String: [CheckedContinuation<Void, Never>]] =
         [:]
     /// Media browser chrome: source bucket, tabs, chip filters, and sort (sort persists).
-    var mediaBrowserSource: MediaBrowserSource = .camera
+    var mediaBrowserSource: MediaBrowserSource = .camera {
+        didSet {
+            guard oldValue != mediaBrowserSource else { return }
+            pruneMediaFiltersToOfferedChips()
+        }
+    }
     var mediaCategoryTab: MediaCategoryTab = .videos {
         didSet {
-            guard oldValue != mediaCategoryTab, mediaBrowserSource == .camera,
-                cameraSession != nil
-            else { return }
+            guard oldValue != mediaCategoryTab else { return }
+            // Chips the new tab cannot offer would keep filtering invisibly — a MOV filter
+            // carried onto Photos empties the grid with nothing in the popup to explain it.
+            pruneMediaFiltersToOfferedChips()
+            guard mediaBrowserSource == .camera, cameraSession != nil else { return }
             // Tabs are pure filters over already-discovered clips. A pass that completed on
             // All/Favorites enumerated every handle (`scopedHandles`), and one completed on
             // this same tab already covered it — only a tab whose handles the previous scope
@@ -911,9 +999,12 @@ final class NativeAppModel {
             scheduleFetchClipsFromCamera()
         }
     }
-    var mediaFormatFilters: Set<MediaFormatFilter> = []
+    var mediaFormatFilters: Set<MediaFormatChip> = []
     var mediaResolutionFilters: Set<MediaResolutionBucket> = []
-    var mediaTodayOnly = false
+    /// Still L/M/S size chips — ranked against the sizes present, so this is stills-only.
+    var mediaPhotoSizeFilters: Set<MediaPhotoSizeClass> = []
+    /// Single relative capture-date window; the windows nest, so they are mutually exclusive.
+    var mediaDateWindow: MediaDateWindow?
     var mediaStorageSlotFilter: UInt32?
     var mediaSortOrder: MediaSortOrder = PreferencesStore.loadMediaSortOrder() {
         didSet { PreferencesStore.saveMediaSortOrder(mediaSortOrder) }
@@ -1758,10 +1849,10 @@ final class NativeAppModel {
 
         // Single-flight: a PTP-IP camera accepts one command channel per initiator, and overlapping
         // Init attempts (re-taps, an auto-reconnect racing a manual one) can wedge the camera's PTP
-        // state machine — coalesce extra triggers instead of stacking attempts. The flag clears in
-        // the establishment task's defer, so a failed attempt still frees the next retry.
+        // state machine — coalesce extra triggers instead of stacking attempts. The latch is
+        // released by whichever comes first: this attempt finishing, or a teardown replacing it
+        // (`clearCameraSessionState`), so a failed or cancelled attempt never blocks the retry.
         guard !isEstablishingConnection else { return }
-        isEstablishingConnection = true
         // An auto-reconnect behind a preserved monitor keeps the operator on the frozen frame with
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
         if !preservingMonitorSurface {
@@ -1783,9 +1874,29 @@ final class NativeAppModel {
         // this attempt is in flight, the attempt must not publish its session — otherwise a slow
         // handshake completing after "Disconnect" silently resurrects the connection.
         let generation = connectionGeneration
+        // Claimed AFTER the clear (which releases it) and scoped to this generation: a teardown
+        // frees the latch immediately, so the operator's next tap is never swallowed while an
+        // abandoned attempt is still unwinding a blocking socket read.
+        isEstablishingConnection = true
+        // Bounded phase timeouts belong to operator-initiated connects: a recovery attempt behind a
+        // preserved monitor is already bounded by its own loop, and failing it here could overlap a
+        // second Init with a socket read the first attempt is still blocked in.
+        if !preservingMonitorSurface {
+            startConnectionTimeoutWatchdog(
+                generation: generation,
+                isUSB: host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix))
+        }
         let hadPriorSession = previousSession != nil || sessionTeardownTask != nil
         establishmentTask = Task {
-            defer { isEstablishingConnection = false }
+            // Only this generation's owner may release the latch — a stale attempt finishing late
+            // must not unlatch the attempt that replaced it.
+            defer {
+                if connectionGeneration == generation {
+                    isEstablishingConnection = false
+                    connectionTimeoutTask?.cancel()
+                    connectionTimeoutTask = nil
+                }
+            }
             if let previousSession {
                 await previousSession.stopLiveView()
                 // Graceful CloseSession before dropping sockets — a bare close leaves the ZR
@@ -1832,6 +1943,9 @@ final class NativeAppModel {
                 AppDiagnostics.shared.record(
                     transportKind == .usb
                         ? .connectionUsbFailed : .connectionWifiJoinFailed)
+                // Behind a preserved monitor the recovery loop owns the outcome — see the
+                // establishment catch below.
+                if preservingMonitorSurface, isMonitorPresented { return }
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
@@ -1967,6 +2081,16 @@ final class NativeAppModel {
                     savePendingPairingCamera()
                 }
                 pendingPairingSaveCandidate = nil
+                // A recovery attempt behind a preserved monitor keeps the held frame and the
+                // recovery affordance. Tearing the surface down and falling back to discovery is
+                // exactly what dumped the operator out of live view on a cable knock (#254); the
+                // recovery loop owns the retry cadence and the give-up point from here.
+                if preservingMonitorSurface, isMonitorPresented {
+                    clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
+                    logConnection(
+                        "recovery attempt failed host=\(host) \(error.localizedDescription)")
+                    return
+                }
                 disconnectCameraSession(resetConnection: false)
                 if acceptedPairing {
                     pendingPairedReconnectHost = host
@@ -2023,6 +2147,74 @@ final class NativeAppModel {
                 startDiscoveryLoop(resetResults: false)
             }
         }
+    }
+
+    /// Fails an attempt whose current phase stopped making progress, so a first connection either
+    /// completes or ends with a truthful error and a Retry — never an open-ended spinner (#264).
+    ///
+    /// Phases that wait on a person (the iOS join prompt, "Confirm on camera") are deliberately
+    /// unbounded; see `CameraConnectionTimeout`. The deadline is absolute rather than a rate
+    /// divider, so the 0.5s tick lands the breach within half a second and cannot alias the budget.
+    private func startConnectionTimeoutWatchdog(generation: Int, isUSB: Bool) {
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = Task { [weak self] in
+            var watchedPhase = self?.connectionPhase ?? .idle
+            var phaseStartedAt = ContinuousClock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, let self, self.connectionGeneration == generation else {
+                    return
+                }
+                let phase = self.connectionPhase
+                if phase != watchedPhase {
+                    watchedPhase = phase
+                    phaseStartedAt = .now
+                    continue
+                }
+                guard
+                    let budget = CameraConnectionTimeout.budgetSeconds(for: phase, isUSB: isUSB),
+                    ContinuousClock.now - phaseStartedAt >= .seconds(budget)
+                else { continue }
+                self.failConnectionAttempt(
+                    message: CameraConnectionTimeout.timeoutMessage(
+                        phase: phase, deviceName: self.connectionProgressDeviceName),
+                    diagnostic: isUSB ? .connectionUsbFailed : .connectionPtpFailed,
+                    logReason: "timed out in \(phase) after \(Int(budget))s"
+                )
+                return
+            }
+        }
+    }
+
+    /// Ends the in-flight attempt with exactly the disposal an explicit cancel performs — stale
+    /// transport, PTP session, sockets, tasks, queued writes and camera identity released, and the
+    /// single-flight latch freed — then surfaces a retryable failure.
+    ///
+    /// This is the equivalence #264 turns on: a failed first attempt must leave the app in the same
+    /// clean state as tapping Cancel, so the identical retry works without one.
+    private func failConnectionAttempt(
+        message: String,
+        diagnostic: AppDiagnosticEvent,
+        logReason: String
+    ) {
+        guard isEstablishingConnection else { return }
+        logConnection("attempt failed host=\(cameraHost) — \(logReason)")
+        AppDiagnostics.shared.record(diagnostic)
+        disconnectCameraSession(resetConnection: false)
+        connection = .disconnected
+        connectionPhase = .failed
+        connectionProgressShowsFailure = true
+        connectionMessage = message
+        connectionFailureDetail = message
+        startDiscoveryLoop(resetResults: false)
+    }
+
+    /// Retries from the failed connection card in place. The failed attempt already disposed
+    /// everything an explicit cancel would, so this is the same connect the operator would get by
+    /// backing out and tapping the camera again — without making them do it.
+    func retryConnectionAttempt() {
+        guard connectionProgressShowsFailure, !isEstablishingConnection else { return }
+        connectToCamera()
     }
 
     private func startupConnectionMessage(
@@ -2154,6 +2346,38 @@ final class NativeAppModel {
         func forceLiveViewGuide(_ step: LiveViewGuideStep) {
             activePanel = nil
             liveViewGuideStep = step
+        }
+
+        /// Stages the dropped-session recovery affordance for simulator screenshot verification.
+        /// No retry loop is started — this only paints the state the loop would publish.
+        func forceSessionRecoveryState(_ state: SessionRecoveryState) {
+            activePanel = nil
+            liveFPS = SessionRecoveryCopy.heldFrameBadge
+            sessionRecovery = state
+        }
+
+        /// Drives the entry point a physical detach reaches once the transport has closed and the
+        /// event drain has surfaced the ended channel. Unlike `forceSessionRecoveryState` this
+        /// starts the real bounded loop, so a test exercises the shipped path rather than a
+        /// painted state.
+        func debugSimulateTransportDetach() {
+            beginSessionRecovery(host: cameraHost, reason: "transport detached (debug)")
+        }
+
+        /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
+        /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
+        /// reconnect never replays stale camera-setting writes. Keeps the real members private.
+        var debugIsEstablishingConnection: Bool { isEstablishingConnection }
+        var debugHasCameraSession: Bool { cameraSession != nil }
+        var debugConnectionGeneration: Int { connectionGeneration }
+        var debugHasSessionRecoveryTask: Bool { sessionRecoveryTask != nil }
+        var debugPendingCameraWriteCount: Int { pendingCameraWrites.count }
+        func debugEnqueueCameraWrite(_ property: PTPPropertyCode) {
+            enqueueCameraWrite(
+                PendingCameraWrite(
+                    picker: .iso,
+                    value: "debug",
+                    write: PTPCameraPropertyWrite(property: property, data: Data([1]))))
         }
     #endif
 
@@ -2318,6 +2542,13 @@ final class NativeAppModel {
     /// a PTP-IP camera accepts one command channel per initiator, and overlapping the old
     /// half-closed channel with a new Init can wedge the camera's PTP state machine.
     @ObservationIgnored private var sessionTeardownTask: Task<Void, Never>?
+    /// Bounded-timeout watchdog for the in-flight attempt: fails a phase that stops making
+    /// progress instead of letting the operator stare at a spinner (see `CameraConnectionTimeout`).
+    @ObservationIgnored private var connectionTimeoutTask: Task<Void, Never>?
+    /// The bounded auto-reconnect loop that runs behind a preserved monitor after an established
+    /// session drops (cable knocked loose, camera power-cycled). Cancelled by any operator-driven
+    /// teardown so a manual disconnect can never race a retry back into a live session.
+    @ObservationIgnored private var sessionRecoveryTask: Task<Void, Never>?
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
@@ -2361,6 +2592,10 @@ final class NativeAppModel {
     /// button can pulse in acknowledgement (the app-fired path animates via the press gesture).
     private(set) var bodyShutterPulse = 0
     private var propertyPollIndex = 0
+    /// Properties the CAMERA announced as changed (`DevicePropChanged`) and that have not been
+    /// re-read yet. Drained ahead of the round-robin so a body-side dial/ring/menu edit lands in
+    /// one poll tick instead of a full ~20 s cycle.
+    @ObservationIgnored private var cameraAnnouncedPropertyChanges = CameraAnnouncedPropertyQueue()
     /// The `LiveViewImageSize` byte last written to the camera, so a thermal/warning step-down only
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
     /// is itself a heat source — see `applyThermalStreamStepDownIfNeeded`).
@@ -2397,6 +2632,9 @@ final class NativeAppModel {
     private var pendingFocusPoint: (x: UInt32, y: UInt32)?
     /// Multi-step focus reset when subject tracking must be released before recentring.
     private var focusResetStep: FocusResetStep?
+    /// Readiness polls still owed after a tap's `AfDrive`, spent one per safe point so the drain
+    /// never blocks the live-view frame loop it runs inside.
+    private var focusAFSettlePolls = 0
     /// A record start/stop requested by the record button, serviced at the next live-view safe
     /// point (so the StartMovieRecInCard / EndMovieRec op doesn't race the live-view loop's reads).
     private var pendingRecordToggle = false
@@ -2471,6 +2709,7 @@ final class NativeAppModel {
     private func resetCameraPropertyState() {
         cameraPropertySnapshot = PTPCameraPropertySnapshot()
         propertyPollIndex = 0
+        cameraAnnouncedPropertyChanges.removeAll()
         lastRecordingPropertyPollAt = nil
         pendingCameraWrites.removeAll()
         pendingShutterMode = nil
@@ -2479,6 +2718,9 @@ final class NativeAppModel {
         pendingISOAuto = nil
         pendingFocusPoint = nil
         focusResetStep = nil
+        focusAFSettlePolls = 0
+        // No exit path may leave a focus drive owning the command channel of a dead session.
+        cancelManualFocusDrive()
         cameraApertures = []
         // Still-capture state must never survive a stream (re)start — a stale chained
         // release re-firing after a reconnect loops the whole connection.
@@ -3322,6 +3564,102 @@ final class NativeAppModel {
         }
     }
 
+    // MARK: - Session recovery
+
+    /// Monotonic epoch for the recovery loop, so a cancelled run can't clear the handle of the run
+    /// that replaced it.
+    @ObservationIgnored private var sessionRecoveryGeneration = 0
+
+    /// Recovers an ESTABLISHED session that dropped underneath the operator — a knocked USB cable,
+    /// a camera power cycle, a wedged command channel — without leaving live view.
+    ///
+    /// The monitor stays up on the last decoded frame (badged as held, not live) while a bounded,
+    /// cancellable retry loop rebuilds the session through the normal `connectToCamera` path: the
+    /// stale transport, PTP session, sockets, tasks, queued property writes and camera identity are
+    /// all disposed (with a graceful `CloseSession`) before the replacement is built. When the
+    /// shared budget is spent the operator chooses — retry, or back to the operator menu.
+    ///
+    /// Only ever runs against a host this app was already connected to, so a retry can never
+    /// blind-probe a camera sitting on its pairing wizard (probing knocks the body out of pairing).
+    private func beginSessionRecovery(host: String, reason: String) {
+        guard !isDemoSession, isMonitorPresented, sessionRecoveryTask == nil else { return }
+        let target = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { return }
+        logConnection("session lost host=\(target) (\(reason)) → bounded recovery")
+        connection = .reconnecting
+        liveFPS = SessionRecoveryCopy.heldFrameBadge
+        isStreamRecovering = true
+        sessionRecoveryGeneration += 1
+        let generation = sessionRecoveryGeneration
+        sessionRecoveryTask = Task { [weak self] in
+            await self?.runSessionRecovery(host: target)
+            guard let self, self.sessionRecoveryGeneration == generation else { return }
+            self.sessionRecoveryTask = nil
+        }
+    }
+
+    /// The bounded loop itself. Every pass delegates teardown-then-rebuild to `connectToCamera`, so
+    /// nothing here reimplements disposal; this only owns *when* to try and when to stop.
+    private func runSessionRecovery(host: String) async {
+        let policy = SessionRecoveryPolicy.monitor
+        var failures = 0
+        while !Task.isCancelled {
+            let state = policy.state(afterFailedAttempts: failures)
+            sessionRecovery = state
+            guard case .retrying = state else { return }
+            cameraHost = host
+            connectToCamera(preservingMonitorSurface: true)
+            await establishmentTask?.value
+            if Task.isCancelled { return }
+            if cameraSession != nil {
+                sessionRecovery = .idle
+                logConnection("recovered host=\(host) after \(failures) failed attempt(s)")
+                return
+            }
+            failures += 1
+            guard
+                case .retry(let wait) = policy.decision(
+                    afterFailedAttempts: failures, jitter: .random(in: 0...1))
+            else {
+                sessionRecovery = policy.state(afterFailedAttempts: failures)
+                logConnection("recovery exhausted host=\(host) after \(failures) attempts")
+                return
+            }
+            try? await Task.sleep(for: .seconds(wait))
+        }
+    }
+
+    /// Operator action from the recovery affordance: start a fresh bounded recovery run.
+    ///
+    /// The abandoned attempt has to be cleared, not just unawaited. `connectToCamera` releases the
+    /// single-flight latch as part of its own teardown, but only *after* the
+    /// `isEstablishingConnection` guard — so a Retry landing while an attempt is still in flight is
+    /// swallowed by that guard and starts nothing, which is exactly the hidden-latch failure #264
+    /// fixed on the connect path. Recovery attempts deliberately run without the timeout watchdog,
+    /// so there is no bound on how long that would last. Clearing here preserves the monitor
+    /// surface, so the operator keeps the held frame across the retry.
+    func retrySessionRecovery() {
+        let host = cameraHost
+        cancelSessionRecovery()
+        clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
+        beginSessionRecovery(host: host, reason: "operator retry")
+    }
+
+    /// Operator action from the recovery affordance: leave the held frame for the operator menu.
+    /// An explicit exit must never be undone by a late reconnect, so this stops retrying first.
+    func exitMonitorToOperatorMenu() {
+        cancelSessionRecovery()
+        disconnect()
+    }
+
+    /// Stops any in-flight recovery loop and clears the affordance.
+    private func cancelSessionRecovery() {
+        sessionRecoveryGeneration += 1
+        sessionRecoveryTask?.cancel()
+        sessionRecoveryTask = nil
+        sessionRecovery = .idle
+    }
+
     /// Clears all in-memory session and live-view state. Performs no network I/O, so callers that
     /// are about to open a new session can clear synchronously and then await the previous
     /// session's socket teardown separately (preventing overlapping PTP-IP command channels).
@@ -3333,6 +3671,14 @@ final class NativeAppModel {
         connectionGeneration += 1
         establishmentTask?.cancel()
         establishmentTask = nil
+        // Release the single-flight latch with the attempt it belonged to. Cancelling a Task does
+        // NOT interrupt a socket read blocked in a non-cancellable syscall, so the abandoned
+        // attempt's `defer` can be up to a full socket timeout away — and until it ran, every
+        // retry was silently swallowed by the guard in `connectToCamera`. That is the hidden state
+        // behind "cancel, then try again, and it connects instantly" (#264).
+        isEstablishingConnection = false
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = nil
         pairingContinuation?.resume(returning: false)
         pairingContinuation = nil
         pendingPairingChallenge = nil
@@ -3371,6 +3717,10 @@ final class NativeAppModel {
         // as stall recovery) instead of dismissing and re-presenting the whole surface — on a
         // flapping link that teardown/rebuild churn reads as app-wide lag and instability.
         if !preserveMonitorSurface {
+            // Dropping the monitor is always an operator-driven exit (disconnect, cancel, pair a
+            // new camera, internet hop). Retries must die with it — a late reconnect resurrecting
+            // a session the operator just left is the duplicate-session bug in #253.
+            cancelSessionRecovery()
             liveFrameImage = nil
             isMonitorPresented = false
             activePanel = nil
@@ -3432,7 +3782,14 @@ final class NativeAppModel {
                 if Task.isCancelled { return }
                 // A stream that ran healthily for a while before blipping resets the streak — only
                 // rapid back-to-back stalls (each <30s of streaming) count toward escalation.
-                let streamedHealthily = Date().timeIntervalSince(streamStart) > 30
+                // Measured from the last GOOD FRAME, not from wall clock: an attempt against a
+                // dead link spends 30s+ purely in transaction deadlines (worse over USB, where
+                // ImageCaptureCore does not fail fast), so the wall-clock reading reset the streak
+                // every pass and the escalation to bounded recovery never fired — the monitor
+                // restarted live view forever on a camera that was physically unplugged (#254).
+                // Android already counts pump deaths this way (`consecutivePumpEnds`).
+                let streamedHealthily =
+                    (lastGoodFrameAt ?? .distantPast).timeIntervalSince(streamStart) > 30
                 switch outcome {
                 case .taskCancelled:
                     return
@@ -3449,7 +3806,11 @@ final class NativeAppModel {
                         )
                         consecutiveStartFailures = 0
                         await session.stopLiveView()
-                        isMonitorPresented = false
+                        // Used to drop the monitor here with nothing driving a retry — the "needs
+                        // an app restart" dead end in #254/#253. Hand over to bounded recovery: the
+                        // held frame stays up and the operator gets Retry / Back.
+                        beginSessionRecovery(
+                            host: session.identity.host, reason: "live view never started")
                         return
                     }
                     let wait = backoff.delaySeconds(
@@ -3473,15 +3834,15 @@ final class NativeAppModel {
                     if stallAttempt >= maxStallRestarts {
                         // The stream keeps dying right after each restart — escalate to a full
                         // reconnect off the saved profile rather than hammering a wedged session.
-                        // connectToCamera tears this session down (cancelling this task); if the
-                        // camera is truly gone it falls through to discovery on its own.
+                        // Bounded recovery owns it: the operator keeps the held frame instead of
+                        // being thrown back to the full-screen connect sheet mid-shoot.
                         logConnection(
                             "stall-escalate host=\(session.identity.host) consecutive=\(stallAttempt) → full reconnect"
                         )
                         connectionMessage =
                             "Live view isn't recovering — reconnecting to the camera…"
-                        cameraHost = session.identity.host
-                        connectToCamera()
+                        beginSessionRecovery(
+                            host: session.identity.host, reason: "live view stall escalation")
                         return
                     }
                     // Recover: back off, restart live view. Watchdog handles normal jitter; we
@@ -3526,6 +3887,14 @@ final class NativeAppModel {
                     logConnection(
                         "keepalive failed host=\(session.identity.host) \(error.localizedDescription)"
                     )
+                    // Three straight failures on the idle channel is the camera being gone, not
+                    // jitter — the shape of a power cycle with the feed paused (command mode,
+                    // panel open). Previously nothing watched this path at all.
+                    if self.recentKeepaliveFailures >= 3 {
+                        self.beginSessionRecovery(
+                            host: session.identity.host, reason: "keepalive failed ×3")
+                        return
+                    }
                 }
             }
         }
@@ -3572,20 +3941,41 @@ final class NativeAppModel {
         activePanel?.coversFullScreen ?? false
     }
 
-    /// Whether the live feed is currently not being shown to anyone — Command mode (DISP 3) or a
-    /// full-screen panel cover. While true the streaming loop stops pulling frames AND tells the
-    /// camera to `EndLiveView`, so the sensor stops encoding for a feed nobody sees (the biggest
-    /// avoidable camera-heat source). It resumes on return.
+    /// Whether the live feed is currently not being shown to anyone — a full-screen panel cover.
+    /// While true the streaming loop stops pulling frames AND tells the camera to `EndLiveView`,
+    /// so the sensor stops encoding for a feed nobody sees (the biggest avoidable camera-heat
+    /// source). It resumes on return.
+    ///
+    /// Command mode (DISP 3) is deliberately **not** here: its hero readout is the timecode, and
+    /// timecode rides the live-view frame header only — there is no PTP timecode property — so
+    /// ending live view froze it (#271). Command uses `streamsHeaderOnly` instead.
     private var shouldPauseLiveFeed: Bool {
-        displayMode == .command || activePanelHidesLiveFeed
+        activePanelHidesLiveFeed
     }
+
+    /// Command mode (DISP 3): the dashboard hides the image but shows live timecode and record
+    /// state, both of which only exist in the live-view frame header. The stream therefore stays
+    /// up at the *smallest* frame the body will send and is pulled on a slow cadence, with decode,
+    /// display, the watch relay and scope sampling all skipped.
+    private var streamsHeaderOnly: Bool {
+        MonitorChromePolicy.streamsHeaderOnly(in: displayMode) && !activePanelHidesLiveFeed
+    }
+
+    /// How long the loop waits between header-only pulls in Command mode — the same cadence the
+    /// mode's property polling already ran at, so the dashboard's transaction load is unchanged
+    /// apart from one small image fetch per tick. The camera keeps encoding at its own rate either
+    /// way: our pull rate does not change camera heat, the frame *size* does.
+    private static let commandHeaderPullInterval: Duration = .milliseconds(250)
 
     /// The `LiveViewImageSize` byte to request right now: the operator's preset, capped smaller when
     /// the phone is thermally stressed, the camera reports an overheat warning, or a take is in
     /// progress. A smaller preview is less sensor-readout/encode work for the body to do while
     /// things are hot. Never enlarges beyond the operator's chosen preset.
     private var effectiveStreamImageSize: UInt8 {
-        preferences.streamPreset.liveViewImageSize
+        // Command shows no image at all — ask for the smallest frame the body offers, purely as a
+        // carrier for the header's timecode and record state.
+        if streamsHeaderOnly { return OperatorPreferences.StreamPreset.fast.liveViewImageSize }
+        return preferences.streamPreset.liveViewImageSize
     }
 
     /// Restarts live view when `effectiveStreamImageSize` has moved since the last configure — e.g.
@@ -3681,6 +4071,8 @@ final class NativeAppModel {
                         await self.refreshWarningStatus(session: session)
                     } else if let recordState = event.inferredRecordState {
                         self.applyCameraRecordState(isRecording: recordState == .recording)
+                    } else {
+                        self.noteCameraAnnouncedPropertyChange(event)
                     }
                 } catch let error as NativeCameraSessionError {
                     if case .timeout = error { continue }
@@ -3691,6 +4083,7 @@ final class NativeAppModel {
                         )
                     else { return }
                     AppDiagnostics.shared.record(.connectionEventChannelEnded)
+                    self.recoverFromEndedEventChannel(session: session)
                     return
                 } catch {
                     guard
@@ -3700,10 +4093,21 @@ final class NativeAppModel {
                         )
                     else { return }
                     AppDiagnostics.shared.record(.connectionEventChannelEnded)
+                    self.recoverFromEndedEventChannel(session: session)
                     return
                 }
             }
         }
+    }
+
+    /// The event channel ending for any reason other than an idle timeout means the link is gone —
+    /// the cable was pulled, or the body powered off. Over USB this is the *only* prompt signal
+    /// (ImageCaptureCore ends the stream on `didRemove`), and until now nothing acted on it: the
+    /// monitor sat on a dead session until the operator force-quit (#254/#253). Recover if a
+    /// monitor is up; otherwise leave it to the normal connect path.
+    private func recoverFromEndedEventChannel(session: NativeCameraSession) {
+        guard cameraSession === session, isMonitorPresented else { return }
+        beginSessionRecovery(host: session.identity.host, reason: "event channel ended")
     }
 
     /// Routes a device event from either channel (the GetEventEx poll or the PTP-IP socket).
@@ -3717,9 +4121,27 @@ final class NativeAppModel {
             if let state = event.inferredRecordState {
                 applyCameraRecordState(isRecording: state == .recording)
             }
+        case .devicePropChanged:
+            noteCameraAnnouncedPropertyChange(event)
         case .unknown:
             break
         }
+    }
+
+    /// Queues an authoritative re-read of a property the CAMERA says changed (`DevicePropChanged`
+    /// `0x4006`, from either event channel). The body is the source of truth: a dial, lens ring, or
+    /// menu edit must reach every surface promptly, and the round-robin visits any one property
+    /// only about every 20 s.
+    ///
+    /// The event carries no value, so it can only schedule a read — never mutate the snapshot. The
+    /// queue is drained in announcement order, a whole burst per poll tick, by
+    /// ``pollNextCameraProperty(session:)``: that keeps the reads on the existing single-flight
+    /// poll and its cadence instead of racing the frame loop for the transaction gate, while a
+    /// ring detent's dependent announcements can no longer bury the one value the operator is
+    /// watching. Bounded by construction: deduplicated, and only the codes the monitor decodes.
+    private func noteCameraAnnouncedPropertyChange(_ event: PTPEvent) {
+        guard let property = event.changedPropertyCode else { return }
+        cameraAnnouncedPropertyChanges.note(property)
     }
 
     /// Syncs the app to a capture fired ON THE CAMERA BODY: pulses the shutter button, runs
@@ -3889,7 +4311,8 @@ final class NativeAppModel {
             deliveredFirstFrame = true
             consecutiveStartFailures = 0
             isStreamRecovering = false
-            watchdog.recordGoodFrame(at: Date())
+            watchdog.recordGoodFrame(
+                at: Date(), signature: LiveFrameSignature.of(firstFrame.jpeg))
             lastGoodFrameAt = Date()
             consecutiveBadLiveFrames = 0
             frameRate.recordFrame(at: CACurrentMediaTime())
@@ -3901,13 +4324,16 @@ final class NativeAppModel {
             connection = .connected
             var pausedForCommand = false
             var liveViewSuspended = false
+            // Whether the stream is currently configured for Command's header-only pulls, so the
+            // size change is applied exactly once per DISP transition instead of every frame.
+            var headerOnly = false
             nextFrameTask = liveFrameTask(session)
             while !Task.isCancelled {
                 if shouldPauseLiveFeed {
-                    // Feed hidden (Command mode / DISP 3, or a full-screen cover): stop pulling
-                    // frames AND end live view on the camera — sensor readout + JPEG encode is the
-                    // dominant camera-heat source. Property polls and queued writes keep running
-                    // on this idle cadence (cheap, separate transactions).
+                    // Feed hidden behind a full-screen cover: stop pulling frames AND end live
+                    // view on the camera — sensor readout + JPEG encode is the dominant
+                    // camera-heat source. Property polls and queued writes keep running on this
+                    // idle cadence (cheap, separate transactions).
                     pausedForCommand = true
                     nextFrameTask.cancel()
                     if !liveViewSuspended {
@@ -3936,6 +4362,7 @@ final class NativeAppModel {
                         lastAppliedStreamImageSize = requestedSize
                         try await session.startLiveView()
                     }
+                    headerOnly = streamsHeaderOnly
                     watchdog.recordGoodFrame(at: Date())
                     lastGoodFrameAt = Date()
                     consecutiveBadLiveFrames = 0
@@ -3944,8 +4371,48 @@ final class NativeAppModel {
                     lastScopeSampleTime = 0
                     nextFrameTask = liveFrameTask(session)
                 }
+                // Entering or leaving Command: restart the stream at the size that mode wants.
+                // One stop/start per DISP transition — the same count the old pause/resume paid.
+                if streamsHeaderOnly != headerOnly {
+                    headerOnly = streamsHeaderOnly
+                    nextFrameTask.cancel()
+                    await session.stopLiveView()
+                    let requestedSize = effectiveStreamImageSize
+                    await session.configureLiveView(
+                        size: requestedSize,
+                        compression: preferences.qualityBias.liveViewImageCompression)
+                    lastAppliedStreamImageSize = requestedSize
+                    try await session.startLiveView()
+                    frameRate = FrameRateSampler()
+                    watchdog.recordGoodFrame(at: Date())
+                    lastGoodFrameAt = Date()
+                    consecutiveBadLiveFrames = 0
+                    lastLevelUpdateTime = 0
+                    lastScopeSampleTime = 0
+                    nextFrameTask = liveFrameTask(
+                        session, deadline: Self.firstLiveViewFrameDeadline)
+                }
                 let frame = try await nextFrameTask.value
                 guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
+                if headerOnly {
+                    // Command mode: the header is the whole point. Publish the authoritative
+                    // timecode and record state, skip the JPEG entirely, and pace the next pull.
+                    //
+                    // `frameRate` / `measuredLiveViewFPS` deliberately do NOT sample here: this
+                    // cadence is our own throttle, not the link's capability, and feeding it to
+                    // the link-health scorer would drop the signal bars to a false alarm. The FPS
+                    // chip holds its last live-feed reading until the feed comes back.
+                    watchdog.recordGoodFrame(at: Date())
+                    lastGoodFrameAt = Date()
+                    consecutiveBadLiveFrames = 0
+                    applyLiveViewHeaderState(frame)
+                    applyLiveViewHeaderTimecode(frame.timecode)
+                    publishWatchState()
+                    nextFrameTask = liveFrameTask(session)
+                    await runCommandModeSafePoint(session: session)
+                    try? await Task.sleep(for: Self.commandHeaderPullInterval)
+                    continue
+                }
                 // Bound in-flight frames to one JPEG + one decoded bitmap: finish decode and
                 // display before pulling the next camera frame; scope sampling overlaps the next
                 // fetch. Scopes must meter the clean frame, never the assist-composited bake
@@ -3956,7 +4423,10 @@ final class NativeAppModel {
                 if let image = decoded, let cleanFrame {
                     frameCounter += 1
                     frameRate.recordFrame(at: CACurrentMediaTime())
-                    watchdog.recordGoodFrame(at: Date())
+                    // Signed with the payload, so a body that wedges into replaying one cached
+                    // JPEG is read as the stall it is instead of a healthy stream (#283).
+                    watchdog.recordGoodFrame(
+                        at: Date(), signature: LiveFrameSignature.of(frame.jpeg))
                     lastGoodFrameAt = Date()
                     consecutiveBadLiveFrames = 0
                     measuredLiveViewFPS = frameRate.displayFPS
@@ -3976,7 +4446,8 @@ final class NativeAppModel {
                     // One shared scope sample per throttle tick feeds histogram, waveform, parade,
                     // and traffic lights (see `ScopeAssistSampling`); the portrait scopes stack
                     // renders exactly these tools, so this set already covers it.
-                    let visibleScopes = preferences.visibleAssistTools(for: .liveView)
+                    // Mode-filtered: clean view with nothing pinned samples no scopes at all.
+                    let visibleScopes = renderedLiveAssistTools
                     let shouldSampleScopes = ScopeAssistSampling.shouldSample(
                         visible: visibleScopes)
                     if shouldSampleScopes {
@@ -4032,7 +4503,9 @@ final class NativeAppModel {
                 watchdog.check(at: Date())
                 lastGoodFrameAt = watchdog.lastGoodFrameAt
                 if watchdog.status == .stalled {
-                    return .stalled(reason: "no good frame")
+                    return .stalled(
+                        reason: watchdog.isRepeatingLastFrame
+                            ? "same frame replayed" : "no good frame")
                 }
             }
             return .taskCancelled
@@ -4107,17 +4580,23 @@ final class NativeAppModel {
                     selector: cameraPropertySnapshot.captureSelector)
                 {
                     try await session.afDrive()
-                    for _ in 0..<4 {
-                        if case .inProgress = try await session.pollStillReleaseReadiness() {
-                            try await Task.sleep(nanoseconds: 120_000_000)
-                        } else {
-                            break
-                        }
-                    }
+                    // Drain readiness one poll per safe point instead of sleeping ~0.5 s inline:
+                    // this runs INSIDE the live-view frame loop, so blocking here is a visible
+                    // feed hitch every time tap-to-focus starts.
+                    focusAFSettlePolls = 4
                 }
             } catch {
                 connectionMessage =
                     "Camera rejected the focus point: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            }
+            return
+        }
+        if focusAFSettlePolls > 0 {
+            focusAFSettlePolls -= 1
+            if case .inProgress = (try? await session.pollStillReleaseReadiness()) {
+                // Still driving — keep the remaining budget and check again next frame.
+            } else {
+                focusAFSettlePolls = 0
             }
             return
         }
@@ -4152,15 +4631,16 @@ final class NativeAppModel {
         if await performNextPendingCameraWrite(session: session) {
             return
         }
-        // Nikon delivers capture events (a shutter fired ON THE BODY → ObjectAdded /
-        // CaptureComplete) through the GetEventEx poll, NOT the PTP-IP event socket the drain
-        // loop reads — so poll it on a brisk cadence in photography chrome and sync the app
-        // (instant playback + shutter-button pulse). Single-flight so it can't stack behind the
-        // transaction gate and jitter the feed.
-        if StillCapturePolicy.prefersPhotographyChrome(
-            selector: cameraPropertySnapshot.captureSelector),
-            frameCounter.isMultiple(of: 4), deviceEventPollTask == nil
-        {
+        // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) AND
+        // `DevicePropChanged` through the GetEventEx poll, not the PTP-IP event socket the drain
+        // loop reads — so poll it on a brisk cadence in EVERY chrome. This used to be gated to
+        // photography, where it was introduced for body-fired stills, which left cinema mode — how
+        // the ZR is normally shot — with no fast path for a body-side aperture/ISO/shutter change
+        // at all: it fell back to a round-robin that revisits any one property about every 20 s
+        // (#268). The chrome test lives in each consumer, which already applies it:
+        // `handleBodyFiredCapture` is a no-op outside photography. Single-flight so the poll can't
+        // stack behind the transaction gate and jitter the feed.
+        if frameCounter.isMultiple(of: 4), deviceEventPollTask == nil {
             deviceEventPollTask = Task { [weak self] in
                 defer { self?.deviceEventPollTask = nil }
                 guard let self, self.cameraSession === session else { return }
@@ -4170,7 +4650,12 @@ final class NativeAppModel {
                 }
             }
         }
-        guard pollEveryCall || frameCounter.isMultiple(of: 8) else { return }
+        // A pending camera-announced change jumps the background cadence — the operator's own hand
+        // on the body should not wait out a poll interval sized for idle round-robin. The stride
+        // and its bound live on the queue itself, next to the batch limit they balance against.
+        guard
+            pollEveryCall || frameCounter.isMultiple(of: cameraAnnouncedPropertyChanges.pollStride)
+        else { return }
         if isRecording {
             let now = Date()
             guard
@@ -4519,7 +5004,7 @@ final class NativeAppModel {
         }
         // Sound indicator (bytes 824–827) → the audio-levels panel. The camera applies its own
         // meter ballistics and peak hold, so segments feed the panel directly.
-        if preferences.visibleAssistTools(for: .liveView).contains(.audioMeters),
+        if renderedLiveAssistTools.contains(.audioMeters),
             let sound = frame.sound
         {
             let levels = AudioMeterLevels(cameraIndicator: sound)
@@ -4593,18 +5078,25 @@ final class NativeAppModel {
                         format: "slow write %@: %.1fs",
                         String(describing: pending.write.property), writeSeconds))
             }
+            // The CAMERA decides what a write landed on, so read the property back and apply that —
+            // never the requested bytes. Echoing the request lets a slow write (a body can sit on
+            // one for seconds) clobber a newer body-originated value the poll already picked up,
+            // and hides a value the body silently clamped or refused in part. Android confirms
+            // every control write by readback (`confirmAndroidControlWrites`); this is parity.
+            if let actual = try? await session.readCameraProperty(pending.write.property) {
+                cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                    property: pending.write.property, data: actual)
+            } else {
+                cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                    property: pending.write.property,
+                    data: pending.write.data
+                )
+            }
+            // A confirmed write supersedes any queued re-read of the same property.
+            cameraAnnouncedPropertyChanges.cancel(pending.write.property)
             if isShutterModeWrite || isBaseISOWrite || isISOAutoWrite || isFocusModeWrite
                 || isShutterLockWrite
             {
-                if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: pending.write.property, data: actual)
-                } else {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: pending.write.property,
-                        data: pending.write.data
-                    )
-                }
                 // Clear optimistic mode only after readback confirms the requested circuit — clearing
                 // on a lagging readback lets `shutterPickerModeIndex` snap back to the old tab.
                 if isShutterModeWrite {
@@ -4626,11 +5118,6 @@ final class NativeAppModel {
                 if isShutterLockWrite {
                     pendingShutterLockState = nil
                 }
-            } else {
-                cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                    property: pending.write.property,
-                    data: pending.write.data
-                )
             }
             publishCameraDisplayState()
             syncFocusFromSnapshot()
@@ -4846,6 +5333,23 @@ final class NativeAppModel {
                     ? .exposureIndicateLightup : .exposureIndicateStatus)
             guard !Task.isCancelled, cameraSession === session else { return }
         }
+        // Properties the CAMERA announced as changed jump the queue: they are the operator's own
+        // edit on the body, and the round-robin would otherwise take a full cycle to notice. The
+        // WHOLE pending burst drains on the tick that sees it, oldest first and capped
+        // (`CameraAnnouncedPropertyQueue.batchLimit`) — one detent of an aperture ring announces
+        // the aperture plus its dependents, and draining one arbitrary entry per tick left the
+        // watched value buried. Maintenance runs once after the batch, not once per read, so the
+        // batch stays a tight run of reads. The round-robin index does NOT advance, so no regular
+        // property is skipped.
+        if !cameraAnnouncedPropertyChanges.isEmpty {
+            for announced in cameraAnnouncedPropertyChanges.nextBatch()
+            where session.supportsProperty(announced) {
+                await readAndApplyCameraProperty(session: session, property: announced)
+                guard !Task.isCancelled, cameraSession === session else { return }
+            }
+            await refreshCameraMaintenanceIfDue(session: session)
+            return
+        }
         let property = PTPPropertyCode.nextMonitorPollProperty(
             pollIndex: propertyPollIndex,
             isRecording: isRecording,
@@ -4978,7 +5482,29 @@ final class NativeAppModel {
         (.movieFocusMode, 1),
         (.movieFocusMeteringMode, 2),
         (.movieAFSubjectDetection, 1),
+        // Shared across both chromes — the MODE drum reads the same 0x500E property in movie and
+        // photo mode, so it is described on every cadence rather than only in photography.
+        (.exposureProgramMode, 2),
     ]
+
+    /// Photo-mode function pickers whose option lists the body enumerates. Read only while the
+    /// photography chrome is up: describing the stills AF / drive / quality space in movie mode
+    /// costs camera round trips for drums nobody can open, and several of these properties report
+    /// a placeholder domain outside their own chrome. Each body advertises its own values in its
+    /// own order — that is the whole point of #274, so nothing here has a "union" fallback.
+    private static let photographyEnumeratedControls:
+        [(property: PTPPropertyCode, valueByteCount: Int)] = [
+            (.stillCaptureMode, 2),
+            (.userMode, 1),
+            (.exposureMeteringMode, 2),
+            (.flashMode, 2),
+            (.compressionSetting, 1),
+            (.rawCompressionType, 1),
+            (.activePicCtrlItem, 2),
+            (.stillFocusMode, 1),
+            (.stillFocusMeteringMode, 2),
+            (.afSubjectDetection, 1),
+        ]
 
     /// Reads the camera's advertised option lists for the moded AF / shutter / WB-preset settings
     /// so each picker offers exactly what the body supports. Re-read on the slow descriptor
@@ -4986,9 +5512,21 @@ final class NativeAppModel {
     /// kept. The WB enum's colour-temperature mode belongs to the Kelvin tab, so it's filtered out.
     private func refreshControlOptions(session: NativeCameraSession) async {
         let shutterMode = effectiveShutterMode()
-        for (property, valueByteCount) in Self.enumeratedControls {
+        let photography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector)
+        let controls =
+            Self.enumeratedControls
+            + (photography ? Self.photographyEnumeratedControls : [])
+        for (property, valueByteCount) in controls {
             if property == .movieShutterSpeed, shutterMode != .speed { continue }
             if property == .movieShutterAngle, shutterMode != .angle { continue }
+            // A body that never lists the property spends nothing on a describe that will fail;
+            // its picker keeps the conservative fallback.
+            if Self.photographyEnumeratedControls.contains(where: { $0.property == property }),
+                !session.supportsProperty(property)
+            {
+                continue
+            }
             await refreshControlOption(
                 session: session, property: property, valueByteCount: valueByteCount)
         }
@@ -5352,6 +5890,46 @@ final class NativeAppModel {
         }
     }
 
+    /// Toggles whether a tool keeps rendering in clean view (DISP 2) — off for all 17 by default
+    /// so clean is a bare image out of the box (#256).
+    func toggleCleanViewPin(_ tool: MonitorAssistTool) {
+        preferences.toggleCleanViewPin(tool)
+    }
+
+    /// Clears the clean-view keep list, restoring the stock bare image (Display settings).
+    func resetCleanViewPins() {
+        preferences.cleanViewPinnedTools = OperatorPreferences.defaults.cleanViewPinnedTools
+    }
+
+    /// Restores one DISP mode's chrome on one capture side to stock (Display settings).
+    func resetChromeVisibility(for mode: DispMode, capture: CaptureLayoutMode? = nil) {
+        preferences.resetChrome(for: mode, capture: capture ?? captureLayoutMode)
+    }
+
+    /// The DISP mode whose chrome the operator was editing before Done, so Display settings can
+    /// reopen on that section instead of the top of the tab.
+    var chromeEditorReturnMode: DispMode?
+
+    /// Opens the Edit view on `mode`: the monitor itself, with an eye badge on every chrome
+    /// element the mode owns. Hidden elements stay on screen at 30% while editing so nothing can
+    /// become unreachable. Leaves Settings so the operator sees the real thing.
+    func beginChromeEditing(_ mode: DispMode) {
+        activePanel = nil
+        displayMode = mode
+        chromeEditorMode = mode
+    }
+
+    /// Done returns to where the operator came from — Display settings, on the section they were
+    /// editing — rather than dropping them on the live monitor to find their way back.
+    func endChromeEditing() {
+        chromeEditorReturnMode = chromeEditorMode
+        chromeEditorMode = nil
+        // The operator may have been editing a mode the DISP key does not cycle through.
+        reconcileDisplayModeAfterDispPreferenceChange()
+        operatorSettingsTab = .display
+        activePanel = .settings
+    }
+
     func resetExposureBarVisibility() {
         preferences.exposureBarVisibleControls =
             OperatorPreferences.defaults.exposureBarVisibleControls
@@ -5595,7 +6173,7 @@ final class NativeAppModel {
     private var shouldCancelSubjectTrackingOnFocusReset: Bool {
         guard !isDemoSession else { return false }
         if let focus = liveViewFocus, focus.isSubjectTrackingLatched { return true }
-        if focusArea == "Subject" { return true }
+        if PTPCameraPropertyDecoders.isSubjectTrackingArea(focusArea) { return true }
         if let focus = liveViewFocus {
             if focus.subjectDetectionActive { return true }
             if focus.selectedBoxIndex != nil { return true }
@@ -5621,6 +6199,9 @@ final class NativeAppModel {
         let recenterX = UInt32(max(0, coordinateWidth / 2))
         let recenterY = UInt32(max(0, coordinateHeight / 2))
         if shouldCancelSubjectTrackingOnFocusReset {
+            // Same rule as a tap: the recenter sequence owns the channel next, not a retrying
+            // focus drive. (The plain-recenter path below gets this via `applyFocusPoint`.)
+            cancelManualFocusDrive()
             let context = FocusResetContext(
                 recenterX: recenterX,
                 recenterY: recenterY,
@@ -5697,6 +6278,9 @@ final class NativeAppModel {
     private func applyFocusPoint(
         cameraX: Int, cameraY: Int, coordinateWidth: Int, coordinateHeight: Int
     ) {
+        // The tap wins over the dial: drop any in-flight/queued focus drive so `ChangeAfArea`
+        // gets the command channel now instead of behind a retrying drive.
+        cancelManualFocusDrive()
         guard !isDemoSession else {
             let boxWidth = max(40, coordinateWidth / 7)
             let boxHeight = max(40, coordinateHeight / 7)
@@ -6211,8 +6795,8 @@ final class NativeAppModel {
 
     // MARK: - Manual focus drive (focus-by-wire scrub)
 
-    /// Operator toggle for the live-view focus scrub strip (persisted, default on) — flipped from
-    /// the FOCUS popup.
+    /// Operator toggle for the live-view focus scrub strip (persisted, default off) — flipped from
+    /// the FOCUS popup, in video and photo mode alike.
     var mfDriveScrubEnabled: Bool = PreferencesStore.loadMFScrubEnabled() {
         didSet { PreferencesStore.saveMFScrubEnabled(mfDriveScrubEnabled) }
     }
@@ -6223,15 +6807,27 @@ final class NativeAppModel {
     /// strip shows in AF modes (AF-S / AF-C / AF-F / AF-A), NOT MF — the app scrub acts as a
     /// manual-focus override, the way the lens ring overrides during AF. Hidden while a panel is
     /// up so picking a mode in the FOCUS popup can't mount an overlay under the operator's finger.
+    /// Both chromes: a focus pull is a video move as much as a stills one, so the only gate is the
+    /// operator's own toggle (default off) plus the focus mode.
     /// [verify-on-HW: whether continuous AF fights the drive in AF-C vs AF-S]
-    var showsMFDriveScrub: Bool {
-        guard mfDriveScrubEnabled, isPhotographyMode,
-            let mode = cameraPropertySnapshot.focusMode
-        else { return false }
-        return mode != "MF" && isConnected && !isDemoSession && activePanel == nil
+    /// Eligibility for the on-feed focus dial in the body's current focus mode.
+    var mfDriveEligibility: MFDriveEligibility {
+        MFDriveEligibility.resolve(focusMode: cameraPropertySnapshot.focusMode)
     }
 
+    var showsMFDriveScrub: Bool {
+        guard mfDriveScrubEnabled, mfDriveEligibility != .unavailable else { return false }
+        return isConnected && !isDemoSession && activePanel == nil
+    }
+
+    /// True while the dial is on screen but cannot drive — AF-F re-focuses continuously, so the
+    /// dial is drawn dimmed and ignores gestures rather than accepting pulls that go nowhere.
+    var mfDriveScrubIsInert: Bool { mfDriveEligibility == .blockedByContinuousAF }
+
     @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
+    /// Bumped by `cancelManualFocusDrive()` so a superseded drive can neither keep running nor
+    /// clear the task slot its replacement now owns.
+    @ObservationIgnored private var mfDriveRunID = 0
     /// Signed pulses awaiting dispatch (+ toward infinity, − toward near). Scrub gestures
     /// accumulate here; a single in-flight drive drains it so gesture speed never floods
     /// the command channel.
@@ -6270,6 +6866,19 @@ final class NativeAppModel {
         mfDriveAtEnd = nil
     }
 
+    /// Drops an in-flight focus drive and everything queued behind it, freeing the camera command
+    /// channel immediately. An AF-point tap is interactive and must win: queueing it behind a
+    /// retrying drive is what made tap-to-focus look dead until a shutter release. Also runs on
+    /// teardown so no exit path leaves focus commands owned by a dead session.
+    func cancelManualFocusDrive() {
+        mfDrivePendingPulses = 0
+        mfDriveTask?.cancel()
+        mfDriveTask = nil
+        // A cancelled drive can still be parked in a non-cancellable transaction; its `defer` must
+        // not clear a task that a later drag has since installed.
+        mfDriveRunID &+= 1
+    }
+
     /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
     /// while a drive is in flight. A refused drive is treated as transient — the stepping-motor
     /// lens initializing after a mode change and momentary autofocus activity both refuse for a
@@ -6289,11 +6898,19 @@ final class NativeAppModel {
         if let far = mfDriveInfinityPulses { mfDriveNetPulses = min(mfDriveNetPulses, far) }
         mfDriveAtEnd = nil
         guard mfDriveTask == nil else { return }
+        let runID = mfDriveRunID
         mfDriveTask = Task { [weak self] in
-            defer { self?.mfDriveTask = nil }
-            var retries = 0
+            defer {
+                // Only clear the slot if a `cancelManualFocusDrive()` hasn't already handed it to
+                // a newer drive — otherwise two drives end up sharing the command channel.
+                if let self, self.mfDriveRunID == runID { self.mfDriveTask = nil }
+            }
+            // Wall clock, not an iteration count: one drive already costs an activation plus a
+            // bounded readiness poll, so a count-based budget silently owns the command channel
+            // for tens of seconds — and while it does, the body answers `ChangeAfArea` busy too.
+            var refusalRunStartedAt: Date?
             while let self, let session = self.cameraSession,
-                self.mfDrivePendingPulses != 0, !Task.isCancelled
+                self.mfDrivePendingPulses != 0, !Task.isCancelled, self.mfDriveRunID == runID
             {
                 let pending = self.mfDrivePendingPulses
                 self.mfDrivePendingPulses = 0
@@ -6304,7 +6921,7 @@ final class NativeAppModel {
                 switch outcome {
                 case .complete, .stepTooSmall:
                     // Position already advanced optimistically on the drag (above).
-                    retries = 0
+                    refusalRunStartedAt = nil
                 case .endOfTravel:
                     // Pin this end at the current (optimistic) position so the relative position
                     // calibrates and the dial clamps here on further drives toward it.
@@ -6316,7 +6933,7 @@ final class NativeAppModel {
                         self.mfDriveAtEnd = 1
                     }
                     self.mfDrivePendingPulses = 0
-                    retries = 0
+                    refusalRunStartedAt = nil
                 case .refused(let code):
                     // A refusal is transient while AF is momentarily driving (access-denied) or
                     // the lens is still initialising (busy): requeue and retry. A sustained
@@ -6324,14 +6941,23 @@ final class NativeAppModel {
                     // lens or that the focus mode slipped back to MF (the body refuses a remote
                     // drive in MF). Surface one message and leave the strip up to retry.
                     self.mfDriveLastCode = code.rawValue
-                    retries += 1
-                    if retries <= 16 {
+                    let startedAt = refusalRunStartedAt ?? Date()
+                    refusalRunStartedAt = startedAt
+                    if MFDriveChannelBudget.shouldRetryRefusal(
+                        elapsedSeconds: Date().timeIntervalSince(startedAt))
+                    {
+                        // Back off FIRST, requeue after: a tap that cancels during the backoff
+                        // must not leave this run's pulses behind for the drive that replaces it.
+                        try? await Task.sleep(
+                            for: .seconds(MFDriveChannelBudget.refusalRetryIntervalSeconds))
+                        guard !Task.isCancelled, self.mfDriveRunID == runID else { continue }
                         self.mfDrivePendingPulses += pending
-                        try? await Task.sleep(for: .milliseconds(80))
                         continue
                     }
+                    // Give the channel back: the next gesture retries from a clean slate, and a
+                    // tap-to-focus queued behind this run goes through immediately.
                     self.mfDrivePendingPulses = 0
-                    retries = 0
+                    refusalRunStartedAt = nil
                     AppDiagnostics.shared.record(.mfDriveRefused)
                     self.connectionMessage =
                         code.rawValue == PTPResponseCode.invalidStatus.rawValue
@@ -6886,6 +7512,13 @@ final class NativeAppModel {
         if let message { connectionMessage = message }
     }
 
+    /// A take is rolling, or a record command is waiting on the operator's confirmation. Clean
+    /// view keeps the record control alone on screen while this is true — it strips every other
+    /// rail, but never the way to STOP a take (#256).
+    var isRecordingOrPending: Bool {
+        isRecording || pendingRecordConfirmation != nil
+    }
+
     /// True while the body reports photo mode — the strips and pickers then resolve the stills
     /// set (`CameraPicker.forValueLabel(_:photography:)`) instead of the movie one.
     var isPhotographyMode: Bool {
@@ -6893,13 +7526,23 @@ final class NativeAppModel {
             selector: cameraPropertySnapshot.captureSelector)
     }
 
-    /// The live assist tools that actually render right now — photography filters the
-    /// cinema-only overlays (video scopes, audio meters, …) while the persisted set stays
-    /// untouched for the flip back to video.
+    /// The live assist tools that actually render right now. The single funnel every live overlay,
+    /// scope, image effect and sampler reads — asking `MonitorChromePolicy` here (rather than at
+    /// each render site) is what makes clean view genuinely clean (#256). Photography then filters
+    /// the cinema-only overlays (video scopes, audio meters, …); the persisted set stays untouched
+    /// for the flip back to video, and for the return to DISP 1.
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
-        let tools = preferences.liveViewVisibleAssistTools
+        let tools = MonitorChromePolicy.visibleTools(
+            mode: displayMode, preferences: preferences)
         guard isPhotographyMode else { return tools }
         return tools.filter(\.appliesToPhotography)
+    }
+
+    /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
+    /// photography toolset — the recency selection itself stays in the core preferences.
+    var renderedFitScopes: [MonitorAssistTool] {
+        let rendered = renderedLiveAssistTools
+        return preferences.displayedFitScopes.filter { rendered.contains($0) }
     }
 
     func confirmRecordToggle() {
@@ -7171,7 +7814,14 @@ final class NativeAppModel {
     func cameraValue(for picker: CameraPicker) -> String {
         switch picker {
         case .resolution: cameraState.resolutionFrameRate
-        case .codec: cameraState.codec
+        case .codec:
+            // Match the body's exact `MovFileType` readback onto the advertised row, so the drum
+            // centres on the codec it is really recording — and, when that row carries a depth
+            // choice, the flanking buttons read the depth off the same match (#276). Falling back
+            // to the bar's short label only while the descriptor has not landed.
+            PTPCameraPropertyDecoders.codecFamily(
+                forFileType: cameraPropertySnapshot.fileType, in: codecFamilies
+            )?.label ?? cameraState.codec
         case .mode, .stillMode: commandExposureMode
         case .stillISO: cameraPropertySnapshot.iso.map(String.init) ?? ""
         case .stillShutter: cameraPropertySnapshot.shutterSpeed ?? ""
@@ -7668,6 +8318,9 @@ final class NativeAppModel {
 
     func showPicker(_ picker: CameraPicker, mode: Int = 0) {
         guard !interfaceLocked else { return }
+        // Clean view stays bare — the controls that open pickers are hidden there anyway, so this
+        // only catches a stray hardware/remote route (#256).
+        guard MonitorChromePolicy.allowsPopups(in: displayMode) else { return }
         // Open only from a clean slate; tapping a setting while a picker is already up blends
         // instead (see CaptureSettingButton / handleBackdropTap).
         guard activePanel == nil else { return }
@@ -7898,6 +8551,7 @@ final class NativeAppModel {
 
     func showAssist(_ tool: MonitorAssistTool) {
         guard !interfaceLocked else { return }
+        guard MonitorChromePolicy.allowsPopups(in: displayMode) else { return }
         if isScopeCapBlocked(tool) {
             scopeCapNotice += 1
             return
@@ -8080,8 +8734,12 @@ final class NativeAppModel {
         }
     }
 
-    func toggleChrome(_ section: DisplayChromeVisibility.Section) {
-        preferences.displayChrome.toggle(section)
+    /// Flips one chrome section for one DISP mode (Display settings, and the Edit view's badges).
+    func toggleChrome(
+        _ section: DisplayChromeVisibility.Section, for mode: DispMode,
+        capture: CaptureLayoutMode? = nil
+    ) {
+        preferences.toggleChrome(section, for: mode, capture: capture ?? captureLayoutMode)
     }
 
     func cycleStreamPreset() {
@@ -8122,6 +8780,25 @@ final class NativeAppModel {
         startLiveView(session: session, skipPropertyBootstrap: true)
     }
 
+    /// The exact advertised codec mode a CODEC pick resolves to. Two shapes reach here and both
+    /// name an advertised value outright — never a label the body did not report:
+    ///
+    /// - a **bit-depth button** passes that variant's own label ("H.265 10-bit"), which matches a
+    ///   mode directly;
+    /// - a **drum row** passes the row label ("H.265"), which resolves through the codec family so
+    ///   a depth-choice row keeps the depth the body is already on rather than snapping back to
+    ///   the first advertised variant — the #276 defect, in the other direction.
+    private func codecMode(forPickedLabel label: String) -> PTPCameraFileTypeMode? {
+        if let exact = cameraFileTypeModes.first(where: { $0.label == label }) { return exact }
+        guard let family = codecFamilies.first(where: { $0.label == label }) else { return nil }
+        if let depth = activeCodecMode?.bitDepth,
+            let held = family.depths.first(where: { $0.bitDepth == depth })
+        {
+            return held
+        }
+        return family.depths.first
+    }
+
     func applyPickerValue(_ value: String, for picker: CameraPicker) {
         guard !isDemoSession else {
             applyLocalPickerValue(value, for: picker)
@@ -8156,7 +8833,7 @@ final class NativeAppModel {
             }
             writes = [PTPCameraPropertyWrite.screenSize(raw: mode.raw)]
         } else if cameraControl == .codec {
-            guard let mode = cameraFileTypeModes.first(where: { $0.label == value }) else {
+            guard let mode = codecMode(forPickedLabel: value) else {
                 connectionMessage =
                     "\(value) isn't a codec the camera reported — pick a listed one."
                 return
@@ -8198,6 +8875,14 @@ final class NativeAppModel {
                 property: write.property, data: write.data)
             publishCameraDisplayState()
             return
+        }
+        // Codec picks also land in the property snapshot when the staged descriptor can name the
+        // pick, exactly as a body's readback would — that is what the CODEC bit-depth pair reads
+        // to fill the active side, so without it the demo shows a pair that never moves.
+        if picker == .codec, let mode = codecMode(forPickedLabel: value) {
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: .movieFileType,
+                data: PTPCameraPropertyWrite.fileType(raw: mode.raw).data)
         }
         let updated = cameraState.values.map { item in
             item.label == picker.valueLabel
@@ -8455,11 +9140,13 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .codec: ["R3D NE", "N-RAW", "ProRes RAW HQ", "ProRes 422 HQ", "H.265 10-bit"]
         // Stabilization renders its own `StabilizationPickerPanel`, never the flat drum.
         case .stabilization: []
-        case .mode: ["Auto", "P", "A", "S", "M", "U1", "U2", "U3"]
+        // Conservative fallback only — the drum prefers the body's own `ExposureProgramMode`
+        // enum (see `optionProperty(forMode:)`). No U banks here: a body that has them
+        // advertises them, and inferring them from generic photo capability offered a Zf
+        // three user modes it does not own (#274).
+        case .mode: PTPCameraPropertyDecoders.exposureProgramFallbackOptions
         case .audio: ["Auto"] + (1...20).map(String.init)
-        // Auto and the user banks round-trip through `exposureProgramCode`; scene/effects
-        // positions are dial-only and stay out of the drum.
-        case .stillMode: ["Auto", "P", "S", "A", "M", "U1", "U2", "U3"]
+        case .stillMode: PTPCameraPropertyDecoders.exposureProgramFallbackOptions
         case .stillISO:
             [
                 "100", "125", "160", "200", "250", "320", "400", "500", "640", "800", "1000",
@@ -8574,7 +9261,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(
                     title: "AF Mode", options: ["MF", "AF-S", "AF-C", "AF-F"], base: "AF-F"),
                 PickerMode(
-                    title: "Area", options: ["Single", "Wide-S", "Wide-L", "Auto", "Subject"],
+                    title: "Area",
+                    options: ["Single", "Wide-S", "Wide-L", "Auto", "Subject tracking"],
                     base: "Single"),
                 PickerMode(
                     title: "Subject",
@@ -8633,8 +9321,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(
                     title: "Area",
                     options: [
-                        "Pin", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L", "3D",
-                        "Auto",
+                        "Pinpoint", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L",
+                        "3D tracking", "Auto",
                     ],
                     base: "Single"),
                 PickerMode(
@@ -8696,10 +9384,35 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // The body enumerates the stills speeds valid for the active program/flash
             // state — the drum follows it, with the hardcoded ladder as fallback.
             return .stillShutterSpeed
-        case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
-            .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
-            .stillQuality, .stillPicture:
-            // The remaining stills pickers keep their fixed hardcoded ladders.
+        // Photo-mode function pickers. Each body advertises its own value set and its own order
+        // for these; sourcing them from a fixed union is what offered a Zf the U banks it does
+        // not have and ordered the Z6III's drive wheel CH before CL (#274).
+        case .mode:
+            return .exposureProgramMode
+        case .stillMode:
+            // Mode tab = the program enum; U Mode tab = the bank's inner program.
+            return mode == 0 ? .exposureProgramMode : .userMode
+        case .stillDrive:
+            // Only the Drive tab is a camera enum — the two Timer tabs are app state.
+            return mode == 0 ? .stillCaptureMode : nil
+        case .stillFocus:
+            switch mode {
+            case 0: return .stillFocusMode
+            case 1: return .stillFocusMeteringMode
+            case 2: return .afSubjectDetection
+            default: return nil
+            }
+        case .stillFlash:
+            return .flashMode
+        case .stillMeter:
+            return .exposureMeteringMode
+        case .stillQuality:
+            return .compressionSetting
+        case .stillPicture:
+            return .activePicCtrlItem
+        case .iso, .iris, .resolution, .codec, .stabilization, .stillISO, .stillIris:
+            // ISO circuits switch via `movieBaseISO`; IRIS, resolution and codec have their own
+            // dedicated descriptor paths; stabilization renders its own panel.
             return nil
         }
     }
@@ -9019,27 +9732,35 @@ extension NativeAppModel {
         mediaClips
     }
 
-    /// Tab + chip filters composed with AND semantics (format/resolution chips OR within type).
-    var filteredMediaClips: [MediaClip] {
-        var clips = mediaBrowserSourceClips
-        let proxyStems = MediaClipFilename.playableProxyStems(
-            in: clips.map(\.filename))
-        clips = clips.filter {
+    /// The active tab's listing before any popup chip is applied — what the filter popup derives
+    /// its chips from, so a tab is only ever offered values its own media can match.
+    var mediaCategoryTabClips: [MediaClip] {
+        let clips = mediaBrowserSourceClips
+        let proxyStems = MediaClipFilename.playableProxyStems(in: clips.map(\.filename))
+        let visible = clips.filter {
             MediaClipFilename.shouldShowInMediaBrowser(
                 filename: $0.filename,
                 playableProxyStems: proxyStems)
         }
 
         switch mediaCategoryTab {
-        case .all: break
-        case .videos:
-            clips = clips.filter { MediaClipFilename.isPlayableProxy($0.filename) }
-        case .photos:
-            clips = clips.filter { MediaClipFilename.isPhoto($0.filename) }
+        case .all: return visible
+        case .videos: return visible.filter { MediaClipFilename.isPlayableProxy($0.filename) }
+        case .photos: return visible.filter { MediaClipFilename.isPhoto($0.filename) }
         case .favorites:
             // Local heart OR any camera star — shots rated during the shoot count as favorites.
-            clips = clips.filter(\.isFavorited)
+            return visible.filter(\.isFavorited)
         }
+    }
+
+    /// The chips the filter popup may offer for the active tab, derived from the listing itself.
+    var mediaFilterOptions: MediaFilterOptions {
+        MediaFilterDerivation.options(for: mediaCategoryTabClips.map(\.filterItem))
+    }
+
+    /// Tab + chip filters composed with AND semantics (format/resolution chips OR within type).
+    var filteredMediaClips: [MediaClip] {
+        var clips = mediaCategoryTabClips
 
         if !mediaFormatFilters.isEmpty {
             clips = clips.filter { clip in
@@ -9054,8 +9775,20 @@ extension NativeAppModel {
             }
         }
 
-        if mediaTodayOnly {
-            clips = clips.filter(\.isCapturedToday)
+        if !mediaPhotoSizeFilters.isEmpty {
+            let stillWidths = mediaCategoryTabClips.compactMap { clip -> UInt32? in
+                clip.mediaKind == .photo ? clip.pixelWidth : nil
+            }
+            clips = clips.filter { clip in
+                guard clip.mediaKind == .photo, let width = clip.pixelWidth,
+                    let size = MediaPhotoSizeClass.rank(pixelWidth: width, among: stillWidths)
+                else { return false }
+                return mediaPhotoSizeFilters.contains(size)
+            }
+        }
+
+        if let window = mediaDateWindow {
+            clips = clips.filter { window.contains(ptpCaptureDate: $0.captureDate) }
         }
 
         if let slot = mediaStorageSlotFilter {
@@ -9151,12 +9884,13 @@ extension NativeAppModel {
         return MediaClipFormatting.byteLabel(mediaBrowserCacheByteCount)
     }
 
-    /// Active sheet/chip filters (format, resolution, today, storage slot) — not category tabs.
+    /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.
     var mediaActiveFilterCount: Int {
         MediaBrowserFilterMetrics.activeCount(
             formatFilters: mediaFormatFilters,
             resolutionFilters: mediaResolutionFilters,
-            todayOnly: mediaTodayOnly,
+            photoSizeFilters: mediaPhotoSizeFilters,
+            dateWindow: mediaDateWindow,
             storageSlotFilter: mediaStorageSlotFilter
         )
     }
@@ -9165,8 +9899,24 @@ extension NativeAppModel {
     func clearMediaFilters() {
         mediaFormatFilters = []
         mediaResolutionFilters = []
-        mediaTodayOnly = false
+        mediaPhotoSizeFilters = []
+        mediaDateWindow = nil
         mediaStorageSlotFilter = nil
+    }
+
+    /// Drops any active chip the current tab no longer offers.
+    ///
+    /// Switching from Videos to Photos must not leave an invisible MOV filter behind — the grid
+    /// would go empty with nothing in the popup explaining why. Storage slots are deliberately
+    /// untouched: they are scoped by the inserted cards, not by the tab's media.
+    func pruneMediaFiltersToOfferedChips() {
+        let offered = mediaFilterOptions
+        mediaFormatFilters.formIntersection(offered.formats)
+        mediaResolutionFilters.formIntersection(offered.resolutions)
+        mediaPhotoSizeFilters.formIntersection(offered.photoSizes)
+        if let window = mediaDateWindow, !offered.dateWindows.contains(window) {
+            mediaDateWindow = nil
+        }
     }
 
     /// Cycles newest → oldest → name.
@@ -9174,20 +9924,21 @@ extension NativeAppModel {
         mediaSortOrder = mediaSortOrder.next
     }
 
-    func toggleMediaFormatFilter(_ filter: MediaFormatFilter) {
-        if mediaFormatFilters.contains(filter) {
-            mediaFormatFilters.remove(filter)
-        } else {
-            mediaFormatFilters.insert(filter)
-        }
+    func toggleMediaFormatFilter(_ filter: MediaFormatChip) {
+        mediaFormatFilters.formSymmetricDifference([filter])
     }
 
     func toggleMediaResolutionFilter(_ bucket: MediaResolutionBucket) {
-        if mediaResolutionFilters.contains(bucket) {
-            mediaResolutionFilters.remove(bucket)
-        } else {
-            mediaResolutionFilters.insert(bucket)
-        }
+        mediaResolutionFilters.formSymmetricDifference([bucket])
+    }
+
+    func toggleMediaPhotoSizeFilter(_ size: MediaPhotoSizeClass) {
+        mediaPhotoSizeFilters.formSymmetricDifference([size])
+    }
+
+    /// Date windows nest, so selecting one replaces the other; tapping the active one clears it.
+    func toggleMediaDateWindow(_ window: MediaDateWindow) {
+        mediaDateWindow = mediaDateWindow == window ? nil : window
     }
 
     /// Refreshes per-slot storage cards from the connected camera (no-op when offline).

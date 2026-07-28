@@ -267,6 +267,71 @@ public enum PTPResponseCode: UInt16, Sendable {
     case unknown = 0xFFFF
 }
 
+/// Whether the on-feed focus dial can drive the lens in the body's current focus mode.
+///
+/// One rule for both shells: the shells had the mode test inline and could only express
+/// show-or-hide, which meant AF-F offered a dial that silently did nothing.
+public enum MFDriveEligibility: Equatable, Sendable {
+    /// Not offered. No focus mode read yet, or the body is in **MF**, where the lens ring owns
+    /// focus and the dial would be a second, competing control.
+    case unavailable
+    /// Offered but inert, and drawn as such. **AF-F** is full-time servo AF: the body re-focuses
+    /// continuously, so a drive is overridden as fast as it lands. Showing a live dial there reads
+    /// as a broken dial rather than as the wrong mode for one.
+    case blockedByContinuousAF
+    /// Drivable — **AF-S** and **AF-C** hold focus between acquisitions, so a pull sticks.
+    case drivable
+
+    /// Resolves eligibility from the body's reported movie/stills focus mode.
+    ///
+    /// Refusals are NOT a factor here: `Device_Busy` (STM lens still initialising) and
+    /// `Access_Denied` (AF still settling) are always transient, so nothing about a refusal makes
+    /// a lens undrivable and this never latches.
+    public static func resolve(focusMode: String?) -> MFDriveEligibility {
+        guard let focusMode else { return .unavailable }
+        switch focusMode {
+        case "MF": return .unavailable
+        case "AF-F": return .blockedByContinuousAF
+        default: return .drivable
+        }
+    }
+}
+
+/// How long a focus-by-wire drive may keep the single camera command channel.
+///
+/// A drive refusal is ALWAYS transient — `Device_Busy` is the stepping-motor lens still
+/// initialising, `Access_Denied` is autofocus still settling — so the drive retries and the dial
+/// is never hidden. What it must never do is budget those retries by ITERATION COUNT: one drive
+/// costs an activation plus a readiness poll loop, so "16 retries" quietly becomes tens of seconds
+/// of channel ownership. While that runs the body answers `Device_Busy` to `ChangeAfArea` too, so
+/// the operator gets a dead focus dial *and* dead tap-to-focus until a shutter release settles the
+/// body — the exact shape of the Z6III report. Both budgets are therefore WALL CLOCK, and an
+/// interactive AF tap pre-empts an in-flight drive rather than queueing behind it.
+///
+/// Mirrored in Kotlin by `MFDriveController` (same numbers, same rule).
+public enum MFDriveChannelBudget: Sendable {
+    /// Readiness polls inside ONE drive before it stops waiting and frees the channel. The lens
+    /// keeps moving on the body; the app just stops owning the transaction gate to watch it.
+    public static let readinessPollLimit = 12
+    public static let readinessPollIntervalSeconds = 0.12
+
+    /// Wall clock a run of refusal retries may keep retrying before it gives up and frees the
+    /// channel. Deliberately shorter than one drive's poll ceiling.
+    public static let refusalRetrySeconds = 1.2
+    public static let refusalRetryIntervalSeconds = 0.08
+
+    /// Whether a refusal run that began `elapsedSeconds` ago may retry once more.
+    public static func shouldRetryRefusal(elapsedSeconds: Double) -> Bool {
+        elapsedSeconds < refusalRetrySeconds
+    }
+
+    /// Worst-case seconds one drag's drive can own the command channel — the bound that keeps
+    /// tap-to-focus alive without a shutter release.
+    public static var worstCaseChannelSeconds: Double {
+        Double(readinessPollLimit) * readinessPollIntervalSeconds + refusalRetrySeconds
+    }
+}
+
 /// Builds the payload for a PTP-IP `Operation_Request` packet.
 public struct PTPOperationRequest: Equatable, Sendable {
     public init(

@@ -21,6 +21,21 @@ internal class FeedEffectsRenderPlan(
     val limitsPaintCube: FeedEffectsCube?,
     val limitsWeightCube: FeedEffectsCube?,
 ) {
+    /**
+     * The 50/50 Log-vs-LUT comparison to render, or `null`.
+     *
+     * Only when [baseCube] is the operator's LUT: STOPS/IRE false colour replaces the base with
+     * exposure zones, which IS the monitoring image and has no ungraded half to compare against.
+     * LIMITS keeps the LUT as its base and paints over it, so it splits — matching the iOS
+     * `resolve` branches exactly.
+     */
+    val splitComparison: FeedSplitOrientation?
+        get() =
+            effects.activeSplitComparison?.takeIf {
+                baseCube != null &&
+                    (effects.falseColor == null || effects.falseColor == FeedFalseColorScale.LIMITS)
+            }
+
     val limitsReady: Boolean
         get() = limitsPaintCube != null && limitsWeightCube != null
 
