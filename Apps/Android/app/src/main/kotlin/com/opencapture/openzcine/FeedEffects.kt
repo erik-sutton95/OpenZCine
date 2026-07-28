@@ -6,11 +6,21 @@ import com.opencapture.openzcine.lut.StoredLutSelection
 /**
  * Built-in monitor looks. [wireOrdinal] mirrors `FeedEffectsWire.look` in the
  * Swift facade — the core generates each look's cube, Kotlin only uploads it.
+ *
+ * [credit] mirrors `MonitorLUT.credit`: null for the looks derived from published math in this
+ * repo, and the contributor's line for a community-contributed table (see THIRD-PARTY-NOTICES.md).
  */
-enum class FeedLut(val id: String, val wireOrdinal: Int, val label: String) {
+enum class FeedLut(
+    val id: String,
+    val wireOrdinal: Int,
+    val label: String,
+    val credit: String? = null,
+) {
     LOG3G10_709("log3g10", 0, "Log3G10→709"),
     NLOG_709("nlog", 1, "N-Log→709"),
-    MONO("mono", 2, "Mono");
+    MONO("mono", 2, "Mono"),
+    R3D_NE_MONITOR("r3d_ne", 3, "R3D NE Monitor", "Contributed by Wang Yuehua"),
+    ;
 
     companion object {
         fun fromId(id: String): FeedLut? = entries.firstOrNull { it.id == id }
@@ -78,6 +88,35 @@ internal object ExposureCurveOrdinals {
 
     /** Every ordinal the Swift facade can emit; parsers refuse anything else. */
     val range = RED_LOG3G10..HLG
+}
+
+/**
+ * How the 50/50 Log-vs-LUT comparison divides the monitor image — the Kotlin mirror of the shared
+ * core's `SplitComparisonOrientation`.
+ *
+ * The boundary is the centre of the **visible image rectangle**, never of the surface: every
+ * backend already sets its viewport to the fitted content rect (`liveFeedContentRect` on GLES,
+ * the letterbox clamp in `live_feed_vk_renderer.cpp`), so splitting at the halfway line of feed
+ * space excludes pillarbox, letterbox and monitor chrome by construction.
+ */
+enum class FeedSplitOrientation(val label: String) {
+    /** Vertical boundary — Log on the left, LUT on the right. */
+    VERTICAL("Left / Right"),
+
+    /** Horizontal boundary — Log on the top, LUT on the bottom. */
+    HORIZONTAL("Top / Bottom"),
+    ;
+
+    internal companion object {
+        /** Edge label for the ungraded half — `SplitComparison.logLabel` in shared core. */
+        const val LOG_LABEL: String = "LOG"
+
+        /** Edge label for the graded half — `SplitComparison.lutLabel` in shared core. */
+        const val LUT_LABEL: String = "LUT"
+
+        fun fromStoredName(value: String?): FeedSplitOrientation? =
+            entries.firstOrNull { it.name == value }
+    }
 }
 
 /** iOS `Peaking.Sensitivity`, with ordinals owned by the Swift facade. */
@@ -155,7 +194,17 @@ data class FeedEffects(
     val falseColor: FeedFalseColorScale? = null,
     val peaking: Boolean = false,
     val zebra: Boolean = false,
+    /** The operator's 50/50 comparison choice, carried even while there is no LUT to apply it to. */
+    val splitComparison: FeedSplitOrientation? = null,
 ) {
+    /**
+     * The comparison actually rendered. Derived rather than stored so it can never outlive the
+     * grade: a mode filter that drops [lut] (clean view without a LUT pin) drops the split with
+     * it, exactly as `LUTResolution.splitComparison` does on iOS.
+     */
+    val activeSplitComparison: FeedSplitOrientation?
+        get() = splitComparison?.takeIf { lut != null }
+
     /** True when the feed renders untouched — the renderer skips the GPU chain. */
     val isIdentity: Boolean
         get() = lut == null && falseColor == null && !peaking && !zebra

@@ -177,10 +177,17 @@ class MainActivity : ComponentActivity() {
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
+        val debugSplitComparison = DemoHarness.splitComparison(intent)
         val operatorSettings =
             OperatorSettings(applicationContext).also { settings ->
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
+                debugSplitComparison?.let {
+                    settings.splitComparisonOrientation = it
+                    settings.splitComparisonEnabled.value = true
+                }
             }
+        // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
+        DemoHarness.chromeEditMode(intent)?.let(operatorSettings::beginChromeEditing)
         setContent {
             // Drop the solid system hold as soon as Compose paints; the only
             // branded splash is LaunchSplashOverlay (rounded logo + wordmark).
@@ -693,6 +700,14 @@ class MainActivity : ComponentActivity() {
                                     mediaRemoteShutter.disarm()
                                     overlay = MonitorOverlay.MEDIA
                                 },
+                                // Recovery affordance's "Operator menu": the same explicit exit
+                                // Operator Settings offers, so a late reconnect can never
+                                // resurrect a session the operator just left.
+                                onBackToOperatorMenu = {
+                                    mediaRemoteShutter.disarm()
+                                    disconnectToSavedCameraHome(false)
+                                },
+                                recoveryStateOverride = DemoHarness.sessionRecoveryOverride(intent),
                                 onDriveDiagnostic = diagnostics::record,
                             )
                             when (overlay) {

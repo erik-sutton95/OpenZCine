@@ -343,7 +343,7 @@ struct PTPIPClientSessionTests {
         // 16-bit 0xDxxx property. The operation must follow property width,
         // not the payload's byte count.
         try session.applyControl(.iso, label: "1600")
-        try session.applyControl(.focusArea, label: "Subject")
+        try session.applyControl(.focusArea, label: "Subject tracking")
 
         #expect(
             server.receivedPropertyWrites()
@@ -380,7 +380,7 @@ struct PTPIPClientSessionTests {
                 "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0", "f/16.0", "f/22.0",
             ])
         #expect(bootstrap.controls.whiteBalanceValues.contains("5560K"))
-        #expect(bootstrap.controls.focusAreas.contains("Subject"))
+        #expect(bootstrap.controls.focusAreas.contains("Subject tracking"))
         #expect(bootstrap.controls.audioSensitivities.last == "20")
         #expect(bootstrap.controls.audioInputs == ["Microphone", "Line"])
         #expect(bootstrap.controls.baseISO == ["Low", "High"])

@@ -110,7 +110,11 @@ struct FeedEffectsWireTests {
         #expect(render.count == FeedEffectsWire.renderConfigurationFieldCount)
         #expect(render[0] == 1)
         #expect(render[1] == 200)
-        #expect(render[7] == Float(0.022 * 0.06))
+        // Ordinal 2 = High: the shared-core detector constants, uploaded verbatim. One table now,
+        // shared with iOS — Android used to carry a second set for its own operator.
+        #expect(render[7] == Float(Peaking.Sensitivity.high.ratioThreshold))
+        // A log movie feed takes the gate unscaled; the stills case is asserted below.
+        #expect(render[8] == Float(Peaking.Sensitivity.high.noiseGate))
         #expect(render[12] == 0)
         #expect(render[17] == 1)
         #expect(render[13] == Float(mapping.signalNative(monitorPercent: 96) / 255))
@@ -162,6 +166,19 @@ struct FeedEffectsWireTests {
                     signalNative: Double(i) / 4 * 255, curve: hlgMapping.curve) / 100)
             #expect(render[2 + i] == expected)
         }
+        // The other half of that fix: the ratio threshold is transfer-curve invariant so it does
+        // not move, but the noise gate is an absolute magnitude and a display-referred preview
+        // hands the detector larger gradients — so the gate carries the mode correction, exactly
+        // as iOS's `PeakingSettings.gateScale` does. Without this a sensitivity step meant
+        // something stricter in photography than in video, which is the reported symptom.
+        #expect(render[7] == Float(Peaking.Sensitivity.medium.ratioThreshold))
+        #expect(
+            render[8]
+                == Float(
+                    Peaking.Sensitivity.medium.noiseGate
+                        * Peaking.gateScale(
+                            gradientScale: Peaking.displayReferredGradientScale)))
+        #expect(render[8] > Float(Peaking.Sensitivity.medium.noiseGate))
     }
 
     @Test("Limits cubes preserve a separate paint and mask while reference bands stay core-owned")
@@ -183,7 +200,8 @@ struct FeedEffectsWireTests {
 
     @Test("Unknown ordinals and unsupported sizes are rejected")
     func unknownOrdinalsAreRejected() {
-        #expect(FeedEffectsWire.bakedLUT(lookOrdinal: 3, size: 33) == nil)
+        // 0–3 are the built-in looks; 4 is the first ordinal no `FeedLut` case claims.
+        #expect(FeedEffectsWire.bakedLUT(lookOrdinal: 4, size: 33) == nil)
         #expect(FeedEffectsWire.bakedLUT(lookOrdinal: 0, size: 65) == nil)
         #expect(FeedEffectsWire.bakedFalseColor(scaleOrdinal: 2, curveOrdinal: 0) == nil)
         #expect(FeedEffectsWire.bakedFalseColor(scaleOrdinal: 0, curveOrdinal: 5) == nil)

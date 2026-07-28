@@ -22,6 +22,7 @@ import com.opencapture.openzcine.pairing.PairingPath
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
@@ -71,7 +72,7 @@ import kotlinx.coroutines.flow.flow
  * Feed effects (needs API 33 + the staged Swift core; combine freely):
  * ```
  * --es zc.assist lut,falsecolor,peaking,zebra   which effects are on
- * --es zc.lut log3g10|nlog|mono                 built-in look (default log3g10)
+ * --es zc.lut log3g10|nlog|mono|r3d_ne          built-in look (default log3g10)
  * --es zc.fc.scale stops|ire                    false-colour scale (default stops)
  * --es zc.portraitAspect fit|fill               persisted portrait feed presentation
  * ```
@@ -137,6 +138,21 @@ object DemoHarness {
      */
     fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
 
+    /**
+     * Stages the dropped-session recovery affordance over the held frame
+     * (`--es zc.demo.sessionLost retrying|lost`), mirroring iOS
+     * `ZC_DEMO_SESSION_LOST`. Paints the state only; no retry loop runs.
+     */
+    const val EXTRA_SESSION_LOST = "zc.demo.sessionLost"
+
+    /** Debug-only recovery state for screenshot verification, or null. */
+    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? =
+        when (intent.getStringExtra(EXTRA_SESSION_LOST)) {
+            null -> null
+            "retrying" -> MonitorRecoveryState.Retrying(attempt = 2, maxAttempts = 8)
+            else -> MonitorRecoveryState.WaitingForOperator(attemptsMade = 8)
+        }
+
     /** String intent extra selecting scopes: `wave,parade,histo,vector,lights`. */
     const val EXTRA_SCOPES = "zc.scopes"
 
@@ -148,6 +164,17 @@ object DemoHarness {
         when (intent.getStringExtra(EXTRA_PORTRAIT_ASPECT)) {
             "fit" -> PortraitFeedAspect.FIT_16_9
             "fill" -> PortraitFeedAspect.FILL
+            else -> null
+        }
+
+    /** String intent extra arming the 50/50 Log-vs-LUT comparison: `vertical` or `horizontal`. */
+    const val EXTRA_SPLIT = "zc.split"
+
+    /** Debug-only comparison override, for deterministic split screenshots. */
+    fun splitComparison(intent: Intent): FeedSplitOrientation? =
+        when (intent.getStringExtra(EXTRA_SPLIT)) {
+            "vertical" -> FeedSplitOrientation.VERTICAL
+            "horizontal" -> FeedSplitOrientation.HORIZONTAL
             else -> null
         }
 
@@ -202,6 +229,15 @@ object DemoHarness {
 
     internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? =
         LiveViewGuideStep.debugValue(intent.getStringExtra(EXTRA_LIVE_GUIDE_STEP))
+
+    /**
+     * Opens the Edit view on one DISP mode (`live` / `clean` / `command`) so the eye badges can be
+     * captured headlessly — the editor is only reachable by tapping through Operator Setup.
+     */
+    const val EXTRA_CHROME_EDIT = "zc.demo.chromeEdit"
+
+    internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? =
+        intent.getStringExtra(EXTRA_CHROME_EDIT)?.let { MonitorDisplayMode.fromStoredName(it) }
 
     /** Debug-only standalone settings selector; release builds always return null. */
     internal fun settingsTab(intent: Intent): OperatorSettingsTab? =

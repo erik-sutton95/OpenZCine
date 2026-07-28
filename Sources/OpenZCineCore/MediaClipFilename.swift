@@ -29,11 +29,32 @@ public enum MediaStillPreviewStrategy: String, Equatable, Sendable {
 
 /// The platform-neutral preview policy for one supported still-image format.
 public struct MediaStillPreview: Equatable, Sendable {
-    /// Operator-facing media format name, for example `JPEG` or `Nikon RAW`.
+    /// Operator-facing media format name, for example `JPEG` or `NEF`. This is also the token
+    /// the JNI listing wire carries, so Android decodes the browser's FORMAT chip from it
+    /// instead of re-deriving the format from the filename extension.
     public let formatLabel: String
 
     /// The only safe decoder path for this format.
     public let strategy: MediaStillPreviewStrategy
+}
+
+/// One value the Media browser can offer in its FORMAT chip row.
+///
+/// Video containers and still formats share a single enum because a tab shows whichever chips
+/// its own listing can produce — the Photos tab derives JPEG/HEIF/NEF, the Videos tab derives
+/// MOV/MP4, and neither hardcodes a list that the other tab's media can never match.
+///
+/// The raw values are the operator-facing chip titles, and for stills they are exactly the
+/// `MediaStillPreview.formatLabel` token the JNI listing wire already carries.
+public enum MediaFormatChip: String, CaseIterable, Codable, Sendable {
+    case mov = "MOV"
+    case mp4 = "MP4"
+    case jpeg = "JPEG"
+    case heif = "HEIF"
+    /// Nikon RAW (`.NEF`, and the `.NRW` / `.DNG` variants that share its handling).
+    case nef = "NEF"
+    case tiff = "TIFF"
+    case png = "PNG"
 }
 
 /// Shared media-browser presentation classification for a sanitized camera filename.
@@ -84,13 +105,15 @@ public enum MediaClipFilename {
     }
 
     private static let jpegPhotoExtensions: Set<String> = ["jpg", "jpeg", "jpe"]
-    private static let heifPhotoExtensions: Set<String> = ["heif", "heic"]
+    /// `.HIF` is Nikon's own HEIF extension — the one a Z body actually writes. Without it a
+    /// HEIF still classified as `.unsupported` and never reached either browser at all.
+    private static let heifPhotoExtensions: Set<String> = ["hif", "heif", "heic"]
     private static let rawPhotoExtensions: Set<String> = ["nef", "nrw", "dng"]
     private static let tiffPhotoExtensions: Set<String> = ["tif", "tiff"]
 
     /// Lowercased extensions treated as still images in the Media browser.
     public static let photoExtensions: Set<String> = [
-        "jpg", "jpeg", "jpe", "heif", "heic", "nef", "nrw", "tif", "tiff", "dng", "png",
+        "jpg", "jpeg", "jpe", "hif", "heif", "heic", "nef", "nrw", "tif", "tiff", "dng", "png",
     ]
 
     /// True for still-image files (JPEG, HEIF, Nikon RAW, etc.).
@@ -124,7 +147,7 @@ public enum MediaClipFilename {
         case let ext where heifPhotoExtensions.contains(ext):
             stillPreview = MediaStillPreview(formatLabel: "HEIF", strategy: .completeFile)
         case let ext where rawPhotoExtensions.contains(ext):
-            stillPreview = MediaStillPreview(formatLabel: "Nikon RAW", strategy: .thumbnailOnly)
+            stillPreview = MediaStillPreview(formatLabel: "NEF", strategy: .thumbnailOnly)
         case let ext where tiffPhotoExtensions.contains(ext):
             stillPreview = MediaStillPreview(formatLabel: "TIFF", strategy: .completeFile)
         default:
@@ -135,6 +158,23 @@ public enum MediaClipFilename {
             return MediaContentClassification(kind: .unsupported)
         }
         return MediaContentClassification(kind: .stillPhoto, stillPreview: stillPreview)
+    }
+
+    /// The FORMAT filter chip a camera filename belongs to.
+    ///
+    /// Nil when no chip covers the object — an unpaired `.R3D` master or an unrecognised
+    /// extension is simply never offered a format chip rather than being given a wrong one.
+    public static func formatChip(for filename: String) -> MediaFormatChip? {
+        switch fileExtension(of: filename) {
+        case "mov", "m4v": .mov
+        case "mp4": .mp4
+        case let ext where jpegPhotoExtensions.contains(ext): .jpeg
+        case let ext where heifPhotoExtensions.contains(ext): .heif
+        case let ext where rawPhotoExtensions.contains(ext): .nef
+        case let ext where tiffPhotoExtensions.contains(ext): .tiff
+        case "png": .png
+        default: nil
+        }
     }
 
     /// True for any browsable media object (video proxy or still).

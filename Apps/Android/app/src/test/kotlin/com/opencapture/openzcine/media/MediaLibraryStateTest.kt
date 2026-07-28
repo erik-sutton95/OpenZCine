@@ -8,6 +8,8 @@ import com.opencapture.openzcine.pairing.SavedCameraRecords
 import com.opencapture.openzcine.pairing.SavedCameraTransport
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,6 +21,9 @@ import kotlinx.coroutines.test.runTest
 
 /** JVM coverage for the persisted, core-authorized Android library state. */
 class MediaLibraryStateTest {
+    /** Fixed clock so the relative date windows are deterministic. */
+    private val TODAY: LocalDate = LocalDate.of(2026, 7, 27)
+
     @Test
     fun `intentional Frameio hop retains the camera library until rejoin resolves`() {
         val retained =
@@ -666,7 +671,7 @@ class MediaLibraryStateTest {
     }
 
     @Test
-    fun `container resolution today and slot filters follow shared metadata fallbacks`() {
+    fun `format resolution date and slot filters follow shared metadata fallbacks`() {
         val todayMov =
             clip(1, "A001.MOV", captureDate = "20260715T101010")
                 .copy(storageId = 11, pixelWidth = 3_840)
@@ -681,9 +686,9 @@ class MediaLibraryStateTest {
                 .copy(storageId = 11, pixelWidth = 0)
         val filters =
             MediaLibraryFilters(
-                containers = setOf(MediaContainerFilter.MOV),
+                formats = setOf(MediaFormatFilter.MOV),
                 resolutions = setOf(MediaResolutionFilter.FOUR_K),
-                todayOnly = true,
+                dateWindow = MediaDateWindowFilter.TODAY,
                 storageId = 11,
             )
 
@@ -695,13 +700,13 @@ class MediaLibraryStateTest {
                 cameraID = "camera",
                 sortOrder = MediaLibrarySortOrder.NAME,
                 filters = filters,
-                todayToken = "20260715",
+                today = LocalDate.of(2026, 7, 15),
             )
 
         assertEquals(listOf(todayMov), displayed)
         assertEquals(4, filters.activeCount)
-        assertEquals(MediaContainerFilter.MOV, todayMov.containerFilter())
-        assertEquals(MediaContainerFilter.MOV, todayMov.copy(filename = "A001.M4V").containerFilter())
+        assertEquals(MediaFormatFilter.MOV, todayMov.formatFilter())
+        assertEquals(MediaFormatFilter.MOV, todayMov.copy(filename = "A001.M4V").formatFilter())
         assertEquals(MediaResolutionFilter.SIX_K, missingWidth.resolutionFilter())
     }
 
@@ -730,7 +735,7 @@ class MediaLibraryStateTest {
         val sixK = clip(2, "A002.MP4").copy(storageId = 22, pixelWidth = 6_048)
         val filters =
             MediaLibraryFilters(
-                containers = setOf(MediaContainerFilter.MOV, MediaContainerFilter.MP4),
+                formats = setOf(MediaFormatFilter.MOV, MediaFormatFilter.MP4),
                 resolutions = setOf(MediaResolutionFilter.HD, MediaResolutionFilter.SIX_K),
                 storageId = 11,
             )
@@ -744,7 +749,7 @@ class MediaLibraryStateTest {
                 "camera",
                 MediaLibrarySortOrder.NAME,
                 filters,
-                "20260715",
+                LocalDate.of(2026, 7, 15),
             ),
         )
         assertEquals(filters, filters.retainingAvailableStorage(MediaLibrarySource.CAMERA, listOf(hd)))
@@ -753,6 +758,166 @@ class MediaLibraryStateTest {
         )
         assertNull(filters.retainingAvailableStorage(MediaLibrarySource.LOCAL, listOf(hd)).storageId)
     }
+
+    @Test
+    fun `photos category offers still formats and never a video chip`() {
+        val jpeg = still(1, "DSC_0001.JPG", "JPEG")
+        val nef = still(2, "DSC_0002.NEF", "NEF")
+        // Nikon writes HEIF as `.HIF`; the shared core supplies the HEIF label off the wire.
+        val hif = still(3, "DSC_0003.HIF", "HEIF")
+
+        val options = MediaFilterDerivation.options(listOf(jpeg, nef, hif), TODAY)
+
+        assertEquals(
+            listOf(MediaFormatFilter.JPEG, MediaFormatFilter.HEIF, MediaFormatFilter.NEF),
+            options.formats,
+        )
+        // The reported defect: video containers and video resolution buckets on a stills listing.
+        assertFalse(MediaFormatFilter.MOV in options.formats)
+        assertFalse(MediaFormatFilter.MP4 in options.formats)
+        assertTrue(options.resolutions.isEmpty())
+    }
+
+    @Test
+    fun `videos category keeps container and resolution chips`() {
+        val mov = clip(1, "A001.MOV").copy(pixelWidth = 6_048)
+        val mp4 = clip(2, "A002.MP4").copy(pixelWidth = 1_920)
+
+        val options = MediaFilterDerivation.options(listOf(mov, mp4), TODAY)
+
+        assertEquals(listOf(MediaFormatFilter.MOV, MediaFormatFilter.MP4), options.formats)
+        assertEquals(listOf(MediaResolutionFilter.HD, MediaResolutionFilter.SIX_K), options.resolutions)
+        assertTrue(options.photoSizes.isEmpty())
+    }
+
+    @Test
+    fun `a chip that matches nothing or everything is not offered`() {
+        val allMov =
+            listOf(
+                clip(1, "A001.MOV").copy(pixelWidth = 1_920),
+                clip(2, "A002.MOV").copy(pixelWidth = 1_920),
+            )
+
+        val options = MediaFilterDerivation.options(allMov, TODAY)
+
+        // No MP4 is listed, and a MOV chip would select every row — neither filters anything.
+        assertTrue(options.formats.isEmpty())
+        assertTrue(options.resolutions.isEmpty())
+        assertTrue(options.isEmpty)
+        assertTrue(MediaFilterDerivation.options(emptyList(), TODAY).isEmpty)
+    }
+
+    @Test
+    fun `still sizes rank against the sizes present and are omitted without dimensions`() {
+        val large = still(1, "DSC_0001.JPG", "JPEG").copy(pixelWidth = 6_048)
+        val medium = still(2, "DSC_0002.JPG", "JPEG").copy(pixelWidth = 4_528)
+        val small = still(3, "DSC_0003.JPG", "JPEG").copy(pixelWidth = 3_024)
+        val widths = listOf(large, medium, small).stillPixelWidths()
+
+        assertEquals(MediaPhotoSizeFilter.LARGE, large.photoSizeFilter(widths))
+        assertEquals(MediaPhotoSizeFilter.MEDIUM, medium.photoSizeFilter(widths))
+        assertEquals(MediaPhotoSizeFilter.SMALL, small.photoSizeFilter(widths))
+        assertEquals(
+            listOf(MediaPhotoSizeFilter.LARGE, MediaPhotoSizeFilter.MEDIUM, MediaPhotoSizeFilter.SMALL),
+            MediaFilterDerivation.options(listOf(large, medium, small), TODAY).photoSizes,
+        )
+
+        // The camera reported no dimensions: no SIZE chip is faked.
+        val unsized =
+            listOf(
+                still(4, "DSC_0004.JPG", "JPEG").copy(pixelWidth = 0),
+                still(5, "DSC_0005.NEF", "NEF").copy(pixelWidth = 0),
+            )
+        assertNull(unsized.first().photoSizeFilter(unsized.stillPixelWidths()))
+        assertTrue(MediaFilterDerivation.options(unsized, TODAY).photoSizes.isEmpty())
+        // One size present partitions nothing.
+        assertTrue(MediaFilterDerivation.options(listOf(large, large.copy(handle = 9)), TODAY).photoSizes.isEmpty())
+    }
+
+    @Test
+    fun `more than three still sizes drops the whole size row`() {
+        // A mixed FX and DX-crop card has four distinct widths. Nikon's image size is a
+        // three-way, so ranking would strand the fourth behind chips claiming to cover everything.
+        val fxAndDX = listOf(6_048, 4_528, 3_984, 3_024)
+        val clips =
+            fxAndDX.mapIndexed { index, width ->
+                still(index + 1L, "DSC_000$index.JPG", "JPEG").copy(pixelWidth = width)
+            }
+        val widths = clips.stillPixelWidths()
+
+        clips.forEach { assertNull(it.photoSizeFilter(widths)) }
+        assertTrue(MediaFilterDerivation.options(clips, TODAY).photoSizes.isEmpty())
+    }
+
+    @Test
+    fun `date windows cover today seven and thirty days and only when they split the listing`() {
+        fun daysAgo(days: Long) = TODAY.minusDays(days).format(DateTimeFormatter.BASIC_ISO_DATE) + "T120000"
+
+        assertTrue(MediaDateWindowFilter.TODAY.contains(daysAgo(0), TODAY))
+        assertFalse(MediaDateWindowFilter.TODAY.contains(daysAgo(1), TODAY))
+        assertTrue(MediaDateWindowFilter.LAST_7_DAYS.contains(daysAgo(6), TODAY))
+        assertFalse(MediaDateWindowFilter.LAST_7_DAYS.contains(daysAgo(7), TODAY))
+        assertTrue(MediaDateWindowFilter.LAST_30_DAYS.contains(daysAgo(29), TODAY))
+        assertFalse(MediaDateWindowFilter.LAST_30_DAYS.contains(daysAgo(30), TODAY))
+        for (malformed in listOf("", "2026", "not-a-date", "20261332T120000")) {
+            assertFalse(MediaDateWindowFilter.LAST_30_DAYS.contains(malformed, TODAY))
+        }
+
+        val spread =
+            listOf(
+                clip(1, "A001.MOV", captureDate = daysAgo(0)),
+                clip(2, "A002.MP4", captureDate = daysAgo(3)),
+                clip(3, "A003.MP4", captureDate = daysAgo(90)),
+            )
+        assertEquals(
+            listOf(
+                MediaDateWindowFilter.TODAY,
+                MediaDateWindowFilter.LAST_7_DAYS,
+                MediaDateWindowFilter.LAST_30_DAYS,
+            ),
+            MediaFilterDerivation.options(spread, TODAY).dateWindows,
+        )
+        // Everything shot today: every window selects every row, so none of them filters.
+        val allToday =
+            listOf(
+                clip(1, "A001.MOV", captureDate = daysAgo(0)),
+                clip(2, "A002.MP4", captureDate = daysAgo(0)),
+            )
+        assertTrue(MediaFilterDerivation.options(allToday, TODAY).dateWindows.isEmpty())
+    }
+
+    @Test
+    fun `switching to a category that cannot offer a chip clears it`() {
+        val photos =
+            listOf(still(1, "DSC_0001.JPG", "JPEG"), still(2, "DSC_0002.NEF", "NEF"))
+        val stale =
+            MediaLibraryFilters(
+                formats = setOf(MediaFormatFilter.MOV, MediaFormatFilter.JPEG),
+                resolutions = setOf(MediaResolutionFilter.SIX_K),
+                dateWindow = MediaDateWindowFilter.TODAY,
+                storageId = 11,
+            )
+
+        val retained = stale.retainingOfferedChips(MediaFilterDerivation.options(photos, TODAY))
+
+        assertEquals(setOf(MediaFormatFilter.JPEG), retained.formats)
+        assertTrue(retained.resolutions.isEmpty())
+        assertNull(retained.dateWindow)
+        // Card selection is scoped by the inserted cards, not by the category's media.
+        assertEquals(11L, retained.storageId)
+    }
+
+    private fun still(
+        handle: Long,
+        filename: String,
+        formatLabel: String,
+    ): MediaClipRecord =
+        clip(handle, filename, MediaContentKind.STILL_PHOTO)
+            .copy(
+                pixelWidth = 6_048,
+                pixelHeight = 4_032,
+                stillPhoto = StillPhotoClassification(formatLabel, StillPreviewStrategy.PROGRESSIVE),
+            )
 
     @Test
     fun `delivery metadata summary contains only bounded clip facts`() {
@@ -816,9 +981,18 @@ class MediaLibraryStateTest {
             pixelHeight = 2160,
             filename = filename,
             contentKind = kind,
+            // Label agrees with the extension, as the listing wire does in production.
             stillPhoto =
                 if (kind == MediaContentKind.STILL_PHOTO) {
-                    StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE)
+                    val label =
+                        when (filename.substringAfterLast('.').lowercase()) {
+                            "nef", "nrw", "dng" -> "NEF"
+                            "hif", "heif", "heic" -> "HEIF"
+                            "tif", "tiff" -> "TIFF"
+                            "png" -> "PNG"
+                            else -> "JPEG"
+                        }
+                    StillPhotoClassification(label, StillPreviewStrategy.PROGRESSIVE)
                 } else {
                     null
                 },

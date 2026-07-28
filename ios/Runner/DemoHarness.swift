@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os
 
 /// The demo / screenshot harness: every `ZC_*` launch-environment hook lives in this file and
 /// nowhere else (`just check-demo-isolation` enforces it). Stages app state for headless captures
@@ -12,11 +13,11 @@ import UIKit
 enum DemoHarness {
     // MARK: Hook registry — every env toggle, one place.
 
-    /// `ZC_DEMO_LOG_FEED=1` marks the mock feed as log-encoded so peaking de-logs it.
-    static let logFeed = flag("ZC_DEMO_LOG_FEED")
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
     /// first downloaded clip (read in `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
+    /// `ZC_DEMO_SPLIT=vertical|horizontal` stages the 50/50 Log-vs-LUT comparison.
+    static let splitComparison = value("ZC_DEMO_SPLIT")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
@@ -31,13 +32,17 @@ enum DemoHarness {
     static let internetHandoffConfirmation = value("ZC_DEMO_INTERNET_CONFIRM")
     /// `ZC_DEMO_INTERNET_PROGRESS=support|report|feature` stages the route-waiting overlay.
     static let internetHandoffProgress = value("ZC_DEMO_INTERNET_PROGRESS")
-    /// `ZC_METAL_FEED=1` opts into the experimental GPU-native feed renderer.
-    static let metalFeed = flag("ZC_METAL_FEED")
+    /// `ZC_DEMO_CPU_FEED=1` forces the old `UIImageView` feed path back, for an A/B against the
+    /// default GPU-native renderer. See `FeedRenderMode`.
+    static let forceCPUFeed = flag("ZC_DEMO_CPU_FEED")
     /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
     /// rasterizer — the baseline for pixel-diff look-regression checks.
     static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")
     /// `ZC_DEMO_WIFI_SCANNER=scan|manual` opens the Wi-Fi credential scanner for screenshots.
     static let cameraWiFiScannerMode = value("ZC_DEMO_WIFI_SCANNER")
+    /// `ZC_DEMO_CAPTURE_FRAMES=N` dumps the next N live-view frames to disk — see
+    /// ``captureLiveViewObject(_:)``.
+    static let captureLiveViewFrameCount = value("ZC_DEMO_CAPTURE_FRAMES").flatMap(Int.init)
 
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
@@ -54,10 +59,129 @@ enum DemoHarness {
         /// Release stub — the launch harness does not exist outside Debug builds.
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {}
     #endif
+
+    // MARK: Live-view frame capture
+
+    #if DEBUG
+        /// Spacing between captured frames. One a second so that slowly racking focus across the
+        /// capture produces a focus SWEEP rather than N copies of one moment.
+        private static let captureInterval: TimeInterval = 1.0
+        /// Grace period between arming and the first frame — long enough to dismiss the setup
+        /// panel and get a hand on the focus ring.
+        private static let captureLeadIn: TimeInterval = 5.0
+
+        private struct CaptureState {
+            var beginsAt: Date?
+            var target = 0
+            var written = 0
+            var run = 0
+            var lastWrite = Date.distantPast
+        }
+
+        private static let captureState = OSAllocatedUnfairLock(initialState: CaptureState())
+
+        static var captureDirectory: URL? {
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        }
+
+        /// Next unused run index, read from disk rather than held in memory so a relaunch between
+        /// sweeps cannot silently overwrite an earlier one — which is exactly what happened the
+        /// first time two sweeps were shot back to back.
+        private static func nextRunIndex() -> Int {
+            guard let directory = captureDirectory,
+                let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
+            else { return 0 }
+            let used = names.compactMap { name -> Int? in
+                guard name.hasPrefix("liveview-r"), name.count > 11 else { return nil }
+                return Int(name.dropFirst(10).prefix(2))
+            }
+            return (used.max() ?? -1) + 1
+        }
+
+        /// Arms a capture run. Deliberately a manual trigger rather than "start on the first
+        /// frame": the stream opens long before the shot is framed, so an automatic start would
+        /// spend the whole run on the connect sequence.
+        static func startLiveViewCapture() {
+            let target = captureLiveViewFrameCount ?? 25
+            let run = nextRunIndex()
+            captureState.withLock { state in
+                state = CaptureState(
+                    beginsAt: Date().addingTimeInterval(captureLeadIn), target: target, run: run)
+            }
+        }
+
+        /// Short status for the debug row, or nil when idle. Polled by the UI rather than pushed,
+        /// so the capture path stays lock-only and never hops to the main actor per frame.
+        static func liveViewCaptureStatus() -> String? {
+            captureState.withLock { state in
+                guard let beginsAt = state.beginsAt else { return nil }
+                let countdown = beginsAt.timeIntervalSinceNow
+                if countdown > 0 { return "Rack in \(Int(countdown.rounded(.up)))…" }
+                if state.written >= state.target {
+                    return "Run \(state.run): saved \(state.written)"
+                }
+                return "Run \(state.run): \(state.written)/\(state.target)"
+            }
+        }
+    #endif
+
+    /// Dumps raw LiveViewObjects — header **and** JPEG, byte for byte as the camera sent them —
+    /// so peaking can be developed against real frames instead of synthetic blur.
+    ///
+    /// Why the whole object and not just the JPEG: the header carries the AF boxes, the focus
+    /// result and the delivered size/compression grade, so one blob re-parses offline into
+    /// everything `PTPLiveViewObject.frame(from:)` produces. It also settles, from real bytes,
+    /// whether the focus result at header offset 42 is populated in manual focus — no fixture in
+    /// the repo covers that today, and it is the mode peaking is actually used in.
+    ///
+    /// Why one frame a second: capture while racking focus slowly end to end and the result is a
+    /// sweep of a single static scene — same lens, same exposure, same compression, only focus
+    /// varying. That makes the sharpest frame an objective in-focus reference and the extremes
+    /// objective defocused ones, which is exactly what synthetic blur cannot provide and what the
+    /// day's regressions slipped through for want of.
+    ///
+    /// Retrieve with Xcode → Window → Devices and Simulators → the app → Download Container, or
+    /// `xcrun devicectl device copy from`. Debug-only; the Release build compiles to a no-op.
+    static func captureLiveViewObject(_ data: Data) {
+        #if DEBUG
+            let index: Int? = captureState.withLock { state in
+                let now = Date()
+                guard let beginsAt = state.beginsAt, now >= beginsAt,
+                    state.written < state.target,
+                    now.timeIntervalSince(state.lastWrite) >= captureInterval
+                else { return nil }
+                state.lastWrite = now
+                state.written += 1
+                return state.written - 1
+            }
+            guard let index else { return }
+            let (limit, run) = captureState.withLock { ($0.target, $0.run) }
+            guard let directory = captureDirectory else { return }
+            let url = directory.appendingPathComponent(
+                String(format: "liveview-r%02d-%02d.bin", run, index))
+            do {
+                try data.write(to: url)
+                print(
+                    "[capture] run \(run) frame \(index + 1)/\(limit) → \(url.lastPathComponent)"
+                        + " (\(data.count) bytes)")
+            } catch {
+                print("[capture] frame \(index) failed: \(error)")
+            }
+        #endif
+    }
 }
 
 #if DEBUG
     extension DemoHarness {
+        /// The DISP mode a capture is aimed at: the Edit view's mode when one is named, else the
+        /// mode the run launches into.
+        static func demoDispMode(_ env: [String: String]) -> DispMode? {
+            if let raw = env["ZC_DEMO_CHROME_EDIT"], let mode = DispMode(rawValue: raw) {
+                return mode
+            }
+            return env["ZC_DEMO_DISP"].flatMap(DispMode.init(rawValue:))
+        }
+
         /// Stages the model from the launch environment (`SIMCTL_CHILD_ZC_DEMO_*` via
         /// `simctl launch`). No effect in normal launches.
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {
@@ -85,6 +209,17 @@ enum DemoHarness {
                 model.demoSeedFocusPair()
                 if model.liveFrameImage == nil {
                     model.demoSelectFeedImage(1)
+                }
+                if env["ZC_DEMO_CODEC_DESCRIPTOR"] == "1" {
+                    // Demo/screenshot affordance: stage a Z6III-shaped `MovFileType` descriptor
+                    // (H.264 8-bit, plus H.265 at BOTH depths) and put the body on H.265 10-bit,
+                    // so the CODEC picker's advertised rows — and the bit-depth pair the
+                    // two-variant family earns — can be captured without a camera.
+                    model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+                        fromEnum: [0x0000_0801, 0x0001_0800, 0x0001_0A00, 0x0031_0A03])
+                    model.applyDemoProperty(
+                        .movieFileType,
+                        data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data)
                 }
                 if let raw = env["ZC_DEMO_PICKER"], let picker = CameraPicker(rawValue: raw) {
                     // ZC_DEMO_PICKER_MODE opens the picker on a specific mode tab (e.g. WB Tint).
@@ -158,6 +293,20 @@ enum DemoHarness {
                     } else if let look = MonitorLUT(rawValue: raw) {
                         model.assistConfiguration.selectedLUT = .builtIn(look)
                         model.setAssist(.lut, visible: true)
+                    }
+                }
+                if let raw = env["ZC_DEMO_SPLIT"] {
+                    // Demo/screenshot affordance: stage the 50/50 Log-vs-LUT comparison.
+                    // `vertical` / `horizontal`; anything else switches it off.
+                    let orientation: SplitComparisonOrientation? =
+                        switch raw {
+                        case "vertical": .vertical
+                        case "horizontal": .horizontal
+                        default: nil
+                        }
+                    model.preferences.splitComparisonEnabled = orientation != nil
+                    if let orientation {
+                        model.preferences.splitComparisonOrientation = orientation
                     }
                 }
                 if let path = env["ZC_DEMO_RED_ZIP"] {
@@ -262,6 +411,54 @@ enum DemoHarness {
                             in: CGRect(x: 0, y: 0, width: 1, height: 1))
                     }
                 }
+                if let raw = env["ZC_DEMO_CLEAN_PIN"] {
+                    // Demo/screenshot affordance: pin assist tools to clean view (comma-separated
+                    // raw values, e.g. "WAVE,GUIDES") so DISP 2 can be captured both bare and
+                    // with exactly one tool kept.
+                    for value in raw.split(separator: ",") {
+                        if let tool = MonitorAssistTool(rawValue: String(value)) {
+                            model.preferences.cleanViewPinnedTools.insert(tool)
+                        }
+                    }
+                }
+                if let raw = env["ZC_DEMO_CHROME_HIDE"] {
+                    // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated
+                    // `DisplayChromeVisibility.Section` raw values, e.g.
+                    // "lockButton,railMedia,focusBox") so each hidden state can be captured
+                    // headlessly — simctl cannot drive the Settings switches. Applies to the DISP
+                    // mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else the current one,
+                    // on the capture side the body reports.
+                    let target = Self.demoDispMode(env) ?? model.displayMode
+                    let capture = model.captureLayoutMode
+                    var chrome = model.preferences.chrome(for: target, capture: capture)
+                    for value in raw.split(separator: ",") {
+                        // The short names the earlier hooks used, then the section raw values.
+                        let section: DisplayChromeVisibility.Section? =
+                            switch value {
+                            case "lock": .lockButton
+                            case "battery": .batteryIndicators
+                            case "topbar": .statusBar
+                            case "toolbar": .assistToolbar
+                            case "values": .cameraValues
+                            default: DisplayChromeVisibility.Section(rawValue: String(value))
+                            }
+                        if let section, chrome.isVisible(section) { chrome.toggle(section) }
+                        // "rail" is the retired whole-rail blob — expand it to the four controls.
+                        if value == "rail" {
+                            for control in DisplayChromeVisibility.Section.railControls
+                            where chrome.isVisible(control) {
+                                chrome.toggle(control)
+                            }
+                        }
+                    }
+                    model.preferences.setChrome(chrome, for: target, capture: capture)
+                }
+                if let mode = Self.demoDispMode(env), env["ZC_DEMO_CHROME_EDIT"] != nil {
+                    // Demo/screenshot affordance: open the Edit view on one DISP mode
+                    // (ZC_DEMO_CHROME_EDIT=live|clean|command). simctl cannot tap the Settings
+                    // button, and the eye badges only exist while the editor is up.
+                    model.beginChromeEditing(mode)
+                }
                 if let raw = env["ZC_DEMO_ASSIST_ON"] {
                     // Demo/screenshot affordance: switch one or more assist tools on (comma-separated
                     // raw values, e.g. "FALSE,PEAK,WAVE") so the live monitor tools can be captured.
@@ -280,7 +477,12 @@ enum DemoHarness {
                         model.demoSeedAudioMonitor()
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
-                    if model.scopesActive,
+                    // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
+                    // view capture with a pinned scope still gets samples.
+                    let scopesOn = MonitorAssistTool.scopeTools.contains {
+                        model.preferences.visibleAssistTools(for: .liveView).contains($0)
+                    }
+                    if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
                     {
                         Task { await model.refreshScopes(from: mock) }
@@ -348,6 +550,16 @@ enum DemoHarness {
                 }
                 if env["ZC_DEMO_REC"] == "1" {
                     model.cameraState = model.cameraState.updating(recordState: .recording)
+                }
+                if let raw = env["ZC_DEMO_SESSION_LOST"] {
+                    // Demo/screenshot affordance: stage the dropped-session recovery affordance
+                    // over the held frame (`retrying` mid-loop, anything else = budget spent), so
+                    // the #253/#254 recovery UI can be captured without unplugging a real camera.
+                    model.connectionProgressDeviceName = "Nikon ZR"
+                    model.forceSessionRecoveryState(
+                        raw == "retrying"
+                            ? .retrying(attempt: 2, maxAttempts: 8)
+                            : .waitingForOperator(attemptsMade: 8))
                 }
                 if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
                     // Demo/screenshot affordance: start in a specific display mode (live/clean/command).

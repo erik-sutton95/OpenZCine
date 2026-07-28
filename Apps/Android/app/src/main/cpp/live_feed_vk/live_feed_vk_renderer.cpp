@@ -22,24 +22,37 @@ namespace {
 
 constexpr int kMaxFramesInFlight = 2;
 
+// Mirrors the `Params` block in shaders/feed.frag, under std140 rules — which are NOT C++'s. The
+// byte offsets are in the trailing comments and every one of them is load-bearing: a `vec4` member
+// starts on a 16-byte boundary and a `vec2` on an 8-byte one, so the explicit pad floats below are
+// what keep C++'s tightly packed float arrays landing where the shader reads them. The block's own
+// size rounds up to 16 as well, which is why `pad` is four floats and not one — the descriptor
+// range is `sizeof(GpuParams)`, and a range short of the declared block is an out-of-bounds read.
+// Change one side of this pair and you must change the other, then run `just android-shaders`.
 struct GpuParams {
-    float lutSize;
-    float peakingOn;
-    float zebraHighlightOn;
-    float zebraMidtoneOn;
-    float peakingColor[4];
-    float zebraHighlightColor[4];
-    float zebraMidtoneColor[4];
-    float peakingThreshold;
-    float peakingRamp;
-    float zebraHighlight;
-    float zebraMidtone;
-    float aspectFill;
+    float lutSize;                 // 0
+    float peakingOn;               // 4
+    float zebraHighlightOn;        // 8
+    float zebraMidtoneOn;          // 12
+    float peakingColor[4];         // 16
+    float zebraHighlightColor[4];  // 32
+    float zebraMidtoneColor[4];    // 48
+    float peakingRatioThreshold;   // 64
+    float peakingNoiseGate;        // 68
+    float zebraHighlight;          // 72
+    float zebraMidtone;            // 76
+    float aspectFill;              // 80
+    // 50/50 Log-vs-LUT comparison: on, and vertical (Log left / LUT right) against horizontal
+    // (Log top / LUT bottom).
+    float splitOn;                 // 84
+    float splitVertical;           // 88
+    float splitPad;                // 92
     // Peaking de-log curve (5 points) + source extent for dual-scale Sobel.
-    float deLogCurve0to3[4];
-    float deLogCurve4;
-    float sourceSize[2];
-    float pad;
+    float deLogCurve0to3[4];       // 96
+    float deLogCurve4;             // 112
+    float deLogPad;                // 116
+    float sourceSize[2];           // 120
+    float pad[4];                  // 128 — block size rounds to 144
 };
 
 }  // namespace
@@ -941,15 +954,17 @@ bool LiveFeedVk_SetPlan(
     bool peakingOn,
     const float* peakingColor3,
     const float* deLogCurve5,
-    float peakingThreshold,
-    float peakingRamp,
+    float peakingRatioThreshold,
+    float peakingNoiseGate,
     bool zebraHighlightOn,
     float zebraHighlight,
     const float* zebraHighlightColor3,
     bool zebraMidtoneOn,
     float zebraMidtone,
     const float* zebraMidtoneColor3,
-    bool aspectFill) {
+    bool aspectFill,
+    bool splitOn,
+    bool splitVertical) {
     if (!session) return false;
     std::lock_guard<std::mutex> guard(session->lock);
     session->params = {};
@@ -957,11 +972,13 @@ bool LiveFeedVk_SetPlan(
     session->params.peakingOn = peakingOn ? 1.f : 0.f;
     session->params.zebraHighlightOn = zebraHighlightOn ? 1.f : 0.f;
     session->params.zebraMidtoneOn = zebraMidtoneOn ? 1.f : 0.f;
-    session->params.peakingThreshold = peakingThreshold;
-    session->params.peakingRamp = peakingRamp;
+    session->params.peakingRatioThreshold = peakingRatioThreshold;
+    session->params.peakingNoiseGate = peakingNoiseGate;
     session->params.zebraHighlight = zebraHighlight;
     session->params.zebraMidtone = zebraMidtone;
     session->params.aspectFill = aspectFill ? 1.f : 0.f;
+    session->params.splitOn = splitOn ? 1.f : 0.f;
+    session->params.splitVertical = splitVertical ? 1.f : 0.f;
     // Preserve sourceSize across plan updates (set when frames upload).
     session->params.sourceSize[0] = static_cast<float>(session->feedW);
     session->params.sourceSize[1] = static_cast<float>(session->feedH);

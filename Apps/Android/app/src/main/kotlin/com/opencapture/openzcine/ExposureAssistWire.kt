@@ -43,8 +43,8 @@ data class FeedEffectsRenderConfiguration(
     val curveOrdinal: Int,
     val clipNative: Float,
     val deLogCurve: FloatArray,
-    val peakingThreshold: Float,
-    val peakingRamp: Float,
+    val peakingRatioThreshold: Float,
+    val peakingNoiseGate: Float,
     val peakingColor: FloatArray,
     val highlightEnabled: Boolean,
     val highlightCode: Float,
@@ -76,7 +76,11 @@ data class FeedEffectsRenderConfiguration(
             ) {
                 "invalid de-log curve"
             }
-            require(values[7] in 0f..1f && values[8] > 0f && values[8] <= 10_000f) {
+            // Ratio threshold lives strictly between "fully defocused" (1) and the ceiling a
+            // perfectly sharp edge saturates at (`Peaking.ratioCeiling`, 4). The noise gate is a
+            // SQUARED code-value slope — see `Peaking.Sensitivity.noiseGate` — and arrives already
+            // scaled for the feed's encoding, so the shaders hold no mode policy of their own.
+            require(values[7] > 1f && values[7] < 4f && values[8] > 0f && values[8] <= 1f) {
                 "invalid peaking controls"
             }
             requireFlag(values[12], "highlight enabled")
@@ -90,8 +94,8 @@ data class FeedEffectsRenderConfiguration(
                 curveOrdinal = curveOrdinal,
                 clipNative = values[1],
                 deLogCurve = deLogCurve,
-                peakingThreshold = values[7],
-                peakingRamp = values[8],
+                peakingRatioThreshold = values[7],
+                peakingNoiseGate = values[8],
                 peakingColor = values.copyOfRange(9, 12),
                 highlightEnabled = values[12] == 1f,
                 highlightCode = values[13],

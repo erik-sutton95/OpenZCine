@@ -148,6 +148,19 @@ struct ConnectionProgressSheet: View {
                     .foregroundStyle(.primary)
             }
             .font(.body)
+            // Retry in place. The failed attempt disposed everything an explicit cancel would, so
+            // this is the same connect the operator used to have to get by cancelling and tapping
+            // the camera again (#264) — the workaround, promoted to a button.
+            Button {
+                model.retryConnectionAttempt()
+            } label: {
+                Text("Try again")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityHint("Retries connecting to this camera")
             Button {
                 prepareDiagnosticsReport()
             } label: {
@@ -155,7 +168,7 @@ struct ConnectionProgressSheet: View {
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .controlSize(.large)
             .disabled(isPreparingDiagnostics)
             .accessibilityLabel("Share diagnostics")

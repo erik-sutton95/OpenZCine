@@ -1,14 +1,27 @@
-What's changed
+New and changed
 
-- Photography mode: a real shutter (tap to shoot, hold for a burst in CL/CH continuous drives, tap-to-AF, bulb/time), built-in and app self-timers (the app timer beeps through the silent switch and pulses a white screen-edge tally), and capture-bar pickers for mode (incl. U1-U3), ISO Auto, focus mode/area/subject, drive, white balance, size, quality (RAW + JPEG/HEIF), and picture profile including downloaded cloud profiles. Portrait is redone: a full 3:2 feed with the tiles below it and no edge cropping.
-- Focus dial (new): a thin dial on the live view drives the lens focus for a manual pull - photo mode only, switched on and off in the FOCUS popup. It tracks your finger and shows a relative near-to-infinity position, and once you dial focus the shutter keeps it instead of re-focusing on the box.
-- Shots fired on the camera body now register in the app - the shutter animates and the frame appears in instant playback, just like an app-fired shot. Instant playback shows the last shot full screen with an optional focus point (now frozen at the moment of capture) and capture info, plus a one-tap favorite star.
-- Burst stacks (new): a continuous-drive burst groups into one stack that opens to a full-screen pager with a scrubbing filmstrip; multi-select to delete or share frames, and "Delete all" clears the burst on both cards.
-- Media page: delete photos (RAW+JPEG together) or videos (the MP4 plus its R3D/NEV master) with a progress bar and a single refresh at the end; two-card backup shots appear under both slots and delete every copy; 1-5 star ratings written to the card, RAW+JPEG shown as one item, images auto-rotate, and pinch zoom stays under your fingers. The EV meter, photo-mode scopes and false color, and matched photo/video focus peaking round out assist.
+- Display settings are rebuilt around the three DISP modes, and video and photo keep separate layouts (one switch at the top of the tab). DISP 1 and DISP 2 have an "Edit view" that opens the monitor itself: tap the eye on any element - top bar and each of its readouts, focus box, batteries, lock, tool bar, camera values, and record / Media / Settings / DISP individually - to show or hide it. Anything you hide stays on screen at 30% while you edit, so you can always turn it back on.
+- DISP 2 now offers exactly the same elements as DISP 1, with different defaults: the picture, the side rail, the focus box and the batteries, everything else off. Switch on whatever else you want. The recording tally, the record control while rolling and camera warnings always stay.
+- The focus dial works in video as well as photo. It is off by default and lives in the FOCUS popup; if you had already switched it on, it stays on.
+- H.265 8-bit and 10-bit are separate choices. When your camera offers both, the codec popup shows one H.265 row with 8-bit and 10-bit either side of it, so you pick the depth directly.
+- Stream Preset and Quality Bias now both read Fast, Balanced, Quality. Quality Bias had only two positions before, so the middle grade your camera offers was unreachable. New installs start on the Quality preset.
+- Media filters match the tab you are on. Photos offers JPEG, HEIF and NEF, an L/M/S size row, and Today, 7 days or 30 days - instead of the video formats and resolutions it used to show.
 
-Please test
+Fixes
 
-- Focus dial: switch it on in the FOCUS popup (photo mode), pull focus with it, then take a shot - the focus should hold, not snap back to the AF box.
-- Fire the shutter on the camera body - the app should flash the shutter and show that frame in instant playback.
-- Shoot a burst (hold the shutter in CL/CH), open the stack in the media page, scrub the filmstrip, and multi-select frames to delete - confirm they clear on both cards and the progress count reads right; also delete a video (its MP4 plus master) and a RAW+JPEG photo.
-- Rotate to portrait in photo mode (the feed fills with the tiles below and the EV meter at the bottom), and compare focus peaking between photo and video - it should match.
+- Changes you make on the camera reach the app quickly again. Turning the aperture ring, ISO or shutter on the body used to take up to twenty seconds to show - or in video, never. This was the most-reported problem and the one worth hammering.
+- Photos shot as HEIF now appear in the media browser at all. The app did not recognise the file type Nikon writes, so every one of them was silently missing from the list.
+- Connecting a second camera no longer changes its settings. Moving between bodies could flip shutter angle back to shutter speed and disturb other settings; connecting is now read-only.
+- Pickers show what your camera actually supports, in the order it uses. Bodies without U1-U3 are no longer offered them, drive modes read Single, CL, CH, CH+, and 3D tracking and subject detection are named apart instead of both reading "Subject".
+- Unplugging the cable or power-cycling the camera used to wedge the app until you force-quit it. Both now recover on their own, or offer you Retry connection and Operator menu on the last frame.
+- The first connection attempt no longer needs cancelling and retrying before it will work.
+- Command view keeps the timecode running. It used to freeze at whatever the clock read when you switched, which looked convincing and was wrong while rolling.
+- The focus dial no longer stalls and take tap-to-focus down with it, and the media filter popup fits on smaller phones instead of sliding off the edge.
+
+What to test
+
+- Open Settings, Display, DISP 2, then Edit view. Hide a few things - a rail key, the focus box, a readout - tap Done (which brings you back to Display), and confirm the live monitor matches. Then check DISP 1 kept its own layout, and that switching Layout For to Photo shows a separate set.
+- On the Photos tab, open Filter: you should see JPEG/HEIF/NEF and L/M/S, not MOV and 6K. If you shoot HEIF, check those frames are actually listed.
+- Turn the aperture ring on the camera while watching IRIS, in video and in photo. It should track you as you turn, close to real time.
+- Connect one body, disconnect, then connect a differently configured one. Nothing on the second camera should change just because you connected.
+- Pull the cable mid-shot and separately switch the camera off and on: both should hold the last frame and offer Retry, and Operator menu should leave straight away.

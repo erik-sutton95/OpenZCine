@@ -316,6 +316,21 @@ public data class CameraStorageSlotStatus(
 )
 
 /**
+ * One bit depth a codec picker row can be recorded at, as grouped by the Swift core.
+ *
+ * [writeValue] is the label the codec write resolves to a single advertised value, so choosing a
+ * depth never means reading one out of a label or carrying a protocol raw across JNI.
+ */
+public data class CodecBitDepthOption(
+    /** The codec row this depth belongs to ("H.265"). */
+    val codec: String,
+    /** Button caption ("10-bit"). */
+    val label: String,
+    /** Exact advertised label to write for this depth ("H.265 10-bit"). */
+    val writeValue: String,
+)
+
+/**
  * Swift-authorized control labels whose protocol values remain in the native session.
  *
  * Values normally come from the connected body's descriptors. A Nikon ZR may also receive a
@@ -366,6 +381,31 @@ public data class CameraControlCapabilities(
     val electronicVr: List<String> = emptyList(),
     /** Photo image-size strings enumerated by the camera, verbatim. */
     val imageSizes: List<String> = emptyList(),
+    /**
+     * Exposure programs the body advertises, in the body's order. Empty means the body did not
+     * enumerate them; the shell then keeps a conservative ladder and never synthesises the U
+     * banks a body may not have.
+     */
+    val exposureModes: List<String> = emptyList(),
+    /** Inner programs a U bank can run as, when the body advertises the property. */
+    val userModePrograms: List<String> = emptyList(),
+    /** Release/drive modes the body advertises, in its own release-mode order. */
+    val driveModes: List<String> = emptyList(),
+    /** Metering patterns the body advertises. */
+    val meteringModes: List<String> = emptyList(),
+    /** Picture controls the body advertises, including only the slots it actually has. */
+    val pictureControls: List<String> = emptyList(),
+    /**
+     * NEF (RAW) recording compressions the body advertises. First-generation Z bodies use the
+     * Compressed/Uncompressed pair and reject the modern trio, so this must come from the body.
+     */
+    val rawCompressions: List<String> = emptyList(),
+    /**
+     * Bit depths behind the [codecs] rows. Present only for codecs the body advertises at more
+     * than one depth — the Swift core makes that call ([PTPCameraCodecFamily]), so a depth button
+     * can never name a combination this body did not offer.
+     */
+    val codecBitDepths: List<CodecBitDepthOption> = emptyList(),
 ) {
     /** Returns the advertised labels for one descriptor-dependent control. */
     public fun options(control: CameraControl): List<String> =
@@ -383,6 +423,18 @@ public data class CameraControlCapabilities(
             CameraControl.FOCUS_MODE -> focusModes
             CameraControl.FOCUS_AREA -> focusAreas
             CameraControl.FOCUS_SUBJECT -> focusSubjects
+            // Photo mode: the facade describes the STILLS focus properties into the same three
+            // lists, so the stills tabs read them like the movie ones do.
+            CameraControl.STILL_FOCUS_MODE -> focusModes
+            CameraControl.STILL_FOCUS_AREA -> focusAreas
+            CameraControl.STILL_FOCUS_SUBJECT -> focusSubjects
+            // The body's own function-picker domains (#274).
+            CameraControl.EXPOSURE_MODE -> exposureModes
+            CameraControl.STILL_USER_MODE_PROGRAM -> userModePrograms
+            CameraControl.STILL_DRIVE -> driveModes
+            CameraControl.STILL_METER -> meteringModes
+            CameraControl.STILL_PICTURE_CONTROL -> pictureControls
+            CameraControl.STILL_RAW_COMPRESSION -> rawCompressions
             CameraControl.AUDIO_SENSITIVITY -> audioSensitivities
             CameraControl.AUDIO_INPUT -> audioInputs
             CameraControl.WIND_FILTER -> windFilters
@@ -445,6 +497,8 @@ public data class CameraPropertySnapshot(
     val resolutionFrameRate: String? = null,
     /** Shared-core short codec label matching the active advertised option. */
     val codecSelection: String? = null,
+    /** Caption of the depth the body is recording at, when [codecSelection]'s row offers a choice. */
+    val codecBitDepth: String? = null,
     /** Active camera white-balance fine-tune label. */
     val whiteBalanceTint: String? = null,
     /** Battery percentage. */
@@ -853,7 +907,7 @@ public interface CameraSession {
      * operation stays behind the shared Swift boundary.
      */
     @Throws(CameraControlException::class)
-    public suspend fun initiateStillCapture() {
+    public suspend fun initiateStillCapture(preserveFocus: Boolean = false) {
         throw CameraControlException.UnsupportedSelection
     }
 

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import OpenZCineCore
@@ -35,8 +36,8 @@ import Testing
 
 @Test func builtInOrderLeadsWithCameraMatchedConversions() {
     // The two camera-matched log conversions lead the picker; Mono (the sole remaining creative
-    // look, now that Teal/Orange is retired) stays last.
-    #expect(MonitorLUT.allCases == [.log3G10Rec709, .nLogRec709, .monochrome])
+    // look, now that Teal/Orange is retired) then the contributed table follow.
+    #expect(MonitorLUT.allCases == [.log3G10Rec709, .nLogRec709, .monochrome, .r3dNEMonitor])
 }
 
 @Test func rgbaComponentsInterleaveOpaqueAlpha() {
@@ -169,4 +170,213 @@ func cubeIsFinite(look: MonitorLUT) {
         #expect(value >= previous - 1e-5)
         previous = value
     }
+}
+
+// MARK: - The contributed, table-backed look
+
+@Test func contributedTableMatchesItsGeneratorChecksum() {
+    // `scripts/generate-builtin-lut-table.rb` prints this checksum; a truncated, hand-edited or
+    // re-encoded blob changes it. Both shells decode these same bytes, so this covers iOS and
+    // Android at once.
+    let bytes = MonitorLUT.contributedTableBytes()
+    #expect(bytes.count == 33 * 33 * 33 * 3 * 2)
+    #expect(MonitorLUT.fnv1a64(bytes) == MonitorLUT.contributedTableChecksum)
+}
+
+@Test func contributedLookDecodesToAnInGamut33Cube() {
+    let cube = MonitorLUT.r3dNEMonitor.cube()
+    #expect(cube.size == 33)
+    #expect(cube.rgb.count == 33 * 33 * 33 * 3)
+    #expect(cube.rgb.allSatisfy { $0 >= 0 && $0 <= 1 })
+    // A display transform, not a pass-through: black holds and encoded white lifts to near-white.
+    // (This look rolls its highlight off to ~0.93 rather than clipping at 1.0, so no ≈1.0 assert.)
+    #expect(Array(cube.rgb.prefix(3)).allSatisfy { $0 == 0 })
+    #expect(Array(cube.rgb.suffix(3)).allSatisfy { $0 > 0.85 })
+}
+
+@Test func contributedLookAt33IsTheContributorsOwnSamples() {
+    // 65 = 2·32 + 1, so the 65³ → 33³ reduction took exact source indices (stride 2, no
+    // interpolation); sampling the table at its own grid then gives trilinear weights of 1. Both
+    // steps together mean the picker applies the contributed numbers verbatim.
+    let cube = MonitorLUT.r3dNEMonitor.cube()
+    #expect(cube.rgb == MonitorLUT.contributedTableCube.rgb)
+
+    // One asymmetric lattice point read straight out of the source .cube — an r/b transposition
+    // anywhere in the generator or the decoder would survive the endpoint checks but not this.
+    let flat = 8 + 16 * 33 + 24 * 33 * 33
+    let sample = Array(cube.rgb[(flat * 3)..<(flat * 3 + 3)])
+    #expect(abs(sample[0] - 0.020_005) < 1e-5)
+    #expect(abs(sample[1] - 0.409_628) < 1e-5)
+    #expect(abs(sample[2] - 0.931_960) < 1e-5)
+}
+
+@Test func contributedLookResamplesOntoOtherGridSizes() {
+    // Nothing ships at another size today, but `cube(size:)` is public and the Android facade takes
+    // the size over JNI, so the table has to answer for a grid it was not authored on.
+    let coarse = MonitorLUT.r3dNEMonitor.cube(size: 17)
+    #expect(coarse.rgb.count == 17 * 17 * 17 * 3)
+    #expect(coarse.rgb.allSatisfy { $0 >= 0 && $0 <= 1 })
+}
+
+@Test func onlyTheContributedLookCarriesACreditLine() {
+    #expect(MonitorLUT.r3dNEMonitor.credit == "Contributed by Wang Yuehua")
+    #expect(MonitorLUT.allCases.filter { $0.credit != nil } == [.r3dNEMonitor])
+}
+
+// MARK: - 50/50 Log vs LUT comparison
+
+@Test func splitComparisonIsOffByDefaultAndOpensVertical() {
+    #expect(!OperatorPreferences.defaults.splitComparisonEnabled)
+    #expect(OperatorPreferences.defaults.splitComparisonOrientation == .vertical)
+}
+
+@Test func splitComparisonNeedsBothThePreferenceAndTheLUTTool() {
+    var preferences = OperatorPreferences.defaults
+    #expect(LUTResolution.splitComparison(visibleTools: [.lut], preferences: preferences) == nil)
+
+    preferences.splitComparisonEnabled = true
+    preferences.splitComparisonOrientation = .horizontal
+    // No grade on screen means nothing to compare — and no divider or labels either.
+    #expect(
+        LUTResolution.splitComparison(visibleTools: [.peaking], preferences: preferences) == nil)
+    #expect(
+        LUTResolution.splitComparison(visibleTools: [.lut, .peaking], preferences: preferences)
+            == .horizontal)
+}
+
+@Test func splitComparisonFollowsTheCleanViewPinLikeTheLUTItself() {
+    var preferences = OperatorPreferences.defaults
+    preferences.splitComparisonEnabled = true
+    preferences.liveViewVisibleAssistTools = [.lut]
+
+    let live = MonitorChromePolicy.visibleTools(mode: .live, preferences: preferences)
+    #expect(LUTResolution.splitComparison(visibleTools: live, preferences: preferences) != nil)
+
+    // Clean drops the tool unless pinned, so the comparison leaves with it.
+    let clean = MonitorChromePolicy.visibleTools(mode: .clean, preferences: preferences)
+    #expect(LUTResolution.splitComparison(visibleTools: clean, preferences: preferences) == nil)
+
+    preferences.cleanViewPinnedTools = [.lut]
+    let pinned = MonitorChromePolicy.visibleTools(mode: .clean, preferences: preferences)
+    #expect(LUTResolution.splitComparison(visibleTools: pinned, preferences: preferences) != nil)
+}
+
+@Test func theOnFeedQuickKeySurvivesItsOwnTap() {
+    // The key mutes the comparison; if it followed the muted state instead of the armed one, the
+    // first tap would remove the only control that undoes it.
+    var preferences = OperatorPreferences.defaults
+    preferences.splitComparisonEnabled = true
+    let tools: Set<MonitorAssistTool> = [.lut]
+
+    #expect(
+        LUTResolution.splitComparison(visibleTools: tools, preferences: preferences, muted: false)
+            == .vertical)
+    #expect(
+        LUTResolution.splitComparison(visibleTools: tools, preferences: preferences, muted: true)
+            == nil)
+    #expect(LUTResolution.showsSplitComparisonKey(visibleTools: tools, preferences: preferences))
+
+    // Disarmed from the pop-up, or with no grade on screen, the key goes with the feature.
+    preferences.splitComparisonEnabled = false
+    #expect(!LUTResolution.showsSplitComparisonKey(visibleTools: tools, preferences: preferences))
+    preferences.splitComparisonEnabled = true
+    #expect(
+        !LUTResolution.showsSplitComparisonKey(visibleTools: [.peaking], preferences: preferences))
+}
+
+@Test func splitHalvesTileTheVisibleImageRectAndMeetAtItsCentre() {
+    // A pillarboxed feed: the image sits inset inside its surface, so a boundary taken from the
+    // surface (or from 0) lands off-centre. The non-zero origin is the whole point of this case.
+    let feed = MonitorModuleFrame(x: 120, y: 0, width: 640, height: 360)
+
+    for orientation in SplitComparisonOrientation.allCases {
+        let log = SplitComparison.logHalf(of: feed, orientation: orientation)
+        let lut = SplitComparison.lutHalf(of: feed, orientation: orientation)
+
+        #expect(log.width * log.height == feed.width * feed.height / 2)
+        #expect(lut.width * lut.height == feed.width * feed.height / 2)
+
+        switch orientation {
+        case .vertical:
+            #expect(log.x == feed.x)
+            #expect(log.x + log.width == feed.midX)
+            #expect(lut.x == feed.midX)
+            #expect(lut.x + lut.width == feed.x + feed.width)
+            #expect(log.height == feed.height && lut.height == feed.height)
+        case .horizontal:
+            #expect(log.y == feed.y)
+            #expect(log.y + log.height == feed.midY)
+            #expect(lut.y == feed.midY)
+            #expect(lut.y + lut.height == feed.y + feed.height)
+            #expect(log.width == feed.width && lut.width == feed.width)
+        }
+    }
+}
+
+@Test func splitBoundaryTracksTheImageRectThroughFitFillCropAndRotation() {
+    // The same source presented four ways: pillarboxed in a wide viewport, letterboxed in a tall
+    // one, centre-cropped by aspect fill, and the portrait (rotated) mount. In every case the
+    // shells hand over the rect the image really occupies, and the boundary is its own centre —
+    // never the viewport's.
+    let rects = [
+        MonitorModuleFrame(x: 212, y: 0, width: 1024, height: 576),  // pillarbox
+        MonitorModuleFrame(x: 0, y: 132, width: 1024, height: 576),  // letterbox
+        MonitorModuleFrame(x: -128, y: 0, width: 1280, height: 720),  // aspect-fill overhang
+        MonitorModuleFrame(x: 0, y: 240, width: 390, height: 219),  // portrait mount
+    ]
+    for feed in rects {
+        #expect(SplitComparison.lutHalf(of: feed, orientation: .vertical).x == feed.midX)
+        #expect(SplitComparison.lutHalf(of: feed, orientation: .horizontal).y == feed.midY)
+    }
+}
+
+@Test func normalizedSplitTestAgreesWithTheHalfRects() {
+    // The shaders take the normalized form and the shells take the rects; they have to name the
+    // same side or the divider drifts off the grade.
+    let feed = MonitorModuleFrame(x: 40, y: 10, width: 200, height: 100)
+    for orientation in SplitComparisonOrientation.allCases {
+        let lut = SplitComparison.lutHalf(of: feed, orientation: orientation)
+        for (nx, ny) in [(0.1, 0.1), (0.4, 0.9), (0.6, 0.2), (0.9, 0.8)] {
+            let point = (x: feed.x + nx * feed.width, y: feed.y + ny * feed.height)
+            let insideLUTHalf =
+                point.x >= lut.x && point.x <= lut.x + lut.width
+                && point.y >= lut.y && point.y <= lut.y + lut.height
+            #expect(
+                SplitComparison.isGradedSide(x: nx, y: ny, orientation: orientation)
+                    == insideLUTHalf)
+        }
+    }
+}
+
+@Test func splitComparisonPreferencesRoundTripAndOlderBlobsDecodeToOff() throws {
+    var preferences = OperatorPreferences.defaults
+    preferences.splitComparisonEnabled = true
+    preferences.splitComparisonOrientation = .horizontal
+    let encoded = try JSONEncoder().encode(preferences)
+    let decoded = try JSONDecoder().decode(OperatorPreferences.self, from: encoded)
+    #expect(decoded.splitComparisonEnabled)
+    #expect(decoded.splitComparisonOrientation == .horizontal)
+
+    // A blob written before the feature existed carries neither key.
+    var dict = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    dict.removeValue(forKey: "splitComparisonEnabled")
+    dict.removeValue(forKey: "splitComparisonOrientation")
+    let migrated = try JSONDecoder().decode(
+        OperatorPreferences.self, from: try JSONSerialization.data(withJSONObject: dict))
+    #expect(!migrated.splitComparisonEnabled)
+    #expect(migrated.splitComparisonOrientation == .vertical)
+}
+
+@Test func splitOrientationSurvivesSwitchingTheComparisonOff() throws {
+    // "Preserve the operator's orientation preference while the feature is enabled" — which only
+    // holds if the two are stored independently rather than collapsed into one tri-state.
+    var preferences = OperatorPreferences.defaults
+    preferences.splitComparisonEnabled = true
+    preferences.splitComparisonOrientation = .horizontal
+    preferences.splitComparisonEnabled = false
+
+    let reloaded = try JSONDecoder().decode(
+        OperatorPreferences.self, from: try JSONEncoder().encode(preferences))
+    #expect(!reloaded.splitComparisonEnabled)
+    #expect(reloaded.splitComparisonOrientation == .horizontal)
 }

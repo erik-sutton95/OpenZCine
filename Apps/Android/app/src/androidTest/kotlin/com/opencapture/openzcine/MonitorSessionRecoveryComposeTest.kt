@@ -12,7 +12,6 @@ import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.transport.ReconnectBackoff
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
@@ -36,7 +35,7 @@ class MonitorSessionRecoveryComposeTest {
                     MonitorSessionRecoveryEffect(
                         session = session,
                         enabled = enabled.value,
-                        retryPolicy = ReconnectBackoff(0L, 0L, jitterFraction = 0.0),
+                        schedule = { _, _ -> 0L },
                     )
                 }
             }

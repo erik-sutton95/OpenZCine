@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.math.max
 import kotlin.math.min
 
@@ -90,6 +91,37 @@ internal fun focusResetButtonBaseFrame(
 }
 
 /**
+ * The 50/50 quick key's slot: the focus-reset lane, one key higher when that key is mounted.
+ *
+ * Sharing the lane rather than claiming a corner of its own is what keeps it off the DISP key
+ * (bottom-right of the rail with no bottom bar), the MF focus dial and the collapsed portrait
+ * assist rail — all of which already own a corner.
+ */
+internal fun splitComparisonKeyFrame(
+    feed: ZoneFrame,
+    isPortrait: Boolean,
+    bottomChromeInset: Float,
+    focusResetMounted: Boolean,
+    widthDp: Float,
+    heightDp: Float,
+): ZoneFrame {
+    val lane = focusResetButtonBaseFrame(feed, isPortrait, bottomChromeInset)
+    val lift = if (focusResetMounted) FOCUS_RESET_BUTTON_SIZE_DP + FOCUS_RESET_PANEL_GAP_DP else 0f
+    // Right-aligned in portrait (the lane hugs the trailing edge there), leading-aligned in
+    // landscape — so a key wider than the round reset button grows away from the feed edge.
+    val x = if (isPortrait) lane.x + lane.width - widthDp else lane.x
+    return clampScopeFrame(
+        ZoneFrame(
+            x = x,
+            y = lane.y + (FOCUS_RESET_BUTTON_SIZE_DP - heightDp) / 2f - lift,
+            width = widthDp,
+            height = heightDp,
+        ),
+        feed,
+    )
+}
+
+/**
  * Lifts the focus-reset affordance above overlapping movable analysis panels.
  *
  * Panels are considered from lowest to highest so a crowded stack is climbed one panel at a time.
@@ -130,9 +162,12 @@ internal data class MonitorAnalysisChromeMounts(
     val assistStrip: Boolean,
     val assistRail: Boolean,
     val captureStrip: Boolean,
-    val landscapeFullSideRails: Boolean = false,
-    val landscapeSettingsRecovery: Boolean = false,
-    val landscapeRecordingSafety: Boolean = false,
+    /**
+     * Which landscape rail controls are on screen, or `null` in portrait. One plan instead of the
+     * old full-rail / settings-recovery / record-safety triple: the rail is six independent
+     * elements now, so a panel corridor carved from three booleans could not describe it.
+     */
+    val landscapeRail: SideRailPlan? = null,
 )
 
 /** Mirrors the landscape and portrait chrome mounting conditions without inferring from mode names. */
@@ -143,18 +178,14 @@ internal fun monitorAnalysisChromeMounts(
     isCommand: Boolean,
     assistToolbarVisible: Boolean,
     cameraValuesVisible: Boolean,
-    landscapeFullSideRails: Boolean = false,
-    landscapeSettingsRecovery: Boolean = false,
-    landscapeRecordingSafety: Boolean = false,
+    landscapeRail: SideRailPlan? = null,
 ): MonitorAnalysisChromeMounts {
     val sideMounts =
         MonitorAnalysisChromeMounts(
             assistStrip = false,
             assistRail = false,
             captureStrip = false,
-            landscapeFullSideRails = !isPortrait && landscapeFullSideRails,
-            landscapeSettingsRecovery = !isPortrait && landscapeSettingsRecovery,
-            landscapeRecordingSafety = !isPortrait && landscapeRecordingSafety,
+            landscapeRail = landscapeRail.takeIf { !isPortrait },
         )
     if (isCommand) return sideMounts
     if (isPortrait) {
@@ -176,9 +207,7 @@ internal fun monitorAnalysisChromeMounts(
         assistStrip = !isClean && assistToolbarVisible,
         assistRail = false,
         captureStrip = !isClean && cameraValuesVisible,
-        landscapeFullSideRails = sideMounts.landscapeFullSideRails,
-        landscapeSettingsRecovery = sideMounts.landscapeSettingsRecovery,
-        landscapeRecordingSafety = sideMounts.landscapeRecordingSafety,
+        landscapeRail = sideMounts.landscapeRail,
     )
 }
 
@@ -271,30 +300,27 @@ internal fun monitorAnalysisPanelLayout(
         }
         bottom = min(bottom, zones.systemCluster.y - PANEL_CONTROL_CLEARANCE_DP)
     } else {
-        // Landscape: carve only the vertical button rails. Top/bottom chrome stays drawable
-        // over panels the way iOS does (rails are painted above scopes).
-        if (chromeMounts.landscapeFullSideRails) {
-            left =
-                maxOf(
-                    left,
-                    zones.lock.x + zones.lock.width + PANEL_CONTROL_CLEARANCE_DP,
-                    zones.batteryCluster?.let { it.x + it.width + PANEL_CONTROL_CLEARANCE_DP }
-                        ?: left,
-                )
-            right =
-                listOf(zones.disp, zones.record, zones.media, zones.settings)
-                    .minOfOrNull { it.x - PANEL_CONTROL_CLEARANCE_DP }
-                    ?.let { min(right, it) }
-                    ?: right
-        } else {
-            // Rails hidden: still leave a recovery corridor for the still-mounted settings /
-            // record affordances so they stay reachable.
-            if (chromeMounts.landscapeSettingsRecovery) {
-                right = min(right, zones.settings.x - PANEL_CONTROL_CLEARANCE_DP)
+        // Landscape: carve only the vertical button rails, and only around the controls that are
+        // actually mounted. Top/bottom chrome stays drawable over panels the way iOS does (rails
+        // are painted above scopes).
+        val rail = chromeMounts.landscapeRail
+        if (rail != null) {
+            if (rail.lock) {
+                left = maxOf(left, zones.lock.x + zones.lock.width + PANEL_CONTROL_CLEARANCE_DP)
             }
-            if (chromeMounts.landscapeRecordingSafety) {
-                right = min(right, zones.record.x - PANEL_CONTROL_CLEARANCE_DP)
+            if (rail.batteries) {
+                zones.batteryCluster?.let {
+                    left = maxOf(left, it.x + it.width + PANEL_CONTROL_CLEARANCE_DP)
+                }
             }
+            listOfNotNull(
+                zones.disp.takeIf { rail.disp },
+                zones.record.takeIf { rail.record },
+                zones.media.takeIf { rail.media },
+                zones.settings.takeIf { rail.settings },
+            )
+                .minOfOrNull { it.x - PANEL_CONTROL_CLEARANCE_DP }
+                ?.let { right = min(right, it) }
         }
     }
 

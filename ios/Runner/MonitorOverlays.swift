@@ -738,8 +738,9 @@ func desqueezedRect(_ full: CGRect, _ desqueeze: AssistConfiguration.Desqueeze) 
 /// same way the index.html prototype does.
 struct FeedAlignedAssists: View {
     @Environment(NativeAppModel.self) private var model
-    /// Clean output mode (DISP 2) keeps the framing guides — which bound the de-squeeze — but drops
-    /// the busier grid, crosshair and level.
+    /// Clean output mode (DISP 2). Which tools survive it is decided by `MonitorChromePolicy` via
+    /// `renderedLiveAssistTools` — nothing unless the operator pinned it. This flag only carries
+    /// the layout consequence (no bottom bars, so the EV needle drops to the feed edge).
     var clean: Bool = false
     /// When set (e.g. letterboxed media playback), framing overlays align to this rect instead of
     /// the full geometry.
@@ -755,7 +756,7 @@ struct FeedAlignedAssists: View {
             let visible =
                 (usePlaybackContext
                 ? model.preferences.playbackVisibleAssistTools
-                : model.preferences.liveViewVisibleAssistTools).subtracting(excludeTools)
+                : model.renderedLiveAssistTools).subtracting(excludeTools)
             let overlayDesqueeze: AssistConfiguration.Desqueeze = {
                 var config = model.assistConfiguration.desqueeze
                 config.enabled = visible.contains(.desqueeze)
@@ -767,8 +768,6 @@ struct FeedAlignedAssists: View {
                     AspectGuideFrameView(
                         configuration: model.assistConfiguration.guides, feed: feed)
                 }
-                // The EV meter survives clean mode (DISP 2): exposure truth is exactly what
-                // a stripped-down operator view still needs, like the framing guides.
                 if visible.contains(.evMeter),
                     // Photography-only: a persisted visibility set from an older build may
                     // still carry the tool, so the render guards the mode as well.
@@ -790,20 +789,26 @@ struct FeedAlignedAssists: View {
                         )
                         .allowsHitTesting(false)
                 }
-                if !clean {
-                    if visible.contains(.grid) {
-                        FeedGridView(grid: model.assistConfiguration.grid, feed: feed)
-                    }
-                    if visible.contains(.crosshair) {
-                        FeedCrosshairView(feed: feed)
-                    }
-                    if visible.contains(.level) && model.assistConfiguration.level.enabled {
-                        FeedLevelView(
-                            style: model.assistConfiguration.level.style, feed: feed,
-                            visibleBounds: Self.visibleBounds(
-                                contentGlobal: proxy.frame(in: .global), size: proxy.size,
-                                screen: screenBounds))
-                    }
+                if visible.contains(.grid) {
+                    FeedGridView(grid: model.assistConfiguration.grid, feed: feed)
+                }
+                if visible.contains(.crosshair) {
+                    FeedCrosshairView(feed: feed)
+                }
+                // Drawn once over the whole feed like every other framing aid, from the same rect
+                // — so the divider lands exactly on the boundary the grade was split at.
+                if let split = LUTResolution.splitComparison(
+                    visibleTools: visible, preferences: model.preferences,
+                    muted: model.splitComparisonMuted)
+                {
+                    FeedSplitComparisonMarks(orientation: split, feed: feed)
+                }
+                if visible.contains(.level) && model.assistConfiguration.level.enabled {
+                    FeedLevelView(
+                        style: model.assistConfiguration.level.style, feed: feed,
+                        visibleBounds: Self.visibleBounds(
+                            contentGlobal: proxy.frame(in: .global), size: proxy.size,
+                            screen: screenBounds))
                 }
             }
         }
@@ -1286,6 +1291,76 @@ struct FeedCrosshairView: View {
             Rectangle().fill(Color.white.opacity(0.65)).frame(width: 40, height: 1.4)
         }
         .position(x: feed.midX, y: feed.midY)
+    }
+}
+
+/// The 50/50 Log-vs-LUT comparison's divider and its two half labels.
+///
+/// Presentation only — the grade itself is split in the feed pipeline (`LiveFrameProcessor` /
+/// `ImageEffectsCompositor.splitting`). Both draw at the centre of the same feed rect, so the
+/// hairline sits on the real boundary rather than near it.
+///
+/// The labels hug the divider at one edge instead of sitting in the middle of each half: the
+/// operator is judging the image, and a caption over the subject is exactly what "without
+/// permanently obscuring the image" rules out. They ride the LUT tool's own visibility (see
+/// `LUTResolution.splitComparison`), so clean view carries them only where the operator pinned the
+/// tool in.
+struct FeedSplitComparisonMarks: View {
+    let orientation: SplitComparisonOrientation
+    let feed: CGRect
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white.opacity(0.5))
+                .frame(
+                    width: orientation == .vertical ? 1 : feed.width,
+                    height: orientation == .vertical ? feed.height : 1
+                )
+                .position(x: feed.midX, y: feed.midY)
+            label(SplitComparison.logLabel)
+                .position(logPosition)
+            label(SplitComparison.lutLabel)
+                .position(lutPosition)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Deliberately tiny and unfilled: the split itself already says which half is which, so these
+    /// only confirm it. A drop shadow rather than a capsule fill — the graded half can be far
+    /// darker or far brighter than the log half depending on the look, and a shadow reads over
+    /// both where one fixed fill colour reads over neither.
+    private func label(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+            .kerning(0.5)
+            .foregroundStyle(Color.white.opacity(0.85))
+            .shadow(color: .black.opacity(0.8), radius: 1.5, y: 0.5)
+    }
+
+    /// Where the pair sits along the divider, as a fraction of the feed rather than a constant:
+    /// the same number then clears the status deck in landscape (~400pt tall) and in portrait, and
+    /// on a tablet, without knowing which chrome is mounted.
+    private var alongDivider: CGFloat { 0.16 }
+
+    /// Log side: left of a vertical divider, above a horizontal one.
+    private var logPosition: CGPoint {
+        switch orientation {
+        case .vertical:
+            CGPoint(x: feed.midX - 16, y: feed.minY + feed.height * alongDivider)
+        case .horizontal:
+            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY - 10)
+        }
+    }
+
+    /// LUT side: right of a vertical divider, below a horizontal one.
+    private var lutPosition: CGPoint {
+        switch orientation {
+        case .vertical:
+            CGPoint(x: feed.midX + 16, y: feed.minY + feed.height * alongDivider)
+        case .horizontal:
+            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY + 10)
+        }
     }
 }
 
@@ -1921,7 +1996,9 @@ struct WaveformScopePlot: View, Equatable {
     var mapping = ExposureSignalMapping(curve: .redLog3G10)
 
     /// Opacity multiplier for the trail pass — low enough to read as decay, high enough to bridge.
-    static let trailDecay = 0.35
+    /// `nonisolated` because `ScopeTraceRenderer` reads it while building geometry off the main
+    /// thread; a `View`'s statics are main-actor by default, and this is a plain constant.
+    nonisolated static let trailDecay = 0.35
 
     nonisolated static func == (lhs: WaveformScopePlot, rhs: WaveformScopePlot) -> Bool {
         lhs.samples == rhs.samples && lhs.trail == rhs.trail && lhs.mode == rhs.mode

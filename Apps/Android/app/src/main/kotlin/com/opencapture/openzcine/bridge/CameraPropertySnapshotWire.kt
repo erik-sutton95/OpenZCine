@@ -6,6 +6,7 @@ import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.core.CameraStorageSlotStatus
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.openzcine.core.CodecBitDepthOption
 
 /** Stable semantic outcomes emitted by the Swift property-readback wire. */
 internal enum class NativePropertyRefreshResult {
@@ -87,6 +88,7 @@ internal object CameraPropertySnapshotWire {
             tone = value.optionalString("tone"),
             resolutionFrameRate = value.optionalString("resolutionFrameRate"),
             codecSelection = value.optionalString("codecSelection"),
+            codecBitDepth = value.optionalString("codecBitDepth"),
             whiteBalanceTint = value.optionalString("whiteBalanceTint"),
             batteryPercent = value.optionalInt("batteryPercent"),
             externalPower = value.optionalBoolean("externalPower"),
@@ -147,6 +149,13 @@ internal object CameraPropertySnapshotWire {
                     vibrationReduction = value.options("options.vibrationReduction"),
                     electronicVr = value.options("options.electronicVr"),
                     imageSizes = value.options("options.imageSize"),
+                    exposureModes = value.options("options.exposureMode"),
+                    userModePrograms = value.options("options.userModeProgram"),
+                    driveModes = value.options("options.drive"),
+                    meteringModes = value.options("options.metering"),
+                    pictureControls = value.options("options.pictureControl"),
+                    rawCompressions = value.options("options.rawCompression"),
+                    codecBitDepths = value.codecBitDepths("options.codecBitDepth"),
                 ),
         )
     }
@@ -267,6 +276,24 @@ internal object CameraPropertySnapshotWire {
             .orEmpty()
 
     private const val OPTION_SEPARATOR: Char = '\u001F'
+    /**
+     * `row`/`caption`/`writeValue` triples from `options.codecBitDepth`, separated by U+001E
+     * inside each U+001F-separated option. Anything that is not a complete triple is dropped
+     * rather than half-decoded — a depth button must always know the exact advertised label it
+     * writes.
+     */
+    private fun Map<String, String>.codecBitDepths(key: String): List<CodecBitDepthOption> =
+        options(key).mapNotNull { entry ->
+            val parts = entry.split(FIELD_SEPARATOR)
+            if (parts.size != 3 || parts.any(String::isBlank)) {
+                null
+            } else {
+                CodecBitDepthOption(codec = parts[0], label = parts[1], writeValue = parts[2])
+            }
+        }
+
+    /** Record separator between the fields of one `options.codecBitDepth` entry. */
+    private val FIELD_SEPARATOR: Char = Char(0x1E)
     private const val STORAGE_SLOT_COUNT: String = "storageSlotCount"
     private const val STORAGE_SLOT_PREFIX: String = "storageSlot."
     private const val MAXIMUM_STORAGE_SLOT_COUNT: Int = 32

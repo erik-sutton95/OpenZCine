@@ -45,13 +45,11 @@ object FeedEffectsState {
  *    (`width = size²`, `height = size`; slice tiles along x). The shader takes
  *    two bilinear taps on adjacent blue slices and mixes — trilinear, the same
  *    interpolation `CIColorCube`/`CubeLUT.map` perform.
- * 2. **Focus peaking**, measured from the *source* frame: the de-logged grey
- *    (the core's camera-aware black→clip stretch, uniforms from
- *    `feedEffectsConfiguration`) runs a
- *    two-scale gradient difference — first-derivative magnitude peaks ON the
- *    edge (single line), and subtracting the coarse-scale gradient cancels
- *    defocused background edges. Overlay colour comes from the shared-core
- *    iOS peaking-colour configuration.
+ * 2. **Focus peaking**, measured from the *source* frame: the gradient of the raw
+ *    grey at two tap spacings, divided. The ratio cancels edge amplitude and leaves
+ *    only how defocused the edge is, so a bright background bokeh rim no longer
+ *    outranks dim in-focus detail. Thresholds come from shared core (`Peaking`).
+ *    Overlay colour comes from the shared-core iOS peaking-colour configuration.
  * 3. **Zebra**, also measured from the source frame: Rec.709 luma against the
  *    core-supplied dual-zone thresholds and independently selected stripe
  *    colours, drawn over the graded image.
@@ -285,15 +283,12 @@ class FeedEffectsRenderer private constructor(
             uploadCube(shader, "limitsPaintCube", "limitsPaintSize", plan.limitsPaintCube)
             uploadCube(shader, "limitsWeightCube", "limitsWeightSize", plan.limitsWeightCube)
             shader.setFloatUniform("limitsOn", if (plan.limitsReady) 1f else 0f)
-
+            shader.setFloatUniform("splitOn", if (plan.splitComparison != null) 1f else 0f)
             shader.setFloatUniform(
-                "deLogCurve0to3",
-                renderConfiguration.deLogCurve[0],
-                renderConfiguration.deLogCurve[1],
-                renderConfiguration.deLogCurve[2],
-                renderConfiguration.deLogCurve[3],
+                "splitVertical",
+                if (plan.splitComparison == FeedSplitOrientation.VERTICAL) 1f else 0f,
             )
-            shader.setFloatUniform("deLogCurve4", renderConfiguration.deLogCurve[4])
+
             shader.setFloatUniform("peakingOn", if (plan.effects.peaking) 1f else 0f)
             shader.setFloatUniform(
                 "peakingColor",
@@ -301,8 +296,11 @@ class FeedEffectsRenderer private constructor(
                 renderConfiguration.peakingColor[1],
                 renderConfiguration.peakingColor[2],
             )
-            shader.setFloatUniform("peakingThreshold", renderConfiguration.peakingThreshold)
-            shader.setFloatUniform("peakingRamp", renderConfiguration.peakingRamp)
+            shader.setFloatUniform(
+                "peakingRatioThreshold",
+                renderConfiguration.peakingRatioThreshold,
+            )
+            shader.setFloatUniform("peakingNoiseGate", renderConfiguration.peakingNoiseGate)
             shader.setFloatUniform(
                 "zebraHighlightOn",
                 if (plan.effects.zebra && renderConfiguration.highlightEnabled) 1f else 0f,
@@ -381,13 +379,15 @@ private val EFFECTS_AGSL =
     uniform float2 dstOffset;          // letterbox origin, canvas px
     uniform float srcScale;            // canvas px -> bitmap px
     uniform float2 sourceSize;         // decoded frame extent, bitmap px
+    // 50/50 Log-vs-LUT comparison: 1 = on, and 1 = a vertical boundary (Log left, LUT right)
+    // against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
+    uniform float splitOn;
+    uniform float splitVertical;
 
     uniform float peakingOn;
     uniform float3 peakingColor;
-    uniform float4 deLogCurve0to3;     // core quarter-axis camera tone curve
-    uniform float deLogCurve4;
-    uniform float peakingThreshold;    // core sensitivity policy
-    uniform float peakingRamp;         // core sensitivity policy
+    uniform float peakingRatioThreshold;  // core sensitivity policy
+    uniform float peakingNoiseGate;       // core sensitivity policy
 
     uniform float zebraHighlightOn;
     uniform float zebraHighlight;      // core threshold, normalized code
@@ -397,7 +397,17 @@ private val EFFECTS_AGSL =
     uniform float3 zebraMidtoneColor;
 
     const float3 LUMA709 = float3(0.2126, 0.7152, 0.0722);
+    // Focus peaking, all from `Peaking` in shared core — see the block comment below.
     const float PEAKING_EDGE_INSET = 6.0;
+    const float PEAKING_W0 = 0.382992;
+    const float PEAKING_W1 = 0.241798;
+    const float PEAKING_W2 = 0.060662;
+    const float PEAKING_W3 = 0.006044;
+    const float PEAKING_RATIO_CEILING = 4.0;
+    const float PEAKING_AA = 0.12;
+    const float PEAKING_UNDER_OFFSET = 0.5;
+    const float PEAKING_GATE_FLOOR = 0.7;
+    const float3 PEAKING_UNDER_COLOR = float3(0.04, 0.04, 0.05);
     const float ZEBRA_GAIN = 40.0;          // iOS soft-threshold ramp
     const float ZEBRA_HALF_WIDTH = 5.0 / 255.0;
     const float STRIPE_PITCH = 14.14;       // iOS 5 px stripes rotated 45 deg
@@ -441,75 +451,59 @@ private val EFFECTS_AGSL =
         return clamp(mix(lo, hi, b - s0), 0.0, 1.0);
     }
 
-    float monotoneTone(float y0, float y1, float y2, float y3, float t) {
-        // Equal-spaced cubic Hermite interpolation is the shader equivalent of
-        // the smooth five-control-point CIToneCurve used by iOS. Clamping each
-        // segment prevents overshoot across a monotone camera response.
-        float m1 = 0.5 * (y2 - y0);
-        float m2 = 0.5 * (y3 - y1);
-        float t2 = t * t;
-        float t3 = t2 * t;
-        float value =
-            (2.0 * t3 - 3.0 * t2 + 1.0) * y1
-            + (t3 - 2.0 * t2 + t) * m1
-            + (-2.0 * t3 + 3.0 * t2) * y2
-            + (t3 - t2) * m2;
-        return clamp(value, min(y1, y2), max(y1, y2));
-    }
-
-    // De-logged grey: five camera-aware tone-curve points, matching iOS's
-    // quarter-axis CIToneCurve configuration without recreating curve policy.
-    float deLogGrey(float2 p) {
+    // Focus peaking measures BLUR RADIUS, not edge contrast: the operator run on the
+    // source and again on a re-blurred copy, then divided, cancels amplitude and leaves
+    // only how defocused the edge is (PEAKING_RATIO_CEILING sharp -> 1.0 fully blurred).
+    // Measured on the RAW source.
+    //
+    // Every constant comes from `Peaking` in shared core, which holds the derivation, the
+    // calibration tables and the measurements. `Peaking.overlay` is the reference this is
+    // transcribed from, and `RunnerTests` checks that reference against the live iOS Core
+    // Image graph pixel-for-pixel — so the chain from here to what an iPhone renders is
+    // closed.
+    //
+    // ONE DIFFERENCE FROM iOS: no morphological closing. `Peaking.closingOffsets` is a
+    // five-point plus, so dilate-then-erode spans a 13-point diamond and each of those
+    // points needs its own re-blur neighbourhood — roughly 130 live floats against the ~25
+    // used here, which is a pass boundary in any renderer. It wants an offscreen mask pass,
+    // tracked separately; without it Android reads slightly grainier than iOS at the same
+    // setting, and everything else matches.
+    float sourceGrey(float2 p) {
         float3 c = float3(feed.eval(p).rgb);
-        float position = clamp((c.r + c.g + c.b) / 3.0, 0.0, 1.0) * 4.0;
-        int segment = int(floor(position));
-        if (segment > 3) segment = 3;
-        float fraction = position - float(segment);
-        if (segment == 0) {
-            return monotoneTone(
-                deLogCurve0to3.x,
-                deLogCurve0to3.x,
-                deLogCurve0to3.y,
-                deLogCurve0to3.z,
-                fraction);
-        } else if (segment == 1) {
-            return monotoneTone(
-                deLogCurve0to3.x,
-                deLogCurve0to3.y,
-                deLogCurve0to3.z,
-                deLogCurve0to3.w,
-                fraction);
-        } else if (segment == 2) {
-            return monotoneTone(
-                deLogCurve0to3.y,
-                deLogCurve0to3.z,
-                deLogCurve0to3.w,
-                deLogCurve4,
-                fraction);
-        } else {
-            return monotoneTone(
-                deLogCurve0to3.z,
-                deLogCurve0to3.w,
-                deLogCurve4,
-                deLogCurve4,
-                fraction);
-        }
-        return deLogCurve4;
+        return (c.r + c.g + c.b) / 3.0;
     }
 
-    // 1 px central differences — no 3×3 / pre-blur fattening.
-    float edgeMagnitude(float2 p) {
-        float l = deLogGrey(p - float2(1.0, 0.0));
-        float r = deLogGrey(p + float2(1.0, 0.0));
-        float u = deLogGrey(p - float2(0.0, 1.0));
-        float d = deLogGrey(p + float2(0.0, 1.0));
-        return length(float2(r - l, d - u)) * 0.5;
+    // Weight of a tap `offset` pixels from the centre of the separable re-blur, zero
+    // beyond its reach. A function rather than an indexed array so the kernel needs no
+    // local array at all — GLSL ES 2.0, SkSL and GLSL 4.5 all inline this identically.
+    float peakingTapWeight(float offset) {
+        float d = abs(offset);
+        return d < 0.5 ? PEAKING_W0
+            : d < 1.5 ? PEAKING_W1
+            : d < 2.5 ? PEAKING_W2
+            : d < 3.5 ? PEAKING_W3
+            : 0.0;
+    }
+
+    // The operator: a squared Roberts cross over the 2x2 quad anchored at the pixel,
+    // reproducing `CIEdges`. SQUARED — a 0.2 step gives 0.08, a 0.4 step 0.32 — which is
+    // the domain every threshold in `Peaking` lives in.
+    float peakingRoberts(float a, float b, float c, float d) {
+        float d1 = d - a;
+        float d2 = c - b;
+        return d1 * d1 + d2 * d2;
     }
 
     half4 main(float2 fragCoord) {
         float2 src = (fragCoord - dstOffset) * srcScale;
         float3 source = float3(feed.eval(src).rgb);
-        float3 color = grade(source);
+        // `src` is in SOURCE bitmap pixels with a top-left origin, so the halfway line of
+        // `sourceSize` is the centre of the image itself — fit shows all of it and fill shows a
+        // centred crop of it, and neither letterbox nor chrome is inside this coordinate space at
+        // all. Exactly `SplitComparison.isGradedSide` from shared core, denormalized.
+        bool graded = splitOn < 0.5
+            || (splitVertical > 0.5 ? src.x >= sourceSize.x * 0.5 : src.y >= sourceSize.y * 0.5);
+        float3 color = graded ? grade(source) : source;
 
         if (limitsOn > 0.5) {
             color = mix(color, limitsPaint(source), limitsWeight(source));
@@ -519,13 +513,70 @@ private val EFFECTS_AGSL =
             if (src.x >= PEAKING_EDGE_INSET && src.y >= PEAKING_EDGE_INSET
                 && src.x < sourceSize.x - PEAKING_EDGE_INSET
                 && src.y < sourceSize.y - PEAKING_EDGE_INSET) {
-                float g = edgeMagnitude(src);
-                float threshold = clamp(peakingThreshold * 30.0, 0.045, 0.14);
-                float aa = threshold * (0.06 + 0.04 * clamp(160.0 / max(peakingRamp, 1.0), 0.5, 1.5));
-                float core = smoothstep(threshold, threshold + aa, g);
-                float under = smoothstep(threshold - aa * 0.35, threshold, g) * (1.0 - core);
-                color = mix(color, float3(0.04, 0.04, 0.05), under * 0.28);
-                color = mix(color, peakingColor, core);
+                // Snap to the source pixel grid before measuring anything. The operator is
+                // defined on source pixels (one texel per tap, no spacing normalisation —
+                // `CIEdges` and the re-blur radius are both fixed at one pixel), but this shader
+                // runs once per DESTINATION pixel. Measuring from a fractional source position
+                // would make every tap a bilinear blend of four source pixels, pre-filtering away
+                // the high frequencies the detector exists to find and letting fragments inside
+                // one source pixel disagree. `src` is already in bitmap pixels, so the taps are
+                // whole numbers.
+                float2 centre = floor(src) + 0.5;
+
+                // Separable re-blur and the operator's two quads over ONE shared 8x8 source
+                // neighbourhood. `vp0`/`vp1` are the vertical halves at the quad's two rows, and the
+                // four `b**` accumulate the horizontal half straight into the re-blurred values the
+                // coarse operator needs — so the whole kernel holds a handful of floats and needs no
+                // local array. 68 source taps in total.
+                float b00 = 0.0;
+                float b10 = 0.0;
+                float b01 = 0.0;
+                float b11 = 0.0;
+                for (int col = 0; col < 8; col++) {
+                    float dx = float(col) - 3.0;
+                    float vp0 = 0.0;
+                    float vp1 = 0.0;
+                    for (int row = 0; row < 8; row++) {
+                        float dy = float(row) - 3.0;
+                        float g = sourceGrey(centre + float2(dx, dy));
+                        vp0 += peakingTapWeight(dy) * g;
+                        vp1 += peakingTapWeight(dy - 1.0) * g;
+                    }
+                    float wx0 = peakingTapWeight(dx);
+                    float wx1 = peakingTapWeight(dx - 1.0);
+                    b00 += wx0 * vp0;
+                    b10 += wx1 * vp0;
+                    b01 += wx0 * vp1;
+                    b11 += wx1 * vp1;
+                }
+                float coarse = peakingRoberts(b00, b10, b01, b11);
+                float fine = peakingRoberts(
+                    sourceGrey(centre),
+                    sourceGrey(centre + float2(1.0, 0.0)),
+                    sourceGrey(centre + float2(0.0, 1.0)),
+                    sourceGrey(centre + float2(1.0, 1.0)));
+                float ratio = min(fine / max(coarse, 1e-9), PEAKING_RATIO_CEILING);
+                // Noise is not lens-blurred, so it always reads as perfectly sharp; the ratio cannot
+                // reject it and this gate is what keeps shadows from sparkling. It arrives already
+                // scaled for the feed's encoding, so there is no mode policy here.
+                float gate = clamp(
+                    (coarse - peakingNoiseGate * PEAKING_GATE_FLOOR)
+                        / max(peakingNoiseGate * (1.0 - PEAKING_GATE_FLOOR), 1e-9),
+                    0.0,
+                    1.0);
+                // LINEAR ramps, deliberately not smoothstep: Core Image reaches these with a
+                // scale-and-clamp pair, and on a ramp this narrow the Hermite curve is a visible
+                // difference in stroke weight rather than a rounding one.
+                float stroke = clamp((ratio - peakingRatioThreshold) / PEAKING_AA, 0.0, 1.0) * gate;
+                float under = clamp(
+                    (ratio - (peakingRatioThreshold - PEAKING_AA * PEAKING_UNDER_OFFSET)) / PEAKING_AA,
+                    0.0,
+                    1.0) * gate;
+                // Hairline first at its full ramp opacity, then the stroke over the top of it —
+                // `ImageEffectsCompositor.composite`'s two blends, in that order. The hairline is what
+                // stops a bright stroke from vanishing into a bright subject.
+                color = mix(color, PEAKING_UNDER_COLOR, under);
+                color = mix(color, peakingColor, stroke);
             }
         }
 

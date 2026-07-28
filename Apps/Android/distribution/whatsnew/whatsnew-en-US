@@ -1,5 +1,5 @@
-- Photography mode: a real shutter (hold for a burst), tap-to-AF, self-timers, and pickers for mode, ISO, focus, WB, size, quality, and picture profile.
-- Focus dial: pull the lens focus on the live view (photo mode).
-- Burst stacks open to a scrubbing pager; multi-select to delete or share.
-- Body-fired shots sync to the app with instant playback.
-- Delete photos/videos (RAW+JPEG or MP4+master) with a progress bar; backup shots under both cards; ratings; auto-rotate.
+- Fixed: a USB-C camera error or unplug could crash the app.
+- Fixed: the Wi-Fi detail scanner no longer gives up after one bad frame, and you can always type the network and key by hand.
+- Fixed: aperture, ISO and shutter changes made on the camera now reach the app promptly.
+- Fixed: HEIF photos were missing from the media browser; connecting a second body no longer alters its settings.
+- New: per-DISP display settings, an Edit view that hides any monitor element, split video/photo layouts.

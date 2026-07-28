@@ -12,7 +12,7 @@ class StillPreviewStateTest {
     @Test
     fun `HEIF and RAW fallbacks never claim a full preview`() {
         val heif = StillPhotoClassification("HEIF", StillPreviewStrategy.COMPLETE_FILE)
-        val raw = StillPhotoClassification("Nikon RAW", StillPreviewStrategy.THUMBNAIL_ONLY)
+        val raw = StillPhotoClassification("NEF", StillPreviewStrategy.THUMBNAIL_ONLY)
 
         val heifFallback =
             assertIs<StillPreviewUiState.ThumbnailFallback>(
@@ -29,7 +29,7 @@ class StillPreviewStateTest {
             heifFallback.message,
         )
         assertEquals(
-            "Nikon RAW files are not decoded for a full preview on Android. " +
+            "NEF files are not decoded for a full preview on Android. " +
                 "The camera did not provide a thumbnail.",
             rawFallback.message,
         )

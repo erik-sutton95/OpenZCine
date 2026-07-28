@@ -66,6 +66,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -795,17 +796,52 @@ internal fun MediaBrowseScreen(
             )
         if (retained != filters) filters = retained
     }
+    // Filtering ends in a sortedWith that lowercases every filename per comparison, so it must not
+    // re-run on unrelated recompositions (a selection tap used to pay for a full re-sort).
     val displayedClips =
-        MediaLibraryFiltering.displayed(
-            clips = loadedClips,
-            category = options.category,
-            favoriteIDs = favorites,
-            cameraID = cameraID,
-            sortOrder = options.sortOrder,
-            filters = filters,
-            libraryKey = ::clipKey,
-            ownerOf = ::ownerCameraID,
-        )
+        remember(
+            loadedClips,
+            options.category,
+            favorites,
+            cameraID,
+            options.sortOrder,
+            filters,
+            offlineClipOwners,
+        ) {
+            MediaLibraryFiltering.displayed(
+                clips = loadedClips,
+                category = options.category,
+                favoriteIDs = favorites,
+                cameraID = cameraID,
+                sortOrder = options.sortOrder,
+                filters = filters,
+                libraryKey = ::clipKey,
+                ownerOf = ::ownerCameraID,
+            )
+        }
+    // The chips the popup may offer, derived from the category's own listing before any chip is
+    // applied — so a category never advertises a value its media cannot match.
+    val filterOptions =
+        remember(loadedClips, options.category, favorites, cameraID, offlineClipOwners) {
+            MediaFilterDerivation.options(
+                MediaLibraryFiltering.categoryScoped(
+                    clips = loadedClips,
+                    category = options.category,
+                    favoriteIDs = favorites,
+                    cameraID = cameraID,
+                    libraryKey = ::clipKey,
+                ),
+            )
+        }
+    // Only an operator navigation prunes, never a discovery batch: chips derived from a listing
+    // that is still streaming in must not clear a selection the operator just made.
+    LaunchedEffect(options.category, librarySource) {
+        val retained = filters.retainingOfferedChips(filterOptions)
+        if (retained != filters) filters = retained
+    }
+    // One key pass over the library, reused by every lookup below. Rebuilding this per call was
+    // the other half of the multiselect stall.
+    val clipsByKey = remember(displayedClips) { displayedClips.associateBy(::clipKey) }
     // Collapse continuous-drive runs into one representative cell per series (iOS
     // filteredMediaClips burst step). Grouping runs on the displayed set, so an offline pass
     // groups only cached frames; the series view reaches the hidden members.
@@ -824,15 +860,14 @@ internal fun MediaBrowseScreen(
         }
     fun burstMembers(representative: MediaClipRecord): List<MediaClipRecord> {
         val series = burstByRepresentative[clipKey(representative)] ?: return emptyList()
-        val byID = displayedClips.associateBy(::clipKey)
-        return series.memberIDs.mapNotNull { byID[it] }
+        return series.memberIDs.mapNotNull { clipsByKey[it] }
     }
     // A grid burst cell stands for its whole series (iOS `burstExpanded`): expand each selected
     // representative to every member so a multiselect delete/share acts on the whole set, not
     // just the representative. Non-series clips pass through; deduped, order preserved.
     fun burstExpanded(clips: List<MediaClipRecord>): List<MediaClipRecord> {
         if (clips.isEmpty()) return clips
-        val byID = displayedClips.associateBy(::clipKey)
+        val byID = clipsByKey
         val seen = HashSet<String>()
         val result = ArrayList<MediaClipRecord>(clips.size)
         for (clip in clips) {
@@ -854,11 +889,16 @@ internal fun MediaBrowseScreen(
     fun hasRawSibling(clip: MediaClipRecord): Boolean =
         clip.isJpegStill && clip.rawPairKey(ownerCameraID(clip)) in rawStillPairKeys
     val selectedClips =
-        displayedClips.filter { clip -> clipKey(clip) in selectedIDs }
+        remember(clipsByKey, selectedIDs) {
+            displayedClips.filter { clip -> clipKey(clip) in selectedIDs }
+        }
     // Delete/share act on the whole burst series behind a selected representative (iOS
     // `burstExpanded`); the selection COUNT stays on the representatives, mirroring iOS.
-    val selectedSeriesClips = burstExpanded(selectedClips)
-    val visibleIDs = displayedClips.map { clip -> clipKey(clip) }.toSet()
+    val selectedSeriesClips =
+        remember(clipsByKey, selectedClips, burstByRepresentative) {
+            burstExpanded(selectedClips)
+        }
+    val visibleIDs = clipsByKey.keys
 
     LaunchedEffect(visibleIDs) {
         val retained = MediaLibrarySelection.retainVisible(selectedIDs, visibleIDs)
@@ -866,7 +906,18 @@ internal fun MediaBrowseScreen(
         if (retained.isEmpty()) isSelecting = false
     }
 
-    LaunchedEffect(cameraID, offlineClipOwners, selectedClips) {
+    // Only the delivery popup reads this, and it stats every selected clip on disk. Keyed on the
+    // ID set rather than the rebuilt clip list so it doesn't restart on unrelated recompositions,
+    // and skipped entirely while no popup is up — otherwise every selection tap paid for a disk
+    // fan-out plus the second full pass of this screen that writing the result triggers.
+    LaunchedEffect(
+        cameraID,
+        offlineClipOwners,
+        selectedIDs,
+        nativeDeliveryPresented,
+        frameioDeliveryPresented,
+    ) {
+        if (!nativeDeliveryPresented && !frameioDeliveryPresented) return@LaunchedEffect
         readySelectionIDs =
             withContext(Dispatchers.IO) {
                 selectedClips.mapNotNull { clip ->
@@ -883,14 +934,6 @@ internal fun MediaBrowseScreen(
                 }.toSet()
             }
     }
-    val readyGalleryCount =
-        selectedClips.count { clip ->
-            (
-                clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
-                    clip.contentKind == MediaContentKind.STILL_PHOTO
-            ) &&
-                clipKey(clip) in readySelectionIDs
-        }
     val selectedLutLabel =
         when (selectedLut) {
             is FeedLutSelection.BuiltIn -> selectedLut.value.label
@@ -1595,6 +1638,7 @@ internal fun MediaBrowseScreen(
         if (filterDialogPresented) {
             MediaFilterDialog(
                 filters = filters,
+                options = filterOptions,
                 storageIds = visibleStorageSlots.map(MediaStorageSlotPresentation::storageId),
                 onFiltersChanged = ::updateFilters,
                 onDismiss = { filterDialogPresented = false },
@@ -2496,6 +2540,7 @@ private fun ThumbnailSizeControl(
 @Composable
 private fun MediaFilterDialog(
     filters: MediaLibraryFilters,
+    options: MediaFilterOptions,
     storageIds: List<Long>,
     onFiltersChanged: (MediaLibraryFilters) -> Unit,
     onDismiss: () -> Unit,
@@ -2536,28 +2581,65 @@ private fun MediaFilterDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    FilterSection("FORMAT") {
-                        MediaContainerFilter.entries.forEach { value ->
-                            FilterChoice(value.title, value in filters.containers) {
-                                onFiltersChanged(
-                                    filters.copy(containers = filters.containers.toggled(value)),
-                                )
+                    if (options.formats.isNotEmpty()) {
+                        FilterSection("FORMAT") {
+                            options.formats.forEach { value ->
+                                FilterChoice(value.title, value in filters.formats) {
+                                    onFiltersChanged(
+                                        filters.copy(formats = filters.formats.toggled(value)),
+                                    )
+                                }
                             }
                         }
                     }
-                    FilterSection("RESOLUTION") {
-                        MediaResolutionFilter.entries.forEach { value ->
-                            FilterChoice(value.title, value in filters.resolutions) {
-                                onFiltersChanged(
-                                    filters.copy(resolutions = filters.resolutions.toggled(value)),
-                                )
+                    if (options.resolutions.isNotEmpty()) {
+                        FilterSection("RESOLUTION") {
+                            options.resolutions.forEach { value ->
+                                FilterChoice(value.title, value in filters.resolutions) {
+                                    onFiltersChanged(
+                                        filters.copy(
+                                            resolutions = filters.resolutions.toggled(value),
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
-                    FilterSection("DATE") {
-                        FilterChoice("TODAY", filters.todayOnly) {
-                            onFiltersChanged(filters.copy(todayOnly = !filters.todayOnly))
+                    if (options.photoSizes.isNotEmpty()) {
+                        FilterSection("SIZE") {
+                            options.photoSizes.forEach { value ->
+                                FilterChoice(value.title, value in filters.photoSizes) {
+                                    onFiltersChanged(
+                                        filters.copy(
+                                            photoSizes = filters.photoSizes.toggled(value),
+                                        ),
+                                    )
+                                }
+                            }
                         }
+                    }
+                    if (options.dateWindows.isNotEmpty()) {
+                        FilterSection("DATE") {
+                            options.dateWindows.forEach { value ->
+                                // The windows nest, so selecting one replaces the other; tapping
+                                // the active one clears it.
+                                FilterChoice(value.title, filters.dateWindow == value) {
+                                    onFiltersChanged(
+                                        filters.copy(
+                                            dateWindow =
+                                                if (filters.dateWindow == value) null else value,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (options.isEmpty && storageIds.isEmpty()) {
+                        Text(
+                            "Nothing in this tab to filter by.",
+                            style = chromeStyle(12f, FontWeight.Normal),
+                            color = LiveDesign.faint,
+                        )
                     }
                     if (storageIds.isNotEmpty()) {
                         FilterSection("STORAGE") {
@@ -2780,6 +2862,10 @@ private fun MediaClipGrid(
         ) {
             items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
                 val identity = clipIdentity(clip)
+                // Scrolled-away cells are disposed but used to leave their last rect behind, and
+                // the hit test is first-match-wins over an unordered map — so a tap could resolve
+                // to an off-screen clip and silently toggle the wrong thing.
+                DisposableEffect(identity) { onDispose { cellFrames.remove(identity) } }
                 MediaClipCell(
                     clip = clip,
                     source = source,
@@ -2885,6 +2971,8 @@ private fun MediaClipList(
         ) {
             items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
                 val identity = clipIdentity(clip)
+                // Same stale-rect eviction as the grid — see MediaClipGrid.
+                DisposableEffect(identity) { onDispose { rowFrames.remove(identity) } }
                 MediaClipListRow(
                     clip = clip,
                     source = source,
@@ -2964,9 +3052,15 @@ private fun Modifier.mediaSelectionGestures(
             val id = hitClipID(frames(), origin(), local) ?: return null
             return orderedIDs.indexOf(id).takeIf { it >= 0 }
         }
+        // Resolve through the already-built index rather than re-deriving every clip's key: this
+        // runs inside the gesture handler, so a linear scan here delayed the toggle itself. The
+        // identity check keeps the old semantics if the list ever moves under a live gesture.
         fun clipAt(local: Offset): MediaClipRecord? {
             val id = hitClipID(frames(), origin(), local) ?: return null
-            return clips().firstOrNull { clipIdentity(it) == id }
+            val list = clips()
+            val byIndex = orderedIDs.indexOf(id).takeIf { it >= 0 }?.let(list::getOrNull)
+            return byIndex?.takeIf { clipIdentity(it) == id }
+                ?: list.firstOrNull { clipIdentity(it) == id }
         }
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -2996,7 +3090,13 @@ private fun Modifier.mediaSelectionGestures(
                 }
 
             when (early) {
-                "up" -> clipAt(down.position)?.let(onToggle)
+                // Same tick the sweep-paint path gives — without it a toggle has no confirmation,
+                // which is what made a registered tap read as a missed one.
+                "up" ->
+                    clipAt(down.position)?.let {
+                        onToggle(it)
+                        view.performOperatorHaptic(HapticFeedbackConstants.CLOCK_TICK)
+                    }
                 is Offset -> {
                     // Finger moved before long-press: pan the list with the finger.
                     // scrollBy(positive) moves content up; finger up (y decreases) → positive.

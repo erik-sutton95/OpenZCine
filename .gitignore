@@ -35,6 +35,9 @@ ios/Runner/Frameio.local.xcconfig
 # CI-generated manual signing (see the matching examples under ios/Config/)
 ios/Config/CI-Signing.xcconfig
 ios/Config/CI-Watch-Signing.xcconfig
+# XcodeBuildMCP incremental-build byproducts — machine-local, never committed
+ios/Makefile
+ios/xcodemake*.log
 
 # ── Reverse-engineering captures (proprietary; keep out of the public repo) ────
 *.pcap

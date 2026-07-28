@@ -33,24 +33,42 @@ const DEVICE_CLASSES = new Set(["phone", "tablet", "unknown"]);
 const CONNECTIONS = new Set(["wifi", "usb", "unknown"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DISALLOWED_CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u;
-const ACTIVITY_EVENTS = new Set([
+/** Bucket for a well-formed code this relay has not learned yet. See `validateV2Report`. */
+const UNRECOGNIZED_ACTIVITY_EVENT = "diagnostics.unrecognized-event";
+const MAX_ACTIVITY_EVENT_LENGTH = 64;
+const ACTIVITY_EVENT_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
+/** Closed vocabulary the apps may emit. Exported so tests can assert the shape invariant. */
+export const ACTIVITY_EVENTS = new Set([
   "app.launched",
   "scene.connected",
   "app.background",
   "app.foreground",
   "connection.disconnected",
   "connection.scanning",
+  "connection.connecting",
+  "connection.handshaking",
   "connection.pairing",
+  "connection.confirm-on-camera",
+  "connection.joining-wifi",
   "connection.reconnecting",
   "connection.preparing-live-view",
   "connection.connected",
-  "connection.connecting",
+  "connection.path.camera-ap",
+  "connection.path.phone-hotspot",
+  "connection.path.usb",
+  "usb.authorization.granted",
+  "usb.authorization.denied",
+  "usb.camera.attached",
+  "usb.camera.detached",
   "monitor.presented",
   "monitor.dismissed",
   "live-view.started",
   "live-view.failed",
   "recording.started",
   "recording.stopped",
+  "rating.write.attempted",
+  "rating.write.confirmed",
+  "camera.write.slow",
   // The currently shipped native event uses the live-guide prefix. The plain guide aliases
   // remain accepted for a short, closed compatibility surface used by early clients.
   "live-guide.presented",
@@ -60,9 +78,20 @@ const ACTIVITY_EVENTS = new Set([
   "guide.completed",
   "guide.skipped",
   "diagnostics.exported",
+  UNRECOGNIZED_ACTIVITY_EVENT,
   "error.connection.failed",
+  "error.connection.wifi-join.failed",
+  "error.connection.usb.failed",
+  "error.connection.usb.permission",
+  "error.connection.ptp.failed",
+  "error.connection.pairing.failed",
+  "error.connection.reconnect.failed",
   "error.connection.event-channel-ended",
   "error.live-view.failed",
+  "error.mf.drive.refused",
+  "error.mf.drive.busy-exhausted",
+  "error.rating.write.refused",
+  "error.rating.write.refused.access-denied",
   "warning.live-view.stalled",
 ]);
 const ACTIVITY_INCIDENTS = new Map([
@@ -485,7 +514,13 @@ export function validateV2Report(value) {
       throw new InvalidRequestError();
     }
 
-    report.activityLog = value.activityLog.map((event) => enumValue(event, ACTIVITY_EVENTS));
+    // The relay deploys independently of the apps, so a shipped client always eventually emits a
+    // code this allowlist has not learned yet. Bucket the unknown entry rather than discarding the
+    // whole report — collecting diagnostics is the point. Malformed entries are dropped outright,
+    // so only allowlisted strings ever reach the public issue and no client text can ride along.
+    report.activityLog = value.activityLog
+      .filter(isWellFormedActivityEvent)
+      .map((event) => (ACTIVITY_EVENTS.has(event) ? event : UNRECOGNIZED_ACTIVITY_EVENT));
   }
 
   return report;
@@ -585,7 +620,7 @@ function renderNormalizedIssue(safeReport, { screenshotURLs = [] } = {}) {
       "",
       "## Privacy-filtered app activity log",
       "",
-      "This list contains closed app event names plus privacy-safe error/warning codes. Incident traces are fixed operational stages, not raw stack traces or free-form log text; there are no timestamps.",
+      `This list contains closed app event names plus privacy-safe error/warning codes. Incident traces are fixed operational stages, not raw stack traces or free-form log text; there are no timestamps. A \`${UNRECOGNIZED_ACTIVITY_EVENT}\` entry is a code this relay does not know yet — the app is ahead of the allowlist, and the original value was discarded, not shown.`,
       "",
       fencedText(renderActivityLog(safeReport.activityLog)),
     );
@@ -1510,6 +1545,15 @@ function normalizedText(value, maximumLength, required, { compact = false } = {}
   }
 
   return result;
+}
+
+/** Bound an activity entry before it is either allowlisted or bucketed as unrecognized. */
+function isWellFormedActivityEvent(value) {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_ACTIVITY_EVENT_LENGTH &&
+    ACTIVITY_EVENT_PATTERN.test(value)
+  );
 }
 
 function enumValue(value, allowedValues) {

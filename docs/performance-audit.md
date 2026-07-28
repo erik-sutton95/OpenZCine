@@ -34,7 +34,7 @@ that drives most of the performance symptoms.
 | P0-3 | Field-critical | No whole-transaction deadline; command gate can wedge | ✅ Fixed |
 | P0-4 | Field-critical | Socket receive self-recurses on `EAGAIN`/`EINTR` | ✅ Fixed |
 | P0-5 | Field-critical | `.cube` LUT import has no size cap | ✅ Fixed |
-| P1-1 | Performance | Per-frame main-thread work: decode + render + scopes (session is *already* off-main — see Correction) | ✅ decode (Phase A) + render (Win 1, gated) + scopes (P1-6) |
+| P1-1 | Performance | Per-frame main-thread work: decode + render + scopes (session is *already* off-main — see Correction) | ✅ decode (Phase A) + render (Win 1, **default since 2026-07-26**) + scopes (P1-6) |
 | P1-2 | Performance | Parser copies full frame 3× to read ~12 header bytes | ✅ Fixed |
 | P1-3 | Performance | `cameraState` reassigned every frame → whole-HUD invalidation | ✅ Fixed |
 | P1-4 | Performance | Render output never cached; re-renders on unrelated churn | 📋 Planned |
@@ -58,7 +58,7 @@ that drives most of the performance symptoms.
 > assembly and LiveViewObject parse were already off-main.** The actual per-frame *main-thread*
 > costs were only three things: `UIImage(data:)` JPEG decode (on the model), the `createCGImage`
 > Core Image render (in `updateUIView`), and scope sampling (on the model). They are addressed by
-> **Phase A** (off-main decode ✅), **GPU Win 1** (Metal render, no readback, gated ✅), and **P1-6**
+> **Phase A** (off-main decode ✅), **GPU Win 1** (Metal render, no readback — **default since 2026-07-26**, validated by diffing both renderers on one frame: 0.34% of pixels differ, half-float rounding), and **P1-6**
 > (off-main scopes ✅). The `@MainActor`→`actor` conversion (refactor plan **Phase C**) is therefore
 > **dropped** — its premise was false; it would add actor-hop overhead at real risk to a
 > field-critical path for no benefit.

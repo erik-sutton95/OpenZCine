@@ -163,7 +163,7 @@ public enum FocusResetReleasePolicy: Equatable, Sendable {
         focusArea: String,
         liveViewFocus: PTPLiveViewFocusInfo?
     ) -> Bool {
-        if focusArea == "Subject" { return true }
+        if PTPCameraPropertyDecoders.isSubjectTrackingArea(focusArea) { return true }
         guard let focus = liveViewFocus else { return false }
         if focus.trackingAFActive { return true }
         return focus.isSubjectTrackingLatched

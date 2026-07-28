@@ -10,7 +10,7 @@ import Foundation
 /// scope-sampling refresh — the two heaviest per-frame CPU/GPU costs — sheds the heat that causes the
 /// throttle *on our terms* while staying readable, and is a strict no-op until the device is genuinely
 /// hot. This tier itself never changes the camera's recording resolution, codec, or take; the shell
-/// may separately pass it to ``LiveViewLoadPolicy`` to reduce only the disposable preview stream.
+/// governs scope sampling cadence only; the live-view stream always honours the operator.
 public enum ThermalTier: Int, Sendable, CaseIterable, Comparable {
     case nominal = 0
     case fair = 1
@@ -51,31 +51,5 @@ public enum ThermalTier: Int, Sendable, CaseIterable, Comparable {
     /// `>= base`, so callers can substitute it wherever they used the fixed base interval.
     public func sheddingInterval(base: Double) -> Double {
         base * cadenceMultiplier
-    }
-}
-
-/// Chooses the camera preview size under recording and thermal load without ever increasing the
-/// operator's requested quality. This affects only the live-view JPEG stream; it never changes the
-/// recording resolution, codec, or the take on the camera card.
-public enum LiveViewLoadPolicy {
-    /// Returns a supported `LiveViewImageSize` (`1` = QVGA, `2` = VGA, `3` = XGA) that bounds the
-    /// requested preview size for the current load conditions.
-    public static func effectiveImageSize(
-        requested: UInt8,
-        isRecording: Bool,
-        thermalTier: ThermalTier,
-        cameraOverheating: Bool
-    ) -> UInt8 {
-        var cap: UInt8 = isRecording ? 2 : 3
-        switch thermalTier {
-        case .critical:
-            cap = 1
-        case .serious:
-            cap = min(cap, 2)
-        case .nominal, .fair:
-            break
-        }
-        if cameraOverheating { cap = 1 }
-        return min(max(requested, 1), cap)
     }
 }

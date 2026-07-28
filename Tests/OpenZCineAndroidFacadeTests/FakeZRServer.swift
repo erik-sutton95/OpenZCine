@@ -167,6 +167,9 @@ final class FakeZRServer: @unchecked Sendable {
         var focusModeRaw: UInt8 = 1  // AF-C
         var focusAreaRaw: UInt16 = 0x8033  // Subject
         var focusSubjectRaw: UInt8 = 2  // People
+        /// The body's `MovieShutterMode` readback (1 = speed, 2 = angle). Lets a test stand up two
+        /// differently-configured bodies — a Z5II on shutter speed and a Z6III on shutter angle.
+        var movieShutterModeRaw: UInt8 = 2  // angle
         /// Current packed movie-screen-size value returned by property readback.
         var movieRecordScreenSizeRaw: UInt64 = 0x1770_0D08_0019_0000
         /// Current packed movie-file-type value returned by property readback.
@@ -174,6 +177,14 @@ final class FakeZRServer: @unchecked Sendable {
         /// Optional codec-specific `MovScreenSize` descriptor domains. When configured, a codec
         /// write switches the current screen size to the first value in that codec's domain.
         var screenSizeModesByFileType: [UInt32: [UInt64]] = [:]
+        /// The `MovFileType` enum this body advertises. Overridable so a test can stand up a body
+        /// that offers BOTH H.265 bit depths, the Z6III case behind #276.
+        var movieFileTypeEnum: [UInt32] = [0x0031_0A03, 0x0001_0A01]
+        /// The `StillCaptureMode` enum this body advertises, in the body's own release-mode order.
+        var stillCaptureModeEnum: [UInt16] = [0x0001, 0x8010, 0x0002, 0x8019]
+        /// The `ExposureProgramMode` enum this body advertises. The default has NO user banks —
+        /// a Zf. A body with banks lists them here.
+        var exposureProgramEnum: [UInt16] = [0x8010, 0x0002, 0x0004, 0x0003, 0x0001]
     }
 
     let port: UInt16
@@ -217,6 +228,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var focusAreaRaw: UInt16
     private var focusSubjectRaw: UInt8
     private var eventConnection: Int32 = -1
+    private var queuedDeviceEvents: [(code: UInt16, parameters: [UInt32])] = []
 
     init(options: Options = Options()) throws {
         self.options = options
@@ -415,6 +427,17 @@ final class FakeZRServer: @unchecked Sendable {
         return true
     }
 
+    /// Queues one event on the body's Nikon event queue, where `GetEventEx` (0x941C) reads it.
+    ///
+    /// This is the channel a real body uses for `DevicePropChanged` and for a shutter fired ON
+    /// THE BODY — distinct from ``sendEvent(rawEventCode:transactionID:parameters:)``, which
+    /// pushes an asynchronous packet down the PTP-IP event socket.
+    func queueDeviceEvent(rawEventCode: UInt16, parameters: [UInt32] = []) {
+        lock.lock()
+        queuedDeviceEvents.append((code: rawEventCode, parameters: parameters))
+        lock.unlock()
+    }
+
     /// Simulates the camera dropping only its PTP-IP event socket. The serve
     /// thread owns the eventual close; shutdown merely wakes its blocked read
     /// without racing descriptor reuse in this test server.
@@ -590,6 +613,20 @@ final class FakeZRServer: @unchecked Sendable {
             sendResponse(connection, code: response, transactionID: transactionID)
         case .getDeviceInfo:
             sendDataIn(connection, data: deviceInfoDataset(), transactionID: transactionID)
+        case .getEventEx:
+            // Parameter1 = 0 tells the body to clear the queue after the read (the production
+            // poll always does), so the same events are never handed out twice.
+            lock.lock()
+            let events = queuedDeviceEvents
+            if parameters.first == 0 { queuedDeviceEvents.removeAll() }
+            lock.unlock()
+            var payload = ByteCoding.uint32LE(UInt32(events.count))
+            for event in events {
+                payload += ByteCoding.uint16LE(event.code)
+                payload += ByteCoding.uint16LE(UInt16(event.parameters.count))
+                for parameter in event.parameters { payload += ByteCoding.uint32LE(parameter) }
+            }
+            sendDataIn(connection, data: Data(payload), transactionID: transactionID)
         case .startLiveView:
             lock.lock()
             liveViewActive = true
@@ -990,7 +1027,7 @@ final class FakeZRServer: @unchecked Sendable {
         case .exposureIndicateLightup:
             return Data([0])  // 0 = indicator lit
         case .movieShutterMode:
-            return Data([2])  // angle
+            return Data([options.movieShutterModeRaw])
         case .movieTVLockSetting:
             return Data([0])
         case .movieShutterAngle:
@@ -1128,10 +1165,17 @@ final class FakeZRServer: @unchecked Sendable {
             return enumDescriptor(
                 property: property,
                 valueByteCount: 4,
-                values: [
-                    ByteCoding.uint32LE(0x0031_0A03),
-                    ByteCoding.uint32LE(0x0001_0A01),
-                ])
+                values: options.movieFileTypeEnum.map(ByteCoding.uint32LE))
+        case .stillCaptureMode:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: options.stillCaptureModeEnum.map(ByteCoding.uint16LE))
+        case .exposureProgramMode:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: options.exposureProgramEnum.map(ByteCoding.uint16LE))
         case .movieFNumber:
             return enumDescriptor(
                 property: property,

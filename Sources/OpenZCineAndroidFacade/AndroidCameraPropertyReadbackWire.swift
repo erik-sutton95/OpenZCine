@@ -65,7 +65,15 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         codecs: [String] = [],
         vibrationReduction: [String] = [],
         electronicVR: [String] = [],
-        imageSizes: [String] = []
+        imageSizes: [String] = [],
+        exposureModes: [String] = [],
+        userModePrograms: [String] = [],
+        driveModes: [String] = [],
+        meteringModes: [String] = [],
+        pictureControls: [String] = [],
+        rawCompressions: [String] = [],
+        codecBitDepths: [String] = [],
+        codecBitDepth: String? = nil
     ) {
         self.resolutionFrameRate = resolutionFrameRate
         self.codec = codec
@@ -91,6 +99,14 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         self.vibrationReduction = vibrationReduction
         self.electronicVR = electronicVR
         self.imageSizes = imageSizes
+        self.exposureModes = exposureModes
+        self.userModePrograms = userModePrograms
+        self.driveModes = driveModes
+        self.meteringModes = meteringModes
+        self.pictureControls = pictureControls
+        self.rawCompressions = rawCompressions
+        self.codecBitDepths = codecBitDepths
+        self.codecBitDepth = codecBitDepth
     }
 
     /// Current shared-core resolution/frame-rate label matching descriptor options.
@@ -141,6 +157,29 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
     public let electronicVR: [String]
     /// Photo image sizes from the camera's string enumeration, verbatim.
     public let imageSizes: [String]
+    /// Exposure programs the body advertises, in its order. Empty means the body did not
+    /// enumerate them — never a reason to synthesise P/A/S/M + U banks (#274).
+    public let exposureModes: [String]
+    /// Inner programs a U bank can run as, when the body advertises the property at all.
+    public let userModePrograms: [String]
+    /// Release/drive modes the body advertises, in the body's own release-mode order.
+    public let driveModes: [String]
+    /// Metering patterns the body advertises.
+    public let meteringModes: [String]
+    /// Picture controls the body advertises, including only the custom/cloud slots it has.
+    public let pictureControls: [String]
+    /// NEF (RAW) recording compressions the body advertises — the modern trio on current bodies,
+    /// the Compressed/Uncompressed pair on first-generation ones.
+    public let rawCompressions: [String]
+    /// The bit depths behind the `codecs` rows, one entry per advertised variant of a codec the
+    /// body offers at more than one depth, as `row␞caption␞writeValue` (␞ = U+001E). `writeValue`
+    /// is the exact label the codec write resolves to a single advertised raw, so the shell picks
+    /// a depth without ever taking a raw across JNI or reading one out of a label. Empty when no
+    /// advertised codec has a depth choice — the core decides that, not the shell.
+    public let codecBitDepths: [String]
+    /// Caption of the depth the body is currently recording at ("10-bit"), so the shell can fill
+    /// the right side of the pair. Nil when the current codec has no depth choice.
+    public let codecBitDepth: String?
 
     /// Empty capabilities before a successful descriptor refresh.
     public static let empty = AndroidCameraControlCapabilities()
@@ -300,11 +339,20 @@ public enum AndroidCameraPropertyReadbackWire {
         appendOptions("options.whiteBalanceTint", values: controls.whiteBalanceTints, to: &fields)
         appendOptions(
             "options.resolutionFrameRate", values: controls.resolutionFrameRates, to: &fields)
+        append("codecBitDepth", value: controls.codecBitDepth, to: &fields)
         appendOptions("options.codec", values: controls.codecs, to: &fields)
+        appendOptions("options.codecBitDepth", values: controls.codecBitDepths, to: &fields)
         appendOptions(
             "options.vibrationReduction", values: controls.vibrationReduction, to: &fields)
         appendOptions("options.electronicVr", values: controls.electronicVR, to: &fields)
         appendOptions("options.imageSize", values: controls.imageSizes, to: &fields)
+        appendOptions("options.exposureMode", values: controls.exposureModes, to: &fields)
+        appendOptions(
+            "options.userModeProgram", values: controls.userModePrograms, to: &fields)
+        appendOptions("options.drive", values: controls.driveModes, to: &fields)
+        appendOptions("options.metering", values: controls.meteringModes, to: &fields)
+        appendOptions("options.pictureControl", values: controls.pictureControls, to: &fields)
+        appendOptions("options.rawCompression", values: controls.rawCompressions, to: &fields)
         return fields.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n")
     }
 

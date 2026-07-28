@@ -90,9 +90,9 @@ import Testing
     // AF-area mode (UINT16): MovieFocusMeteringMode.
     #expect(PTPCameraPropertyDecoders.movieFocusArea(0x8010) == "Single")
     #expect(PTPCameraPropertyDecoders.movieFocusArea(0x8011) == "Auto")
-    #expect(PTPCameraPropertyDecoders.movieFocusArea(0x8033) == "Subject")
+    #expect(PTPCameraPropertyDecoders.movieFocusArea(0x8033) == "Subject tracking")
     #expect(PTPCameraPropertyDecoders.movieFocusAreaCode(for: "Wide-L") == 0x8019)
-    #expect(PTPCameraPropertyDecoders.movieFocusAreaCode(for: "Subject") == 0x8033)
+    #expect(PTPCameraPropertyDecoders.movieFocusAreaCode(for: "Subject tracking") == 0x8033)
     // Subject detection (UINT8): MovieAFSubjectDetection.
     #expect(PTPCameraPropertyDecoders.movieAFSubject(2) == "People")
     #expect(PTPCameraPropertyDecoders.movieAFSubject(5) == "Bird")
@@ -105,7 +105,7 @@ import Testing
             == PTPCameraPropertyWrite(property: .movieFocusMode, data: Data([0x01])))
     // UINT16 little-endian: 0x8033 → [0x33, 0x80].
     #expect(
-        PTPCameraPropertyWrite.request(control: .focusArea, label: "Subject")
+        PTPCameraPropertyWrite.request(control: .focusArea, label: "Subject tracking")
             == PTPCameraPropertyWrite(
                 property: .movieFocusMeteringMode, data: Data([0x33, 0x80])))
     #expect(
@@ -263,7 +263,7 @@ import Testing
         .applying(property: .movieFocusMeteringMode, data: Data([0x33, 0x80]))
         .applying(property: .movieAFSubjectDetection, data: Data([0x03]))
     #expect(snapshot.focusMode == "AF-C")
-    #expect(snapshot.focusArea == "Subject")
+    #expect(snapshot.focusArea == "Subject tracking")
     #expect(snapshot.focusSubject == "Animal")
     // The FOCUS bar readout reflects the camera's AF mode.
     let state = CameraDisplayState.preview.applyingCameraProperties(snapshot)
@@ -558,7 +558,7 @@ import Testing
     #expect(
         PTPCameraPropertyDecoders.optionLabels(
             for: .movieFocusMeteringMode, rawValues: [0x8010, 0x8019, 0x8033])
-            == ["Single", "Wide-L", "Subject"])
+            == ["Single", "Wide-L", "Subject tracking"])
     #expect(
         PTPCameraPropertyDecoders.optionLabels(
             for: .movieAFSubjectDetection, rawValues: [1, 2, 3]) == ["Auto", "People", "Animal"])

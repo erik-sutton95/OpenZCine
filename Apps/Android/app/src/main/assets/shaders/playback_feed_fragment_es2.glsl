@@ -8,6 +8,10 @@ uniform sampler2D uLimitsPaintCube;
 uniform sampler2D uLimitsWeightCube;
 uniform float uFlipInputY;
 uniform float uLutSize;
+// 50/50 Log-vs-LUT comparison: 1 = on, and 1 = a vertical boundary (Log left, LUT right)
+// against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
+uniform float uSplitOn;
+uniform float uSplitVertical;
 uniform float uLimitsPaintSize;
 uniform float uLimitsWeightSize;
 uniform float uLimitsOn;
@@ -16,10 +20,10 @@ uniform vec2 uDisplaySize;
 
 uniform float uPeakingOn;
 uniform vec3 uPeakingColor;
-uniform vec4 uDeLogCurve0To3;
-uniform float uDeLogCurve4;
-uniform float uPeakingThreshold;
-uniform float uPeakingRamp;
+// Pass 1's output: R = stroke opacity, G = the hairline's, at SOURCE resolution.
+// The detector itself lives in `peaking_mask_fragment_es2.glsl`; see its header for why
+// it is a separate pass and not an inline block here.
+uniform sampler2D uPeakingMask;
 
 uniform float uZebraHighlightOn;
 uniform float uZebraHighlight;
@@ -32,7 +36,9 @@ varying vec2 vTexSamplingCoord;
 
 const vec3 LUMA_709 = vec3(0.2126, 0.7152, 0.0722);
 const float ATLAS_COLUMNS = 8.0;
-const float PEAKING_EDGE_INSET = 6.0;
+// Focus peaking's hairline colour, from `Peaking.underColor`. Every other peaking
+// constant belongs to the detector and lives with it, in the mask pass.
+const vec3 PEAKING_UNDER_COLOR = vec3(0.04, 0.04, 0.05);
 const float ZEBRA_GAIN = 40.0;
 const float ZEBRA_HALF_WIDTH = 5.0 / 255.0;
 const float STRIPE_PITCH = 14.14;
@@ -77,6 +83,25 @@ vec3 sampleSource(vec2 coordinate) {
     return texture2D(uTexSampler, vec2(coordinate.x, y)).rgb;
 }
 
+// Whether this fragment belongs to the graded half of a 50/50 comparison — always true when the
+// comparison is off, so the LUT stays one predicate rather than two code paths. A branch inside an
+// existing kernel is close to free; a second pass would not be.
+//
+// `vTexSamplingCoord` spans exactly the visible image rectangle: the caller sets the viewport to
+// `liveFeedContentRect` before drawing, so 0.5 is the middle of the IMAGE and letterbox, pillarbox
+// and chrome are all outside the quad entirely.
+//
+// Top/bottom uses the same display convention as the zebra block below — GL fragments count up, so
+// the top of the display is `coordinate.y == 1`, not 0. NOT the `uFlipInputY` sampling fold: that
+// one is about where a texel lives in the input texture, and the operator's "top" is where the
+// pixel lands on screen.
+bool splitIsGradedSide(vec2 coordinate) {
+    if (uSplitOn < 0.5) {
+        return true;
+    }
+    return uSplitVertical > 0.5 ? coordinate.x >= 0.5 : coordinate.y < 0.5;
+}
+
 vec3 limitsPaint(vec3 color) {
     if (uLimitsPaintSize < 2.0) {
         return color;
@@ -113,98 +138,65 @@ float limitsWeight(vec3 color) {
     return clamp(mix(lower, upper, blue - lowerSlice), 0.0, 1.0);
 }
 
-float monotoneTone(float y0, float y1, float y2, float y3, float fraction) {
-    float m1 = 0.5 * (y2 - y0);
-    float m2 = 0.5 * (y3 - y1);
-    float t2 = fraction * fraction;
-    float t3 = t2 * fraction;
-    float value =
-        (2.0 * t3 - 3.0 * t2 + 1.0) * y1
-        + (t3 - 2.0 * t2 + fraction) * m1
-        + (-2.0 * t3 + 3.0 * t2) * y2
-        + (t3 - t2) * m2;
-    return clamp(value, min(y1, y2), max(y1, y2));
-}
+// Morphological closing of the finished stroke, over the element `Peaking.closingOffsets`
+// measures: `CIMorphologyMaximum` at radius 1 is a five-point PLUS, not the 3x3 square the
+// filter name suggests. Dilate then erode therefore spans the |dx| + |dy| <= 2 diamond, so
+// 13 distinct mask reads answer all 25 min-of-max terms.
+//
+// This is what rejoins the dashes a strict noise gate punches into edges that ARE sharp; a
+// line broken into dashes reads as MORE noise than a continuous one even with less ink on
+// screen, which is how a stricter setting can look worse. Closing and not opening: the
+// strokes are about a pixel wide, so eroding first would delete them along with the specks.
+float peakingClosedStroke(vec2 centre, vec2 texel) {
+    float m00 = texture2D(uPeakingMask, centre).r;
+    float mR = texture2D(uPeakingMask, centre + vec2(texel.x, 0.0)).r;
+    float mL = texture2D(uPeakingMask, centre - vec2(texel.x, 0.0)).r;
+    float mD = texture2D(uPeakingMask, centre + vec2(0.0, texel.y)).r;
+    float mU = texture2D(uPeakingMask, centre - vec2(0.0, texel.y)).r;
+    float mRR = texture2D(uPeakingMask, centre + vec2(2.0 * texel.x, 0.0)).r;
+    float mLL = texture2D(uPeakingMask, centre - vec2(2.0 * texel.x, 0.0)).r;
+    float mDD = texture2D(uPeakingMask, centre + vec2(0.0, 2.0 * texel.y)).r;
+    float mUU = texture2D(uPeakingMask, centre - vec2(0.0, 2.0 * texel.y)).r;
+    float mRD = texture2D(uPeakingMask, centre + vec2(texel.x, texel.y)).r;
+    float mRU = texture2D(uPeakingMask, centre + vec2(texel.x, -texel.y)).r;
+    float mLD = texture2D(uPeakingMask, centre + vec2(-texel.x, texel.y)).r;
+    float mLU = texture2D(uPeakingMask, centre + vec2(-texel.x, -texel.y)).r;
 
-float deLogGrey(vec2 coordinate) {
-    vec3 color = sampleSource(coordinate);
-    float position = clamp((color.r + color.g + color.b) / 3.0, 0.0, 1.0) * 4.0;
-    float segment = min(floor(position), 3.0);
-    float fraction = position - segment;
-    if (segment < 0.5) {
-        return monotoneTone(
-            uDeLogCurve0To3.x,
-            uDeLogCurve0To3.x,
-            uDeLogCurve0To3.y,
-            uDeLogCurve0To3.z,
-            fraction
-        );
-    }
-    if (segment < 1.5) {
-        return monotoneTone(
-            uDeLogCurve0To3.x,
-            uDeLogCurve0To3.y,
-            uDeLogCurve0To3.z,
-            uDeLogCurve0To3.w,
-            fraction
-        );
-    }
-    if (segment < 2.5) {
-        return monotoneTone(
-            uDeLogCurve0To3.y,
-            uDeLogCurve0To3.z,
-            uDeLogCurve0To3.w,
-            uDeLogCurve4,
-            fraction
-        );
-    }
-    return monotoneTone(
-        uDeLogCurve0To3.z,
-        uDeLogCurve0To3.w,
-        uDeLogCurve4,
-        uDeLogCurve4,
-        fraction
-    );
-}
-
-// Thin peaking: pure 1 px central differences (no 3×3 Sobel / pre-blur —
-// those fatten the ridge). Strict threshold + minimal AA.
-// Wire: uPeakingThreshold = sensitivity×0.06; uPeakingRamp must stay *used*
-// or ES2 strips it and Media3 NPE fail-closes the whole assist path.
-float edgeMagnitude(vec2 coordinate) {
-    vec2 px = 1.0 / max(uSourceSize, vec2(1.0));
-    float l = deLogGrey(coordinate - vec2(px.x, 0.0));
-    float r = deLogGrey(coordinate + vec2(px.x, 0.0));
-    float u = deLogGrey(coordinate - vec2(0.0, px.y));
-    float d = deLogGrey(coordinate + vec2(0.0, px.y));
-    return length(vec2(r - l, d - u)) * 0.5;
+    // Dilation at each of the element's five offsets...
+    float dC = max(max(max(m00, mR), max(mL, mD)), mU);
+    float dR = max(max(max(mR, mRR), max(m00, mRD)), mRU);
+    float dL = max(max(max(mL, m00), max(mLL, mLD)), mLU);
+    float dD = max(max(max(mD, mRD), max(mLD, mDD)), m00);
+    float dU = max(max(max(mU, mRU), max(mLU, m00)), mUU);
+    // ...then erosion over the same element.
+    return min(min(min(dC, dR), min(dL, dD)), dU);
 }
 
 void main() {
     vec3 source = sampleSource(vTexSamplingCoord);
-    vec3 color = grade(source);
+    vec3 color = splitIsGradedSide(vTexSamplingCoord) ? grade(source) : source;
 
     if (uLimitsOn > 0.5) {
         color = mix(color, limitsPaint(source), limitsWeight(source));
     }
 
     if (uPeakingOn > 0.5) {
-        vec2 inset = vec2(PEAKING_EDGE_INSET) / max(uSourceSize, vec2(1.0));
-        if (
-            vTexSamplingCoord.x >= inset.x
-            && vTexSamplingCoord.y >= inset.y
-            && vTexSamplingCoord.x < 1.0 - inset.x
-            && vTexSamplingCoord.y < 1.0 - inset.y
-        ) {
-            float g = edgeMagnitude(vTexSamplingCoord);
-            float threshold = clamp(uPeakingThreshold * 30.0, 0.045, 0.14);
-            // Very narrow AA — almost a hard edge (ramp kept live for the linker).
-            float aa = threshold * (0.06 + 0.04 * clamp(160.0 / max(uPeakingRamp, 1.0), 0.5, 1.5));
-            float core = smoothstep(threshold, threshold + aa, g);
-            float under = smoothstep(threshold - aa * 0.35, threshold, g) * (1.0 - core);
-            color = mix(color, vec3(0.04, 0.04, 0.05), under * 0.28);
-            color = mix(color, uPeakingColor, core);
-        }
+        // Snap to the source pixel grid: the mask has one texel per source pixel, and the
+        // closing's offsets are source pixels, so every read has to land on a texel centre.
+        // Sampling from a fractional position would bilinear-blend four mask texels and
+        // soften the very thing the closing exists to keep continuous.
+        vec2 sourceSize = max(uSourceSize, vec2(1.0));
+        vec2 texel = 1.0 / sourceSize;
+        vec2 centre = (floor(vTexSamplingCoord * sourceSize) + 0.5) * texel;
+        float stroke = peakingClosedStroke(centre, texel);
+        // The hairline is NOT closed, matching iOS: morphology is two more passes, and a
+        // hairline drawn under the stroke gains almost nothing from being continuous.
+        float under = texture2D(uPeakingMask, centre).g;
+        // Hairline first at its full ramp opacity, then the stroke over the top of it —
+        // `ImageEffectsCompositor.composite`'s two blends, in that order. The hairline is
+        // what stops a bright stroke from vanishing into a bright subject.
+        color = mix(color, PEAKING_UNDER_COLOR, under);
+        color = mix(color, uPeakingColor, stroke);
     }
 
     if (uZebraHighlightOn > 0.5 || uZebraMidtoneOn > 0.5) {

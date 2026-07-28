@@ -1259,7 +1259,6 @@ private fun ProgressivePlayer(
         if (framingAssistsVisible) {
             LocalFramingAssistOverlay(
                 configuration = playbackFramingConfiguration,
-                cleanMode = false,
                 feedRect =
                     fittedVideo?.let { rect ->
                         FramingAssistRect(

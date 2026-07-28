@@ -38,6 +38,12 @@ struct MonitorExperience: View {
             .overlay {
                 TimerTallyBorderOverlay()
             }
+            // A dropped session keeps the operator here on the held frame, with Retry / Operator
+            // menu, instead of collapsing the monitor back to the connect screen.
+            .overlay {
+                MonitorRecoveryOverlay()
+                    .animation(.easeOut(duration: 0.2), value: model.sessionRecovery)
+            }
             // Instant playback covers the whole monitor — a focused look at the captured
             // frame, above every piece of chrome.
             .overlay {
@@ -98,6 +104,9 @@ private struct LiveViewShell: View {
                     if let step = model.liveViewGuideStep,
                         model.activePanel == nil,
                         model.displayMode == .live,
+                        // The Edit view owns the screen while it is open; a coach mark on top of
+                        // it would both confuse and steal taps meant for a badge.
+                        model.chromeEditorMode == nil,
                         !model.isRecording
                     {
                         LiveViewGuideOverlay(
@@ -556,15 +565,55 @@ private struct LiveFeedFocusOverlay: View {
     let lockProgress: CGFloat
 
     var body: some View {
-        // The AF box shows in live AND clean (DISP 1 & 2) — focus feedback the operator relies on
-        // even in the stripped-back view. (Command never mounts the feed, so no guard needed.)
-        if let focus = model.liveViewFocus, !focus.boxes.isEmpty {
+        // The AF box is an element like any other: on by default in DISP 1 and DISP 2 (focus
+        // feedback the operator relies on even in the stripped-back view), and hideable in both.
+        // (Command never mounts the feed, so no mode guard is needed.)
+        if model.chromeSectionMounts(.focusBox), let focus = model.liveViewFocus,
+            !focus.boxes.isEmpty
+        {
             // Focus metadata repeats identically on most frames — the Equatable guard skips the
             // Canvas redraw unless a box, lock, or progress changed.
             LiveFocusBoxOverlay(
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress
             )
             .equatable()
+            // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
+            // below), and this Canvas draws the boxes itself.
+            .opacity(focusBoxEditDimmed ? 0.3 : 1)
+            // The badge goes on the primary AF box, not the whole feed — a dashed outline round
+            // the entire image would name nothing.
+            .overlay { focusBoxEditTarget(focus) }
+        }
+    }
+
+    /// The AF box is force-mounted while editing a mode that has it switched off — dim it so the
+    /// operator sees it is off and can switch it back on from its badge.
+    private var focusBoxEditDimmed: Bool {
+        guard let mode = model.chromeEditorMode,
+            DisplayChromeVisibility.isConfigurable(.focusBox, in: mode)
+        else { return false }
+        return !model.preferences.chrome(for: mode, capture: model.captureLayoutMode)
+            .focusBoxVisible
+    }
+
+    /// A zero-content proxy sized to the primary AF box, so the Edit view's outline and badge land
+    /// on the box the operator sees. Mounted only while editing.
+    @ViewBuilder private func focusBoxEditTarget(_ focus: PTPLiveViewFocusInfo) -> some View {
+        if model.chromeEditorMode != nil, focus.coordinateWidth > 0, focus.coordinateHeight > 0,
+            let box = focus.boxes.first
+        {
+            GeometryReader { proxy in
+                let scaleX = proxy.size.width / CGFloat(focus.coordinateWidth)
+                let scaleY = proxy.size.height / CGFloat(focus.coordinateHeight)
+                let width = CGFloat(box.width) * scaleX
+                let height = CGFloat(box.height) * scaleY
+                Color.clear
+                    .frame(width: width, height: height)
+                    .chromeEditable(.focusBox, editing: model.chromeEditorMode)
+                    .position(
+                        x: CGFloat(box.centerX) * scaleX,
+                        y: CGFloat(box.centerY) * scaleY)
+            }
         }
     }
 }
@@ -943,12 +992,21 @@ struct BatteryRailModule: View {
                     // the zone ends short of the feed frame, which keeps the gauges off the
                     // image.
                     batteryPill
+                        .chromeEditable(
+                            .batteryIndicators, editing: model.chromeEditorMode
+                        )
                         .position(x: proxy.size.width / 2 - 6, y: CGFloat(layout.pillCenterY))
                 } else {
                     phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
+                        .chromeEditable(
+                            .batteryIndicators, editing: model.chromeEditorMode
+                        )
                         .position(
                             x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
                     cameraBatteryIndicator
+                        .chromeEditable(
+                            .batteryIndicators, editing: model.chromeEditorMode
+                        )
                         .position(
                             x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
                 }
