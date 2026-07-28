@@ -339,14 +339,17 @@ import Testing
     #expect(landscapeRight.feed.x == 0)
     #expect(landscapeLeft.feed.height == 390)
     #expect(landscapeLeft.batteryRail == landscapeRight.batteryRail)
-    // Dynamic Island layouts retain the established fixed inset from the feed in either
-    // orientation. Only classic-notch geometry receives the lock-clearance adjustment.
+    // The island-side feed starts clear of the lock, so it keeps the established fixed inset.
     #expect(
         landscapeLeft.topInfoDeck.x
             == landscapeLeft.feed.x + MonitorLiveViewModuleLayout.topInfoDeckSideInset)
+    // The opposite orientation reports no leading inset, so the feed runs flush under the lock and
+    // the deck insets past it instead — the same clearance a classic-notch or 16:9 layout gets.
+    let lock = landscapeRight.lockButton
+    #expect(landscapeRight.feed.x < lock.x)
     #expect(
         landscapeRight.topInfoDeck.x
-            == landscapeRight.feed.x + MonitorLiveViewModuleLayout.topInfoDeckSideInset)
+            == lock.x + lock.width + MonitorLiveViewModuleLayout.topInfoDeckControlGap)
     #expect(landscapeLeft.bottomAssistTools == landscapeRight.bottomAssistTools)
     #expect(landscapeLeft.bottomCaptureSettings == landscapeRight.bottomCaptureSettings)
     #expect(landscapeLeft.rightRailControls.x > landscapeLeft.feed.x + landscapeLeft.feed.width)
@@ -467,6 +470,83 @@ import Testing
     #expect(abs(deckCenter - feedCenter) < 0.001)
 }
 
+/// A 16:9 landscape viewport (1920×1080 emulator, 16:9 tablet) pins the feed flush and leaves no
+/// side lanes, so both chrome clusters fall back over it. The deck — which the DISP-3 dashboard
+/// fills — has to stop short of both in either chrome direction, or the dashboard renders under
+/// the lock / battery at one end and the record / DISP / media / settings buttons at the other.
+@Test func sixteenByNineLandscapeInfoDeckClearsBothChromeClusters() {
+    for direction in [
+        MonitorHorizontalLayoutDirection.standard, MonitorHorizontalLayoutDirection.mirrored,
+    ] {
+        let layout = MonitorLiveViewModuleLayout.fit(
+            viewportWidth: 731.4,
+            viewportHeight: 411.4,
+            feedSafeArea: .zero,
+            chromeInsets: MonitorChromeLayout.insets(feedSafeArea: .zero),
+            bottomBarHeight: 54,
+            horizontalDirection: direction
+        )
+        let deck = layout.topInfoDeck
+        let rail = layout.rightRailControls
+        let lock = layout.lockButton
+        let battery = layout.batteryRail
+        let gap = MonitorLiveViewModuleLayout.topInfoDeckControlGap
+        // The lock and battery share a leading edge; the deck must clear both, so check the wider.
+        let lockCluster = max(lock.x + lock.width, battery.x + battery.width)
+        let (leadingEdge, trailingEdge) =
+            direction == .mirrored
+            ? (rail.x + rail.width, min(lock.x, battery.x))
+            : (lockCluster, rail.x)
+
+        // Precondition: the lanes really did collapse, so both clusters overlap the feed.
+        #expect(rail.x < layout.feed.x + layout.feed.width)
+        #expect(lock.x >= layout.feed.x)
+        #expect(deck.width > 0)
+        #expect(leadingEdge + gap <= deck.x)
+        #expect(deck.x + deck.width + gap <= trailingEdge)
+    }
+}
+
+/// The lock clearance is a symmetric feed inset, so a classic-notch deck stays centered over the
+/// feed while clearing the lock — the property the old compact-classic-notch special case had.
+@Test func classicNotchLandscapeInfoDeckClearsLockAndStaysCentered() {
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
+    let layout = MonitorLiveViewModuleLayout.fit(
+        viewportWidth: 896,
+        viewportHeight: 414,
+        feedSafeArea: safeArea,
+        chromeInsets: MonitorChromeLayout.insets(feedSafeArea: safeArea),
+        bottomBarHeight: 58
+    )
+    let lock = layout.lockButton
+    let deckCenter = layout.topInfoDeck.x + layout.topInfoDeck.width / 2
+    let feedCenter = layout.feed.x + layout.feed.width / 2
+
+    #expect(
+        lock.x + lock.width + MonitorLiveViewModuleLayout.topInfoDeckControlGap
+            <= layout.topInfoDeck.x)
+    #expect(abs(deckCenter - feedCenter) < 0.001)
+}
+
+/// The clip is a no-op on the 19.5:9 and 20:9 phones the app actually ships on — the rail sits in
+/// its own lane past the feed, so the deck keeps spanning the full feed.
+@Test func phoneLandscapeInfoDeckKeepsFullFeedSpanDespiteRailClip() {
+    for (width, height) in [(844.0, 390.0), (914.0, 411.4)] {
+        let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)
+        let layout = MonitorLiveViewModuleLayout.fit(
+            viewportWidth: width,
+            viewportHeight: height,
+            feedSafeArea: safeArea,
+            chromeInsets: MonitorChromeLayout.insets(feedSafeArea: safeArea),
+            bottomBarHeight: 54
+        )
+        let inset = MonitorLiveViewModuleLayout.topInfoDeckSideInset
+
+        #expect(layout.topInfoDeck.x == layout.feed.x + inset)
+        #expect(abs(layout.topInfoDeck.width - (layout.feed.width - 2 * inset)) < 0.001)
+    }
+}
+
 @Test func iphone11LandscapeInfoDeckClearsLockButtonAndStaysCentered() {
     let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
     let layout = MonitorLiveViewModuleLayout.fit(
@@ -575,6 +655,26 @@ import Testing
             (layout.displayTop - layout.recordBottom) - (layout.bottomBarTop - layout.displayBottom)
         )
             < 0.0001)
+}
+
+@Test func sideRailDisplayDropsToTheCornerWithNoBottomBar() {
+    // Clean view with the strips switched off: splitting the gap would leave the DISP key
+    // floating in the middle of the freed space with nothing to relate to, so it sits in the
+    // bottom corner instead.
+    let railHeight = 390.0
+    let bare = MonitorSideRailControlLayout.fit(railWidth: 120, railHeight: railHeight)
+
+    #expect(abs(bare.displayBottom - railHeight) < 0.0001)
+    #expect(bare.displayTop > bare.recordBottom, "must not collide with the record button")
+
+    // With a bar present it keeps splitting the gap, so it still reads as part of the rail.
+    let barred = MonitorSideRailControlLayout.fit(
+        railWidth: 120, railHeight: railHeight, bottomBarHeight: 54)
+    #expect(barred.displayBottom < bare.displayBottom)
+
+    // A rail too short for the corner keeps the key clear of record rather than overlapping it.
+    let cramped = MonitorSideRailControlLayout.fit(railWidth: 120, railHeight: 200)
+    #expect(cramped.displayTop >= cramped.recordBottom)
 }
 
 @Test func batteryRailPlacesIndicatorsAroundSideNotch() {

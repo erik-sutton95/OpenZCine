@@ -84,6 +84,19 @@ enum FakeZRMediaCard {
         FakeZRMediaObject(
             handle: 0x100A, filename: "100NIKON", objectFormat: 0x3001,
             sizeBytes: 0, captureDate: "", pixelWidth: 0, pixelHeight: 0, thumbnail: []),
+        // Nikon RAW and Nikon's own `.HIF` HEIF, both on unmapped vendor object-format codes so
+        // the fixture exercises the filename fallback in `PTPObjectInfo.isStillImage` — which is
+        // what real hardware needs. `DSC_0007.NEF` deliberately shares the JPEG's stem to keep a
+        // RAW+JPEG pair on the card; the smaller `.HIF` gives the L/M/S size chips something to
+        // rank against (Z8 sizes: L 8256, M 6192).
+        FakeZRMediaObject(
+            handle: 0x100B, filename: "DSC_0007.NEF", objectFormat: 0xB101,
+            sizeBytes: 50_400_000, captureDate: "20260714T102030",
+            pixelWidth: 8256, pixelHeight: 5504, thumbnail: thumb7),
+        FakeZRMediaObject(
+            handle: 0x100C, filename: "DSC_0009.HIF", objectFormat: 0xB102,
+            sizeBytes: 10_400_000, captureDate: "20260714T103030",
+            pixelWidth: 6192, pixelHeight: 4128, thumbnail: thumb7),
     ]
 
     // 1212 bytes

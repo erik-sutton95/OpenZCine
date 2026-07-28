@@ -25,10 +25,13 @@
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */; };
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
+		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
 		331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */; };
 		7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */; };
+		7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */; };
 		354E32F45664AA90999EF23C /* MonitorLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */; };
+		8B68EB70E5AA9908E04B81BE /* MonitorLUTContributedTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCDBE14234AFC0870DD4C4A4 /* MonitorLUTContributedTable.swift */; };
 		3B2081943B1D2A36C4DA228C /* ScopeSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A11 /* ScopeSampler.swift */; };
 		3B2081943B1D2A36C4DA228D /* AudioLevelMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */; };
 		3C4D5E6F708192A3B4C5D6E7 /* ScopeDisplayScale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F708192A3B4C5D6 /* ScopeDisplayScale.swift */; };
@@ -78,6 +81,7 @@
 		C0DE00000000000000000028 /* MonitorExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000029 /* MonitorExperience.swift */; };
 		C0DE0000000000000000002A /* MonitorPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002B /* MonitorPanels.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
+		C0DE000000000000000000F7 /* MonitorRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* MonitorRecovery.swift */; };
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
 		C0DE00000000000000000030 /* DesignShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000031 /* DesignShared.swift */; };
 		C0DE00000000000000000032 /* MonitorTextFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000033 /* MonitorTextFormat.swift */; };
@@ -85,6 +89,7 @@
 		C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003D /* LiveViewWatchdog.swift */; };
 		C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003F /* RecordDurationEstimator.swift */; };
 		C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000041 /* CameraLinkHealth.swift */; };
+		C0DE000000000000000000F9 /* SessionRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FA /* SessionRecovery.swift */; };
 		C0DE00000000000000000042 /* PTPEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000043 /* PTPEvent.swift */; };
 		C0DE00000000000000000044 /* CameraWarningStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000045 /* CameraWarningStatus.swift */; };
 		C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000051 /* ConnectionProgressSheet.swift */; };
@@ -126,6 +131,7 @@
 		R3D00000000000000000008 /* MediaResolutionBucket.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3D00000000000000000009 /* MediaResolutionBucket.swift */; };
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
 		TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */; };
+		TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000091 /* ConnectionLifecycleTests.swift */; };
 		USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBC00000000000000000001 /* PTPUSBContainer.swift */; };
 		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
 		WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */; };
@@ -188,6 +194,7 @@
 		0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InternetReachability.swift; sourceTree = "<group>"; };
 		1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackAssists.swift; sourceTree = "<group>"; };
 		1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorLUT.swift; path = ../Sources/OpenZCineCore/MonitorLUT.swift; sourceTree = SOURCE_ROOT; };
+		DCDBE14234AFC0870DD4C4A4 /* MonitorLUTContributedTable.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorLUTContributedTable.swift; path = ../Sources/OpenZCineCore/MonitorLUTContributedTable.swift; sourceTree = SOURCE_ROOT; };
 		255DC60AACB3D2B7FFF2AF19 /* ExposureScale.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExposureScale.swift; path = ../Sources/OpenZCineCore/ExposureScale.swift; sourceTree = SOURCE_ROOT; };
 		2B3C4D5E6F708192A3B4C5D6 /* ScopeDisplayScale.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ScopeDisplayScale.swift; path = ../Sources/OpenZCineCore/ScopeDisplayScale.swift; sourceTree = SOURCE_ROOT; };
 		2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDelivery.swift; sourceTree = "<group>"; };
@@ -195,9 +202,11 @@
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStoreTests.swift; sourceTree = "<group>"; };
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
+		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTimecodeTests.swift; sourceTree = "<group>"; };
+		7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPopupPlacementTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		381B085F758DD57850E6CFAE /* FrameioModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModels.swift; path = ../Sources/OpenZCineCore/Frameio/FrameioModels.swift; sourceTree = SOURCE_ROOT; };
 		3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPopup.swift; sourceTree = "<group>"; };
@@ -258,6 +267,7 @@
 		C0DE00000000000000000029 /* MonitorExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorExperience.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002B /* MonitorPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPanels.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
+		C0DE000000000000000000F8 /* MonitorRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRecovery.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000031 /* DesignShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignShared.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000033 /* MonitorTextFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorTextFormat.swift; path = ../Sources/OpenZCineCore/MonitorTextFormat.swift; sourceTree = SOURCE_ROOT; };
@@ -265,6 +275,7 @@
 		C0DE0000000000000000003D /* LiveViewWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveViewWatchdog.swift; path = ../Sources/OpenZCineCore/LiveViewWatchdog.swift; sourceTree = SOURCE_ROOT; };
 		C0DE0000000000000000003F /* RecordDurationEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecordDurationEstimator.swift; path = ../Sources/OpenZCineCore/RecordDurationEstimator.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000041 /* CameraLinkHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraLinkHealth.swift; path = ../Sources/OpenZCineCore/CameraLinkHealth.swift; sourceTree = SOURCE_ROOT; };
+		C0DE000000000000000000FA /* SessionRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SessionRecovery.swift; path = ../Sources/OpenZCineCore/SessionRecovery.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000043 /* PTPEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPEvent.swift; path = ../Sources/OpenZCineCore/PTPEvent.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000045 /* CameraWarningStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraWarningStatus.swift; path = ../Sources/OpenZCineCore/CameraWarningStatus.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000051 /* ConnectionProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProgressSheet.swift; sourceTree = "<group>"; };
@@ -308,6 +319,7 @@
 		R3D00000000000000000009 /* MediaResolutionBucket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MediaResolutionBucket.swift; path = ../Sources/OpenZCineCore/MediaResolutionBucket.swift; sourceTree = SOURCE_ROOT; };
 		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraEstablishRetryTests.swift; sourceTree = "<group>"; };
+		TEST00000000000000000091 /* ConnectionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLifecycleTests.swift; sourceTree = "<group>"; };
 		USBC00000000000000000001 /* PTPUSBContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPUSBContainer.swift; path = ../Sources/OpenZCineCore/PTPUSBContainer.swift; sourceTree = SOURCE_ROOT; };
 		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
 		WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WhiteBalanceKelvinPolicy.swift; path = ../Sources/OpenZCineCore/WhiteBalanceKelvinPolicy.swift; sourceTree = SOURCE_ROOT; };
@@ -341,11 +353,14 @@
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
+				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
 				331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */,
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
+				7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */,
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
 				TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */,
+				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -401,6 +416,7 @@
 				C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */,
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
+				C0DE000000000000000000F8 /* MonitorRecovery.swift */,
 				C0DE000000000000000000B1 /* MonitorPortrait.swift */,
 				C0DE000000000000000000B3 /* MonitorPortraitModules.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
@@ -480,11 +496,13 @@
 				C0DE0000000000000000003B /* FrameRateSampler.swift */,
 				C0DE0000000000000000003D /* LiveViewWatchdog.swift */,
 				C0DE00000000000000000041 /* CameraLinkHealth.swift */,
+				C0DE000000000000000000FA /* SessionRecovery.swift */,
 				C0DE000000000000000000CB /* LinkSignalBars.swift */,
 				C0DE0000000000000000003F /* RecordDurationEstimator.swift */,
 				4A371B3334DBAAA71593727B /* AssistToolActivation.swift */,
 				C08D59A4E8FE339FD74256B9 /* CubeLUT.swift */,
 				1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */,
+				DCDBE14234AFC0870DD4C4A4 /* MonitorLUTContributedTable.swift */,
 				FC0D15A11A2B3C4D5E6F7002 /* MonitorDisplayToneMap.swift */,
 				50E264D06796DCA124FB4D87 /* LUTLibrary.swift */,
 				255DC60AACB3D2B7FFF2AF19 /* ExposureScale.swift */,
@@ -660,11 +678,14 @@
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
+				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
 				331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */,
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,
+				7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */,
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
 				TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */,
+				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -692,6 +713,7 @@
 				C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */,
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
+				C0DE000000000000000000F7 /* MonitorRecovery.swift in Sources */,
 				C0DE000000000000000000B0 /* MonitorPortrait.swift in Sources */,
 				C0DE000000000000000000B2 /* MonitorPortraitModules.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
@@ -735,6 +757,7 @@
 				C0DE0000000000000000003A /* FrameRateSampler.swift in Sources */,
 				C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */,
 				C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */,
+				C0DE000000000000000000F9 /* SessionRecovery.swift in Sources */,
 				C0DE000000000000000000CA /* LinkSignalBars.swift in Sources */,
 				C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */,
 				C0DE00000000000000000014 /* PTPDeviceInfo.swift in Sources */,
@@ -742,6 +765,7 @@
 				6A455A5E5D850A48FD899BF4 /* AssistToolActivation.swift in Sources */,
 				7182A6D4C55420DE0C30F08E /* CubeLUT.swift in Sources */,
 				354E32F45664AA90999EF23C /* MonitorLUT.swift in Sources */,
+				8B68EB70E5AA9908E04B81BE /* MonitorLUTContributedTable.swift in Sources */,
 				FC0D15A11A2B3C4D5E6F7001 /* MonitorDisplayToneMap.swift in Sources */,
 				157EA76CF9AF666C94A66343 /* LUTLibrary.swift in Sources */,
 				CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */,

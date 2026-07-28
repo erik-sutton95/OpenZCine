@@ -235,8 +235,8 @@ internal class VulkanLiveFeedBackend(
                 plan.effects.peaking,
                 plan.configuration.peakingColor,
                 plan.configuration.deLogCurve,
-                plan.configuration.peakingThreshold,
-                plan.configuration.peakingRamp,
+                plan.configuration.peakingRatioThreshold,
+                plan.configuration.peakingNoiseGate,
                 plan.effects.zebra && plan.configuration.highlightEnabled,
                 plan.configuration.highlightCode,
                 plan.configuration.highlightColor,
@@ -244,6 +244,8 @@ internal class VulkanLiveFeedBackend(
                 plan.configuration.midtoneCode,
                 plan.configuration.midtoneColor,
                 aspectFill,
+                plan.splitComparison != null,
+                plan.splitComparison == FeedSplitOrientation.VERTICAL,
             )
         if (!ok) {
             renderFailed = true
@@ -317,8 +319,8 @@ internal object VulkanLiveFeedNative {
         peakingOn: Boolean,
         peakingColor: FloatArray,
         deLogCurve: FloatArray,
-        peakingThreshold: Float,
-        peakingRamp: Float,
+        peakingRatioThreshold: Float,
+        peakingNoiseGate: Float,
         zebraHighlightOn: Boolean,
         zebraHighlight: Float,
         zebraHighlightColor: FloatArray,
@@ -326,5 +328,7 @@ internal object VulkanLiveFeedNative {
         zebraMidtone: Float,
         zebraMidtoneColor: FloatArray,
         aspectFill: Boolean,
+        splitOn: Boolean,
+        splitVertical: Boolean,
     ): Boolean
 }

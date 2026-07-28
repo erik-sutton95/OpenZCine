@@ -5,6 +5,7 @@ import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalFramingGuideFamily
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -55,7 +56,6 @@ class FramingAssistsTest {
                                 LocalFramingAspectRatio.RATIO_9_16,
                             ),
                     ),
-                cleanMode = false,
             )
 
         assertEquals(
@@ -82,7 +82,6 @@ class FramingAssistsTest {
                     selectedGuideRatios = selected,
                     guideMaskEnabled = true,
                 ),
-                cleanMode = false,
             )
         val hidden =
             localFramingRenderPlan(
@@ -93,7 +92,6 @@ class FramingAssistsTest {
                     selectedGuideRatios = selected,
                     guideMaskEnabled = true,
                 ),
-                cleanMode = false,
             )
 
         assertTrue(visible.drawsInverseGuideMask)
@@ -103,7 +101,7 @@ class FramingAssistsTest {
     }
 
     @Test
-    fun `grid patterns are independent and clean mode retains only delivery framing`() {
+    fun `grid patterns are independent and clean view draws only the pinned tools`() {
         val configuration =
             framingConfiguration(
                 guidesVisible = true,
@@ -119,8 +117,21 @@ class FramingAssistsTest {
                 desqueezeOrientation = LocalDesqueezeOrientation.VERTICAL,
             )
 
-        val live = localFramingRenderPlan(1_920f, 1_080f, configuration, cleanMode = false)
-        val clean = localFramingRenderPlan(1_920f, 1_080f, configuration, cleanMode = true)
+        // The render plan no longer decides DISP policy: the caller hands it a configuration
+        // already filtered by `renderedFramingAssists`. Clean with only GUIDES pinned keeps the
+        // delivery frame and its mask and drops the grid and crosshair (#256).
+        val live = localFramingRenderPlan(1_920f, 1_080f, configuration)
+        val clean =
+            localFramingRenderPlan(
+                1_920f,
+                1_080f,
+                renderedFramingAssists(
+                    configuration,
+                    MonitorDisplayMode.CLEAN,
+                    setOf(AssistTool.GUIDES, AssistTool.DESQ),
+                    photography = false,
+                ),
+            )
 
         assertTrue(live.drawsRuleOfThirds)
         assertTrue(live.drawsPhiGrid)
@@ -153,7 +164,6 @@ class FramingAssistsTest {
                         desqueezeEnabled = true,
                         desqueezeRatio = LocalDesqueezeRatio.X200,
                     ),
-                cleanMode = false,
             )
 
         // iOS scales the complete camera-pixel feed first and lets the screen

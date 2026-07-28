@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation swift-lint swift-test
+check: hygiene site-check testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -188,6 +188,26 @@ android-build:
 android-test:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew test
 
+# Recompile the committed Vulkan SPIR-V from its GLSL source. Nothing in the Gradle
+# build does this, so editing feed.frag without running this ships the old shader.
+android-shaders:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src=Apps/Android/app/src/main/cpp/live_feed_vk/shaders
+    out=Apps/Android/app/src/main/assets/shaders/vulkan
+    glslc -fshader-stage=vert "$src/feed.vert" -o "$out/feed.vert.spv"
+    glslc -fshader-stage=frag "$src/feed.frag" -o "$out/feed.frag.spv"
+    echo "recompiled Vulkan SPIR-V"
+
+# Verify the committed Vulkan SPIR-V still matches its GLSL source.
+check-vulkan-shaders:
+    ./scripts/check-vulkan-shaders.sh
+
+# Reject GLSL ES 1.00 reserved words in the GLES2 shaders. Nothing else compiles them before a
+# device does, and the live surface answers a compile failure by rendering the plain feed.
+check-gles-shaders:
+    ./scripts/check-gles-shaders.sh
+
 # Compile the Android instrumentation-test APK without requiring a device.
 # `android-check` includes this gate so UI-test source never silently rots in CI.
 android-ui-test-compile:
@@ -198,8 +218,8 @@ android-ui-test-compile:
 android-ui-test:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew connectedDebugAndroidTest
 
-# Run all Android checks: build, unit tests, and Android lint.
-android-check:
+# Run all Android checks: shader lint, build, unit tests, and Android lint.
+android-check: check-gles-shaders
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest test lint
 
 # Generate the Play upload keystore into gitignored .local/ (never committed;

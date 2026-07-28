@@ -1,15 +1,26 @@
 import Metal
 import MetalKit
+import MetalPerformanceShaders
 import SwiftUI
 import UIKit
 import os
 
-/// Opt-in selector for the live-view feed renderer. The default is the proven `UIImageView` path
-/// (`LiveFrameView`); set the launch env var `ZC_METAL_FEED=1` on a Metal-capable device to use the
-/// GPU-native `MetalLiveView`. Default-off so the experimental Metal path can never regress the
-/// shipping feed — flip it on to validate on hardware with an Xcode GPU frame capture.
+/// Selects the live-view feed renderer. GPU-native `MetalLiveView` by default, falling back to the
+/// `UIImageView` path (`LiveFrameView`) on any device without Metal or after a render failure.
+///
+/// This used to be off unless `ZC_METAL_FEED=1` was set, on the reasoning that an unvalidated GPU
+/// path must never regress the shipping feed. What that reasoning missed is the cost of the path it
+/// was protecting: the `UIImageView` route reads every rendered frame back off the GPU as `RGBAh`,
+/// eight bytes a pixel — roughly 4.7 MB per frame and 140 MB/s at 30 fps — only for SwiftUI to
+/// upload it again to display. Measured on an iPhone 16 Pro Max that pipeline ran 35.4 ms of CPU
+/// against 2.5 ms of GPU per frame and held 28 fps with the energy gauge in the red. Being careful
+/// about the new path was costing more than the risk it avoided.
+///
+/// `ZC_DEMO_CPU_FEED=1` forces the old path back for an A/B or if the GPU route ever misbehaves;
+/// ``disableMetalFeed(_:)`` does the same automatically and permanently after a render failure.
 enum FeedRenderMode {
-    static let useMetal: Bool = DemoHarness.metalFeed && MTLCreateSystemDefaultDevice() != nil
+    static let useMetal: Bool =
+        !DemoHarness.forceCPUFeed && MTLCreateSystemDefaultDevice() != nil
 
     private static let metalFeedEnabledState = OSAllocatedUnfairLock(initialState: true)
 
@@ -46,12 +57,16 @@ extension Notification.Name {
 }
 
 /// GPU-native live-view feed: renders the frame (with monitor effects) on the GPU via Core Image,
-/// then blits into the `MTKView` drawable — no `createCGImage` GPU→CPU readback. Core Image cannot
+/// then scales into the `MTKView` drawable — no `createCGImage` GPU→CPU readback. Core Image cannot
 /// write CAMetalLayer drawables directly (they lack `MTLTextureUsageShaderWrite`), so CI renders to
-/// a private intermediate texture and a blit encoder copies to the swapchain texture for present.
+/// a private intermediate texture and the present copies it to the swapchain texture.
+///
+/// That intermediate is at the *feed's* resolution, not the drawable's (see
+/// `MetalFeedFrameBaker.bakeSize`), so the present is a scale rather than a copy — one bilinear
+/// sample per drawable pixel instead of a whole Core Image graph per drawable pixel.
 ///
 /// Opt-in alternative to `LiveFrameView` (see `FeedRenderMode`). **Needs on-device validation** — the
-/// vertical flip, aspect-fill, and colour-space handling below are correct by the documented pattern
+/// vertical flip, crop, and colour-space handling below are correct by the documented pattern
 /// but only a GPU capture against the live ZR confirms orientation/aspect/colour pixel-for-pixel.
 struct MetalLiveView: UIViewRepresentable {
     let image: UIImage
@@ -88,11 +103,16 @@ struct MetalLiveView: UIViewRepresentable {
     }
 
     /// Owns the Metal objects for the feed. Core Image baking runs off-main in `MetalFeedFrameBaker`;
-    /// `draw(in:)` only blits the latest baked texture to the swapchain drawable.
+    /// `draw(in:)` only scales the latest baked texture into the swapchain drawable.
     final class Coordinator: NSObject, MTKViewDelegate {
         let device: MTLDevice
         private let commandQueue: MTLCommandQueue
         private let baker: MetalFeedFrameBaker
+        /// Upscales the source-resolution bake to the drawable — see `MetalFeedFrameBaker.bakeSize`.
+        /// A blit encoder cannot scale, and a fullscreen quad would need a new `.metal` file in the
+        /// target; MPS needs neither and is already linked (`ScopeTraceMetalView`). Bilinear because
+        /// that is what Core Image's own affine upscale did, so the image reads the same.
+        private lazy var scaler = MPSImageBilinearScale(device: device)
         private var currentImage: UIImage?
         private var currentEffects = LiveImageEffects()
         private var lastDrawableSize: CGSize = .zero
@@ -155,11 +175,9 @@ struct MetalLiveView: UIViewRepresentable {
                 guard dstSize.width > 0, dstSize.height > 0 else { return }
                 lastDrawableSize = dstSize
 
-                let width = max(1, Int(dstSize.width))
-                let height = max(1, Int(dstSize.height))
                 guard
                     let baked = baker.bakedTexture(
-                        width: width, height: height, pixelFormat: view.colorPixelFormat),
+                        for: dstSize, pixelFormat: view.colorPixelFormat),
                     let drawable = view.currentDrawable,
                     let commandBuffer = commandQueue.makeCommandBuffer()
                 else { return }
@@ -168,18 +186,29 @@ struct MetalLiveView: UIViewRepresentable {
                     captureScope?.begin()
                 #endif
                 LiveViewSignposts.beginMetalFeedPresent()
-                if let blit = commandBuffer.makeBlitCommandEncoder() {
-                    blit.copy(
-                        from: baked,
-                        sourceSlice: 0,
-                        sourceLevel: 0,
-                        sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                        sourceSize: MTLSize(width: width, height: height, depth: 1),
-                        to: drawable.texture,
-                        destinationSlice: 0,
-                        destinationLevel: 0,
-                        destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-                    blit.endEncoding()
+                let target = drawable.texture
+                if baked.width == target.width, baked.height == target.height {
+                    if let blit = commandBuffer.makeBlitCommandEncoder() {
+                        blit.copy(
+                            from: baked,
+                            sourceSlice: 0,
+                            sourceLevel: 0,
+                            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                            sourceSize: MTLSize(
+                                width: baked.width, height: baked.height, depth: 1),
+                            to: target,
+                            destinationSlice: 0,
+                            destinationLevel: 0,
+                            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                        blit.endEncoding()
+                    }
+                } else {
+                    // The bake already carries the drawable's aspect, so a full-source-to-full-
+                    // destination scale is uniform — no `scaleTransform` and no letterbox needed.
+                    scaler.encode(
+                        commandBuffer: commandBuffer, sourceTexture: baked,
+                        destinationTexture: target
+                    )
                 }
                 commandBuffer.present(drawable)
                 commandBuffer.commit()

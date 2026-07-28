@@ -47,14 +47,16 @@ bool LiveFeedVk_SetPlan(
     bool peakingOn,
     const float* peakingColor3,
     const float* deLogCurve5,
-    float peakingThreshold,
-    float peakingRamp,
+    float peakingRatioThreshold,
+    float peakingNoiseGate,
     bool zebraHighlightOn,
     float zebraHighlight,
     const float* zebraHighlightColor3,
     bool zebraMidtoneOn,
     float zebraMidtone,
     const float* zebraMidtoneColor3,
-    bool aspectFill);
+    bool aspectFill,
+    bool splitOn,
+    bool splitVertical);
 
 }  // extern "C"

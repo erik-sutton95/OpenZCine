@@ -27,6 +27,7 @@ class StillCaptureControllerTest {
             MutableStateFlow(CameraRecordingState.STANDBY)
 
         var initiates = 0
+        var lastPreserveFocus: Boolean? = null
         var terminates = 0
         var bracketCalls = mutableListOf<Boolean>()
         var refreshes = 0
@@ -41,11 +42,12 @@ class StillCaptureControllerTest {
 
         override suspend fun disconnect() = Unit
 
-        override suspend fun initiateStillCapture() {
+        override suspend fun initiateStillCapture(preserveFocus: Boolean) {
             if (failInitiate) {
                 throw com.opencapture.openzcine.core.CameraControlException.CommandRejected
             }
             initiates += 1
+            lastPreserveFocus = preserveFocus
         }
 
         override suspend fun pollStillRelease(): StillReleasePoll =
@@ -66,6 +68,32 @@ class StillCaptureControllerTest {
             if (refreshDelayMillis > 0) kotlinx.coroutines.delay(refreshDelayMillis)
             refreshes += 1
         }
+    }
+
+    @Test
+    fun `preserve focus reaches every release of a chained burst`() = runTest {
+        val session = FakeSession()
+        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        session.polls.addAll(listOf(StillReleasePoll.COMPLETE, StillReleasePoll.COMPLETE))
+
+        controller.pressed(this, continuousDrive = true, preserveFocus = true)
+        advanceUntilIdle()
+
+        // Every release in the run must skip AF, not just the first.
+        assertTrue(session.initiates > 1)
+        assertEquals(true, session.lastPreserveFocus)
+    }
+
+    @Test
+    fun `a release defaults to AF-then-release`() = runTest {
+        val session = FakeSession()
+        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        session.polls.add(StillReleasePoll.COMPLETE)
+
+        controller.pressed(this, continuousDrive = false)
+        advanceUntilIdle()
+
+        assertEquals(false, session.lastPreserveFocus)
     }
 
     @Test

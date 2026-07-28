@@ -123,15 +123,17 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_setPlan(
     jboolean peakingOn,
     jfloatArray peakingColor,
     jfloatArray deLogCurve,
-    jfloat peakingThreshold,
-    jfloat peakingRamp,
+    jfloat peakingRatioThreshold,
+    jfloat peakingNoiseGate,
     jboolean zebraHighlightOn,
     jfloat zebraHighlight,
     jfloatArray zebraHighlightColor,
     jboolean zebraMidtoneOn,
     jfloat zebraMidtone,
     jfloatArray zebraMidtoneColor,
-    jboolean aspectFill) {
+    jboolean aspectFill,
+    jboolean splitOn,
+    jboolean splitVertical) {
     std::vector<uint8_t> lut, paint, weight;
     jboolean copy = JNI_FALSE;
     auto* lutPtr = pinBytes(env, lutRgba, &copy, lut);
@@ -162,15 +164,17 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_setPlan(
         peakingOn == JNI_TRUE,
         peak,
         curve,
-        peakingThreshold,
-        peakingRamp,
+        peakingRatioThreshold,
+        peakingNoiseGate,
         zebraHighlightOn == JNI_TRUE,
         zebraHighlight,
         zh,
         zebraMidtoneOn == JNI_TRUE,
         zebraMidtone,
         zm,
-        aspectFill == JNI_TRUE)
+        aspectFill == JNI_TRUE,
+        splitOn == JNI_TRUE,
+        splitVertical == JNI_TRUE)
         ? JNI_TRUE
         : JNI_FALSE;
 }

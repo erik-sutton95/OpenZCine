@@ -51,7 +51,14 @@ The optional `activityLog` JSON field is an array of at most 200 closed OpenZCin
 incident codes. Error/warning incident codes are rendered with fixed operational stages such as
 `connection.attempt → transport-or-handshake → connection.failure`; those stages are relay-owned
 and are not raw runtime stack frames. The field does not accept exception messages, arbitrary log text,
-timestamps, device names, paths, network values, or identifiers. The relay rejects unknown values.
+timestamps, device names, paths, network values, or identifiers.
+
+Unknown values never reach the issue, but they also never cost the report. The relay ships
+independently of the apps, so a shipped client eventually emits a code the allowlist has not learned
+yet; the relay replaces that entry with `diagnostics.unrecognized-event` and accepts the rest of the
+report. An entry that is not a lowercase dotted/hyphenated code of at most 64 characters is dropped
+outright. A seen `diagnostics.unrecognized-event` means the apps are ahead of this allowlist — add
+the code from `AppDiagnosticEvent` (iOS) or `AndroidDiagnosticEvent` (Android).
 
 Each screenshot is parsed server-side before storage. It must be a 1–2560px, 8-bit RGBA,
 non-interlaced PNG with valid CRCs; the Worker writes a newly canonical PNG containing only `IHDR`,

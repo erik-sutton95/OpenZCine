@@ -27,12 +27,13 @@ public enum FeedEffectsWire {
     public static let renderConfigurationFieldCount = 22
 
     /// Built-in look ordinals, mirroring `FeedLut` in Kotlin:
-    /// 0 = Log3G10→709, 1 = N-Log→709, 2 = Mono.
+    /// 0 = Log3G10→709, 1 = N-Log→709, 2 = Mono, 3 = R3D NE Monitor.
     static func look(_ ordinal: Int) -> MonitorLUT? {
         switch ordinal {
         case 0: .log3G10Rec709
         case 1: .nLogRec709
         case 2: .monochrome
+        case 3: .r3dNEMonitor
         default: nil
         }
     }
@@ -286,11 +287,16 @@ public enum FeedEffectsWire {
     /// Complete renderer configuration, resolved exclusively from shared-core
     /// camera mapping and iOS-matched operator choices. The flat payload is:
     ///
-    /// `[curveOrdinal, clipNative, deLog0...deLog4, peakingThreshold,
-    /// peakingRamp, peakR, peakG, peakB, highlightOn, highlightCode,
+    /// `[curveOrdinal, clipNative, deLog0...deLog4, peakingRatioThreshold,
+    /// peakingNoiseGate, peakR, peakG, peakB, highlightOn, highlightCode,
     /// highlightR, highlightG, highlightB, midtoneOn, midtoneCode, midtoneR,
-    /// midtoneG, midtoneB]`. The five de-log values are the same quarter-axis
-    /// tone-curve samples used by iOS's peaking compositor.
+    /// midtoneG, midtoneB]`. The five de-log values are the quarter-axis tone-curve
+    /// samples of the active curve; peaking no longer consumes them (it measures a
+    /// blur ratio on the raw source — see `Peaking`), and the slots are kept so the
+    /// record layout and the Vulkan uniform block stay put.
+    ///
+    /// `peakingNoiseGate` arrives already scaled for the feed's own encoding, so the shaders
+    /// compare it directly and hold no mode policy of their own.
     public static func renderConfiguration(
         codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil,
         peakingSensitivityOrdinal: Int, peakingColorOrdinal: Int, highlightEnabled: Bool,
@@ -310,29 +316,36 @@ public enum FeedEffectsWire {
         let peak = peakingColor.rgb
         let highlight = zebraRGB(highlightColor)
         let midtone = zebraRGB(midtoneColor)
-        // Peaking de-logs with the ACTIVE mode's curve (matching iOS): the display-referred
-        // sRGB/HLG photography feed was previously de-logged as Log3G10 (video's curve), so
-        // peaking looked different between photo and video. `mapping.curve` is sRGB/HLG in
-        // photography and the codec log in video, so both modes now linearise correctly.
         let deLog = (0...4).map { index in
             Float(
                 ExposureScale.referenceIRE(
                     signalNative: Double(index) / 4 * 255, curve: mapping.curve) / 100)
         }
-        return [
+        // Assembled in named steps, not one literal: as a single expression this exceeded the
+        // type checker's budget on the Xcode-default toolchain.
+        var record: [Float] = [
             Float(curveOrdinal(mapping.curve)),
             Float(mapping.clipNative),
-        ] + deLog + [
-            Float(sensitivity * 0.06),
-            160,
-            Float(peak.0), Float(peak.1), Float(peak.2),
-            highlightEnabled ? 1 : 0,
-            Float(highlightCode),
-            Float(highlight.0), Float(highlight.1), Float(highlight.2),
-            midtoneEnabled ? 1 : 0,
-            Float(midtoneCode),
-            Float(midtone.0), Float(midtone.1), Float(midtone.2),
         ]
+        record += deLog
+        // The ratio threshold is transfer-curve invariant; the noise gate is not. A display-referred
+        // stills preview hands the detector larger gradients than the log video feed the gate was
+        // calibrated on, so the gate moves with the mode — the same correction iOS applies through
+        // `PeakingSettings.gateScale`, and `stillsToneMode` is the same photography-mode
+        // discriminator `cameraMapping` above routes on.
+        let gateScale =
+            stillsToneMode == nil
+            ? 1 : Peaking.gateScale(gradientScale: Peaking.displayReferredGradientScale)
+        record.append(Float(sensitivity.ratioThreshold))
+        record.append(Float(sensitivity.noiseGate * gateScale))
+        record += [Float(peak.0), Float(peak.1), Float(peak.2)]
+        record.append(highlightEnabled ? 1 : 0)
+        record.append(Float(highlightCode))
+        record += [Float(highlight.0), Float(highlight.1), Float(highlight.2)]
+        record.append(midtoneEnabled ? 1 : 0)
+        record.append(Float(midtoneCode))
+        record += [Float(midtone.0), Float(midtone.1), Float(midtone.2)]
+        return record
     }
 
     private static func mapping(curveOrdinal: Int, clipNative: Double?) -> ExposureSignalMapping? {
@@ -355,13 +368,13 @@ public enum FeedEffectsWire {
         }
     }
 
-    /// iOS `Peaking.Sensitivity.peakingThreshold`, kept in the facade so
-    /// Android only uploads the resolved detector threshold.
-    private static func peakingSensitivity(_ ordinal: Int) -> Double? {
+    /// The operator-facing step; the detector constants behind it live in shared core
+    /// (`Peaking.Sensitivity`) so both shells resolve the same numbers.
+    private static func peakingSensitivity(_ ordinal: Int) -> Peaking.Sensitivity? {
         switch ordinal {
-        case 0: 0.05
-        case 1: 0.035
-        case 2: 0.022
+        case 0: .low
+        case 1: .medium
+        case 2: .high
         default: nil
         }
     }

@@ -31,6 +31,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeClickable
+import com.opencapture.openzcine.chromePressable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
 import java.util.Locale
@@ -42,13 +43,22 @@ import java.util.Locale
  * how the operator confirms it.
  */
 
-/** True for the display side of a RAW+JPEG pair (iOS `isJPEGPhoto`). */
+/**
+ * True for the display side of a RAW+JPEG pair (iOS `isJPEGPhoto`).
+ *
+ * Reads the classification the shared core already made and sent over the listing wire, rather
+ * than re-deriving it from the extension here: Kotlin does not classify camera filenames, and a
+ * second copy of the extension set only stays right until one copy learns a new extension. (`.HIF`
+ * was missing from the core's HEIF set while two other places already special-cased it, and every
+ * Nikon HEIF went unlisted as a result.) Stills always carry the label — `MediaLibraryState`
+ * enforces `contentKind == STILL_PHOTO` iff `stillPhoto != null`, and the cache round-trips it.
+ */
 internal val MediaClipRecord.isJpegStill: Boolean
-    get() = filenameExtension in setOf("jpg", "jpeg", "jpe")
+    get() = formatFilter() == MediaFormatFilter.JPEG
 
 /** True for Nikon RAW stills (iOS `isRawPhoto`) — the tag-along pair side. */
 internal val MediaClipRecord.isRawStill: Boolean
-    get() = filenameExtension in setOf("nef", "nrw", "dng")
+    get() = formatFilter() == MediaFormatFilter.NEF
 
 private val MediaClipRecord.filenameExtension: String
     get() = filename.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.US)
@@ -253,21 +263,29 @@ internal fun StarRatingRow(
         modifier
             // CircleShape renders as a capsule on a wide row, like iOS's Capsule.
             .glass(CircleShape)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         (1..5).forEach { star ->
             val filled = star <= stars
-            Icon(
-                if (filled) Icons.Filled.Star else Icons.Filled.StarBorder,
-                contentDescription = "Rate $star star${if (star == 1) "" else "s"}",
-                tint = if (filled) LiveDesign.accent else LiveDesign.muted,
-                modifier =
-                    Modifier.size(22.dp)
-                        .semantics { role = Role.Button }
-                        .chromeClickable { onSelect(if (star == stars) 0 else star) },
-            )
+            // The glyph stays 22 dp; the TOUCH box is 44 dp, matching iOS's `.zcTapTarget`.
+            // It used to be the bare 22 dp icon with 10 dp gaps and no press feedback, so a
+            // near-miss did nothing visible and the rating read as broken — the write path
+            // behind it was always fine.
+            Box(
+                Modifier.size(44.dp)
+                    .semantics { role = Role.Button }
+                    .chromePressable { onSelect(if (star == stars) 0 else star) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (filled) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = "Rate $star star${if (star == 1) "" else "s"}",
+                    tint = if (filled) LiveDesign.accent else LiveDesign.muted,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
     }
 }

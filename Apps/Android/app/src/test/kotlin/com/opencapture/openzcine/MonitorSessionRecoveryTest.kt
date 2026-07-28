@@ -5,7 +5,6 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.transport.ReconnectBackoff
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -19,12 +18,17 @@ import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MonitorSessionRecoveryTest {
-    @Test
-    fun `monitor retry policy starts at half a second and caps at eight seconds`() {
-        val policy = defaultMonitorSessionRetryPolicy()
+    /**
+     * Stand-in for the Swift core's `SessionRecoveryPolicy`: doubling from
+     * [base] and stopping once [budget] attempts have failed. Keeps the
+     * sequencing under test without a JNI hop.
+     */
+    private class FakeSchedule(private val base: Long = 100L, private val budget: Int = 8) :
+        SessionRetryScheduleBridge {
+        override fun retryDelayMillis(failures: Int, jitter: Double): Long? =
+            if (failures >= budget) null else base shl failures
 
-        assertEquals(500L, policy.delayMillis(attempt = 0, jitter = 0.5))
-        assertEquals(8_000L, policy.delayMillis(attempt = 99, jitter = 0.5))
+        override fun maxAutomaticAttempts(): Int = budget
     }
 
     @Test
@@ -34,7 +38,7 @@ class MonitorSessionRecoveryTest {
         val coordinator =
             MonitorSessionRecoveryCoordinator(
                 session = session,
-                retryPolicy = ReconnectBackoff(100L, 800L, jitterFraction = 0.0),
+                schedule = FakeSchedule(),
                 jitterSample = { 1.0 },
                 sleep = sleeps::add,
             )
@@ -46,6 +50,7 @@ class MonitorSessionRecoveryTest {
         assertEquals(listOf(100L, 200L), sleeps)
         assertEquals(300L, session.cameraProperties.value.iso)
         assertEquals(CameraRecordingState.RECORDING, session.recordingState.value)
+        assertEquals(MonitorRecoveryState.Idle, coordinator.recoveryState.value)
     }
 
     @Test
@@ -55,7 +60,7 @@ class MonitorSessionRecoveryTest {
         val coordinator =
             MonitorSessionRecoveryCoordinator(
                 session = session,
-                retryPolicy = ReconnectBackoff(100L, 800L, jitterFraction = 0.0),
+                schedule = FakeSchedule(),
                 jitterSample = { 1.0 },
                 sleep = sleeps::add,
             )
@@ -77,7 +82,7 @@ class MonitorSessionRecoveryTest {
         val coordinator =
             MonitorSessionRecoveryCoordinator(
                 session = session,
-                retryPolicy = ReconnectBackoff(1_000L, 1_000L, jitterFraction = 0.0),
+                schedule = FakeSchedule(base = 1_000L),
                 jitterSample = { 1.0 },
             )
         val recovery = backgroundScope.launch { coordinator.run() }
@@ -97,7 +102,7 @@ class MonitorSessionRecoveryTest {
         val coordinator =
             MonitorSessionRecoveryCoordinator(
                 session = session,
-                retryPolicy = ReconnectBackoff(1_000L, 1_000L, jitterFraction = 0.0),
+                schedule = FakeSchedule(base = 1_000L),
                 jitterSample = { 1.0 },
             )
         backgroundScope.launch { coordinator.run() }
@@ -109,6 +114,56 @@ class MonitorSessionRecoveryTest {
         runCurrent()
 
         assertEquals(1, session.connectCount)
+    }
+
+    @Test
+    fun `automatic retries are bounded and hand the decision to the operator`() = runTest {
+        // Every attempt fails; a two-attempt budget must stop, not loop forever behind a static
+        // "No camera" (the pre-fix Android behaviour).
+        val session = RecoverySession(false, false, false, false, false)
+        val coordinator =
+            MonitorSessionRecoveryCoordinator(
+                session = session,
+                schedule = FakeSchedule(budget = 2),
+                jitterSample = { 1.0 },
+                sleep = {},
+            )
+
+        backgroundScope.launch { coordinator.run() }
+        runCurrent()
+
+        // One initial connect plus the two budgeted retries, then stop.
+        assertEquals(3, session.connectCount)
+        assertEquals(
+            MonitorRecoveryState.WaitingForOperator(attemptsMade = 2),
+            coordinator.recoveryState.value,
+        )
+    }
+
+    @Test
+    fun `the published state counts attempts truthfully while retrying`() = runTest {
+        val session = RecoverySession(false, false)
+        val statesDuringBackoff = mutableListOf<MonitorRecoveryState>()
+        lateinit var coordinator: MonitorSessionRecoveryCoordinator
+        coordinator =
+            MonitorSessionRecoveryCoordinator(
+                session = session,
+                schedule = FakeSchedule(budget = 4),
+                jitterSample = { 1.0 },
+                sleep = { statesDuringBackoff.add(coordinator.recoveryState.value) },
+            )
+        val runner = backgroundScope.launch { coordinator.run() }
+        runCurrent()
+        runner.cancelAndJoin()
+
+        assertEquals(
+            listOf<MonitorRecoveryState>(
+                MonitorRecoveryState.Retrying(attempt = 1, maxAttempts = 4),
+                MonitorRecoveryState.Retrying(attempt = 2, maxAttempts = 4),
+            ),
+            statesDuringBackoff,
+        )
+        assertEquals(MonitorRecoveryState.Idle, coordinator.recoveryState.value)
     }
 
     private class RecoverySession(vararg outcomes: Boolean) : CameraSession {

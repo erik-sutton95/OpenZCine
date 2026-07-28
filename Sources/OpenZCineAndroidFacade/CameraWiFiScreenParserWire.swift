@@ -23,6 +23,21 @@ public enum AndroidCameraWiFiScreenParserWire {
         CameraWiFiScreenParser.parse(transcript).map(encode)
     }
 
+    /// Validates operator-typed Connection-wizard credentials.
+    ///
+    /// The Android scanner falls back to typed entry whenever on-device OCR is
+    /// unavailable, so pairing never dead-ends. Routing it here keeps the manual
+    /// contract identical to the iOS form, which calls
+    /// ``CameraWiFiScreenParser/manualCredentials(ssid:key:)`` directly.
+    ///
+    /// - Returns: `SSID<unit-separator>key` only when both fields validate.
+    public static func manual(ssid: String, key: String) -> String? {
+        // Unlike an OCR-normalized SSID, a typed one is not restricted to the
+        // Nikon shape, so it could carry the separator and split the payload.
+        guard !ssid.contains(fieldSeparator) else { return nil }
+        return CameraWiFiScreenParser.manualCredentials(ssid: ssid, key: key).map(encode)
+    }
+
     /// Encodes already-validated shared-core credentials for the JNI boundary.
     public static func encode(_ credentials: CameraWiFiScreenParser.Credentials) -> String {
         credentials.ssid + fieldSeparator + credentials.key

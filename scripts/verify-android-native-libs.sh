@@ -101,3 +101,36 @@ verify_archive() {
 
 verify_archive "APK" "$apk_entries" "lib/arm64-v8a/"
 verify_archive "AAB" "$aab_entries" "base/lib/arm64-v8a/"
+
+# ── Bundled on-device OCR (issue #267) ──────────────────────────────────────
+# The camera-AP scanner uses the *bundled* ML Kit Latin recognizer, so its model
+# assets and native pipeline must be inside the shrunk release artifact and its
+# initialization provider must survive manifest merging. Without all three the
+# scanner reports "text recognition is not ready" on a device that is otherwise
+# perfectly capable, and pairing loses its OCR path.
+verify_mlkit() {
+    local archive_kind="$1"
+    local entries="$2"
+    local library_prefix="$3"
+    local asset_prefix="$4"
+
+    grep -Fxq "${library_prefix}libmlkit_google_ocr_pipeline.so" "$entries" || fail \
+        "$archive_kind is missing the bundled ML Kit OCR native pipeline"
+    # The Latin recognizer's own model, not just the shared graph definitions.
+    grep -q "^${asset_prefix}mlkit-google-ocr-models/gocr/gocr_models/line_recognition.*Latn" \
+        "$entries" || fail "$archive_kind is missing the bundled Latin OCR model assets"
+}
+
+verify_mlkit "APK" "$apk_entries" "lib/arm64-v8a/" "assets/"
+verify_mlkit "AAB" "$aab_entries" "base/lib/arm64-v8a/" "base/assets/"
+
+# The provider is what calls MlKitContext.initializeIfNeeded before any
+# getClient(). Its authority string lives in the APK's binary manifest string
+# pool, so this needs no aapt2 and works on a CI artifact.
+apk_manifest_strings="$(mktemp)"
+trap 'rm -f "$expected" "$apk_entries" "$aab_entries" "$apk_manifest_strings"' EXIT
+unzip -p "$apk" AndroidManifest.xml | LC_ALL=C tr -cd '\11\12\15\40-\176' > "$apk_manifest_strings"
+grep -q 'MlKitInitProvider' "$apk_manifest_strings" || fail \
+    "release manifest lost com.google.mlkit.common.internal.MlKitInitProvider"
+
+printf 'Verified bundled ML Kit Latin OCR model, native pipeline, and init provider\n'

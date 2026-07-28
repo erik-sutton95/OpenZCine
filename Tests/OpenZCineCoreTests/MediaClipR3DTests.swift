@@ -35,8 +35,14 @@ import Testing
 
     let raw = MediaClipFilename.mediaClassification(for: "DSC_0003.NEF")
     #expect(raw.kind == .stillPhoto)
-    #expect(raw.stillPreview?.formatLabel == "Nikon RAW")
+    #expect(raw.stillPreview?.formatLabel == "NEF")
     #expect(raw.stillPreview?.strategy == .thumbnailOnly)
+
+    // Nikon writes HEIF as `.HIF`; it used to fall through to `.unsupported`.
+    let nikonHEIF = MediaClipFilename.mediaClassification(for: "DSC_0004.HIF")
+    #expect(nikonHEIF.kind == .stillPhoto)
+    #expect(nikonHEIF.stillPreview?.formatLabel == "HEIF")
+    #expect(nikonHEIF.stillPreview?.strategy == .completeFile)
 
     let r3d = MediaClipFilename.mediaClassification(for: "A001_C004_0714RC.R3D")
     #expect(r3d.kind == .r3dMaster)

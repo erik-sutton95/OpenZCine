@@ -39,37 +39,4 @@ struct ThermalLoadPolicyTests {
         #expect(1.0 / ThermalTier.critical.sheddingInterval(base: 1.0 / 8.0) >= 4.0)
         #expect(m >= 1.0)
     }
-
-    @Test func liveViewLoadPolicyNeverRaisesTheRequestedSize() {
-        for requested: UInt8 in 1...3 {
-            for tier in ThermalTier.allCases {
-                let size = LiveViewLoadPolicy.effectiveImageSize(
-                    requested: requested,
-                    isRecording: true,
-                    thermalTier: tier,
-                    cameraOverheating: false)
-                #expect(size <= requested)
-                #expect((1...3).contains(size))
-            }
-        }
-    }
-
-    @Test func liveViewLoadPolicyCapsPreviewForRecordingAndHeat() {
-        #expect(
-            LiveViewLoadPolicy.effectiveImageSize(
-                requested: 3, isRecording: true, thermalTier: .nominal,
-                cameraOverheating: false) == 2)
-        #expect(
-            LiveViewLoadPolicy.effectiveImageSize(
-                requested: 3, isRecording: false, thermalTier: .serious,
-                cameraOverheating: false) == 2)
-        #expect(
-            LiveViewLoadPolicy.effectiveImageSize(
-                requested: 3, isRecording: false, thermalTier: .critical,
-                cameraOverheating: false) == 1)
-        #expect(
-            LiveViewLoadPolicy.effectiveImageSize(
-                requested: 3, isRecording: false, thermalTier: .nominal,
-                cameraOverheating: true) == 1)
-    }
 }

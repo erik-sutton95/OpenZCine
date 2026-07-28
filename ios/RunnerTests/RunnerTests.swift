@@ -810,7 +810,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertTrue(box.set(effects: effects))
         XCTAssertFalse(box.set(effects: effects))
 
-        effects.peaking?.threshold += 0.01
+        effects.peaking?.sensitivity = .high
         XCTAssertTrue(box.set(effects: effects))
 
         XCTAssertTrue(box.set(effects: ImageEffectsCompositor.ResolvedEffects()))
@@ -1101,5 +1101,484 @@ extension RunnerTests {
         XCTAssertEqual(sorted.first, "B.JPG")
         XCTAssertEqual(sorted[1], "C.JPG")
         XCTAssertEqual(Set(sorted.suffix(2)), ["A.JPG", "D.JPG"])
+    }
+
+    // MARK: - Fused peaking kernel vs the reference filter chain
+
+    /// The single-pass CIKL detector must reproduce the filter chain exactly — every constant in
+    /// `Peaking` was calibrated against the chain, so any divergence here is the kernel being
+    /// WRONG, not different. The frame mixes the four cases that matter: hard sharp edges, fine
+    /// texture, a defocused (pre-blurred) region, and per-pixel noise dense enough to exercise the
+    /// gate's partial band. Checked at every sensitivity because the gains and biases change with
+    /// it.
+    /// The frame the peaking equivalence tests measure on: sharp strokes and fine texture on the
+    /// left half, the same content defocused on the right, and sensor-like noise over all of it —
+    /// so a detector that confuses grain for detail, or blur for focus, separates here.
+    private func peakingProbeFrame(width w: Int, height h: Int) throws -> CIImage {
+        // Scale pinned to 1 — the renderer defaults to the screen scale, which would silently make
+        // the frame 3x the stated size and every readback a partial crop of it.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let frame = UIGraphicsImageRenderer(size: CGSize(width: w, height: h), format: format)
+            .image { ctx in
+                let cg = ctx.cgContext
+                cg.setFillColor(UIColor(white: 0.3, alpha: 1).cgColor)
+                cg.fill(CGRect(x: 0, y: 0, width: w, height: h))
+                var seed: UInt64 = 0x5_DEEC_E66D
+                func rand() -> Double {
+                    seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                    return Double(seed >> 33) / Double(UInt64(1) << 31)
+                }
+                // Sharp strokes and fine texture on the left half.
+                for i in 0..<24 {
+                    cg.setFillColor(UIColor(white: i % 2 == 0 ? 0.85 : 0.12, alpha: 1).cgColor)
+                    cg.fill(CGRect(x: 8 + i * 5, y: 10, width: 2, height: 70))
+                    cg.fill(CGRect(x: 8, y: 90 + i * 3, width: 130, height: 1))
+                }
+                // Noise everywhere, including over the edges.
+                for _ in 0..<4_000 {
+                    cg.setFillColor(UIColor(white: rand(), alpha: 1).cgColor)
+                    cg.fill(
+                        CGRect(
+                            x: Int(rand() * Double(w - 1)), y: Int(rand() * Double(h - 1)),
+                            width: 1, height: 1))
+                }
+            }
+        let source = try XCTUnwrap(CIImage(image: frame, options: [.colorSpace: NSNull()]))
+        // Defocus the right half by pre-blurring — the ratio must read it as out of focus.
+        let blurredHalf =
+            source
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3.0])
+            .cropped(to: CGRect(x: w / 2, y: 0, width: w / 2, height: h))
+        return blurredHalf.composited(over: source).cropped(to: source.extent)
+    }
+
+    /// `Peaking.overlay` is the transcription target for all three Android shells, so it has to be
+    /// a transcription of what iOS actually renders. This test is the only thing standing behind
+    /// that, and without it "Android matches iOS" is an intention rather than a fact.
+    ///
+    /// Checked end to end against the composited frame rather than against an intermediate mask, so
+    /// every part of the port lands here as pixels: the operator's tap quad, the measured re-blur
+    /// weights, the ratio ceiling, the ramps being LINEAR rather than the smoothstep a shader
+    /// reaches for by habit, the closing's five-point element, and the order the dark hairline and
+    /// the stroke composite in.
+    func testSharedCoreReferenceReproducesTheRenderedDetector() throws {
+        let w = 320
+        let h = 180
+        let frame = try peakingProbeFrame(width: w, height: h)
+
+        // Colour management off and float readback: this compares the MATH, so nothing may convert
+        // between the two paths. Under the shipping BGRA8 space the chain quantises every one of its
+        // ~25 intermediates to 1/255, which is below the detector's own gates.
+        let context = CIContext(options: [
+            .workingFormat: CIFormat.RGBAf,
+            .workingColorSpace: NSNull(),
+            .cacheIntermediates: false,
+        ])
+        func rendered(_ image: CIImage) -> [Float] {
+            var out = [Float](repeating: 0, count: w * h * 4)
+            context.render(
+                image, toBitmap: &out, rowBytes: w * 16,
+                bounds: CGRect(x: 0, y: 0, width: w, height: h), format: .RGBAf, colorSpace: nil)
+            return out
+        }
+
+        // `CIContext.render(toBitmap:)` writes buffer row 0 as the image's TOP row — probed, not
+        // assumed — which is the same top-down order `Peaking.overlay` reads, so the operator's
+        // `+y` tap lands on the same neighbour in both. Getting this backwards would shift the
+        // whole overlay by one row, which is exactly the sort of thing this test exists to catch.
+        let base = rendered(frame)
+        let grey = (0..<(w * h)).map { i in
+            (Double(base[i * 4]) + Double(base[i * 4 + 1]) + Double(base[i * 4 + 2])) / 3
+        }
+        let dark = Peaking.underColor
+
+        for sensitivity in Peaking.Sensitivity.allCases {
+            let settings = PeakingSettings(color: .red, sensitivity: sensitivity)
+            let actual = rendered(
+                ImageEffectsCompositor.applyPeaking(
+                    over: frame, source: frame, settings: settings, extent: frame.extent))
+            let reference = Peaking.overlay(
+                grey: grey, width: w, height: h, sensitivity: sensitivity)
+            let tint = settings.color.rgb
+
+            /// The hairline first, then the stroke over it — `composite`'s two blends.
+            func expected(_ baseValue: Float, _ darkValue: Double, _ tintValue: Double, _ i: Int)
+                -> Double
+            {
+                let under = reference.under[i]
+                let stroke = reference.stroke[i]
+                let withUnder = Double(baseValue) * (1 - under) + darkValue * under
+                return withUnder * (1 - stroke) + tintValue * stroke
+            }
+
+            var painted = 0
+            var worst = 0.0
+            var worstAt = (0, 0)
+            var beyondTolerance = 0
+            for i in 0..<(w * h) {
+                if reference.stroke[i] > 0.35 { painted += 1 }
+                let channels = [
+                    expected(base[i * 4], dark.red, tint.0, i),
+                    expected(base[i * 4 + 1], dark.green, tint.1, i),
+                    expected(base[i * 4 + 2], dark.blue, tint.2, i),
+                ]
+                for (channel, want) in channels.enumerated() {
+                    let delta = abs(Double(actual[i * 4 + channel]) - want)
+                    if delta > worst {
+                        worst = delta
+                        worstAt = (i % w, i / w)
+                    }
+                    if delta > 2.0 / 255 { beyondTolerance += 1 }
+                }
+            }
+            // The frame must actually paint, or an all-zero overlay would agree with anything.
+            XCTAssertGreaterThan(
+                painted, 200, "\(sensitivity): probe frame drew almost nothing to compare")
+            // 2/255 absorbs float ordering across the graph's passes; a formula divergence moves
+            // whole strokes, not a handful of channels on a ramp knee.
+            XCTAssertLessThan(
+                Double(beyondTolerance) / Double(w * h * 3), 0.001,
+                "\(sensitivity): \(beyondTolerance) of \(w * h * 3) channels differ by >2/255, "
+                    + "worst \(worst) at \(worstAt) (\(painted) px painted)")
+        }
+    }
+
+    func testFusedPeakingMatchesFilterChainPixelForPixel() throws {
+        try XCTSkipIf(
+            !ImageEffectsCompositor.fusedPeakingAvailable,
+            "fused peaking disabled on this OS (kernel missing or the runtime self-check found it "
+                + "does not reproduce the chain) — chain fallback is in force, nothing to compare")
+        let w = 320
+        let h = 180
+        let mixed = try peakingProbeFrame(width: w, height: h)
+        let source = mixed
+
+        // Float working space, deliberately NOT the shipping BGRA8: this test compares the MATH.
+        // Under BGRA8 the chain quantises every intermediate to 1/255 across its ~25 passes — the
+        // detector's own gates sit below one code value there, which is exactly the precision loss
+        // the 8-bit switch was measured to cost — while the fused kernel holds float through its
+        // single pass. Their shipping outputs therefore differ legitimately (the kernel is the
+        // more faithful one); equality of the formulas is only decidable where both see exact
+        // intermediates.
+        let context = CIContext(options: [
+            .workingFormat: CIFormat.RGBAf,
+            .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+            .cacheIntermediates: false,
+        ])
+        func rendered(_ image: CIImage) -> [UInt8] {
+            var out = [UInt8](repeating: 0, count: w * h * 4)
+            context.render(
+                image, toBitmap: &out, rowBytes: w * 4,
+                bounds: CGRect(x: 0, y: 0, width: w, height: h), format: .BGRA8,
+                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+            return out
+        }
+
+        for sensitivity in Peaking.Sensitivity.allCases {
+            let settings = PeakingSettings(color: .red, sensitivity: sensitivity)
+            let fused = rendered(
+                ImageEffectsCompositor.applyPeaking(
+                    over: mixed, source: mixed, settings: settings, extent: source.extent))
+            let chain = rendered(
+                ImageEffectsCompositor.applyPeakingFilterChain(
+                    over: mixed, source: mixed, settings: settings, extent: source.extent))
+            var worst = 0
+            var differing = 0
+            var inRing = 0
+            var worstAt = (0, 0)
+            let inset = Int(Peaking.edgeInset)
+            for i in 0..<fused.count {
+                let d = abs(Int(fused[i]) - Int(chain[i]))
+                if d > worst {
+                    worst = d
+                    worstAt = ((i / 4) % w, (i / 4) / w)
+                }
+                if d > 1 {
+                    differing += 1
+                    let px = (i / 4) % w
+                    let py = (i / 4) / w
+                    if px < inset || py < inset || px >= w - inset || py >= h - inset {
+                        inRing += 1
+                    }
+                }
+            }
+            // ±1/255 allows float-order-of-operations rounding; anything past that on more than a
+            // stray pixel means a real formula divergence.
+            XCTAssertLessThanOrEqual(
+                differing, 8,
+                "\(sensitivity): \(differing) channels differ by >1/255 (\(inRing) of them in the "
+                    + "\(inset)px inset ring), worst \(worst) at \(worstAt)")
+        }
+    }
+
+    // MARK: - Live-feed bake resolution
+
+    /// A 16:9 feed on a 2.17:1 panel keeps every source column and crops rows — at SOURCE
+    /// resolution, which is the whole point: the drawable-sized bake it replaced evaluated the
+    /// Core Image graph over 6× as many pixels.
+    func testFeedBakeKeepsSourceResolutionAndCropsToDrawableAspect() {
+        let size = MetalFeedFrameBaker.bakeSize(
+            source: CGSize(width: 1_024, height: 576),
+            drawable: CGSize(width: 2_868, height: 1_320))
+
+        XCTAssertEqual(size.width, 1_024, accuracy: 0.5)
+        XCTAssertEqual(size.height, 1_024 / (2_868.0 / 1_320.0), accuracy: 0.5)
+        // Aspect must match the drawable exactly, or the uniform scale on present stretches.
+        XCTAssertEqual(size.width / size.height, 2_868.0 / 1_320.0, accuracy: 0.001)
+    }
+
+    /// A taller-than-panel source crops columns instead, and still matches the drawable's aspect.
+    func testFeedBakeCropsColumnsWhenSourceIsWiderThanTheDrawable() {
+        let size = MetalFeedFrameBaker.bakeSize(
+            source: CGSize(width: 1_024, height: 256),
+            drawable: CGSize(width: 800, height: 600))
+
+        XCTAssertEqual(size.height, 256, accuracy: 0.5)
+        XCTAssertEqual(size.width / size.height, 800.0 / 600.0, accuracy: 0.001)
+        XCTAssertLessThan(size.width, 1_024)
+    }
+
+    /// Demo stills out-resolve the panel. Baking at their size would render pixels that can never
+    /// be shown — slower than the drawable-sized path this replaced — so it clamps.
+    func testFeedBakeClampsToDrawableWhenSourceOutResolvesThePanel() {
+        let drawable = CGSize(width: 1_024, height: 768)
+
+        XCTAssertEqual(
+            MetalFeedFrameBaker.bakeSize(
+                source: CGSize(width: 4_032, height: 3_024), drawable: drawable),
+            drawable)
+    }
+
+    /// An empty or infinite source extent (a CI generator with no bounds) falls back to the drawable.
+    func testFeedBakeFallsBackToDrawableForADegenerateSource() {
+        let drawable = CGSize(width: 1_024, height: 768)
+
+        XCTAssertEqual(
+            MetalFeedFrameBaker.bakeSize(source: .zero, drawable: drawable), drawable)
+        XCTAssertEqual(
+            MetalFeedFrameBaker.bakeSize(source: CGRect.infinite.size, drawable: drawable), drawable
+        )
+    }
+
+    /// The Focus dial is opt-in, and switching the default off must not overrule an operator who
+    /// already made the choice — in either direction. The stored key IS the migration: it only
+    /// exists once the FOCUS-popup toggle wrote it.
+    @MainActor
+    func testFocusDialDefaultsOffAndPreservesAnExplicitOperatorChoice() {
+        let key = "mfDriveScrubEnabled"
+        let original = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let original {
+                UserDefaults.standard.set(original, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+
+        // Fresh install / settings reset: nothing stored, so the dial is off — and a new model
+        // (the relaunch case) reads the same answer.
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertFalse(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertFalse(NativeAppModel().mfDriveScrubEnabled)
+
+        // An operator who deliberately switched the dial ON keeps it across the default change.
+        PreferencesStore.saveMFScrubEnabled(true)
+        XCTAssertTrue(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertTrue(NativeAppModel().mfDriveScrubEnabled)
+
+        // …and one who deliberately switched it OFF is never migrated back on.
+        PreferencesStore.saveMFScrubEnabled(false)
+        XCTAssertFalse(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertFalse(NativeAppModel().mfDriveScrubEnabled)
+    }
+
+    /// Preference off hides the dial whatever else is true — mode included, since the chrome no
+    /// longer gates it. (Visible-when-on needs a live focus mode from a camera; that is the
+    /// simulator/hardware check.)
+    @MainActor
+    func testFocusDialStaysHiddenWhileThePreferenceIsOff() {
+        let key = "mfDriveScrubEnabled"
+        let original = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let original {
+                UserDefaults.standard.set(original, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        let model = NativeAppModel()
+        model.mfDriveScrubEnabled = false
+        model.connection = .connected
+        model.activePanel = nil
+
+        XCTAssertFalse(model.showsMFDriveScrub)
+    }
+
+    /// The camera-values strip must not migrate to the left edge when the assist toolbar is
+    /// hidden — an operator who configures DISP 2 with only the values on would see them move as
+    /// soon as they left the Edit view, which renders with both bars mounted.
+    func testBottomBandKeepsEachStripOnItsOwnSide() {
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: false, assistVisible: true),
+            .leading, "with both bars up the assist strip fills the space and values land trailing")
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: false, assistVisible: false),
+            .trailing, "values alone must stay on the right, not slide to the left edge")
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: true, assistVisible: false),
+            .center, "photography centres its shared strip under the centred feed")
+    }
+
+    /// #272: no focus-drive exit path may leave focus commands owned. Cancelling with nothing in
+    /// flight, twice, and with no session must all be no-ops that leave the dial usable.
+    @MainActor
+    func testCancellingAFocusDriveIsAlwaysSafeAndNeverLatches() {
+        let model = NativeAppModel()
+
+        model.driveManualFocus(pulses: 400)
+        model.cancelManualFocusDrive()
+        model.cancelManualFocusDrive()
+
+        // Nothing latched: the dial still reports a usable, re-armable position.
+        model.resetMFDriveDial()
+        XCTAssertEqual(model.mfDriveNetPulses, 0)
+        XCTAssertNil(model.mfDriveAtEnd)
+    }
+
+    // MARK: - CODEC bit-depth pair (#276 follow-up)
+
+    /// The Z6III's `MovFileType` enum: H.264 once, H.265 at both depths.
+    private static let hevcBothDepthsEnum: [UInt32] = [0x0000_0801, 0x0001_0800, 0x0001_0A00]
+
+    /// The codec drum lists ONE H.265 row, and the depth beside it is whatever the body's own
+    /// readback reports — never a remembered UI choice that could disagree with the camera.
+    /// Picking a depth writes that exact advertised value; settling the drum on a family carries
+    /// the depth the body is currently recording at, and only falls back to the family's lowest
+    /// advertised depth when the body's current depth is not one it offers.
+    @MainActor
+    func testCodecRowsCarryTheirBitDepthAndKeepItAcrossAFamilySwitch() {
+        let model = NativeAppModel()
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: Self.hevcBothDepthsEnum)
+
+        // One row per family; only the two-variant family offers a depth choice.
+        XCTAssertEqual(model.codecOptions, ["H.264", "H.265"])
+        XCTAssertEqual(model.codecFamilies.map(\.offersBitDepthChoice), [false, true])
+        let hevc = model.codecFamilies[1]
+        XCTAssertEqual(hevc.depths.map(\.bitDepthLabel), ["8-bit", "10-bit"])
+
+        // Body on H.265 8-bit: the drum centres on the family row, the pair reads 8-bit.
+        model.applyDemoProperty(
+            .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0800).data)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.265")
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 8)
+
+        // Tapping "10-bit" writes the advertised 10-bit value.
+        model.applyPickerValue("H.265 10-bit", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 10)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.265")
+
+        // Settling the drum on a family row carries the depth the body is on: H.264 is 8-bit, so
+        // coming back to H.265 records 8-bit, and the pair — not a second row — moves it to 10.
+        model.applyPickerValue("H.264", for: .codec)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.264")
+        model.applyPickerValue("H.265", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0800)
+        model.applyPickerValue("H.265 10-bit", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0A00)
+    }
+
+    /// A depth the body is on but does not advertise for the codec being selected must not be
+    /// carried across — the row falls back to that family's lowest advertised depth instead of
+    /// writing a combination the body never offered.
+    @MainActor
+    func testAFamilyThatCannotHoldTheCurrentDepthFallsBackToItsLowest() {
+        let model = NativeAppModel()
+        // R3D NE is 12-bit only; H.265 is offered at 8 and 10.
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: [0x0031_0C03, 0x0001_0800, 0x0001_0A00])
+        model.applyDemoProperty(
+            .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: 0x0031_0C03).data)
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 12)
+
+        model.applyPickerValue("H.265", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0800)
+    }
+
+    /// A body that advertises one variant of a codec gets no depth buttons at all — a dead button
+    /// for a depth the body cannot record is exactly what this feature must not ship.
+    @MainActor
+    func testASingleVariantCodecOffersNoBitDepthChoice() {
+        let model = NativeAppModel()
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: [0x0031_0A03, 0x0002_0C02, 0x0001_0A01])
+        XCTAssertEqual(model.codecOptions, ["R3D NE", "N-RAW", "H.265"])
+        XCTAssertTrue(model.codecFamilies.allSatisfy { !$0.offersBitDepthChoice })
+    }
+
+    // MARK: - Picker option sourcing (#274)
+
+    /// Every function picker must name the PTP property whose descriptor drives its drum. A nil
+    /// here is a picker silently rendering the app's fixed union again — the whole #274 defect.
+    /// (Which property each one names is asserted in the shared core's `PickerOptionPolicyTests`,
+    /// where the descriptor decoders live; this target does not link the core module.)
+    func testEveryFunctionPickerNamesItsDescriptorProperty() {
+        let sourced: [(CameraPicker, Int)] = [
+            (.mode, 0), (.stillMode, 0), (.stillMode, 1), (.stillDrive, 0),
+            (.stillFocus, 0), (.stillFocus, 1), (.stillFocus, 2),
+            (.stillFlash, 0), (.stillMeter, 0), (.stillQuality, 0), (.stillPicture, 0),
+            (.focus, 0), (.focus, 1), (.focus, 2),
+        ]
+        for (picker, mode) in sourced {
+            XCTAssertNotNil(
+                picker.optionProperty(forMode: mode),
+                "\(picker.rawValue) mode \(mode) is not sourced from the camera")
+        }
+        // Focus mode / area / subject are three separate Nikon settings, so the three tabs must
+        // read three different properties — never collapsed onto one.
+        for picker: CameraPicker in [.focus, .stillFocus] {
+            let properties = (0...2).compactMap { picker.optionProperty(forMode: $0) }
+            XCTAssertEqual(Set(properties).count, 3, "\(picker.rawValue) conflates its focus tabs")
+        }
+        // The Drive picker's two Timer tabs are app state, not camera enums.
+        XCTAssertNil(CameraPicker.stillDrive.optionProperty(forMode: 1))
+        XCTAssertNil(CameraPicker.stillDrive.optionProperty(forMode: 2))
+    }
+
+    /// The fallback a body without a descriptor gets must be conservative: no user banks (the
+    /// reported Zf), and the drive ladder in the body's release order (the reported Z6III).
+    func testPickerFallbackLaddersAreConservativeAndInBodyOrder() {
+        for picker: CameraPicker in [.mode, .stillMode] {
+            XCTAssertFalse(
+                picker.options.contains { $0.hasPrefix("U") },
+                "\(picker.rawValue) invents user banks without a descriptor")
+        }
+        XCTAssertEqual(CameraPicker.stillMode.modes[0].options, ["Auto", "P", "S", "A", "M"])
+        XCTAssertEqual(
+            CameraPicker.stillDrive.options,
+            [
+                "Single", "Continuous L", "Continuous H", "Continuous H+", "C15", "C30", "C60",
+                "C120",
+            ]
+        )
+    }
+
+    /// Focus AREA and subject DETECTION are separate Nikon settings, and neither tab may wear the
+    /// other's name. The core suite proves these exact labels encode back to their own raw values.
+    func testFocusAreaLabelsNameTheBodysSettings() {
+        for picker: CameraPicker in [.focus, .stillFocus] {
+            let areas = picker.modes[1].options
+            let subjects = picker.modes[2].options
+            // The bare forms are the reported confusion: "Subject" reads as the detection tab and
+            // "3D" is not what the body calls 3D-tracking.
+            XCTAssertFalse(areas.contains("Subject"), "\(picker.rawValue) area tab says 'Subject'")
+            XCTAssertFalse(areas.contains("3D"), "\(picker.rawValue) area tab says bare '3D'")
+            // Only "Auto" legitimately names a position in both spaces.
+            XCTAssertTrue(Set(areas).intersection(subjects).isSubset(of: ["Auto"]))
+        }
+        // Each chrome's own tracking position, spelled the way the body spells it.
+        XCTAssertTrue(CameraPicker.focus.modes[1].options.contains("Subject tracking"))
+        XCTAssertTrue(CameraPicker.stillFocus.modes[1].options.contains("3D tracking"))
     }
 }

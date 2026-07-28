@@ -7,6 +7,7 @@ import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.OperatorSettingsTab
 
 /**
@@ -39,6 +40,8 @@ object DemoHarness {
 
     /** Release builds cannot force a standalone settings surface. */
     @Suppress("UNUSED_PARAMETER")
+    internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? = null
+
     internal fun settingsTab(intent: Intent): OperatorSettingsTab? = null
 
     /** Release builds cannot auto-open debug surfaces. */
@@ -69,9 +72,17 @@ object DemoHarness {
     @Suppress("UNUSED_PARAMETER")
     fun glassTierOverride(intent: Intent): String? = null
 
+    /** Always null: release builds cannot stage a dropped-session affordance. */
+    @Suppress("UNUSED_PARAMETER")
+    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? = null
+
     /** Release builds never provide a debug image-assist override. */
     @Suppress("UNUSED_PARAMETER")
     fun assistEffects(intent: Intent): FeedEffects? = null
+
+    /** Always null: release builds cannot arm the 50/50 comparison from an intent. */
+    @Suppress("UNUSED_PARAMETER")
+    fun splitComparison(intent: Intent): FeedSplitOrientation? = null
 
     /** Always null: the debug scope toggle does not exist in release builds. */
     @Suppress("UNUSED_PARAMETER")

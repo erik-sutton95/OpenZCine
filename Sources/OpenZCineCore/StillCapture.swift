@@ -33,12 +33,17 @@ public enum CameraCaptureSelector: String, Equatable, Sendable, CaseIterable {
 /// the extended-continuous mode are body-dependent). Bodies with a release-mode
 /// dial report `quickSetting` when the dial sits on the quick position and move
 /// the effective mode to `StillCaptureModeQuick` (0xD0F6).
+///
+/// Declaration order is the body's own release-mode order — Single, CL, CH, CH+, then the
+/// high-speed frame-capture positions — NOT ascending raw value. `allCases` is the picker's
+/// fallback list, and ordering it by raw put CH ahead of CL, which is neither the Z6III's order
+/// nor any Z body's (#274). A connected body's advertised descriptor still wins over this.
 public enum StillDriveMode: UInt16, Equatable, Sendable, CaseIterable {
     case single = 0x0001
-    case continuousHigh = 0x0002
     case continuousLow = 0x8010
-    case selfTimer = 0x8011
+    case continuousHigh = 0x0002
     case continuousHighExtended = 0x8019
+    case selfTimer = 0x8011
     case quickSetting = 0x8100
     case highSpeedFrameC15 = 0x810F
     case highSpeedFrameC30 = 0x811E
@@ -105,6 +110,15 @@ public enum StillCapturePolicy: Sendable {
         case .sdram: return .initiateCaptureRecInSdram
         case .media: return .initiateCaptureRecInMedia
         }
+    }
+
+    /// First parameter of the media capture op (`CaptureSort`). `0xFFFFFFFE` runs AF driving and
+    /// THEN releases — a half-press-then-fire, like the body's own shutter button. `0xFFFFFFFF` is
+    /// a plain release with NO AF-driving step, used to hold the focus the operator set with the
+    /// focus dial; an AF release would re-focus at the box and undo the manual pull.
+    /// [verify-on-HW: 0xFFFFFFFF skips AF while the body is in an AF focus mode]
+    public static func captureSortParameter(preserveFocus: Bool) -> UInt32 {
+        preserveFocus ? 0xFFFF_FFFF : 0xFFFF_FFFE
     }
 
     /// Properties polled while the body is in photo mode (in addition to shared health).

@@ -5,8 +5,14 @@ import kotlin.math.pow
 import kotlin.math.roundToLong
 
 /**
- * Jittered exponential backoff for reconnect retries — the Kotlin twin of the
- * shared core's `ReconnectBackoff` (`Sources/OpenZCineCore/ReconnectBackoff.swift`).
+ * Jittered exponential backoff for **transport-level** retries — the Kotlin twin
+ * of the shared core's `ReconnectBackoff` (`Sources/OpenZCineCore/ReconnectBackoff.swift`).
+ *
+ * Scope: socket-level retry inside one Android transport, where a JNI hop per
+ * attempt would sit in the hot path. The operator-facing *recovery policy* —
+ * when to retry a dropped session, how long, and when to stop and ask — is NOT
+ * here: it lives in the core's `SessionRecoveryPolicy` and reaches Kotlin
+ * through `SessionRetryScheduleBridge`, so both shells obey one rule.
  *
  * Plain doubling wakes every retry at the same instants and hammers a flaky
  * access point with synchronized bursts; spreading each delay by a random

@@ -40,7 +40,7 @@ struct PTPEventTests {
     @Test func unrelatedEventHasNoRecordHint() throws {
         let event = try PTPEvent(payloadBytes: Array(eventPayload(code: 0x4006)))
         #expect(event.rawEventCode == 0x4006)
-        #expect(event.eventCode == .unknown)
+        #expect(event.eventCode == .devicePropChanged)
         #expect(event.recordingInterruptionErrorCode == nil)
         #expect(event.inferredRecordState == nil)
     }
