@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Slow-motion conform preview** for high-frame-rate clips: pick the rate the edit will conform
+  to and watch the clip at that speed, stated in full (`60 → 24 fps · 40%`). Real time stays the
+  default, audio is muted while a conform runs, and the clip itself is never touched. Where the
+  source cannot be trusted — unknown rate, variable frame rate — the control says why instead of
+  showing a plausible wrong speed.
+- **A visible clean-view button in playback**, hiding every non-essential control. The swipe-down
+  gesture still works; the button makes it discoverable. A tap on the picture always brings the
+  controls back.
+- **Anamorphic de-squeeze in photo mode** — live view, instant playback and the media-page still
+  viewer, with the same presets and custom 1.00–2.00× ratio the cinema path uses. Display only:
+  the camera original and any export are unchanged.
+
 - **Photography (stills) mode** (iOS + Android): dedicated stills chrome with a real shutter
   (hold-to-burst in continuous drives, tap-to-AF, bulb/time), built-in and app self-timers, and
   capture-bar pickers for mode (incl. U1–U3), ISO Auto, focus mode/area/subject, drive, white

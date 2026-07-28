@@ -1,11 +1,11 @@
 New and changed
 
-- Display settings are rebuilt around the three DISP modes, and video and photo keep separate layouts (one switch at the top of the tab). DISP 1 and DISP 2 have an "Edit view" that opens the monitor itself: tap the eye on any element - top bar and each of its readouts, focus box, batteries, lock, tool bar, camera values, and record / Media / Settings / DISP individually - to show or hide it. Anything you hide stays on screen at 30% while you edit, so you can always turn it back on.
+- Display settings are rebuilt around the three DISP modes, and video and photo keep separate layouts (one switch at the top of the tab). DISP 1 and DISP 2 have an "Edit view" that opens the monitor itself: tap the eye on any element to show or hide it, down to individual readouts and buttons. Anything you hide stays on screen at 30% while you edit, so you can always turn it back on.
 - DISP 2 now offers exactly the same elements as DISP 1, with different defaults: the picture, the side rail, the focus box and the batteries, everything else off. Switch on whatever else you want. The recording tally, the record control while rolling and camera warnings always stay.
-- The focus dial works in video as well as photo. It is off by default and lives in the FOCUS popup; if you had already switched it on, it stays on.
-- H.265 8-bit and 10-bit are separate choices. When your camera offers both, the codec popup shows one H.265 row with 8-bit and 10-bit either side of it, so you pick the depth directly.
-- Stream Preset and Quality Bias now both read Fast, Balanced, Quality. Quality Bias had only two positions before, so the middle grade your camera offers was unreachable. New installs start on the Quality preset.
-- Media filters match the tab you are on. Photos offers JPEG, HEIF and NEF, an L/M/S size row, and Today, 7 days or 30 days - instead of the video formats and resolutions it used to show.
+- The focus dial works in video as well as photo. Off by default, in the FOCUS popup; if you already switched it on, it stays on.
+- H.265 8-bit and 10-bit are separate choices: the codec popup shows one H.265 row with 8-bit and 10-bit either side, so you pick the depth directly. Stream Preset and Quality Bias now both read Fast, Balanced, Quality - Quality Bias had only two positions, so the middle grade was unreachable. New installs start on Quality.
+- Playback gains a clean-view button that hides every control; tap the picture to bring them back. High-frame-rate clips can be watched at their edit speed - pick a rate and it shows what you get, e.g. 60 to 24 fps at 40%, with audio muted while it runs. De-squeeze now works in photo mode too: live view, instant playback and the media viewer.
+- Media filters match the tab you are on: Photos offers JPEG, HEIF and NEF, an L/M/S size row, and Today / 7 days / 30 days.
 
 Fixes
 
