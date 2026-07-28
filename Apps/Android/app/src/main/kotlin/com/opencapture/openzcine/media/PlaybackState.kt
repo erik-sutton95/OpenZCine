@@ -116,6 +116,35 @@ internal fun playbackChromeVisibilityForSwipe(
     return verticalDeltaDp < 0f
 }
 
+/** How long the clean-view hint stays up; iOS uses the same 1.8s. */
+internal const val PLAYBACK_CLEAN_VIEW_HINT_MILLIS = 1_800L
+
+/** What a tap on the playback frame means (iOS `PlaybackFrameTap`). */
+internal enum class PlaybackFrameTap {
+    RESTORE_CHROME,
+    RESTART_PLAYBACK,
+    TOGGLE_TRANSPORT,
+}
+
+/**
+ * A hidden chrome wins over everything else.
+ *
+ * The clean-view button hands the operator a screen with no visible controls, so the tap that
+ * brings them back cannot also be the tap that plays or pauses. Without this the button would
+ * create precisely the trap it exists to remove — and a worse one than the swipe gesture ever
+ * was, because a gesture nobody knows about is undiscoverable, while a button that strands you
+ * is inescapable.
+ */
+internal fun playbackFrameTapAction(
+    chromeVisible: Boolean,
+    reachedEnd: Boolean,
+): PlaybackFrameTap =
+    when {
+        !chromeVisible -> PlaybackFrameTap.RESTORE_CHROME
+        reachedEnd -> PlaybackFrameTap.RESTART_PLAYBACK
+        else -> PlaybackFrameTap.TOGGLE_TRANSPORT
+    }
+
 /** Screen-space pan used for playback zoom without leaking Compose geometry into tests. */
 internal data class PlaybackPan(
     val x: Float = 0f,

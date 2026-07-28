@@ -2884,7 +2884,7 @@ struct MediaPlayerView: View {
 
     @State private var isClipReady = false
     @State private var streamPollTask: Task<Void, Never>?
-    @State private var chromeVisible = true
+    @State private var chromeVisible = !DemoHarness.playbackCleanView
     @State private var assistMode = false
     @State private var assistOptionsTool: MonitorAssistTool?
     @State private var playbackBarFrame: CGRect = .zero
@@ -2917,6 +2917,13 @@ struct MediaPlayerView: View {
     @State private var zoomContainerSize: CGSize = .zero
     /// Suppresses play/pause tap recognition after pinch, pan, or frame scrub so those gestures do not toggle transport.
     @State private var suppressNextPlaybackTap = false
+    /// Shown for a beat when the clean-view button hides the chrome, so the way back is never a
+    /// guess. Deliberately not the `toastMessage` toast — that one only renders while the chrome
+    /// is up, which is exactly when this is not needed.
+    /// Seeded by the demo hook so the hint is in the headless capture; in the app only
+    /// `enterCleanView()` raises it, and it dismisses itself.
+    @State private var cleanViewHintVisible = DemoHarness.playbackCleanView
+    @State private var cleanViewHintTask: Task<Void, Never>?
     /// Brief play/pause symbol shown centered on the video after a frame tap toggles transport.
     @State private var playbackFlashSymbol: String?
     @State private var playbackFlashVisible = false
@@ -3116,6 +3123,17 @@ struct MediaPlayerView: View {
                     .padding(.bottom, 2)
                 }
                 if chromeVisible { bottomBar }
+                if !chromeVisible && cleanViewHintVisible {
+                    Text("Tap to show controls")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(LiveDesign.text)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .liquidGlass(in: Capsule(), interactive: false)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
@@ -3364,8 +3382,12 @@ struct MediaPlayerView: View {
                 guard !isFrameScrubbing else { return }
                 let dy = value.translation.height
                 guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
-                withAnimation(.spring(duration: 0.32)) {
-                    chromeVisible = dy < 0
+                if dy < 0 {
+                    restoreChrome()
+                } else {
+                    // The gesture is for operators who already know it; no hint.
+                    cleanViewHintTask?.cancel()
+                    withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
                 }
             }
     }
@@ -3653,6 +3675,7 @@ struct MediaPlayerView: View {
                 actionToggle("speaker.slash.fill", "speaker.wave.2.fill", on: isMuted) {
                     toggleMute()
                 }
+                cleanViewButton
                 viewAssistButton
                 shareButton
             }
@@ -3706,6 +3729,35 @@ struct MediaPlayerView: View {
                     }
             }
         }
+    }
+
+    /// Hides every non-critical control, leaving the frame alone.
+    ///
+    /// The swipe-down gesture has always done this, but an undisclosed gesture is indistinguishable
+    /// from a missing feature — so the capability gets a control you can see. The gesture stays for
+    /// operators who already know it.
+    private var cleanViewButton: some View {
+        Button {
+            enterCleanView()
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
+                .foregroundStyle(LiveDesign.text)
+                .frame(
+                    width: PlaybackChrome.actionButtonSize.width,
+                    height: PlaybackChrome.actionButtonSize.height
+                )
+                .contentShape(
+                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+                )
+                .liquidGlass(
+                    in: RoundedRectangle(
+                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
+                    interactive: true)
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Hide playback controls")
+        .accessibilityHint("Tap the video to bring them back")
     }
 
     private var viewAssistButton: some View {
@@ -4099,6 +4151,7 @@ struct MediaPlayerView: View {
 
     /// Tap on the video frame toggles transport; at end-of-clip restarts from the beginning.
     private func handlePlaybackFrameTap() {
+        // Decision in `PlaybackFrameTap` so it can be tested; the view only performs it.
         guard isClipReady else { return }
         guard deliveryPresentation == nil, assistOptionsTool == nil else { return }
         guard !isFrameScrubbing else { return }
@@ -4106,10 +4159,13 @@ struct MediaPlayerView: View {
             suppressNextPlaybackTap = false
             return
         }
-        if reachedEnd {
+        switch PlaybackFrameTap.action(chromeVisible: chromeVisible, reachedEnd: reachedEnd) {
+        case .restoreChrome:
+            restoreChrome()
+        case .restartPlayback:
             restartPlayback()
             showPlaybackFlash(symbol: "play.fill")
-        } else {
+        case .toggleTransport:
             let willPlay = !isPlaying
             togglePlay()
             showPlaybackFlash(symbol: willPlay ? "play.fill" : "pause.fill")
@@ -4212,6 +4268,29 @@ struct MediaPlayerView: View {
             item.videoComposition != nil
         else { return }
         item.videoComposition = playbackEffectsBox.makeVideoComposition(for: item.asset)
+    }
+
+    /// Hides the chrome and says how to get it back. The hint is shown every time the BUTTON is
+    /// used rather than once ever: it costs nothing to re-read, it is self-limiting (only the
+    /// button raises it, and only the operator who wanted clean view presses that), and a
+    /// once-ever tutorial is forgotten long before the one time it is needed.
+    private func enterCleanView() {
+        withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
+        cleanViewHintTask?.cancel()
+        withAnimation { cleanViewHintVisible = true }
+        cleanViewHintTask = Task {
+            try? await Task.sleep(for: .seconds(1.8))
+            guard !Task.isCancelled else { return }
+            withAnimation { cleanViewHintVisible = false }
+        }
+    }
+
+    private func restoreChrome() {
+        cleanViewHintTask?.cancel()
+        withAnimation(.spring(duration: 0.32)) {
+            chromeVisible = true
+            cleanViewHintVisible = false
+        }
     }
 
     private func showToast(_ message: String) {
@@ -4334,3 +4413,26 @@ private struct PlayerLayerView: UIViewRepresentable {
 }
 
 // MARK: - Supporting views
+
+/// What a tap on the playback frame means.
+///
+/// Lifted out of the view so the rule below is covered by a test. It cannot be checked by driving
+/// the simulator — synthetic input does not reach this app — so the alternative to a test is
+/// reading the gesture code and hoping.
+enum PlaybackFrameTap: Equatable {
+    case restoreChrome
+    case restartPlayback
+    case toggleTransport
+
+    /// A hidden chrome wins over everything else.
+    ///
+    /// The clean-view button hands the operator a screen with no visible controls, so the tap that
+    /// brings them back cannot also be the tap that plays or pauses. Without this the button would
+    /// create precisely the trap it exists to remove — and it would be a worse trap than the swipe
+    /// gesture ever was, because a gesture nobody knows about is undiscoverable, while a button
+    /// that strands you is inescapable.
+    static func action(chromeVisible: Bool, reachedEnd: Bool) -> PlaybackFrameTap {
+        guard chromeVisible else { return .restoreChrome }
+        return reachedEnd ? .restartPlayback : .toggleTransport
+    }
+}

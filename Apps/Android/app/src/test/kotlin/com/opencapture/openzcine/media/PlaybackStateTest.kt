@@ -184,4 +184,26 @@ class PlaybackStateTest {
                     null
                 },
         )
+
+    @Test
+    fun `tapping a hidden chrome always restores it rather than toggling transport`() {
+        // Hidden chrome wins even at end-of-clip, where the tap would otherwise restart playback.
+        assertEquals(
+            PlaybackFrameTap.RESTORE_CHROME,
+            playbackFrameTapAction(chromeVisible = false, reachedEnd = false),
+        )
+        assertEquals(
+            PlaybackFrameTap.RESTORE_CHROME,
+            playbackFrameTapAction(chromeVisible = false, reachedEnd = true),
+        )
+        // With the chrome up, the tap keeps its old meaning.
+        assertEquals(
+            PlaybackFrameTap.TOGGLE_TRANSPORT,
+            playbackFrameTapAction(chromeVisible = true, reachedEnd = false),
+        )
+        assertEquals(
+            PlaybackFrameTap.RESTART_PLAYBACK,
+            playbackFrameTapAction(chromeVisible = true, reachedEnd = true),
+        )
+    }
 }

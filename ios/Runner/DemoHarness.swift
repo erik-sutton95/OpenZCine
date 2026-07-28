@@ -40,6 +40,10 @@ enum DemoHarness {
     static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")
     /// `ZC_DEMO_WIFI_SCANNER=scan|manual` opens the Wi-Fi credential scanner for screenshots.
     static let cameraWiFiScannerMode = value("ZC_DEMO_WIFI_SCANNER")
+    /// `ZC_DEMO_PLAYBACK_CLEAN_VIEW=1` opens the clip player with its chrome already hidden, so
+    /// the clean view and its "tap to show controls" hint can be captured headlessly. Synthetic
+    /// taps do not reach this app, so the state is otherwise only reachable by hand.
+    static let playbackCleanView = flag("ZC_DEMO_PLAYBACK_CLEAN_VIEW")
     /// `ZC_DEMO_CAPTURE_FRAMES=N` dumps the next N live-view frames to disk — see
     /// ``captureLiveViewObject(_:)``.
     static let captureLiveViewFrameCount = value("ZC_DEMO_CAPTURE_FRAMES").flatMap(Int.init)

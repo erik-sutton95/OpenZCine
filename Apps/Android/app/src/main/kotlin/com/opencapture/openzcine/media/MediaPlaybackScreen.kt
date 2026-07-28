@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -803,6 +804,8 @@ private fun ProgressivePlayer(
     var reachedEnd by remember(entry) { mutableStateOf(false) }
     var scrubPosition by remember(entry) { mutableFloatStateOf(0f) }
     var scrubbing by remember(entry) { mutableStateOf(false) }
+    // When the clean-view hint was raised; 0 once it has been dismissed or expired.
+    var cleanViewHintShownAt by remember(entry) { mutableLongStateOf(0L) }
     var wasPlayingBeforeScrub by remember(entry) { mutableStateOf(false) }
     var lastPreviewSeekAt by remember(entry) { mutableLongStateOf(0L) }
     var zoom by remember(entry) { mutableFloatStateOf(1f) }
@@ -836,6 +839,28 @@ private fun ProgressivePlayer(
     fun resetZoom() {
         zoom = 1f
         pan = PlaybackPan()
+    }
+
+    /**
+     * Hides the chrome and says how to get it back. The hint is shown every time the BUTTON is
+     * used rather than once ever: it costs nothing to re-read, it is self-limiting (only the
+     * button raises it, and only the operator who wanted clean view presses that), and a
+     * once-ever tutorial is forgotten long before the one time it is needed.
+     */
+    LaunchedEffect(cleanViewHintShownAt) {
+        if (cleanViewHintShownAt == 0L) return@LaunchedEffect
+        delay(PLAYBACK_CLEAN_VIEW_HINT_MILLIS)
+        cleanViewHintShownAt = 0L
+    }
+
+    fun enterCleanView() {
+        onChromeVisibleChanged(false)
+        cleanViewHintShownAt = SystemClock.elapsedRealtime()
+    }
+
+    fun restoreChrome() {
+        cleanViewHintShownAt = 0L
+        onChromeVisibleChanged(true)
     }
 
     fun togglePlayback(showFlash: Boolean = false) {
@@ -1251,11 +1276,32 @@ private fun ProgressivePlayer(
                 .transformable(transformState)
                 .pointerInput(zoom, scrubbing, reachedEnd) {
                     detectTapGestures(
-                        onTap = { if (!scrubbing) togglePlayback(showFlash = true) },
+                        onTap = {
+                            if (scrubbing) return@detectTapGestures
+                            when (playbackFrameTapAction(chromeVisible, reachedEnd)) {
+                                PlaybackFrameTap.RESTORE_CHROME -> restoreChrome()
+                                else -> togglePlayback(showFlash = true)
+                            }
+                        },
                         onDoubleTap = { resetZoom() },
                     )
                 },
         )
+        if (!chromeVisible && cleanViewHintShownAt != 0L) {
+            Text(
+                "Tap to show controls",
+                modifier =
+                    Modifier.align(Alignment.BottomCenter)
+                        .windowInsetsPadding(
+                            WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
+                        )
+                        .padding(bottom = 24.dp)
+                        .glass(CircleShape)
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                style = chromeStyle(12f, FontWeight.Medium),
+                color = LiveDesign.text,
+            )
+        }
         if (framingAssistsVisible) {
             LocalFramingAssistOverlay(
                 configuration = playbackFramingConfiguration,
@@ -1541,6 +1587,16 @@ private fun ProgressivePlayer(
                                 audioMode = audioMode.toggled()
                                 player.volume = audioMode.volume
                             },
+                        )
+                        // The swipe-down gesture has always hidden the chrome, but an
+                        // undisclosed gesture is indistinguishable from a missing feature — so
+                        // the capability gets a control you can see. The gesture stays for
+                        // operators who already know it.
+                        PlaybackIconButton(
+                            icon = Icons.Filled.Fullscreen,
+                            contentDescription = "Hide playback controls",
+                            action = true,
+                            onClick = { enterCleanView() },
                         )
                         PlaybackIconButton(
                             icon = Icons.Outlined.CenterFocusWeak,
