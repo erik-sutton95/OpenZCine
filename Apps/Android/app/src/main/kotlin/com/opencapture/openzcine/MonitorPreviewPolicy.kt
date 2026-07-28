@@ -41,22 +41,34 @@ internal fun monitorAllowsPopups(mode: MonitorDisplayMode): Boolean =
     mode != MonitorDisplayMode.CLEAN
 
 /**
- * Whether [tool] renders right now, given the DISP [mode] and the operator's
- * clean-view pins. Mirrors `MonitorChromePolicy.isToolVisible`: live shows
- * everything switched on, clean shows only pinned tools, command shows none
- * (its dashboard replaces the feed entirely). Callers still apply the tool's
- * own on/off state — this only filters by mode.
+ * Whether [tool] renders right now, given the DISP [mode], the operator's
+ * clean-view pins, and whether the body is in [photography]. Mirrors
+ * `MonitorChromePolicy.isToolVisible` plus iOS `renderedLiveAssistTools`: live
+ * shows everything switched on, clean shows only pinned tools, command shows
+ * none (its dashboard replaces the feed entirely). Callers still apply the
+ * tool's own on/off state — this only filters by mode.
+ *
+ * The [photography] filter is one gate for every render path rather than a test
+ * at each call site, because the paths that forgot it diverged: a cinema-only
+ * tool left on in video rode straight into the photo feed. The LUT is the one
+ * that shows: the stills live view is already display-referred, so a Log→709
+ * look lands on an image that has been graded once already and the frame reads
+ * as broken — and the photo toolbar cannot even switch it off. Stored state is
+ * untouched, so flipping back to video restores the set exactly.
  */
 internal fun assistToolRendersInMode(
     tool: AssistTool,
     mode: MonitorDisplayMode,
     pinnedToCleanView: Set<AssistTool>,
-): Boolean =
-    when (mode) {
+    photography: Boolean,
+): Boolean {
+    if (photography && !tool.appliesToPhotography) return false
+    return when (mode) {
         MonitorDisplayMode.LIVE -> true
         MonitorDisplayMode.CLEAN -> tool in pinnedToCleanView
         MonitorDisplayMode.COMMAND -> false
     }
+}
 
 /** The [AssistTool] whose pin governs this scope panel. */
 internal val ScopeKind.assistTool: AssistTool
@@ -74,9 +86,10 @@ internal fun renderedScopes(
     selected: Set<ScopeKind>,
     mode: MonitorDisplayMode,
     pinnedToCleanView: Set<AssistTool>,
+    photography: Boolean,
 ): Set<ScopeKind> =
     selected.filterTo(mutableSetOf()) {
-        assistToolRendersInMode(it.assistTool, mode, pinnedToCleanView)
+        assistToolRendersInMode(it.assistTool, mode, pinnedToCleanView, photography)
     }
 
 /** The feed effects the GPU chain should bake — clean bakes only pinned looks. */
@@ -84,8 +97,10 @@ internal fun renderedFeedEffects(
     effects: FeedEffects,
     mode: MonitorDisplayMode,
     pinnedToCleanView: Set<AssistTool>,
+    photography: Boolean,
 ): FeedEffects {
-    fun keeps(tool: AssistTool) = assistToolRendersInMode(tool, mode, pinnedToCleanView)
+    fun keeps(tool: AssistTool) =
+        assistToolRendersInMode(tool, mode, pinnedToCleanView, photography)
     if (keeps(AssistTool.LUT) && keeps(AssistTool.FALSE) && keeps(AssistTool.PEAK) &&
         keeps(AssistTool.ZEBRA)
     ) {
@@ -107,9 +122,13 @@ internal fun renderedFramingAssists(
     configuration: LocalFramingAssistConfiguration,
     mode: MonitorDisplayMode,
     pinnedToCleanView: Set<AssistTool>,
+    photography: Boolean,
 ): LocalFramingAssistConfiguration {
-    if (mode == MonitorDisplayMode.LIVE) return configuration
-    fun keeps(tool: AssistTool) = assistToolRendersInMode(tool, mode, pinnedToCleanView)
+    // Photography drops the cinema-only aids (guides, crosshair, desqueeze) even in LIVE, so the
+    // early return has to be conditional on it — otherwise they ride into the photo feed.
+    if (mode == MonitorDisplayMode.LIVE && !photography) return configuration
+    fun keeps(tool: AssistTool) =
+        assistToolRendersInMode(tool, mode, pinnedToCleanView, photography)
     return configuration.copy(
         guidesVisible = configuration.guidesVisible && keeps(AssistTool.GUIDES),
         gridVisible = configuration.gridVisible && keeps(AssistTool.GRID),

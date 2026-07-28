@@ -129,6 +129,7 @@ class FramingAssistsTest {
                     configuration,
                     MonitorDisplayMode.CLEAN,
                     setOf(AssistTool.GUIDES, AssistTool.DESQ),
+                    photography = false,
                 ),
             )
 

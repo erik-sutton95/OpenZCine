@@ -17,19 +17,19 @@ class MonitorCleanViewPolicyTest {
     fun `clean hides every tool that is not pinned and command hides all of them`() {
         for (tool in AssistTool.entries) {
             assertTrue(
-                assistToolRendersInMode(tool, MonitorDisplayMode.LIVE, emptySet()),
+                assistToolRendersInMode(tool, MonitorDisplayMode.LIVE, emptySet(), photography = false),
                 "$tool must render in live",
             )
             assertFalse(
-                assistToolRendersInMode(tool, MonitorDisplayMode.CLEAN, emptySet()),
+                assistToolRendersInMode(tool, MonitorDisplayMode.CLEAN, emptySet(), photography = false),
                 "$tool must be hidden in clean by default",
             )
             assertFalse(
-                assistToolRendersInMode(tool, MonitorDisplayMode.COMMAND, setOf(tool)),
+                assistToolRendersInMode(tool, MonitorDisplayMode.COMMAND, setOf(tool), photography = false),
                 "$tool must be hidden in command even when pinned",
             )
             assertTrue(
-                assistToolRendersInMode(tool, MonitorDisplayMode.CLEAN, setOf(tool)),
+                assistToolRendersInMode(tool, MonitorDisplayMode.CLEAN, setOf(tool), photography = false),
                 "$tool must render in clean once pinned",
             )
         }
@@ -49,14 +49,14 @@ class MonitorCleanViewPolicyTest {
 
         assertEquals(
             selected,
-            renderedScopes(selected, MonitorDisplayMode.LIVE, emptySet()),
+            renderedScopes(selected, MonitorDisplayMode.LIVE, emptySet(), photography = false),
         )
-        assertTrue(renderedScopes(selected, MonitorDisplayMode.CLEAN, emptySet()).isEmpty())
+        assertTrue(renderedScopes(selected, MonitorDisplayMode.CLEAN, emptySet(), photography = false).isEmpty())
         assertEquals(
             setOf(ScopeKind.HISTOGRAM),
-            renderedScopes(selected, MonitorDisplayMode.CLEAN, setOf(AssistTool.HISTO)),
+            renderedScopes(selected, MonitorDisplayMode.CLEAN, setOf(AssistTool.HISTO), photography = false),
         )
-        assertTrue(renderedScopes(selected, MonitorDisplayMode.COMMAND, emptySet()).isEmpty())
+        assertTrue(renderedScopes(selected, MonitorDisplayMode.COMMAND, emptySet(), photography = false).isEmpty())
     }
 
     @Test
@@ -70,20 +70,20 @@ class MonitorCleanViewPolicyTest {
             )
 
         // Live is handed the identical instance — no needless recomposition input.
-        assertSame(effects, renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet()))
+        assertSame(effects, renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = false))
 
-        val bare = renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, emptySet())
+        val bare = renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, emptySet(), photography = false)
         assertTrue(bare.isIdentity)
 
         val pinnedPeaking =
-            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, setOf(AssistTool.PEAK))
+            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, setOf(AssistTool.PEAK), photography = false)
         assertTrue(pinnedPeaking.peaking)
         assertFalse(pinnedPeaking.zebra)
         assertNull(pinnedPeaking.lut)
         assertNull(pinnedPeaking.falseColor)
 
         // Leaving clean restores the operator's set untouched.
-        assertSame(effects, renderedFeedEffects(effects, MonitorDisplayMode.LIVE, setOf(AssistTool.PEAK)))
+        assertSame(effects, renderedFeedEffects(effects, MonitorDisplayMode.LIVE, setOf(AssistTool.PEAK), photography = false))
     }
 
     @Test
@@ -110,10 +110,10 @@ class MonitorCleanViewPolicyTest {
 
         assertSame(
             configuration,
-            renderedFramingAssists(configuration, MonitorDisplayMode.LIVE, emptySet()),
+            renderedFramingAssists(configuration, MonitorDisplayMode.LIVE, emptySet(), photography = false),
         )
 
-        val bare = renderedFramingAssists(configuration, MonitorDisplayMode.CLEAN, emptySet())
+        val bare = renderedFramingAssists(configuration, MonitorDisplayMode.CLEAN, emptySet(), photography = false)
         assertFalse(bare.guidesVisible)
         assertFalse(bare.gridVisible)
         assertFalse(bare.centerCrosshairEnabled)
@@ -122,7 +122,7 @@ class MonitorCleanViewPolicyTest {
         assertFalse(bare.desqueezeEnabled)
 
         val pinnedGuides =
-            renderedFramingAssists(configuration, MonitorDisplayMode.CLEAN, setOf(AssistTool.GUIDES))
+            renderedFramingAssists(configuration, MonitorDisplayMode.CLEAN, setOf(AssistTool.GUIDES), photography = false)
         assertTrue(pinnedGuides.guidesVisible)
         assertFalse(pinnedGuides.gridVisible)
     }

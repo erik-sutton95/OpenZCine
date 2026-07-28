@@ -79,18 +79,63 @@ class FeedEffectsTest {
             )
         assertEquals(
             FeedSplitOrientation.HORIZONTAL,
-            renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet()).activeSplitComparison,
+            renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = false).activeSplitComparison,
         )
         // Clean drops an unpinned LUT, and the divider and labels have to leave with it.
         assertNull(
-            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, emptySet())
+            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, emptySet(), photography = false)
                 .activeSplitComparison,
         )
         assertEquals(
             FeedSplitOrientation.HORIZONTAL,
-            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, setOf(AssistTool.LUT))
+            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, setOf(AssistTool.LUT), photography = false)
                 .activeSplitComparison,
         )
+    }
+
+    @Test
+    fun `photography drops a video lut instead of grading an already-display-referred frame`() {
+        // The reported bug: a LUT left on in video survived the flip to photo, so a Log→709 look
+        // landed on the stills live view, which is already display-referred — and the photo
+        // toolbar has no LUT key to switch it off with.
+        val effects =
+            FeedEffects(
+                lut = FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709),
+                splitComparison = FeedSplitOrientation.VERTICAL,
+                peaking = true,
+            )
+
+        val photo = renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = true)
+        assertNull(photo.lut)
+        // The divider and its LOG/LUT labels ride the look, so they leave with it.
+        assertNull(photo.activeSplitComparison)
+        // Peaking is an exposure aid photographers do use — dropping the LUT must not take it.
+        assertTrue(photo.peaking)
+
+        // Nothing is persisted by the filter: video still renders the operator's look untouched.
+        val video = renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = false)
+        assertEquals(effects.lut, video.lut)
+        assertEquals(FeedSplitOrientation.VERTICAL, video.activeSplitComparison)
+    }
+
+    @Test
+    fun `photography keeps its own aids and drops only the cinema-only ones`() {
+        // One gate for every render path, so the tool table is the single source of truth.
+        for (tool in AssistTool.entries) {
+            assertEquals(
+                tool.appliesToPhotography,
+                assistToolRendersInMode(
+                    tool, MonitorDisplayMode.LIVE, emptySet(), photography = true),
+                "photography rendering disagrees with the tool table for $tool",
+            )
+            // A clean-view pin cannot smuggle a cinema-only tool into the photo feed either.
+            assertEquals(
+                tool.appliesToPhotography,
+                assistToolRendersInMode(
+                    tool, MonitorDisplayMode.CLEAN, setOf(tool), photography = true),
+                "a clean pin overrode the photography filter for $tool",
+            )
+        }
     }
 
     @Test

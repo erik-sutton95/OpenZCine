@@ -1508,7 +1508,8 @@ internal fun MonitorScreen(
         // DISP mode suppresses switched off. The stored config is untouched, so leaving clean
         // restores the previous set exactly.
         val renderedFraming =
-            renderedFramingAssists(localFraming, effectiveDisplayMode, cleanViewPins)
+            renderedFramingAssists(
+                localFraming, effectiveDisplayMode, cleanViewPins, isPhotographyMode)
         // While the EV meter tool is on, the session interleaves fast needle
         // reads between regular property polls (dropped again on dispose so a
         // dismissed monitor can't keep the extra camera traffic alive).
@@ -1711,10 +1712,12 @@ internal fun MonitorScreen(
                 ),
                 effectiveDisplayMode,
                 cleanViewPins,
+                isPhotographyMode,
             )
         val renderedAudioMeters =
             audioMetersEnabled &&
-                assistToolRendersInMode(AssistTool.AUDIO, effectiveDisplayMode, cleanViewPins)
+                assistToolRendersInMode(
+                    AssistTool.AUDIO, effectiveDisplayMode, cleanViewPins, isPhotographyMode)
         var liveAudioLevels by
             remember(monitorFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
         LaunchedEffect(monitorFrameSource, renderedAudioMeters) {
@@ -2743,7 +2746,9 @@ internal fun MonitorScreen(
         // One monitor-owned sampler serves every toolbar-selected scope.
         // Landscape and portrait fill float every selection; portrait fit
         // mounts only its recency-selected ≤2 stack in the shared zone.
-        val renderedScopeSet = renderedScopes(assist.selectedScopes, effectiveDisplayMode, cleanViewPins)
+        val renderedScopeSet =
+            renderedScopes(
+                assist.selectedScopes, effectiveDisplayMode, cleanViewPins, isPhotographyMode)
         if (renderedScopeSet.isNotEmpty() && monitorFrameSource != null) {
             ScopePanels(
                 selectedScopes = renderedScopeSet,
@@ -2752,7 +2757,11 @@ internal fun MonitorScreen(
                 histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
                 configuration = operatorSettings.scopeAssistConfiguration,
                 cameraInput = exposureAssistCameraInput,
-                lutSelection = assist.effects.lut,
+                // The mode-filtered look, not the stored one: the vectorscope reads the MONITOR
+                // image, so it must push its samples through the LUT actually baked into the frame
+                // — none in photography, and none in clean unless the operator pinned it. Mirrors
+                // iOS passing `renderedLiveAssistTools` to `vectorscopeMonitorCube`.
+                lutSelection = renderedEffects.lut,
                 lutLibrary = lutLibrary,
                 onScaleChange = { kind, scale ->
                     operatorSettings.scopeAssistConfiguration =
