@@ -124,7 +124,7 @@ internal fun renderedFramingAssists(
     pinnedToCleanView: Set<AssistTool>,
     photography: Boolean,
 ): LocalFramingAssistConfiguration {
-    // Photography drops the cinema-only aids (guides, crosshair, desqueeze) even in LIVE, so the
+    // Photography drops the cinema-only aids (guides, crosshair) even in LIVE, so the
     // early return has to be conditional on it — otherwise they ride into the photo feed.
     if (mode == MonitorDisplayMode.LIVE && !photography) return configuration
     fun keeps(tool: AssistTool) =

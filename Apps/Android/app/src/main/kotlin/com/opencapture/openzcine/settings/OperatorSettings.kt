@@ -555,6 +555,25 @@ public data class LocalFramingAssistConfiguration(
                 1f
             }
 
+    /**
+     * The aspect ratio a STILL should be presented at once de-squeezed, or null when de-squeeze
+     * is off (present at the image's own ratio).
+     *
+     * Stills cannot use the two presentation scales the way the live feed does. The feed is
+     * scaled inside a fixed rect, but a still is FITTED to its container first, so scaling
+     * afterwards would push the image outside the frame it was just fitted into. Handing Compose
+     * a ratio lets `Modifier.aspectRatio` do the fit, and everything anchored to the resulting
+     * box follows without knowing about anamorphic. iOS `desqueezedAspectRatio`.
+     */
+    public fun desqueezedAspectRatio(sourceWidth: Int, sourceHeight: Int): Float? {
+        if (!desqueezeEnabled || sourceWidth <= 0 || sourceHeight <= 0) return null
+        val width = sourceWidth * horizontalPresentationScale
+        val height = sourceHeight * verticalPresentationScale
+        if (width <= 0f || height <= 0f) return null
+        val ratio = width / height
+        return if (ratio == sourceWidth.toFloat() / sourceHeight) null else ratio
+    }
+
     /** Local vertical monitor scale after applying the selected de-squeeze. */
     public val verticalPresentationScale: Float
         get() =

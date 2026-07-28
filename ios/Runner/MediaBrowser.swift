@@ -2411,7 +2411,13 @@ struct MediaPhotoViewer: View {
                 GeometryReader { geo in
                     Image(uiImage: image)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        // Anamorphic stills are judged at their intended geometry; the file is
+                        // never touched. `nil` (de-squeeze off) means the image's own ratio.
+                        .aspectRatio(
+                            desqueezedAspectRatio(
+                                image.size, model.assistConfiguration.desqueeze),
+                            contentMode: .fit
+                        )
                         .frame(width: geo.size.width, height: geo.size.height)
                         .scaleEffect(zoom.scale)
                         .offset(zoom.offset)

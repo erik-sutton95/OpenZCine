@@ -719,6 +719,38 @@ func desqueezeScale(_ desqueeze: AssistConfiguration.Desqueeze) -> CGSize {
         : CGSize(width: 1, height: 1 / factor)
 }
 
+/// A still's presented size once de-squeezed: the source with the chosen axis divided out.
+///
+/// Stills cannot use ``desqueezeScale`` the way the live feed does. The feed layer is scaled inside
+/// a fixed rect, but a still is FITTED to its container first, so scaling afterwards would push the
+/// image outside the frame it was just fitted into. De-squeezing the size before the fit keeps the
+/// whole picture on screen and lets everything anchored to the fitted rect — the AF box on instant
+/// review, the zoom transform in the viewer — follow without knowing about anamorphic at all.
+///
+/// Note `orientation` names the axis that is SCALED DOWN (matching ``desqueezeScale``), not the
+/// lens's squeeze axis: vertical letterboxes, horizontal pillarboxes.
+func desqueezedSize(_ size: CGSize, _ desqueeze: AssistConfiguration.Desqueeze) -> CGSize {
+    guard desqueeze.enabled, desqueeze.factor > 1, size.width > 0, size.height > 0 else {
+        return size
+    }
+    let factor = CGFloat(desqueeze.factor)
+    return desqueeze.orientation == .horizontal
+        ? CGSize(width: size.width / factor, height: size.height)
+        : CGSize(width: size.width, height: size.height / factor)
+}
+
+/// ``desqueezedSize`` as an aspect ratio, for the SwiftUI fits that take one. `nil` when
+/// de-squeeze is off, which `aspectRatio(_:contentMode:)` reads as "use the image's own".
+func desqueezedAspectRatio(
+    _ size: CGSize, _ desqueeze: AssistConfiguration.Desqueeze
+) -> CGFloat? {
+    guard desqueeze.enabled, desqueeze.factor > 1, size.width > 0, size.height > 0 else {
+        return nil
+    }
+    let presented = desqueezedSize(size, desqueeze)
+    return presented.width / presented.height
+}
+
 /// The visible (de-squeezed) image rectangle inside the full feed rect — the same centred sub-rect
 /// the scale above produces, so framing overlays land on the de-squeezed image.
 func desqueezedRect(_ full: CGRect, _ desqueeze: AssistConfiguration.Desqueeze) -> CGRect {

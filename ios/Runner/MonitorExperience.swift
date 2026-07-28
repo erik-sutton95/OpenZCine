@@ -671,8 +671,13 @@ struct InstantReviewOverlay: View {
             ZStack(alignment: .topTrailing) {
                 Color.black
                 GeometryReader { proxy in
+                    // Fit the de-squeezed size rather than scaling after the fit: the AF boxes
+                    // below derive their scale from `fitted`, so de-squeezing here carries them
+                    // with the image instead of leaving them on the squeezed geometry.
                     let fitted = Self.fittedRect(
-                        image: review.image.size, container: proxy.size)
+                        image: desqueezedSize(
+                            review.image.size, model.assistConfiguration.desqueeze),
+                        container: proxy.size)
                     // The stand-in thumb shows blurred; the upgrade animates the blur away
                     // as the full image swaps underneath, reading as one continuous sharpen.
                     Image(uiImage: review.image)

@@ -1659,6 +1659,7 @@ internal fun MediaBrowseScreen(
                 val owner = ownerCameraID(clip)
                 MediaStillViewer(
                     clip = clip,
+                    desqueeze = operatorSettings.localFramingAssistConfiguration,
                     cameraID = owner,
                     cameraTransferAvailable = cameraConnected,
                     rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
@@ -1747,6 +1748,7 @@ internal fun MediaBrowseScreen(
             val owner = ownerCameraID(clip)
             MediaStillViewer(
                 clip = clip,
+                desqueeze = operatorSettings.localFramingAssistConfiguration,
                 cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
                 rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),

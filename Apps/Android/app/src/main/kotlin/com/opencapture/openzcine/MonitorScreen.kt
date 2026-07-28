@@ -3015,6 +3015,7 @@ internal fun MonitorScreen(
                 review = review,
                 onDismiss = instantReview::dismiss,
                 onToggleStar = { starred -> instantReview.setStarred(recordScope, starred) },
+                desqueeze = operatorSettings.localFramingAssistConfiguration,
             )
         }
 

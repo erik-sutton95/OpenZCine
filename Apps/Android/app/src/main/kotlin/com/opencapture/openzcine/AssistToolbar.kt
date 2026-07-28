@@ -102,11 +102,16 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
      * the exposure aids plus the composition aids photographers actually use.
      * Everything else is cinema-only, keeping the photo toolbar deliberately
      * shorter so the stills strip gets the bar width.
+     *
+     * DESQ is here because anamorphic lenses are used for stills too, and a
+     * squeezed preview makes faces, framing and edge behaviour impossible to
+     * judge on a tethered shoot. It is a display transform everywhere it
+     * reaches — the camera original is never touched.
      */
     val appliesToPhotography: Boolean
         get() =
             when (this) {
-                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY -> true
+                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY, DESQ -> true
                 else -> false
             }
 
