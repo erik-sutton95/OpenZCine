@@ -14,6 +14,7 @@ import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -132,6 +133,18 @@ class MonitorCameraControlsTest {
                 requireNotNull(settings[4].picker).modes[1].request,
             ),
         )
+    }
+
+    @Test
+    fun `the subject-tracking AF area label is recognised as an area, not a subject`() {
+        // The facade hands the core's decoded `0x8033` label straight across, so this ladder has
+        // to spell it the same way. When it read the older bare "Subject", `isAreaLabel` returned
+        // false and the FOCUS picker opened on AF Mode instead of Area (#274).
+        assertTrue(FocusPickerPolicy.isAreaLabel("Subject tracking"))
+        assertFalse(FocusPickerPolicy.isSubjectLabel("Subject tracking"))
+        // The subject-*detection* drum keeps its own vocabulary; neither drum may claim the other's.
+        assertTrue(FocusPickerPolicy.isSubjectLabel("People"))
+        assertFalse(FocusPickerPolicy.isAreaLabel("People"))
     }
 
     @Test
@@ -756,7 +769,7 @@ class MonitorCameraControlsTest {
                     irisValues = listOf("f/2.8", "f/4"),
                     whiteBalanceValues = listOf("5560K", "Sunny"),
                     focusModes = listOf("AF-C", "MF"),
-                    focusAreas = listOf("Wide-L", "Subject"),
+                    focusAreas = listOf("Wide-L", "Subject tracking"),
                     focusSubjects = listOf("People", "Animal"),
                     baseIso = listOf("Low", "High"),
                     shutterModes = listOf("Angle", "Speed"),

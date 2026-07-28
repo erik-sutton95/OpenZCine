@@ -107,7 +107,7 @@ class CommandMonitorTest {
                                 whiteBalanceValues =
                                     listOf("Natural auto", "Sunny", "5600K"),
                                 focusModes = listOf("AF-S", "AF-C", "MF"),
-                                focusAreas = listOf("Wide-L", "Subject"),
+                                focusAreas = listOf("Wide-L", "Subject tracking"),
                                 focusSubjects = listOf("People", "Airplane"),
                                 audioSensitivities = listOf("Auto", "12", "20"),
                                 audioInputs = listOf("Microphone", "Line"),
@@ -459,7 +459,7 @@ class CommandMonitorTest {
                 snapshot =
                     CameraPropertySnapshot(
                         focusMode = "AF-C",
-                        focusArea = "Subject",
+                        focusArea = "Subject tracking",
                         focusSubject = "People",
                         audioSensitivity = "12",
                         audioInput = "Line",
@@ -469,7 +469,7 @@ class CommandMonitorTest {
                         controlCapabilities =
                             CameraControlCapabilities(
                                 focusModes = listOf("AF-S", "AF-C", "MF"),
-                                focusAreas = listOf("Wide-L", "Subject"),
+                                focusAreas = listOf("Wide-L", "Subject tracking"),
                                 focusSubjects = listOf("People", "Airplane"),
                                 audioSensitivities = listOf("Auto", "12", "20"),
                                 audioInputs = listOf("Microphone", "Line"),

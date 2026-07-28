@@ -763,7 +763,7 @@ class SwiftCoreCameraSessionTest {
             session.cameraProperties.value.controlCapabilities.focusModes,
         )
         assertEquals(
-            listOf("Wide-L", "Subject"),
+            listOf("Wide-L", "Subject tracking"),
             session.cameraProperties.value.controlCapabilities.focusAreas,
         )
         assertEquals(
@@ -1404,7 +1404,7 @@ class SwiftCoreCameraSessionTest {
                 "options.iris\tf/2.8\u001Ff/4",
                 "options.whiteBalance\tSunny\u001F5600K",
                 "options.focusMode\tAF-C\u001FMF",
-                "options.focusArea\tWide-L\u001FSubject",
+                "options.focusArea\tWide-L\u001FSubject tracking",
                 "options.focusSubject\tPeople\u001FAnimal",
                 "options.audioSensitivity\tAuto\u001F12",
                 "options.audioInput\tLine\u001FMicrophone",

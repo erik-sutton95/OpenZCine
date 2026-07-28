@@ -3630,9 +3630,18 @@ final class NativeAppModel {
     }
 
     /// Operator action from the recovery affordance: start a fresh bounded recovery run.
+    ///
+    /// The abandoned attempt has to be cleared, not just unawaited. `connectToCamera` releases the
+    /// single-flight latch as part of its own teardown, but only *after* the
+    /// `isEstablishingConnection` guard — so a Retry landing while an attempt is still in flight is
+    /// swallowed by that guard and starts nothing, which is exactly the hidden-latch failure #264
+    /// fixed on the connect path. Recovery attempts deliberately run without the timeout watchdog,
+    /// so there is no bound on how long that would last. Clearing here preserves the monitor
+    /// surface, so the operator keeps the held frame across the retry.
     func retrySessionRecovery() {
         let host = cameraHost
         cancelSessionRecovery()
+        clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
         beginSessionRecovery(host: host, reason: "operator retry")
     }
 

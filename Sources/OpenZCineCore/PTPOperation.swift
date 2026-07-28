@@ -267,18 +267,6 @@ public enum PTPResponseCode: UInt16, Sendable {
     case unknown = 0xFFFF
 }
 
-/// How long a focus-by-wire drive may keep the single camera command channel.
-///
-/// A drive refusal is ALWAYS transient — `Device_Busy` is the stepping-motor lens still
-/// initialising, `Access_Denied` is autofocus still settling — so the drive retries and the dial
-/// is never hidden. What it must never do is budget those retries by ITERATION COUNT: one drive
-/// costs an activation plus a readiness poll loop, so "16 retries" quietly becomes tens of seconds
-/// of channel ownership. While that runs the body answers `Device_Busy` to `ChangeAfArea` too, so
-/// the operator gets a dead focus dial *and* dead tap-to-focus until a shutter release settles the
-/// body — the exact shape of the Z6III report. Both budgets are therefore WALL CLOCK, and an
-/// interactive AF tap pre-empts an in-flight drive rather than queueing behind it.
-///
-/// Mirrored in Kotlin by `MFDriveController` (same numbers, same rule).
 /// Whether the on-feed focus dial can drive the lens in the body's current focus mode.
 ///
 /// One rule for both shells: the shells had the mode test inline and could only express
@@ -309,6 +297,18 @@ public enum MFDriveEligibility: Equatable, Sendable {
     }
 }
 
+/// How long a focus-by-wire drive may keep the single camera command channel.
+///
+/// A drive refusal is ALWAYS transient — `Device_Busy` is the stepping-motor lens still
+/// initialising, `Access_Denied` is autofocus still settling — so the drive retries and the dial
+/// is never hidden. What it must never do is budget those retries by ITERATION COUNT: one drive
+/// costs an activation plus a readiness poll loop, so "16 retries" quietly becomes tens of seconds
+/// of channel ownership. While that runs the body answers `Device_Busy` to `ChangeAfArea` too, so
+/// the operator gets a dead focus dial *and* dead tap-to-focus until a shutter release settles the
+/// body — the exact shape of the Z6III report. Both budgets are therefore WALL CLOCK, and an
+/// interactive AF tap pre-empts an in-flight drive rather than queueing behind it.
+///
+/// Mirrored in Kotlin by `MFDriveController` (same numbers, same rule).
 public enum MFDriveChannelBudget: Sendable {
     /// Readiness polls inside ONE drive before it stops waiting and frees the channel. The lens
     /// keeps moving on the body; the app just stops owning the transaction gate to watch it.

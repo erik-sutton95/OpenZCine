@@ -42,12 +42,12 @@ private let z6iiiFileTypeEnum: [UInt32] = [
     #expect(modes.map(\.label) == ["R3D NE", "N-RAW", "H.265"])
 }
 
-@Test func selectingTenBitWritesTheAdvertisedTenBitValueNotTheEightBitOne() {
+@Test func selectingTenBitWritesTheAdvertisedTenBitValueNotTheEightBitOne() throws {
     let modes = PTPCameraPropertyDecoders.fileTypeModes(fromEnum: z6iiiFileTypeEnum)
 
     // The label the operator picked resolves to exactly one advertised value — the shells'
     // write path is this lookup.
-    let picked = try! #require(modes.first { $0.label == "H.265 10-bit" })
+    let picked = try #require(modes.first { $0.label == "H.265 10-bit" })
     #expect(picked.raw == 0x0001_0A00)
     let write = PTPCameraPropertyWrite.fileType(raw: picked.raw)
     #expect(write.property == .movieFileType)
@@ -64,13 +64,13 @@ private let z6iiiFileTypeEnum: [UInt32] = [
     #expect(reopened?.label == "H.265 10-bit")
 }
 
-@Test func leavingHEVCAndReturningLandsBackOnTenBit() {
+@Test func leavingHEVCAndReturningLandsBackOnTenBit() throws {
     // The exact reported sequence: H.265 10-bit -> H.264 -> H.265 10-bit.
     let modes = PTPCameraPropertyDecoders.fileTypeModes(fromEnum: z6iiiFileTypeEnum)
     var snapshot = PTPCameraPropertySnapshot()
 
     for label in ["H.265 10-bit", "H.264", "H.265 10-bit"] {
-        let mode = try! #require(modes.first { $0.label == label })
+        let mode = try #require(modes.first { $0.label == label })
         snapshot = snapshot.applying(
             property: .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: mode.raw).data)
     }
@@ -107,14 +107,14 @@ private let z6iiiFileTypeEnum: [UInt32] = [
 
 // MARK: - #276 follow-up · one codec row, the advertised depths beside it
 
-@Test func aFamilyAdvertisedAtTwoDepthsBecomesOneRowCarryingBoth() {
+@Test func aFamilyAdvertisedAtTwoDepthsBecomesOneRowCarryingBoth() throws {
     let families = PTPCameraPropertyDecoders.codecFamilies(
         PTPCameraPropertyDecoders.fileTypeModes(fromEnum: z6iiiFileTypeEnum))
 
     // H.264 keeps a plain row; the two H.265 values collapse into one row with a depth choice.
     #expect(families.map(\.label) == ["H.264", "H.265"])
     #expect(families.map(\.offersBitDepthChoice) == [false, true])
-    let hevc = try! #require(families.last)
+    let hevc = try #require(families.last)
     // Lower depth first: the picker puts 8-bit on the left, 10-bit on the right.
     #expect(hevc.depths.map(\.bitDepth) == [8, 10])
     #expect(hevc.depths.map(\.bitDepthLabel) == ["8-bit", "10-bit"])
@@ -132,13 +132,13 @@ private let z6iiiFileTypeEnum: [UInt32] = [
     #expect(families.flatMap { $0.depths.map(\.raw) } == modes.map(\.raw))
 }
 
-@Test func theDepthButtonWritesTheAdvertisedRawAndSurvivesAReopen() {
+@Test func theDepthButtonWritesTheAdvertisedRawAndSurvivesAReopen() throws {
     let modes = PTPCameraPropertyDecoders.fileTypeModes(fromEnum: z6iiiFileTypeEnum)
     let families = PTPCameraPropertyDecoders.codecFamilies(modes)
-    let hevc = try! #require(families.first { $0.label == "H.265" })
+    let hevc = try #require(families.first { $0.label == "H.265" })
 
     // Tapping "10-bit" writes the advertised 10-bit value, byte for byte.
-    let tenBit = try! #require(hevc.depths.last)
+    let tenBit = try #require(hevc.depths.last)
     let write = PTPCameraPropertyWrite.fileType(raw: tenBit.raw)
     #expect(write.data == Data(ByteCoding.uint32LE(0x0001_0A00)))
 

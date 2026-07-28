@@ -199,6 +199,28 @@ struct SessionRecoveryLifecycleTests {
         #expect(model.sessionRecovery == .idle)
     }
 
+    /// #264's hidden latch, on the recovery path this time. `connectToCamera` releases the
+    /// single-flight latch as part of its own teardown, but only *after* the guard — so a Retry
+    /// landing while an attempt was still in flight got swallowed and started nothing. Recovery
+    /// connects run without the timeout watchdog, so nothing bounded that wait.
+    @Test("Retry abandons the in-flight attempt instead of being swallowed by its own latch")
+    func retryReleasesTheEstablishmentLatch() {
+        let model = recoveringModel()
+        model.connectToCamera(preservingMonitorSurface: true)
+        #expect(model.debugIsEstablishingConnection)
+        let abandoned = model.debugConnectionGeneration
+
+        model.retrySessionRecovery()
+
+        // The generation bump disowns the abandoned attempt: its late `defer` is scoped to the
+        // old generation, so it can no longer unlatch the attempt that replaced it.
+        #expect(model.debugConnectionGeneration > abandoned)
+        #expect(model.debugIsEstablishingConnection == false, "retry swallowed by the stale latch")
+        #expect(model.debugHasSessionRecoveryTask)
+
+        model.exitMonitorToOperatorMenu()
+    }
+
     @Test("Recovery never arms without a monitor to preserve")
     func noRecoveryWithoutMonitor() {
         let model = NativeAppModel()
