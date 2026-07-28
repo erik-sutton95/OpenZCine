@@ -197,7 +197,7 @@ private enum AndroidNikonZRControlFallback {
         AndroidRawControlMode(label: "Wide-S", raw: 0x8018),
         AndroidRawControlMode(label: "Wide-L", raw: 0x8019),
         AndroidRawControlMode(label: "Auto", raw: 0x8011),
-        AndroidRawControlMode(label: "Subject", raw: 0x8033),
+        AndroidRawControlMode(label: "Subject tracking", raw: 0x8033),
     ]
     static let focusSubjects: [AndroidRawControlMode<UInt8>] = [
         AndroidRawControlMode(label: "Auto", raw: 1),
@@ -269,6 +269,14 @@ private struct AndroidRawControlCatalog: Sendable {
     var stillShutterSpeeds: [AndroidRawControlMode<UInt32>] = []
     var stillWhiteBalanceModes: [AndroidRawControlMode<UInt16>] = []
     var imageSizes: [String] = []
+    // Photo-mode FUNCTION picker domains. Empty until the body advertises them; the shells then
+    // keep a conservative fallback rather than an invented union of the whole Z lineup (#274).
+    var exposureModes: [AndroidRawControlMode<UInt16>] = []
+    var userModePrograms: [AndroidRawControlMode<UInt8>] = []
+    var driveModes: [AndroidRawControlMode<UInt16>] = []
+    var meteringModes: [AndroidRawControlMode<UInt16>] = []
+    var pictureControls: [AndroidRawControlMode<UInt16>] = []
+    var rawCompressions: [AndroidRawControlMode<UInt8>] = []
 
     func capabilities(
         properties: PTPCameraPropertySnapshot,
@@ -389,7 +397,8 @@ private struct AndroidRawControlCatalog: Sendable {
         }
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: resolutionFrameRate,
-            codec: properties.fileType.map(MonitorTextFormat.codecShortLabel),
+            codec: currentCodecOptionLabel(properties.fileType)
+                ?? properties.fileType.map(MonitorTextFormat.codecShortLabel),
             whiteBalanceTint: whiteBalanceTint,
             isoValues: isoValues,
             shutterValues: activeShutterValues,
@@ -413,20 +422,89 @@ private struct AndroidRawControlCatalog: Sendable {
                     currentCodec: recognizedCodec,
                     usesNikonZRFallbacks: usesNikonZRFallbacks)
             },
-            codecs: fileTypes.map(\.label),
+            codecs: codecRows.map(\.label),
             vibrationReduction: vibrationReduction.map(\.label),
             // Unknown/raw codecs fail closed: only a recognized non-raw codec unlocks e-VR.
             electronicVR:
                 recognizedCodec.map(MonitorTextFormat.isRawCodec) == false
                 ? electronicVR.map(\.label) : [],
-            imageSizes: imageSizes
+            imageSizes: imageSizes,
+            exposureModes: exposureModes.map(\.label),
+            userModePrograms: userModePrograms.map(\.label),
+            driveModes: driveModes.map(\.label),
+            meteringModes: meteringModes.map(\.label),
+            pictureControls: pictureControls.map(\.label),
+            rawCompressions: rawCompressions.map(\.label),
+            codecBitDepths: codecBitDepthWireEntries,
+            codecBitDepth: currentCodecBitDepthLabel(properties.fileType)
         )
     }
 
+    /// The codec picker's rows, grouped by the shared core so both shells collapse a two-depth
+    /// family the same way instead of each deciding in UI code.
+    private var codecRows: [PTPCameraCodecFamily] {
+        PTPCameraPropertyDecoders.codecFamilies(fileTypes)
+    }
+
+    /// The depth choices behind those rows, flattened for the JNI wire as
+    /// `row␞caption␞writeValue`. Only depth-choice rows contribute, so the shell can never draw a
+    /// button for a depth this body did not advertise.
+    private var codecBitDepthWireEntries: [String] {
+        codecRows.filter(\.offersBitDepthChoice).flatMap { row in
+            row.depths.map { "\(row.label)\u{1E}\($0.bitDepthLabel)\u{1E}\($0.label)" }
+        }
+    }
+
+    /// Every label a codec write may legitimately name: the picker rows, plus each depth's own
+    /// advertised label for a row the core collapsed. Both shapes resolve to exactly one
+    /// advertised value in `fileTypeMode(forCodecLabel:currentFileType:)`.
+    var codecWriteLabels: [String] {
+        codecRows.map(\.label)
+            + codecRows.filter(\.offersBitDepthChoice).flatMap { $0.depths.map(\.label) }
+    }
+
+    /// The caption of the depth the body is recording at, when its codec row offers a choice.
+    private func currentCodecBitDepthLabel(_ codec: String?) -> String? {
+        guard
+            let row = PTPCameraPropertyDecoders.codecFamily(forFileType: codec, in: codecRows),
+            row.offersBitDepthChoice,
+            let mode = PTPCameraPropertyDecoders.fileTypeMode(forFileType: codec, in: fileTypes)
+        else { return nil }
+        return mode.bitDepthLabel
+    }
+
+    /// The body's current codec, resolved against the advertised catalog by its exact raw value
+    /// and reported as the FAMILY short label ("H.265") — crop presentation and e-VR gating are
+    /// family decisions. Matching on the raw matters because a picker label now carries the bit
+    /// depth whenever a body advertises more than one variant of a family (#276).
     private func recognizedCurrentCodec(_ codec: String?) -> String? {
-        guard let codec else { return nil }
-        let label = MonitorTextFormat.codecShortLabel(codec)
-        return fileTypes.contains(where: { $0.label == label }) ? label : nil
+        guard
+            let mode = PTPCameraPropertyDecoders.fileTypeMode(forFileType: codec, in: fileTypes)
+        else { return nil }
+        return MonitorTextFormat.codecShortLabel(PTPCameraPropertyDecoders.fileType(mode.raw))
+    }
+
+    /// The advertised codec ROW the body is currently on — the picker's selected option. A family
+    /// the body offers at two bit depths is one row; the depth rides beside it (`codecBitDepth`)
+    /// rather than in the row label. Nil until the descriptor and readback agree, so the drum
+    /// never claims a selection the catalog cannot write back.
+    private func currentCodecOptionLabel(_ codec: String?) -> String? {
+        PTPCameraPropertyDecoders.codecFamily(forFileType: codec, in: codecRows)?.label
+    }
+
+    /// Resolves a codec pick to exactly one camera-advertised mode, matching iOS
+    /// `NativeAppRoot.codecMode(forPickedLabel:)`. A bit-depth button passes that variant's own
+    /// label and matches outright; a drum row passes the row label and resolves through the codec
+    /// family, keeping the depth the body is recording at when that family offers it. Nothing here
+    /// reads a depth out of a label — that guess is the #276 defect.
+    func fileTypeMode(forCodecLabel label: String, currentFileType: String?)
+        -> PTPCameraFileTypeMode?
+    {
+        if let exact = fileTypes.first(where: { $0.label == label }) { return exact }
+        guard let row = codecRows.first(where: { $0.label == label }) else { return nil }
+        let depth = PTPCameraPropertyDecoders.fileTypeMode(
+            forFileType: currentFileType, in: fileTypes)?.bitDepth
+        return row.depths.first { $0.bitDepth == depth } ?? row.depths.first
     }
 
     /// Resolves a picker label to a camera-advertised mode — same matching as iOS
@@ -1376,8 +1454,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
             return androidPropertyReadback(result: result)
         case .propertyChanged(let rawCode):
+            // Gate on the movie ∪ photo monitor union, not the movie order alone: photo chrome
+            // watches `fNumber` / `stillShutterSpeed` / `imageSize`, none of which appear in
+            // `liveMonitorPollOrder`, so the old gate silently dropped every photo-mode
+            // camera-side change and left the readouts to the ~20 s round-robin.
             guard let property = PTPPropertyCode(rawValue: rawCode),
-                PTPPropertyCode.liveMonitorPollOrder.contains(property)
+                PTPPropertyCode.isMonitoredChange(property)
             else {
                 // The event stream preserves unknown properties for callers,
                 // but a raw event alone is not evidence that this readback
@@ -1535,6 +1617,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
             refreshAndroidStillShutterDescriptor,
             refreshAndroidStillWhiteBalanceDescriptor,
             refreshAndroidImageSizeDescriptor,
+            // The photo-mode function pickers (#274). Optional for the same reason as the three
+            // above: a body in movie mode rejects them, which is a mode-dependent omission, not a
+            // capability gap. `ExposureProgramMode` sits here too — several bodies expose it as a
+            // dial-only readout and reject the describe, and that must not downgrade the refresh.
+            refreshAndroidExposureModeDescriptor,
+            refreshAndroidUserModeDescriptor,
+            refreshAndroidDriveDescriptor,
+            refreshAndroidMeteringDescriptor,
+            refreshAndroidPictureControlDescriptor,
+            refreshAndroidRawCompressionDescriptor,
         ]
         var result: AndroidCameraPropertyRefreshResult = .accepted
         for refresh in refreshers {
@@ -1702,31 +1794,51 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
+    /// Whether the body is in photo chrome, so the focus family describes the STILLS properties
+    /// (AF-A, the dynamic areas, 3D tracking) rather than the movie ones.
+    private var androidPrefersPhotographyChrome: Bool {
+        StillCapturePolicy.prefersPhotographyChrome(
+            selector: androidPropertySnapshot.captureSelector)
+    }
+
     private func refreshAndroidFocusModeDescriptor() throws {
         androidControlCatalog.focusModes = []
+        let photography = androidPrefersPhotographyChrome
         let advertised = try descriptorModesWithZRFallback(
             fallback: AndroidNikonZRControlFallback.focusModes
         ) {
-            let raw = try descriptorEnumValues(.movieFocusMode, valueByteCount: 1)
+            let raw = try descriptorEnumValues(
+                photography ? .stillFocusMode : .movieFocusMode, valueByteCount: 1)
             return uniqueUInt8Modes(raw) { value in
-                let label = PTPCameraPropertyDecoders.movieFocusMode(value)
+                let label =
+                    photography
+                    ? PTPCameraPropertyDecoders.stillFocusModeD061(value)
+                    : PTPCameraPropertyDecoders.movieFocusMode(value)
                 return label.hasPrefix("0x") ? nil : label
             }
         }
+        // The ZR's movie AF ladder stays selectable after a lens-ring override narrows the
+        // descriptor to MF-only; the stills space has its own values and takes the body verbatim.
         androidControlCatalog.focusModes =
-            usesNikonZRFallbacks
+            usesNikonZRFallbacks && !photography
             ? mergedModes(AndroidNikonZRControlFallback.focusModes, advertised)
             : advertised
     }
 
     private func refreshAndroidFocusAreaDescriptor() throws {
         androidControlCatalog.focusAreas = []
+        let photography = androidPrefersPhotographyChrome
         androidControlCatalog.focusAreas = try descriptorModesWithZRFallback(
             fallback: AndroidNikonZRControlFallback.focusAreas
         ) {
-            let raw = try descriptorEnumValues(.movieFocusMeteringMode, valueByteCount: 2)
+            let raw = try descriptorEnumValues(
+                photography ? .stillFocusMeteringMode : .movieFocusMeteringMode,
+                valueByteCount: 2)
             return uniqueUInt16Modes(raw) { value in
-                let label = PTPCameraPropertyDecoders.movieFocusArea(value)
+                let label =
+                    photography
+                    ? PTPCameraPropertyDecoders.stillFocusArea(value)
+                    : PTPCameraPropertyDecoders.movieFocusArea(value)
                 return label.hasPrefix("0x") ? nil : label
             }
         }
@@ -1734,14 +1846,80 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     private func refreshAndroidFocusSubjectDescriptor() throws {
         androidControlCatalog.focusSubjects = []
+        let photography = androidPrefersPhotographyChrome
         androidControlCatalog.focusSubjects = try descriptorModesWithZRFallback(
             fallback: AndroidNikonZRControlFallback.focusSubjects
         ) {
-            let raw = try descriptorEnumValues(.movieAFSubjectDetection, valueByteCount: 1)
+            let raw = try descriptorEnumValues(
+                photography ? .afSubjectDetection : .movieAFSubjectDetection, valueByteCount: 1)
             return uniqueUInt8Modes(raw) { value in
                 let label = PTPCameraPropertyDecoders.movieAFSubject(value)
                 return label.hasPrefix("0x") ? nil : label
             }
+        }
+    }
+
+    /// The photo-mode function-picker domains: exposure program, the U bank's inner program,
+    /// release/drive mode, metering pattern and picture control.
+    ///
+    /// Every one of these used to be a fixed list in each shell. They are read verbatim — the
+    /// body's values in the body's order — with NO fallback merge, because the whole point of
+    /// #274 is that a union invents options the connected body does not have (a Zf offered
+    /// U1/U2/U3) and an app-chosen order contradicts the body's (Z6III drive: Single, CL, CH,
+    /// CH+). An unread domain stays empty and the shells keep a conservative fallback.
+    private func refreshAndroidExposureModeDescriptor() throws {
+        androidControlCatalog.exposureModes = []
+        let raw = try descriptorEnumValues(.exposureProgramMode, valueByteCount: 2)
+        androidControlCatalog.exposureModes = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.exposureProgramShort(value)
+            // Only positions the MODE drum can write back.
+            return PTPCameraPropertyDecoders.exposureProgramCode(for: label) == nil ? nil : label
+        }
+    }
+
+    private func refreshAndroidUserModeDescriptor() throws {
+        androidControlCatalog.userModePrograms = []
+        let raw = try descriptorEnumValues(.userMode, valueByteCount: 1)
+        androidControlCatalog.userModePrograms = uniqueUInt8Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.userModeProgram(value)
+            return PTPCameraPropertyDecoders.userModeProgramCode(for: label) == nil ? nil : label
+        }
+    }
+
+    private func refreshAndroidDriveDescriptor() throws {
+        androidControlCatalog.driveModes = []
+        let raw = try descriptorEnumValues(.stillCaptureMode, valueByteCount: 2)
+        androidControlCatalog.driveModes = uniqueUInt16Modes(raw) { value in
+            StillDriveMode.decode(raw: value)?.label
+        }
+    }
+
+    private func refreshAndroidMeteringDescriptor() throws {
+        androidControlCatalog.meteringModes = []
+        let raw = try descriptorEnumValues(.exposureMeteringMode, valueByteCount: 2)
+        androidControlCatalog.meteringModes = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.exposureMetering(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    private func refreshAndroidPictureControlDescriptor() throws {
+        androidControlCatalog.pictureControls = []
+        let raw = try descriptorEnumValues(.activePicCtrlItem, valueByteCount: 2)
+        androidControlCatalog.pictureControls = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.pictureControl(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    /// The NEF (RAW) recording menu. First-generation Z bodies use the Compressed/Uncompressed
+    /// pair and reject the modern trio, so the chips must come from the body, not a union.
+    private func refreshAndroidRawCompressionDescriptor() throws {
+        androidControlCatalog.rawCompressions = []
+        let raw = try descriptorEnumValues(.rawCompressionType, valueByteCount: 1)
+        androidControlCatalog.rawCompressions = uniqueUInt8Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.rawCompression(value)
+            return label.hasPrefix("0x") ? nil : label
         }
     }
 
@@ -2572,14 +2750,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
             )
             .map { [PTPCameraPropertyWrite.screenSize(raw: $0.raw)] } ?? []
         case .codec:
-            if let mode = androidControlCatalog.fileTypes.first(where: { $0.label == label }) {
-                return [PTPCameraPropertyWrite.fileType(raw: mode.raw)]
-            }
-            // Accept long camera strings ("R3D NE 12-bit R3D") against short labels.
-            let short = MonitorTextFormat.codecShortLabel(label)
-            return androidControlCatalog.fileTypes.first(where: {
-                $0.label == short || MonitorTextFormat.codecShortLabel($0.label) == short
-            })
+            return androidControlCatalog.fileTypeMode(
+                forCodecLabel: label,
+                currentFileType: androidPropertySnapshot.fileType
+            )
             .map { [PTPCameraPropertyWrite.fileType(raw: $0.raw)] } ?? []
         case .vibrationReduction:
             let writes = uint8DescriptorWrite(
@@ -2701,7 +2875,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         case .shutterLock: capabilities.shutterLocks
         case .whiteBalanceTint: capabilities.whiteBalanceTints
         case .resolutionFrameRate: capabilities.resolutionFrameRates
-        case .codec: capabilities.codecs
+        // A codec write is legitimately named two ways: the drum row, and — when the core
+        // collapsed a two-depth family into one row — the depth button's own advertised label.
+        // Both resolve to exactly one advertised value, so both belong in the write domain.
+        case .codec: androidControlCatalog.codecWriteLabels
         case .vibrationReduction: capabilities.vibrationReduction
         case .electronicVR: capabilities.electronicVR
         case .exposureMode: []
@@ -2905,13 +3082,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard start.operationResponse.responseCode == .ok else {
             return .refused(start.operationResponse.responseCode)
         }
-        for _ in 0..<25 {
+        // Bounded by `MFDriveChannelBudget`: this whole loop runs under `commandLifecycleLock`,
+        // which `changeAfArea` also needs — waiting out a long pull here is what left tap-to-focus
+        // blocked. Past the ceiling the lens keeps moving on the body; the app just stops watching.
+        for _ in 0..<MFDriveChannelBudget.readinessPollLimit {
             guard let ready = try? executeTransaction(.deviceReady) else {
                 return .refused(.deviceBusy)
             }
             switch ready.operationResponse.responseCode {
             case .ok: return .complete
-            case .deviceBusy: Thread.sleep(forTimeInterval: 0.12)
+            case .deviceBusy:
+                Thread.sleep(forTimeInterval: MFDriveChannelBudget.readinessPollIntervalSeconds)
             case .mfDriveStepEnd: return .endOfTravel
             case .mfDriveStepInsufficiency: return .stepTooSmall
             case let other: return .refused(other)
@@ -3002,7 +3183,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             || initialFocus.subjectDetectionActive
             || initialFocus.selectedBoxIndex != nil
             || initialFocus.boxes.count > 1
-            || savedFocusArea == "Subject"
+            || PTPCameraPropertyDecoders.isSubjectTrackingArea(savedFocusArea)
             || savedFocusSubject != "Off"
             || savedFocusMode == "AF-F"
 
@@ -3256,22 +3437,24 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     /// Polls the camera's Nikon event queue (`GetEventEx` 0x941C) and returns the events it
     /// held. Nikon bodies deliver capture events (`ObjectAdded` 0x4002, `CaptureComplete`
-    /// 0x400D) through THIS poll, not the PTP-IP event socket the drain reads — so a shutter
-    /// fired ON THE CAMERA BODY only surfaces here. Parameter1 = 0 clears the queue after the
-    /// read so the same events are not seen twice.
+    /// 0x400D) AND `DevicePropChanged` (0x4006) through THIS poll, not the PTP-IP event socket
+    /// the drain reads — so a shutter fired ON THE CAMERA BODY, and a setting changed on the
+    /// body, surface here. Parameter1 = 0 clears the queue after the read so the same events are
+    /// not seen twice.
     ///
-    /// Gated to photography chrome (the only place a body-fired still matters, mirroring the
-    /// iOS poll) and skipped while media mode owns the wire. Acquires the command-lifecycle
-    /// lock non-blockingly so a poll driven off the live-view pump never stacks behind an
-    /// in-flight control write and stalls the feed — the body's queue persists, so the next
-    /// frame's poll picks up whatever a skipped one missed. Empty on a busy/non-OK answer.
+    /// Polled in EVERY chrome. It used to be gated to photography, where it was introduced for
+    /// body-fired stills; that left cinema mode with no fast path for a body-side setting change
+    /// and readouts trailing the ~20 s round-robin (#268). Chrome remains each consumer's test —
+    /// `MonitorScreen`'s body-capture sync already applies it. Skipped while media mode owns the
+    /// wire. Acquires the command-lifecycle lock non-blockingly so a poll driven off the live-view
+    /// pump never stacks behind an in-flight control write and stalls the feed — the body's queue
+    /// persists, so the next frame's poll picks up whatever a skipped one missed. Empty on a
+    /// busy/non-OK answer.
     /// [verify-on-HW: the ZR's real GetEventEx cadence and which capture code(s) it emits]
     public func pollDeviceEvents() -> [PTPEvent] {
         guard commandLifecycleLock.`try`() else { return [] }
         defer { commandLifecycleLock.unlock() }
         guard !isMediaModeActive,
-            StillCapturePolicy.prefersPhotographyChrome(
-                selector: androidPropertySnapshot.captureSelector),
             let result = try? executeTransaction(
                 .getEventEx, parameters: [0], dataPhase: .dataIn),
             result.operationResponse.responseCode == .ok
@@ -3819,10 +4002,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 focusFrameCondition.broadcast()
                 focusFrameCondition.unlock()
                 onFrame(frame, Int64(Self.monotonicNanoseconds()))
-                // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) through
-                // the GetEventEx poll, NOT the PTP-IP event socket the drain reads — so poll the
-                // queue every Nth frame and route captures into the SAME sink the socket drain
-                // feeds. Inline in this serial pump = inherently single-flight, one poll at most.
+                // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) and a
+                // body-side setting change (DevicePropChanged) through the GetEventEx poll, NOT
+                // the PTP-IP event socket the drain reads — so poll the queue every Nth frame, in
+                // every chrome, and route both into the SAME sink the socket drain feeds. Inline
+                // in this serial pump = inherently single-flight, one poll at most.
                 framesSinceDeviceEventPoll += 1
                 if framesSinceDeviceEventPoll >= Self.deviceEventPollFrameStride {
                     framesSinceDeviceEventPoll = 0

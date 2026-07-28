@@ -116,8 +116,9 @@ flowchart TD
   `NativeAppRoot.filteredMediaClips`, `MediaLibrary.swift` (`MediaClip`, filters, sort),
   `Sources/OpenZCineCore/MediaClipFilename.swift`.
 - **Detail:** Filters compose with AND semantics: hide raw `.R3D` when a playable proxy stem exists;
-  category tab (All / Videos / Photos / Favorites); format chips (MOV/MP4); resolution buckets;
-  TODAY; storage slot. Sort cycles newest → oldest → name (persisted). Thumbnails: `ensureThumbnail`
+  category tab (All / Videos / Photos / Favorites); format chips (MOV/MP4 for video, JPEG/HEIF/NEF
+  for stills); resolution buckets (video) or L/M/S size (stills); date window; storage slot. Sort
+  cycles newest → oldest → name (persisted). Thumbnails: `ensureThumbnail`
   queues PTP `GetThumb` with **max 48** queued fetches (drops oldest on fast scroll). Cells decode
   downsampled stills off the main actor. Long-press (**0.4 s**) enters selection; horizontal drag in
   selection mode sweep-selects (Photos-style, no edge auto-scroll).
@@ -148,12 +149,23 @@ flowchart TD
 ### MEDIA-08 — Filter popup
 
 - **Status:** shipped
-- **Screen:** 400pt glass panel anchored under the FILTER pill: FORMAT (MOV/MP4), RESOLUTION,
-  DATE (TODAY), STORAGE (per slot when connected), Clear all filters. Dimmed backdrop tap closes.
+- **Screen:** 400pt glass panel anchored under the FILTER pill: FORMAT, RESOLUTION (video) or SIZE
+  (stills), DATE (TODAY / 7 DAYS / 30 DAYS), STORAGE (per slot when connected), Clear all filters.
+  Dimmed backdrop tap closes.
 - **Code:** `MediaBrowser.swift` (`MediaFilterPopup`, `filterPopupOverlay`),
-  `NativeAppRoot.clearMediaFilters`, `MediaBrowserFilterMetrics`.
-- **Detail:** Storage slot chips mirror sidebar storage cards (same `mediaStorageSlotFilter` state).
-  Active filter count badges the FILTER pill.
+  `NativeAppRoot.mediaFilterOptions` / `clearMediaFilters` / `pruneMediaFiltersToOfferedChips`,
+  `MediaBrowserFilterMetrics`, `Sources/OpenZCineCore/MediaResolutionBucket.swift`
+  (`MediaFilterDerivation`).
+- **Detail:** Chips are **derived from the active tab's listing**, never hardcoded: a chip is
+  offered only when it matches at least one listed object **and** excludes at least one, and a row
+  with no chip renders no header. That keeps the media kinds apart without a tab parameter —
+  resolution buckets are classified for videos only, L/M/S for stills only — so Photos shows
+  JPEG/HEIF/NEF + L/M/S and Videos shows MOV/MP4 + buckets. Stills with no reported
+  `ImagePixWidth` get no SIZE row rather than a faked one. Date windows nest, so they are
+  single-select. Switching tab or source prunes any chip the new listing cannot offer
+  (`retainingOfferedChips` on Android) so a stale MOV filter cannot silently empty Photos; storage
+  slot chips are exempt (scoped by inserted cards) and mirror the sidebar storage cards (same
+  `mediaStorageSlotFilter` state). Active filter count badges the FILTER pill.
 - 📝 Notes:
 
 ### MEDIA-09 — Selection mode

@@ -62,6 +62,15 @@ object SwiftCore {
      */
     external fun parseCameraWifiScreen(transcript: String): String?
 
+    /**
+     * Validates credentials the operator typed off the camera's Connection
+     * wizard when on-device OCR is unavailable. Returns the same
+     * `SSID<unit-separator>key` wire as [parseCameraWifiScreen], or null when
+     * either field fails the shared contract. Callers must never log or persist
+     * the arguments — the key is the camera's Wi-Fi passphrase.
+     */
+    external fun manualCameraWifiCredentials(ssid: String, key: String): String?
+
     // ── Frame.io (OAuth/API policy remains in the portable Swift core) ──
 
     /**
@@ -441,6 +450,18 @@ object SwiftCore {
         isUsbTransport: Boolean,
         resetSignalBars: Boolean,
     ): String?
+
+    /**
+     * The shared monitor reconnect schedule from `SessionRecoveryPolicy`.
+     * Returns the milliseconds to wait before the next attempt after [failures]
+     * consecutive failures, or a negative value once the automatic budget is
+     * spent. [jitter] is a `0.0..1.0` sample drawn by the caller so the
+     * schedule stays pure. Kotlin owns no retry math of its own.
+     */
+    external fun sessionRetryDelayMillis(failures: Int, jitter: Double): Long
+
+    /** The shared automatic-attempt budget, for a truthful "attempt N of M". */
+    external fun sessionMaxAutomaticAttempts(): Int
 
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 

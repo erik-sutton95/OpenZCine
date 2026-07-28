@@ -196,6 +196,99 @@ class PhotographyPickersTest {
     }
 
     @Test
+    fun `every function picker prefers the body's advertised list over the ladder`() {
+        // #274: the drums must mirror the connected body — its values, in its order — not a
+        // fixed union of the Z lineup. A Z6III's release order is Single, CL, CH, CH+.
+        val body =
+            snapshot.copy(
+                exposureMode = "P",
+                controlCapabilities =
+                    CameraControlCapabilities(
+                        exposureModes = listOf("Auto", "P", "S", "A", "M"),
+                        driveModes =
+                            listOf(
+                                "Single", "Continuous L", "Continuous H", "Continuous H+",
+                            ),
+                        meteringModes = listOf("Matrix", "Spot"),
+                        pictureControls = listOf("Standard", "Flat", "Custom 1"),
+                        focusModes = listOf("AF-S", "AF-C", "AF-A", "MF"),
+                        focusAreas = listOf("Single", "3D tracking", "Auto"),
+                        focusSubjects = listOf("Off", "People"),
+                    ),
+            )
+        val built = settings(body)
+        fun options(kind: MonitorPickerKind, tab: Int = 0) =
+            assertNotNull(built.first { it.kind == kind }.picker).modes[tab].request.options
+
+        assertEquals(listOf("Auto", "P", "S", "A", "M"), options(MonitorPickerKind.MODE))
+        assertEquals(
+            listOf("Single", "Continuous L", "Continuous H", "Continuous H+"),
+            options(MonitorPickerKind.DRIVE),
+        )
+        assertEquals(listOf("Matrix", "Spot"), options(MonitorPickerKind.METER))
+        assertEquals(
+            listOf("Standard", "Flat", "Custom 1"),
+            options(MonitorPickerKind.PROFILE),
+        )
+        assertEquals(listOf("Single", "3D tracking", "Auto"), options(MonitorPickerKind.FOCUS, 1))
+        assertEquals(listOf("Off", "People"), options(MonitorPickerKind.FOCUS, 2))
+    }
+
+    @Test
+    fun `the mode fallback never invents user banks and the body's banks still show`() {
+        // The reported Zf: offered U1/U2/U3 it does not have. With no advertised program enum
+        // the drum keeps the conservative ladder.
+        val fallback =
+            assertNotNull(settings().first { it.kind == MonitorPickerKind.MODE }.picker)
+        assertEquals(listOf("Auto", "P", "S", "A", "M"), fallback.modes[0].request.options)
+        assertFalse(fallback.modes[0].request.options.any { it.startsWith("U") })
+
+        // A body that DOES advertise banks still gets them — the rule is "what the body says".
+        val withBanks =
+            settings(
+                snapshot.copy(
+                    controlCapabilities =
+                        CameraControlCapabilities(
+                            exposureModes = listOf("P", "S", "A", "M", "U1", "U2", "U3"),
+                        ),
+                ),
+            ).first { it.kind == MonitorPickerKind.MODE }.picker
+        assertNotNull(withBanks)
+        assertTrue("U3" in withBanks.modes[0].request.options)
+    }
+
+    @Test
+    fun `an advertised drive list still hides the positions the app owns`() {
+        // Quick is dial-only and Self-timer belongs to the Built-in Timer tab, even when the
+        // body lists them.
+        val picker =
+            settings(
+                snapshot.copy(
+                    controlCapabilities =
+                        CameraControlCapabilities(
+                            driveModes =
+                                listOf("Single", "Self-timer", "Continuous L", "Quick"),
+                        ),
+                ),
+            ).first { it.kind == MonitorPickerKind.DRIVE }.picker
+        assertNotNull(picker)
+        assertEquals(listOf("Single", "Continuous L"), picker.modes[0].request.options)
+    }
+
+    @Test
+    fun `focus area names the body's settings and never the subject-detection tab`() {
+        // "3D tracking" and "Subject tracking" are AF-AREA modes; the Subject tab is subject
+        // DETECTION. Collapsing either into a generic "Subject" is the #274 label report.
+        val picker = assertNotNull(settings().first { it.kind == MonitorPickerKind.FOCUS }.picker)
+        val areas = picker.modes[1].request.options
+        val subjects = picker.modes[2].request.options
+        assertTrue("3D tracking" in areas)
+        assertFalse("Subject" in areas)
+        assertFalse("3D" in areas)
+        assertFalse(subjects.any { it in areas && it != "Auto" })
+    }
+
+    @Test
     fun `drive picker mirrors the iOS timer tab exclusivity`() {
         val idle = settings().first { it.kind == MonitorPickerKind.DRIVE }.picker
         assertNotNull(idle)

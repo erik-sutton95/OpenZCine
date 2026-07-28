@@ -928,6 +928,9 @@ struct PickerPanel: View {
     @State private var screenModes: [String] = []
     /// Codecs the camera advertises, captured on appear (same rationale as `screenModes`).
     @State private var codecModes: [String] = []
+    /// The same codecs as picker rows, so a row the body offers at two bit depths can flank
+    /// itself with them. Captured on appear alongside `codecModes`.
+    @State private var codecRows: [PTPCameraCodecFamily] = []
 
     private var isShutterControlLocked: Bool {
         picker == .shutter && model.lockedControls.contains(.shutter)
@@ -975,6 +978,32 @@ struct PickerPanel: View {
             && activePickerModes[selectedMode].title == "Kelvin"
     }
 
+    /// The advertised bit depths flanking the settled CODEC row — 8-bit left, 10-bit right, the
+    /// same shape as WB Kelvin's −10 / +10 (Erik's ask on #276). Nil for every codec the body
+    /// advertises at a single depth, so a depth the connected body cannot record is never a
+    /// button. Both sides write an exact advertised value; the filled one is the depth the
+    /// camera's own readback reports, so the pair survives closing and reopening the picker.
+    private var codecDepthAdjust: DrumSideAdjust? {
+        guard picker == .codec,
+            let row = codecRows.first(where: { $0.label == selection }),
+            row.offersBitDepthChoice,
+            let low = row.depths.first, let high = row.depths.last
+        else { return nil }
+        let active = model.activeCodecMode?.bitDepth
+        return DrumSideAdjust(
+            minusEnabled: !isDrumInteractionLocked,
+            plusEnabled: !isDrumInteractionLocked,
+            onMinus: { model.applyPickerValue(low.label, for: .codec) },
+            onPlus: { model.applyPickerValue(high.label, for: .codec) },
+            minusTitle: low.bitDepthLabel,
+            plusTitle: high.bitDepthLabel,
+            minusAccessibilityLabel: "Record \(row.label) at \(low.bitDepth) bit",
+            plusAccessibilityLabel: "Record \(row.label) at \(high.bitDepth) bit",
+            minusSelected: active == low.bitDepth,
+            plusSelected: active == high.bitDepth,
+            hint: "Use the bit-depth buttons beside the codec to switch depth")
+    }
+
     private func applyKelvinSideStep(delta: Int) {
         guard
             let next = WhiteBalanceKelvinPolicy.fineAdjust(from: selection, delta: delta),
@@ -1009,9 +1038,11 @@ struct PickerPanel: View {
                         selection: $selection,
                         markedValues: markedValues,
                         isInteractive: !isDrumInteractionLocked,
-                        // −10 / +10 permanently flank the selected Kelvin value.
-                        sideAdjust: isKelvinMode
-                            ? DrumSideAdjust(
+                        // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
+                        // reuses the pair for the bit depths a body advertises for that codec.
+                        sideAdjust: !isKelvinMode
+                            ? codecDepthAdjust
+                            : DrumSideAdjust(
                                 minusEnabled: !isDrumInteractionLocked
                                     && WhiteBalanceKelvinPolicy.canFineAdjust(
                                         from: selection,
@@ -1028,7 +1059,7 @@ struct PickerPanel: View {
                                     applyKelvinSideStep(
                                         delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
                                 }
-                            ) : nil
+                            )
                     )
                     // Fresh wheel per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
                     // *and* the centred value at once, which `.scrollPosition` alone doesn't follow
@@ -1059,7 +1090,8 @@ struct PickerPanel: View {
                 screenModes = model.resolutionOptions
             }
             if picker == .codec {
-                codecModes = model.codecOptions
+                codecRows = model.codecFamilies
+                codecModes = codecRows.map(\.label)
             }
             // Dual-circuit pickers always open on the camera's active circuit (`movieBaseISO` /
             // `movieShutterMode`), never via overlapping ISO steps or `showPicker`'s default mode.
@@ -1131,9 +1163,18 @@ struct PickerPanel: View {
             lastApplied = next
         }
         // Confirm-on-snap: apply each newly-centred value to the active mode's target.
-        .onChange(of: selection) { _, newValue in
+        .onChange(of: selection) { oldValue, newValue in
             guard !isDrumInteractionLocked else { return }
             guard !newValue.isEmpty, newValue != lastApplied else { return }
+            // A descriptor refresh (60 s cadence, lens swap, shutter-circuit switch) can reshape
+            // the option list while the picker is open. When the centred value leaves the list,
+            // SwiftUI re-resolves `.scrollPosition` onto a neighbouring row and writes it back
+            // through the binding — that is the LIST moving, not the operator, and pushing it to
+            // the camera would change a setting nobody touched. Re-baseline silently instead.
+            guard currentOptions.contains(oldValue) else {
+                lastApplied = newValue
+                return
+            }
             lastApplied = newValue
             model.applyPicker(picker, mode: selectedMode, value: newValue)
         }
@@ -1449,7 +1490,10 @@ struct PickerPanel: View {
             if property == .movieWhiteBalance, model.isPhotographyMode {
                 property = .whiteBalance
             }
-            if let cameraMode = model.cameraControlOptions[property], cameraMode.count > 1 {
+            // A body advertising exactly one value means exactly one value is selectable — show
+            // that, not the app's union. (The shutter circuits' single-value PLACEHOLDER enum is
+            // filtered upstream in `refreshControlOption`, so it never reaches this cache.)
+            if let cameraMode = model.cameraControlOptions[property], !cameraMode.isEmpty {
                 return cameraMode
             }
         }
@@ -1545,12 +1589,24 @@ struct StabilizationPickerPanel: View {
 /// to each value like a drum, with the centred value enlarged and gold, the rest dimmed, bracketed
 /// by hairlines and faded at the edges. The centred value is reported through `selection`, updating
 /// as the drum locks onto each detent.
-/// −10 / +10 flanking the settled drum value (Kelvin fine-tune).
+/// A pair of buttons flanking the settled drum value: WB Kelvin's −10 / +10, and the CODEC
+/// drum's advertised bit depths (8-bit left, 10-bit right — same idiom, Erik's ask on #276).
+/// The captions default to the Kelvin pair so that call site stays as it was.
 struct DrumSideAdjust {
     var minusEnabled: Bool
     var plusEnabled: Bool
     var onMinus: () -> Void
     var onPlus: () -> Void
+    var minusTitle: String = "−10"
+    var plusTitle: String = "+10"
+    var minusAccessibilityLabel: String = "Decrease Kelvin by 10"
+    var plusAccessibilityLabel: String = "Increase Kelvin by 10"
+    /// Filled treatment for a side that IS the current camera value (the active bit depth).
+    /// Kelvin's steps are relative nudges, so neither side is ever "selected" there.
+    var minusSelected: Bool = false
+    var plusSelected: Bool = false
+    /// Accessibility hint for the drum carrying the pair.
+    var hint: String = "Use minus 10 and plus 10 beside the selected value to fine-adjust"
 }
 
 /// The photo Quality picker: two side-by-side drums — RAW on/off and the JPEG/HEIF tier —
@@ -1571,6 +1627,9 @@ struct QualityPickerPanel: View {
 
     private static let rawOptions = ["On", "Off"]
     private static let tierOptions = StillQualityConfiguration.Tier.allCases.map(\.rawValue)
+    /// Conservative fallback only — the body's own `RawCompressionType` enum wins below.
+    /// First-generation Z bodies use the Compressed/Uncompressed pair and reject this trio, so
+    /// offering it unconditionally is the same "options the body does not have" defect (#274).
     private static let nefOptions = [
         "High efficiency", "High efficiency★", "Lossless compression",
     ]
@@ -1646,8 +1705,9 @@ struct QualityPickerPanel: View {
     private var nefRows: some View {
         let enabled = config.rawEnabled
         let current = model.cameraPropertySnapshot.rawCompression
+        let options = model.cameraControlOptions[.rawCompressionType] ?? Self.nefOptions
         return VStack(spacing: 6) {
-            ForEach(Self.nefOptions, id: \.self) { option in
+            ForEach(options, id: \.self) { option in
                 optionChip(option, active: current == option, enabled: enabled) {
                     model.applyStillRawCompression(option)
                 }
@@ -1774,13 +1834,15 @@ struct AccentDrumWheel: View {
             .overlay {
                 if let sideAdjust {
                     HStack {
-                        kelvinSideButton(
-                            title: "−10", enabled: sideAdjust.minusEnabled,
-                            label: "Decrease Kelvin by 10", action: sideAdjust.onMinus)
+                        sideAdjustButton(
+                            title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
+                            selected: sideAdjust.minusSelected,
+                            label: sideAdjust.minusAccessibilityLabel, action: sideAdjust.onMinus)
                         Spacer(minLength: 0)
-                        kelvinSideButton(
-                            title: "+10", enabled: sideAdjust.plusEnabled,
-                            label: "Increase Kelvin by 10", action: sideAdjust.onPlus)
+                        sideAdjustButton(
+                            title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
+                            selected: sideAdjust.plusSelected,
+                            label: sideAdjust.plusAccessibilityLabel, action: sideAdjust.onPlus)
                     }
                     .padding(.horizontal, 4)
                     .frame(height: rowHeight)
@@ -1792,23 +1854,27 @@ struct AccentDrumWheel: View {
             .onAppear {
                 DispatchQueue.main.async { proxy.scrollTo(selection, anchor: .center) }
             }
-            .accessibilityHint(
-                sideAdjust != nil
-                    ? "Use minus 10 and plus 10 beside the selected value to fine-adjust" : "")
+            .accessibilityHint(sideAdjust?.hint ?? "")
         }
     }
 
-    private func kelvinSideButton(
-        title: String, enabled: Bool, label: String, action: @escaping () -> Void
+    /// One flanking button. `selected` fills it solid — the CODEC pair shows which bit depth the
+    /// body is on; Kelvin's relative steps never set it.
+    private func sideAdjustButton(
+        title: String, enabled: Bool, selected: Bool = false, label: String,
+        action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
+                .foregroundStyle(
+                    selected
+                        ? LiveDesign.background : (enabled ? LiveDesign.accent : LiveDesign.faint)
+                )
                 .frame(width: 56, height: 40)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(LiveDesign.accentDim)
+                        .fill(selected ? LiveDesign.accent : LiveDesign.accentDim)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1816,10 +1882,13 @@ struct AccentDrumWheel: View {
                             enabled ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
                 )
         }
-        .buttonStyle(.plain)
+        // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
+        // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
+        .buttonStyle(.zcTapTarget)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
         .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     @ViewBuilder private func optionRow(_ option: String, isCentered: Bool) -> some View {
@@ -2690,11 +2759,15 @@ struct LUTPickerContent: View {
     }
 
     /// Fixed height of the region below the tabs so the popup is the same size on every tab.
-    private let contentHeight: CGFloat = 180
+    ///
+    /// Landscape is ~400pt tall and this panel had no headroom left, so the 50/50 row below is
+    /// paid for out of the drum rather than added to the panel — at 180 the panel's own header
+    /// and the category tabs went off the top of the screen.
+    private let contentHeight: CGFloat = 146
     private let footerHeight: CGFloat = 44
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             SegmentedButtons(
                 items: LUTCategory.allCases.map(\.rawValue),
                 selected: category.rawValue
@@ -2707,6 +2780,7 @@ struct LUTPickerContent: View {
             }
             tabContent
                 .frame(height: contentHeight)
+            splitComparisonControls
         }
         .onAppear {
             model.refreshCustomLUTs()
@@ -2744,6 +2818,61 @@ struct LUTPickerContent: View {
         }
     }
 
+    /// The 50/50 Log-vs-LUT comparison: an off-by-default toggle, with its orientation revealed
+    /// beside it only while it is on. The orientation stays persisted either way, so switching the
+    /// comparison off and back on returns to the operator's own choice.
+    ///
+    /// One row, not a stacked toggle-then-picker: landscape is ~400pt tall and this panel already
+    /// spends most of it on the drum, so the two-row version pushed the category tabs off the top
+    /// of the screen.
+    @ViewBuilder private var splitComparisonControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                model.preferences.splitComparisonEnabled.toggle()
+                OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+                // Comparison is meaningless with the grade off, so switching it on switches the
+                // tool on — the same rule the category tabs follow. Arming also clears the on-feed
+                // key's mute, so the split is showing when the operator comes back to the image.
+                if model.preferences.splitComparisonEnabled {
+                    model.splitComparisonMuted = false
+                    model.setAssist(.lut, visible: true)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(
+                        systemName: model.preferences.splitComparisonEnabled
+                            ? "checkmark.circle.fill" : "circle"
+                    )
+                    .foregroundStyle(
+                        model.preferences.splitComparisonEnabled
+                            ? LiveDesign.accent : LiveDesign.muted)
+                    Text("50/50")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(LiveDesign.text)
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(
+                    model.preferences.splitComparisonEnabled
+                        ? LiveDesign.accentDim : LiveDesign.glassBright,
+                    in: Capsule())
+            }
+            .buttonStyle(.zcTapTarget)
+            if model.preferences.splitComparisonEnabled {
+                SegmentedButtons(
+                    items: SplitComparisonOrientation.allCases.map(\.rawValue),
+                    selected: model.preferences.splitComparisonOrientation.rawValue
+                ) { raw in
+                    guard let next = SplitComparisonOrientation(rawValue: raw) else { return }
+                    model.preferences.splitComparisonOrientation = next
+                    OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+                }
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
     /// The tab matching the currently-applied LUT, so the picker opens where the operator left off.
     private var currentCategory: LUTCategory {
         switch model.assistConfiguration.selectedLUT {
@@ -2771,27 +2900,45 @@ struct LUTPickerContent: View {
         model.setAssist(.lut, visible: true)
     }
 
+    /// Height reserved under the built-in drum for the contributor credit. Always reserved, never
+    /// conditional: a line that appears only on the contributed look would resize the drum mid-scroll.
+    private let creditHeight: CGFloat = 16
+
+    /// The look the built-in drum is currently on — `nil` while a stored LUT is applied.
+    private var selectedBuiltIn: MonitorLUT? {
+        guard case .builtIn(let look) = model.assistConfiguration.selectedLUT else { return nil }
+        return look
+    }
+
     @ViewBuilder private var tabContent: some View {
         switch category {
         case .builtIn:
-            AccentDrumWheel(
-                options: MonitorLUT.allCases.map(\.rawValue),
-                selection: Binding(
-                    get: {
-                        if case .builtIn(let look) = model.assistConfiguration.selectedLUT {
-                            return look.rawValue
+            VStack(spacing: 0) {
+                AccentDrumWheel(
+                    options: MonitorLUT.allCases.map(\.rawValue),
+                    selection: Binding(
+                        get: {
+                            selectedBuiltIn?.rawValue
+                                ?? MonitorLUT.allCases.first?.rawValue ?? ""
+                        },
+                        set: { name in
+                            guard let look = MonitorLUT(rawValue: name) else { return }
+                            model.assistConfiguration.selectedLUT = .builtIn(look)
+                            // Picking a look turns the LUT on; the bar toggle is the only "off".
+                            model.setAssist(.lut, visible: true)
                         }
-                        return MonitorLUT.allCases.first?.rawValue ?? ""
-                    },
-                    set: { name in
-                        guard let look = MonitorLUT(rawValue: name) else { return }
-                        model.assistConfiguration.selectedLUT = .builtIn(look)
-                        // Picking a look turns the LUT on; the bar toggle is the only "off".
-                        model.setAssist(.lut, visible: true)
-                    }
-                ),
-                wheelHeight: contentHeight
-            )
+                    ),
+                    wheelHeight: contentHeight - creditHeight
+                )
+                // Community-contributed looks are credited here rather than in the label — the drum
+                // is one narrow monospaced line and a name would push the look's own name out.
+                Text(selectedBuiltIn?.credit ?? "")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(LiveDesign.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(height: creditHeight)
+            }
         case .custom:
             customTab
         case .red:
@@ -3561,6 +3708,12 @@ struct OperatorSettingsPanel: View {
     @State private var externalLinkErrorMessage: String?
     @State private var pendingInternetDestination: SettingsInternetDestination?
     @State private var isPreparingDiagnostics = false
+    /// Which DISP section on the Display tab is open. All three start collapsed — the tab is a
+    /// short list of modes at a glance, and you open the one you want to set up.
+    @State private var expandedDispSection: DispMode?
+    /// Which capture side the Display tab's DISP sections are editing. `nil` until the operator
+    /// picks one, so the tab opens on whichever side the camera is actually in.
+    @State private var displayCaptureMode: CaptureLayoutMode?
     /// Standalone setup is already a root cover, so its report flow is presented above that cover.
     /// Camera-backed setup uses the root-owned presentation instead, which survives an AP hop.
     @State private var standaloneBugReportPresented = false
@@ -3910,12 +4063,20 @@ struct OperatorSettingsPanel: View {
                 help:
                     "Steers the selected stream preset toward smaller frames or more image detail."
             ) {
+                // All three grades the body actually offers. The pair this used to show could not
+                // name the middle one, so a stored `.balanced` displayed as "Size" — the same label
+                // Android wrote as `.latency`, i.e. one label meaning two different bytes across
+                // the two shells.
                 SettingsSegmented(
-                    options: ["Size", "Quality"],
-                    selected: model.preferences.qualityBias == .detail ? "Quality" : "Size"
+                    options: OperatorPreferences.QualityBias.allCases.map(\.settingsLabel),
+                    selected: model.preferences.qualityBias.settingsLabel
                 ) { value in
-                    // ponytail: the 3-way core bias collapses to the mockup's Size/Quality pair.
-                    model.setQualityBias(value == "Quality" ? .detail : .latency)
+                    guard
+                        let bias = OperatorPreferences.QualityBias.allCases.first(where: {
+                            $0.settingsLabel == value
+                        })
+                    else { return }
+                    model.setQualityBias(bias)
                 }
             }
             #if DEBUG
@@ -3981,39 +4142,44 @@ struct OperatorSettingsPanel: View {
 
     }
 
+    /// The Display tab is one card per DISP mode: each mode owns what it shows, and each opens on
+    /// tap. Collapsed, the whole tab reads as "Video/Photo, DISP 1, DISP 2, DISP 3, button order"
+    /// instead of ~50 controls in one scroll.
+    ///
+    /// Video and photo keep separate layouts, and the switch for that is **one segmented control
+    /// at the top of the tab**, not a second copy of each section. Six stacked DISP cards would
+    /// double the length of the tab to express one bit; a single "which layout am I editing"
+    /// control reads at a glance and leaves the three sections exactly as they were.
     @ViewBuilder private var displayRows: some View {
-        SettingsGroupCard(
-            title: "View Assist toolbar",
-            caption: "Drag to reorder; tap the eye to show or hide each tool on the monitor bar.",
-            onReset: { model.resetAssistToolbarPreferences() },
-            content: {
-                AssistToolbarOrderStrip()
-                    .environment(model)
+        SettingsRowCard {
+            SettingsInlineRow(
+                title: "Layout For",
+                help:
+                    "Video and photo keep their own monitor layouts, so a cinema rig and a stills body do not fight over the same chrome. This picks which one the DISP sections below are setting up; the camera's own mode dial picks which one the monitor renders.",
+                showTopDivider: false
+            ) {
+                SettingsSegmented(
+                    options: CaptureLayoutMode.allCases.map(\.title),
+                    selected: editedCaptureMode.title
+                ) { value in
+                    guard
+                        let mode = CaptureLayoutMode.allCases.first(where: { $0.title == value })
+                    else { return }
+                    editedCaptureMode = mode
+                }
             }
-        )
-
-        SettingsGroupCard(
-            title: "Live Status Readouts", caption: "Hide readouts you do not ride during a take."
-        ) {
-            displayToggleGrid([
-                (
-                    "REC", model.preferences.displayChrome.recReadoutVisible,
-                    { model.preferences.displayChrome.recReadoutVisible.toggle() }
-                ),
-                (
-                    "CODEC", model.preferences.displayChrome.codecReadoutVisible,
-                    { model.preferences.displayChrome.codecReadoutVisible.toggle() }
-                ),
-                (
-                    "MEDIA", model.preferences.displayChrome.mediaReadoutVisible,
-                    { model.preferences.displayChrome.mediaReadoutVisible.toggle() }
-                ),
-                (
-                    "FPS", model.preferences.displayChrome.fpsReadoutVisible,
-                    { model.preferences.displayChrome.fpsReadoutVisible.toggle() }
-                ),
-            ])
         }
+        // Coming back from the Edit view lands on the section that was being edited, open, rather
+        // than at the top of the tab with everything collapsed again.
+        .onAppear {
+            guard let returning = model.chromeEditorReturnMode else { return }
+            expandedDispSection = returning
+            model.chromeEditorReturnMode = nil
+        }
+
+        dispSectionCard(.live)
+        dispSectionCard(.clean)
+        dispSectionCard(.command)
 
         SettingsGroupCard(
             title: "DISP Button Order",
@@ -4024,6 +4190,96 @@ struct OperatorSettingsPanel: View {
                     .environment(model)
             }
         )
+    }
+
+    /// Which capture side the DISP sections are editing. Follows the camera on first open — the
+    /// layout you are looking at is the one you most likely came to change.
+    private var editedCaptureMode: CaptureLayoutMode {
+        get { displayCaptureMode ?? model.captureLayoutMode }
+        nonmutating set { displayCaptureMode = newValue }
+    }
+
+    /// The Edit view is the live monitor, so it can only arrange the layout the body is actually
+    /// rendering. Editing the other one falls back to the plain switch list.
+    private var editsTheLiveLayout: Bool { editedCaptureMode == model.captureLayoutMode }
+
+    @ViewBuilder private func dispSectionCard(_ mode: DispMode) -> some View {
+        let capture = editedCaptureMode
+        SettingsGroupCard(
+            title: "DISP \(dispNumber(mode)) · \(mode.title)",
+            caption: dispCaption(mode),
+            onReset: { model.resetChromeVisibility(for: mode, capture: capture) },
+            expansion: Binding(
+                get: { expandedDispSection == mode },
+                set: { expandedDispSection = $0 ? mode : nil }),
+            content: {
+                dispSectionBody(mode, capture: capture)
+            }
+        )
+    }
+
+    @ViewBuilder private func dispSectionBody(_ mode: DispMode, capture: CaptureLayoutMode)
+        -> some View
+    {
+        VStack(alignment: .leading, spacing: 10) {
+            // Command is a fixed dashboard grid, not the live chrome — there is no live view
+            // to place badges on, so it gets the plain list. So does the capture side the body
+            // is not currently in: badges belong on the real thing, not on a stand-in.
+            if mode == .command || !editsTheLiveLayout {
+                if mode != .command {
+                    Text(
+                        "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor."
+                    )
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LiveDesign.muted)
+                }
+                displayToggleGrid(chromeToggles(for: mode, capture: capture))
+            } else {
+                SettingsActionPill(title: "Edit view") { model.beginChromeEditing(mode) }
+                    .accessibilityHint(
+                        "Opens the monitor with an eye on each element you can show or hide")
+                if mode == .clean {
+                    Text("View assists that stay on in clean view")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(LiveDesign.muted)
+                    CleanViewPinStrip()
+                        .environment(model)
+                } else {
+                    Text("Tool bar buttons — drag to reorder, tap the eye to show or hide")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(LiveDesign.muted)
+                    AssistToolbarOrderStrip()
+                        .environment(model)
+                }
+            }
+        }
+    }
+
+    private func dispNumber(_ mode: DispMode) -> Int {
+        (DispMode.allCases.firstIndex(of: mode) ?? 0) + 1
+    }
+
+    private func dispCaption(_ mode: DispMode) -> String {
+        switch mode {
+        case .live:
+            "The full monitor. Set what it shows in Edit view, and which tools reach the tool bar."
+        case .clean:
+            "A stripped-back image. Same elements as DISP 1 — the rail, focus box and batteries start on, everything else off."
+        case .command:
+            "The data dashboard — no feed, so no image assists. Only the side rail is on screen."
+        }
+    }
+
+    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode)
+        -> [(title: String, isOn: Bool, action: () -> Void)]
+    {
+        DisplayChromeVisibility.configurableSections(in: mode).map { section in
+            (
+                section.title,
+                model.preferences.chrome(for: mode, capture: capture).isVisible(section),
+                { model.toggleChrome(section, for: mode, capture: capture) }
+            )
+        }
     }
 
     /// Marketing version + build number from the bundle, e.g. "0.2.0 (9)", matching what
@@ -5540,11 +5796,31 @@ struct MFDriveVerticalScrub: View {
     @State private var lastDragY: CGFloat?
     @State private var isDragging = false
 
-    /// Drag-to-pulse gain — deliberately gentle so a full sweep is a controllable focus pull.
-    private static let pulsesPerPoint = 4
+    /// Drag-to-pulse gain at the slow end of the ramp.
+    ///
+    /// Was 4, which a real video pull found too coarse to trim focus with: at 4, and with the
+    /// speed ramp reaching ×3 after only a 12pt/frame move, a careful nudge already moved the lens
+    /// further than the operator wanted. 2 makes a slow drag genuinely fine and keeps the flick
+    /// useful — see `speedRampDivisor`.
+    ///
+    /// ponytail: this is a calibration knob, not a derived constant. It is tuned against how a
+    /// focus-by-wire lens actually travels, which no test can tell us — raise it if a full sweep
+    /// cannot cross the range on a real body, lower it if trimming still overshoots.
+    private static let pulsesPerPoint = 2
+    /// Points of per-frame travel that buy one extra multiple of gain, up to `maxSpeedFactor`.
+    /// Larger divisor = the ramp needs a more deliberate flick, so slow drags stay in the fine band.
+    private static let speedRampDivisor: CGFloat = 14
+    private static let maxSpeedFactor: CGFloat = 4
     /// Drum geometry: one tick every `pulsesPerTick` pulses, `tickSpacing` points apart.
     private static let tickSpacing: CGFloat = 11
     private static let pulsesPerTick: CGFloat = 220
+
+    /// Pulses for one drag frame. Extracted so the gain curve is unit-testable — the sensitivity
+    /// is the whole point of this control and a real pull found the old curve too coarse.
+    static func pulses(forDelta delta: CGFloat) -> Int {
+        let speedFactor = min(1 + abs(delta) / speedRampDivisor, maxSpeedFactor)
+        return Int(delta * CGFloat(pulsesPerPoint) * speedFactor)
+    }
 
     var body: some View {
         VStack(spacing: 5) {
@@ -5565,6 +5841,15 @@ struct MFDriveVerticalScrub: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 6)
         .liquidGlass(in: Capsule())
+        // AF-F re-focuses continuously, so a pull is overridden as fast as it lands. Drawn dimmed
+        // and inert rather than hidden: the dial disappearing when the operator changes focus mode
+        // reads as a bug, while a greyed one says "wrong mode for this", which is the truth.
+        .opacity(model.mfDriveScrubIsInert ? 0.55 : 1)  // matches the Android strip
+        .allowsHitTesting(!model.mfDriveScrubIsInert)
+        .accessibilityHint(
+            model.mfDriveScrubIsInert
+                ? "Unavailable in AF-F. The camera refocuses continuously in this mode." : ""
+        )
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 2)
@@ -5572,11 +5857,10 @@ struct MFDriveVerticalScrub: View {
                     isDragging = true
                     let delta = (lastDragY ?? value.startLocation.y) - value.location.y
                     lastDragY = value.location.y
-                    // Upward drag drives toward infinity. Ring-like speed response: a slow
-                    // drag steps finely, a flick multiplies travel (up to ×3, gentle ramp).
-                    let speedFactor = min(1 + abs(delta) / 6, 3)
+                    // Upward drag drives toward infinity. Ring-like speed response: a slow drag
+                    // steps finely, a deliberate flick multiplies travel.
                     model.driveManualFocus(
-                        pulses: Int(delta * CGFloat(Self.pulsesPerPoint) * speedFactor))
+                        pulses: Self.pulses(forDelta: delta))
                 }
                 .onEnded { _ in
                     lastDragY = nil

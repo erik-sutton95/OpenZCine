@@ -212,9 +212,21 @@ class MediaDeletionTest {
             pixelHeight = 2160,
             filename = filename,
             contentKind = kind,
+            // The label must agree with the extension, as it does in production — the listing
+            // wire carries the shared core's own classification of this filename. Hardcoding
+            // "JPEG" for every still made the fixture claim a .NEF was a JPEG, which only went
+            // unnoticed while the pairing predicates read the extension and ignored the label.
             stillPhoto =
                 if (kind == MediaContentKind.STILL_PHOTO) {
-                    StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE)
+                    val label =
+                        when (filename.substringAfterLast('.').lowercase()) {
+                            "nef", "nrw", "dng" -> "NEF"
+                            "hif", "heif", "heic" -> "HEIF"
+                            "tif", "tiff" -> "TIFF"
+                            "png" -> "PNG"
+                            else -> "JPEG"
+                        }
+                    StillPhotoClassification(label, StillPreviewStrategy.PROGRESSIVE)
                 } else {
                     null
                 },

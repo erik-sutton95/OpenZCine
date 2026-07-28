@@ -12,6 +12,7 @@ import android.hardware.SensorManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -369,6 +371,12 @@ internal fun LiveFrameMetadataOverlay(
     gaugeBottomChromeInset: Float = 0f,
     focusPointLocked: Boolean = false,
     focusLockProgress: Float = 0f,
+    /** The AF box is an operator-configurable element like any other (`ChromeSection.FOCUS_BOX`). */
+    focusBoxVisible: Boolean = true,
+    /** 0.3 while the Edit view has it switched off, so its badge still has something to sit on. */
+    focusBoxAlpha: Float = 1f,
+    /** Edit-view proxy: applied to an invisible box over the primary AF box, or null when live. */
+    focusBoxEditModifier: Modifier? = null,
     /** Body exposure-indicator needle in 1/6 EV steps; null hides the meter. */
     evIndicatorSixths: Int? = null,
     /** Body indicator lit state; the meter hides only on an explicit false. */
@@ -376,7 +384,10 @@ internal fun LiveFrameMetadataOverlay(
     modifier: Modifier = Modifier,
 ) {
     val cameraLevel = presentationState.level
-    val levelEnabled = configuration.levelEnabled && !cleanMode
+    // Tool visibility comes from [configuration], already filtered for the DISP mode by
+    // `renderedFramingAssists` (#256). `cleanMode` is now only a LAYOUT input: clean leaves the
+    // feed's bottom edge free, so the EV needle drops to it instead of clearing a capture bar.
+    val levelEnabled = configuration.levelEnabled
     val cameraLevelAvailable = cameraLevel?.let(::cameraLevelIsValid) == true
     val deviceGravity =
         rememberDeviceGravityLevel(
@@ -418,12 +429,16 @@ internal fun LiveFrameMetadataOverlay(
             val debugFixtureShown =
                 presentationState.focus?.isDebugFixture == true ||
                     presentationState.level?.isDebugFixture == true
-            CameraFocusOverlay(
-                focus = presentationState.focus,
-                feed = feed,
-                locked = focusPointLocked,
-                lockProgress = focusLockProgress,
-            )
+            if (focusBoxVisible) {
+                CameraFocusOverlay(
+                    focus = presentationState.focus,
+                    feed = feed,
+                    locked = focusPointLocked,
+                    lockProgress = focusLockProgress,
+                    alpha = focusBoxAlpha,
+                    editModifier = focusBoxEditModifier,
+                )
+            }
             if (levelEnabled) {
                 CameraLevelOverlay(
                     reading = level,
@@ -435,8 +450,6 @@ internal fun LiveFrameMetadataOverlay(
                     debugFixtureShown = debugFixtureShown,
                 )
             }
-            // The EV meter SURVIVES clean mode (iOS DISP 2 rule): exposure
-            // truth is exactly what a stripped-down operator view still needs.
             // Photography-only — the render guards the mode as well as the
             // toolset, since a persisted visibility set from an older build may
             // still carry the tool. Hidden while the body reports its indicator
@@ -469,14 +482,33 @@ private fun CameraFocusOverlay(
     feed: LiveOverlayRect,
     locked: Boolean,
     lockProgress: Float,
+    alpha: Float = 1f,
+    editModifier: Modifier? = null,
 ) {
     if (focus == null || focus.boxes.isEmpty()) return
     val description =
         focus.accessibilityDescription() +
             if (locked) " Focus point position locked in app." else ""
     val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed)
+    // The Edit view's outline and badge go on the primary AF box, not the whole feed — a dashed
+    // rectangle round the entire image would name nothing.
+    if (editModifier != null && primaryRect != null) {
+        with(LocalDensity.current) {
+            // Offset and size FIRST: `chromeEditable`'s `onGloballyPositioned` reports the bounds
+            // of its own node, and an offset applied inside it moves only the child — the badge
+            // landed at the overlay's origin instead of on the box.
+            Box(
+                Modifier
+                    .absoluteOffset(primaryRect.left.toDp(), primaryRect.top.toDp())
+                    .size(primaryRect.width.toDp(), primaryRect.height.toDp())
+                    .then(editModifier),
+            )
+        }
+    }
     BoxWithConstraints(
-        Modifier.fillMaxSize().clearAndSetSemantics { contentDescription = description },
+        Modifier.fillMaxSize()
+            .alpha(alpha)
+            .clearAndSetSemantics { contentDescription = description },
     ) {
         val density = LocalDensity.current
         val visibleBounds =

@@ -1288,6 +1288,7 @@ public fun PairingExperience(
                     environment.primeCameraApScan(candidate.ssid)
                 },
                 onDismiss = { cameraWifiScannerPresented = false },
+                onDiagnosticPhase = onDiagnosticPhase,
             )
         }
         // Keep scanning while the Ready-to-join card is up.

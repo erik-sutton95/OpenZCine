@@ -154,6 +154,70 @@ enum MediaThumbnailSize: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 }
 
+/// Geometry for a media popup panel anchored to its trigger button.
+///
+/// The preferred width is a *preference, not a promise*: a 400pt panel cannot fit a 393pt phone,
+/// and no clamp rescues a width that does not fit — a trailing-aligned `min(max(…))` silently
+/// inverts and shoves the panel off the leading edge. So the width is bounded by the safe
+/// viewport first, which is precisely what makes the two-edge clamp well-formed afterwards.
+///
+/// Pure and host-local (the values feed straight into `.offset`/`.frame`) so the phone-width
+/// matrix is covered by unit tests instead of twenty screenshots.
+struct MediaPopupPlacement: Equatable {
+    /// Leading edge relative to the host origin.
+    let x: CGFloat
+    /// Top edge relative to the host origin.
+    let y: CGFloat
+    let width: CGFloat
+    let maxHeight: CGFloat
+
+    /// Gap kept between the panel and every safe-area edge.
+    static let margin: CGFloat = 12
+
+    /// Width and leading edge — the rule every anchored media popup shares. Only the vertical
+    /// rule differs between the below-anchor and above-anchor panels.
+    static func fitted(
+        anchor: CGRect,
+        host: CGRect,
+        safeArea: MonitorEdgeInsets,
+        preferredWidth: CGFloat
+    ) -> (x: CGFloat, width: CGFloat) {
+        let minX = host.minX + max(0, CGFloat(safeArea.leading))
+        let maxX = host.maxX - max(0, CGFloat(safeArea.trailing))
+        let width = max(0, min(preferredWidth, maxX - minX - margin * 2))
+        // Trailing-align to the trigger, then clamp inside BOTH margins. With the width already
+        // bounded, `minX + margin <= maxX - width - margin`, so the outer `min` can no longer
+        // overrule the inner `max`.
+        let trailing = anchor.width > 1 ? anchor.maxX : maxX - margin
+        let x = min(max(trailing - width, minX + margin), maxX - width - margin)
+        return (x - host.minX, width)
+    }
+
+    /// Panel hanging below its trigger, kept clear of every safe-area edge. A stale anchor (one
+    /// frame behind a rotation or an iPad window resize) can shift the panel but can no longer
+    /// push it off-screen: both axes are clamped into the live safe viewport every layout pass.
+    static func below(
+        anchor: CGRect,
+        host: CGRect,
+        safeArea: MonitorEdgeInsets,
+        preferredWidth: CGFloat,
+        minimumHeight: CGFloat
+    ) -> MediaPopupPlacement {
+        let (x, width) = fitted(
+            anchor: anchor, host: host, safeArea: safeArea, preferredWidth: preferredWidth)
+        let minY = host.minY + max(0, CGFloat(safeArea.top))
+        let maxY = host.maxY - max(0, CGFloat(safeArea.bottom))
+        let desiredTop = anchor.width > 1 ? anchor.maxY + 8 : minY + 120
+        let top = max(minY + margin, min(desiredTop, maxY - margin - minimumHeight))
+        return MediaPopupPlacement(
+            x: x,
+            y: top - host.minY,
+            width: width,
+            maxHeight: max(0, maxY - margin - top)
+        )
+    }
+}
+
 /// Full-screen Media page: sidebar navigation, filter popup, and a clip grid with progressive
 /// on-camera playback when a clip is opened.
 struct MediaBrowserView: View {
@@ -377,20 +441,20 @@ struct MediaBrowserView: View {
         .mediaDeliveryShareSheet(enabled: playingClip == nil)
     }
 
+    /// Preferred, not guaranteed — see ``MediaPopupPlacement``.
     private let filterPopupWidth: CGFloat = 400
 
     private var filterPopupOverlay: some View {
         GeometryReader { proxy in
-            let host = proxy.frame(in: .global)
-            let button = filterButtonFrame
-            let hasButton = button.width > 1
-            let trailing = hasButton ? button.maxX : host.maxX - 24
-            let leading = min(
-                max(trailing - filterPopupWidth, host.minX + 12),
-                host.maxX - filterPopupWidth - 12
+            // Recomputed every layout pass, so rotation and iPad window resizes re-place the
+            // panel instead of reusing the geometry it opened with.
+            let place = MediaPopupPlacement.below(
+                anchor: filterButtonFrame,
+                host: proxy.frame(in: .global),
+                safeArea: safeArea,
+                preferredWidth: filterPopupWidth,
+                minimumHeight: 180
             )
-            let top = hasButton ? button.maxY + 8 : host.minY + 120
-            let maxHeight = max(180, host.maxY - top - 24)
 
             ZStack(alignment: .topLeading) {
                 Color.black.opacity(0.18)
@@ -401,9 +465,9 @@ struct MediaBrowserView: View {
                     isFilterPopupPresented = false
                 }
                 .environment(model)
-                .frame(width: filterPopupWidth)
-                .frame(maxHeight: maxHeight, alignment: .top)
-                .offset(x: leading - host.minX, y: top - host.minY)
+                .frame(width: place.width)
+                .frame(maxHeight: place.maxHeight, alignment: .top)
+                .offset(x: place.x, y: place.y)
             }
         }
         .ignoresSafeArea()
@@ -415,6 +479,7 @@ struct MediaBrowserView: View {
             anchorFrame: deliveryAnchorFrame,
             placement: .belowAnchor,
             preferredDestination: deliveryRequest?.preferredDestination,
+            safeArea: safeArea,
             onBeginDelivery: { request in
                 deliveryRequest = nil
                 startDelivery(request)
@@ -671,6 +736,10 @@ struct MediaBrowserView: View {
                         filterButton
                         sortButton
                     }
+                    // Both pills keep their intrinsic width; the title absorbs any squeeze. The
+                    // active-filter badge used to steal the difference from these two, wrapping
+                    // the label to "FILTE / R" and clipping SORT to "SO…" on a 393pt phone.
+                    .fixedSize()
                 }
 
                 if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }),
@@ -1029,10 +1098,11 @@ private struct MediaFilterPopup: View {
     @Environment(NativeAppModel.self) private var model
     let onClose: () -> Void
 
-    private let filterChipColumns = [
-        GridItem(.flexible(), spacing: 5),
-        GridItem(.flexible(), spacing: 5),
-    ]
+    /// Two chips where they fit, one where they do not. `.adaptive` is SwiftUI's own column
+    /// collapse, so the narrow case needs no width plumbed into the popup. 150 is chosen to stay
+    /// two-up at the full 400pt panel (120 gave three) and to drop to one column only below a
+    /// ~350pt viewport, where two chips no longer hold a usable width.
+    private let filterChipColumns = [GridItem(.adaptive(minimum: 150), spacing: 5)]
 
     var body: some View {
         GlassPanel(
@@ -1056,47 +1126,82 @@ private struct MediaFilterPopup: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        filterSection(title: "FORMAT") {
-                            LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                ForEach(MediaFormatFilter.allCases, id: \.self) { format in
-                                    MediaFilterChip(
-                                        title: format.rawValue,
-                                        expands: true,
-                                        isActive: model.mediaFormatFilters.contains(format)
-                                    ) {
-                                        model.toggleMediaFormatFilter(format)
+                        let options = model.mediaFilterOptions
+
+                        if !options.formats.isEmpty {
+                            filterSection(title: "FORMAT") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.formats, id: \.self) { format in
+                                        MediaFilterChip(
+                                            title: format.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaFormatFilters.contains(format)
+                                        ) {
+                                            model.toggleMediaFormatFilter(format)
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        filterSection(title: "RESOLUTION") {
-                            LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                ForEach(MediaResolutionBucket.allCases, id: \.self) { bucket in
-                                    MediaFilterChip(
-                                        title: bucket.rawValue,
-                                        expands: true,
-                                        isActive: model.mediaResolutionFilters.contains(bucket)
-                                    ) {
-                                        model.toggleMediaResolutionFilter(bucket)
+                        if !options.resolutions.isEmpty {
+                            filterSection(title: "RESOLUTION") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.resolutions, id: \.self) { bucket in
+                                        MediaFilterChip(
+                                            title: bucket.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaResolutionFilters.contains(bucket)
+                                        ) {
+                                            model.toggleMediaResolutionFilter(bucket)
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        filterSection(title: "DATE") {
-                            LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                MediaFilterChip(
-                                    title: "TODAY",
-                                    expands: true,
-                                    isActive: model.mediaTodayOnly
-                                ) {
-                                    model.mediaTodayOnly.toggle()
+                        if !options.photoSizes.isEmpty {
+                            filterSection(title: "SIZE") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.photoSizes, id: \.self) { size in
+                                        MediaFilterChip(
+                                            title: size.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaPhotoSizeFilters.contains(size)
+                                        ) {
+                                            model.toggleMediaPhotoSizeFilter(size)
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        if model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
+                        if !options.dateWindows.isEmpty {
+                            filterSection(title: "DATE") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.dateWindows, id: \.self) { window in
+                                        MediaFilterChip(
+                                            title: window.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaDateWindow == window
+                                        ) {
+                                            model.toggleMediaDateWindow(window)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let hasStorageSection =
+                            model.mediaBrowserSource == .camera && !model.mediaStorageSlots.isEmpty
+                        if options.isEmpty, !hasStorageSection {
+                            Text("Nothing in this tab to filter by.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(LiveDesign.faint)
+                                .padding(.vertical, 2)
+                        }
+
+                        if hasStorageSection {
                             filterSection(title: "STORAGE") {
                                 LazyVGrid(columns: filterChipColumns, spacing: 5) {
                                     ForEach(model.mediaStorageSlots) { slot in

@@ -12,6 +12,7 @@ import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.CodecBitDepthOption
 import com.opencapture.openzcine.transport.UsbPtpTransport
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -41,6 +42,59 @@ import kotlinx.coroutines.test.advanceTimeBy
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SwiftCoreCameraSessionTest {
+    @Test
+    fun `codec bit depths decode as whole triples and the current depth rides beside them`() {
+        val rs = Char(0x1E)
+        val us = Char(0x1F)
+        val payload =
+            listOf(
+                "result\taccepted",
+                "codec\tH.265 10-bit MOV",
+                "codecSelection\tH.265",
+                "codecBitDepth\t10-bit",
+                "options.codec\tH.264${us}H.265",
+                "options.codecBitDepth\t" +
+                    "H.265${rs}8-bit${rs}H.265 8-bit$us" +
+                    "H.265${rs}10-bit${rs}H.265 10-bit",
+            ).joinToString("\n")
+
+        val decoded = CameraPropertySnapshotWire.decode(payload)
+
+        assertTrue(decoded.isValid)
+        assertEquals("H.265", decoded.snapshot.codecSelection)
+        assertEquals("10-bit", decoded.snapshot.codecBitDepth)
+        assertEquals(
+            listOf(
+                CodecBitDepthOption("H.265", "8-bit", "H.265 8-bit"),
+                CodecBitDepthOption("H.265", "10-bit", "H.265 10-bit"),
+            ),
+            decoded.snapshot.controlCapabilities.codecBitDepths,
+        )
+    }
+
+    @Test
+    fun `a truncated codec bit depth entry is dropped rather than half decoded`() {
+        val rs = Char(0x1E)
+        val us = Char(0x1F)
+        // A depth button must always know the exact advertised label it writes; a two-field entry
+        // does not, so it must not become a button.
+        val payload =
+            listOf(
+                "result\taccepted",
+                "options.codec\tH.265",
+                "options.codecBitDepth\t" +
+                    "H.265${rs}8-bit$us" +
+                    "H.265${rs}10-bit${rs}H.265 10-bit",
+            ).joinToString("\n")
+
+        val decoded = CameraPropertySnapshotWire.decode(payload)
+
+        assertEquals(
+            listOf(CodecBitDepthOption("H.265", "10-bit", "H.265 10-bit")),
+            decoded.snapshot.controlCapabilities.codecBitDepths,
+        )
+    }
+
     @Test
     fun `starts disconnected`() {
         assertEquals(
@@ -709,7 +763,7 @@ class SwiftCoreCameraSessionTest {
             session.cameraProperties.value.controlCapabilities.focusModes,
         )
         assertEquals(
-            listOf("Wide-L", "Subject"),
+            listOf("Wide-L", "Subject tracking"),
             session.cameraProperties.value.controlCapabilities.focusAreas,
         )
         assertEquals(
@@ -878,6 +932,83 @@ class SwiftCoreCameraSessionTest {
         assertEquals(1_250L, session.cameraProperties.value.iso)
         assertEquals(7, session.cameraProperties.value.warningRaw)
         assertEquals(CameraPropertyRefreshStatus.Ready, session.propertyRefreshStatus.value)
+
+        session.disconnect()
+    }
+
+    @Test
+    fun `a burst past the cap is finished on the next pass, in announcement order`() = runTest {
+        // #268: the drain used to `take(cap)` and then clear, so everything past the cap was
+        // silently dropped and that readout stayed stale until the ~20 s round-robin.
+        val bridge = FakeBridge()
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                propertyPollIntervalMillis = 60_000,
+                selectorPollIntervalMillis = 60_000,
+                propertyEventDebounceMillis = 250,
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        runCurrent()
+        bridge.clearRefreshRequests()
+
+        val burst = listOf(0xD0A4L, 0xD1A1L, 0xD1A2L, 0xD1A3L, 0xD1A4L, 0xD1A5L)
+        burst.forEach { bridge.eventListeners.single().onEvent(0x4006, 9, longArrayOf(it)) }
+
+        advanceTimeBy(250)
+        runCurrent()
+        // MAX_EVENT_PROPERTY_REFRESHES (private) — matches the core's
+        // CameraAnnouncedPropertyQueue.batchLimit.
+        assertEquals(burst.take(4), bridge.refreshRequests().map { it.propertyCode })
+
+        // The overflow was kept, not dropped: a follow-up pass reads it.
+        advanceTimeBy(250)
+        runCurrent()
+        assertEquals(burst, bridge.refreshRequests().map { it.propertyCode })
+
+        session.disconnect()
+    }
+
+    @Test
+    fun `a body that keeps announcing cannot defer the read indefinitely`() = runTest {
+        // #268: cancel-and-reschedule made this a RESETTING debounce, so an operator holding an
+        // aperture ring pushed the read out for as long as the turn lasted.
+        val bridge = FakeBridge()
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                propertyPollIntervalMillis = 60_000,
+                selectorPollIntervalMillis = 60_000,
+                propertyEventDebounceMillis = 250,
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        runCurrent()
+        bridge.clearRefreshRequests()
+
+        bridge.eventListeners.single().onEvent(0x4006, 9, longArrayOf(0xD0A4))
+        advanceTimeBy(200)
+        runCurrent()
+        // Still turning: a second detent lands before the window closes.
+        bridge.eventListeners.single().onEvent(0x4006, 10, longArrayOf(0xD1A1))
+        advanceTimeBy(50)
+        runCurrent()
+
+        // 250 ms after the FIRST announcement, both have been read.
+        assertEquals(listOf(0xD0A4L, 0xD1A1L), bridge.refreshRequests().map { it.propertyCode })
 
         session.disconnect()
     }
@@ -1273,7 +1404,7 @@ class SwiftCoreCameraSessionTest {
                 "options.iris\tf/2.8\u001Ff/4",
                 "options.whiteBalance\tSunny\u001F5600K",
                 "options.focusMode\tAF-C\u001FMF",
-                "options.focusArea\tWide-L\u001FSubject",
+                "options.focusArea\tWide-L\u001FSubject tracking",
                 "options.focusSubject\tPeople\u001FAnimal",
                 "options.audioSensitivity\tAuto\u001F12",
                 "options.audioInput\tLine\u001FMicrophone",

@@ -4,6 +4,7 @@ import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.bridge.ZoneStyle
 import com.opencapture.openzcine.settings.ScopeAssistConfiguration
+import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -50,10 +51,10 @@ class MonitorAnalysisPanelPlacementTest {
                 isCommand = false,
                 assistToolbarVisible = true,
                 cameraValuesVisible = true,
-                landscapeSettingsRecovery = true,
+                landscapeRail = RAIL_SETTINGS_ONLY,
             )
         val hiddenRecordingChrome =
-            hiddenChrome.copy(landscapeRecordingSafety = true)
+            hiddenChrome.copy(landscapeRail = RAIL_SETTINGS_ONLY.copy(record = true))
         val hiddenLayout =
             requireNotNull(
                 monitorAnalysisPanelLayout(
@@ -726,6 +727,24 @@ class MonitorAnalysisPanelPlacementTest {
         )
 
     private companion object {
+        val RAIL_ALL =
+            SideRailPlan(
+                lock = true,
+                batteries = true,
+                disp = true,
+                record = true,
+                media = true,
+                settings = true,
+            )
+        val RAIL_SETTINGS_ONLY =
+            SideRailPlan(
+                lock = false,
+                batteries = false,
+                disp = false,
+                record = false,
+                media = false,
+                settings = true,
+            )
         val LANDSCAPE_VIEWPORT = ZoneFrame(0f, 0f, 848f, 393f)
         val PORTRAIT_VIEWPORT = ZoneFrame(0f, 0f, 400f, 800f)
         val LANDSCAPE_LIVE_CHROME =
@@ -733,7 +752,7 @@ class MonitorAnalysisPanelPlacementTest {
                 assistStrip = true,
                 assistRail = false,
                 captureStrip = true,
-                landscapeFullSideRails = true,
+                landscapeRail = RAIL_ALL,
             )
         val PORTRAIT_FILL_CHROME = MonitorAnalysisChromeMounts(false, true, true)
         val PORTRAIT_FIT_CHROME = MonitorAnalysisChromeMounts(true, false, false)

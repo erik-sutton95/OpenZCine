@@ -43,13 +43,22 @@ import java.util.Locale
  * how the operator confirms it.
  */
 
-/** True for the display side of a RAW+JPEG pair (iOS `isJPEGPhoto`). */
+/**
+ * True for the display side of a RAW+JPEG pair (iOS `isJPEGPhoto`).
+ *
+ * Reads the classification the shared core already made and sent over the listing wire, rather
+ * than re-deriving it from the extension here: Kotlin does not classify camera filenames, and a
+ * second copy of the extension set only stays right until one copy learns a new extension. (`.HIF`
+ * was missing from the core's HEIF set while two other places already special-cased it, and every
+ * Nikon HEIF went unlisted as a result.) Stills always carry the label — `MediaLibraryState`
+ * enforces `contentKind == STILL_PHOTO` iff `stillPhoto != null`, and the cache round-trips it.
+ */
 internal val MediaClipRecord.isJpegStill: Boolean
-    get() = filenameExtension in setOf("jpg", "jpeg", "jpe")
+    get() = formatFilter() == MediaFormatFilter.JPEG
 
 /** True for Nikon RAW stills (iOS `isRawPhoto`) — the tag-along pair side. */
 internal val MediaClipRecord.isRawStill: Boolean
-    get() = filenameExtension in setOf("nef", "nrw", "dng")
+    get() = formatFilter() == MediaFormatFilter.NEF
 
 private val MediaClipRecord.filenameExtension: String
     get() = filename.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.US)

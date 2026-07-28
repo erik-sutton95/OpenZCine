@@ -123,7 +123,12 @@ class MFDriveControllerTest {
         // non-busy code (access-denied 0x2013). It must NOT be treated as an undrivable lens —
         // the pulses requeue and the drive lands once the state clears.
         val session = FakeSession()
-        val controller = MFDriveController(session, retryDelayMillis = 1)
+        val controller =
+            MFDriveController(
+                session,
+                retryDelayMillis = 1,
+                elapsedMillis = { testScheduler.currentTime },
+            )
         val messages = mutableListOf<String>()
         controller.onRefusalExhausted = { messages += it }
         session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2013))
@@ -144,7 +149,12 @@ class MFDriveControllerTest {
     @Test
     fun `busy activation requeues the batch and drives once busy clears`() = runTest {
         val session = FakeSession()
-        val controller = MFDriveController(session, retryDelayMillis = 1)
+        val controller =
+            MFDriveController(
+                session,
+                retryDelayMillis = 1,
+                elapsedMillis = { testScheduler.currentTime },
+            )
         val messages = mutableListOf<String>()
         controller.onRefusalExhausted = { messages += it }
         // The body refuses the first two activations mid-acquisition, then takes it.
@@ -166,7 +176,12 @@ class MFDriveControllerTest {
     @Test
     fun `refusal requeue keeps pulses queued by gestures during the retry window`() = runTest {
         val session = FakeSession()
-        val controller = MFDriveController(session, retryDelayMillis = 50)
+        val controller =
+            MFDriveController(
+                session,
+                retryDelayMillis = 50,
+                elapsedMillis = { testScheduler.currentTime },
+            )
         session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
         session.outcomes.add(MFDriveOutcome.Complete)
 
@@ -181,33 +196,78 @@ class MFDriveControllerTest {
     }
 
     @Test
-    fun `exhausted retries surface once, clear pending, and reset for the next gesture`() =
+    fun `a refusal run gives the command channel back inside the wall-clock budget`() =
         runTest {
+            // #272: budgeting refusals by ITERATION COUNT let a drag own cameraCommandMutex for
+            // tens of seconds — and changeAfArea needs that same mutex, so tap-to-focus went dead
+            // until a shutter release. The budget is wall clock, and the run must end at it.
             val session = FakeSession()
-            val controller = MFDriveController(session, retryDelayMillis = 1)
+            val controller =
+                MFDriveController(
+                    session,
+                    retryDelayMillis = 400,
+                    elapsedMillis = { testScheduler.currentTime },
+                )
             val messages = mutableListOf<String>()
             controller.onRefusalExhausted = { messages += it }
-            // 17 straight refusals: first attempt + 16 bounded retries.
-            repeat(17) {
+            repeat(50) {
                 session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2013))
             }
 
             controller.drive(this, 200)
             advanceUntilIdle()
 
-            // First attempt + 16 bounded retries, then ONE explanation carrying the code.
-            assertEquals(17, session.drives.size)
+            // t=0, 400, 800 retry; at t=1200 the budget is spent and the run stops.
+            assertEquals(4, session.drives.size)
+            assertTrue(testScheduler.currentTime <= MFDriveController.REFUSAL_RETRY_BUDGET_MILLIS)
             assertEquals(1, messages.size)
             assertTrue(messages.single().contains("0x2013"))
 
-            // The counter reset: a later gesture retries from scratch and lands.
+            // The budget reset: a later gesture retries from scratch and lands.
+            session.outcomes.clear()
             session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
             session.outcomes.add(MFDriveOutcome.Complete)
             controller.drive(this, 60)
             advanceUntilIdle()
-            assertEquals(19, session.drives.size)
+            assertEquals(6, session.drives.size)
             assertEquals(1, messages.size)
         }
+
+    @Test
+    fun `cancel drops the queue so a focus tap is never stuck behind a drive`() = runTest {
+        // #272: an AF tap cancels the drive before calling changeAfArea. Nothing queued may
+        // survive it, and no second drain may start alongside the cancelled one.
+        val session = FakeSession()
+        val controller =
+            MFDriveController(
+                session,
+                retryDelayMillis = 400,
+                elapsedMillis = { testScheduler.currentTime },
+            )
+        val gate = CompletableDeferred<Unit>()
+        session.gate = gate
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+        repeat(20) { session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019)) }
+
+        controller.drive(this, 100)
+        testScheduler.runCurrent()
+        // Operator keeps scrubbing, then taps the feed mid-drive.
+        controller.drive(this, 80)
+        controller.cancel()
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        // Only the drive already on the wire ran; the queued pulses were dropped, and the
+        // refusal never retried — the channel is free for changeAfArea.
+        assertEquals(listOf(false to 100), session.drives)
+
+        // …and the dial still works right after: no latched "undrivable" state.
+        session.outcomes.clear()
+        session.outcomes.add(MFDriveOutcome.Complete)
+        controller.drive(this, 40)
+        advanceUntilIdle()
+        assertEquals(listOf(false to 100, false to 40), session.drives)
+    }
 
     @Test
     fun `an Invalid_Status refusal points the operator to an AF focus mode`() = runTest {
@@ -215,10 +275,15 @@ class MFDriveControllerTest {
         // Invalid_Status (0xA004). The exhaustion message must send the operator to an AF mode
         // (not the old "make sure focus mode is MF" copy) and it carries no raw code.
         val session = FakeSession()
-        val controller = MFDriveController(session, retryDelayMillis = 1)
+        val controller =
+            MFDriveController(
+                session,
+                retryDelayMillis = 400,
+                elapsedMillis = { testScheduler.currentTime },
+            )
         val messages = mutableListOf<String>()
         controller.onRefusalExhausted = { messages += it }
-        repeat(17) { session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0xA004)) }
+        repeat(20) { session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0xA004)) }
 
         controller.drive(this, 200)
         advanceUntilIdle()

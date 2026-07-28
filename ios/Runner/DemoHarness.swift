@@ -16,6 +16,8 @@ enum DemoHarness {
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
     /// first downloaded clip (read in `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
+    /// `ZC_DEMO_SPLIT=vertical|horizontal` stages the 50/50 Log-vs-LUT comparison.
+    static let splitComparison = value("ZC_DEMO_SPLIT")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
@@ -171,6 +173,15 @@ enum DemoHarness {
 
 #if DEBUG
     extension DemoHarness {
+        /// The DISP mode a capture is aimed at: the Edit view's mode when one is named, else the
+        /// mode the run launches into.
+        static func demoDispMode(_ env: [String: String]) -> DispMode? {
+            if let raw = env["ZC_DEMO_CHROME_EDIT"], let mode = DispMode(rawValue: raw) {
+                return mode
+            }
+            return env["ZC_DEMO_DISP"].flatMap(DispMode.init(rawValue:))
+        }
+
         /// Stages the model from the launch environment (`SIMCTL_CHILD_ZC_DEMO_*` via
         /// `simctl launch`). No effect in normal launches.
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {
@@ -198,6 +209,17 @@ enum DemoHarness {
                 model.demoSeedFocusPair()
                 if model.liveFrameImage == nil {
                     model.demoSelectFeedImage(1)
+                }
+                if env["ZC_DEMO_CODEC_DESCRIPTOR"] == "1" {
+                    // Demo/screenshot affordance: stage a Z6III-shaped `MovFileType` descriptor
+                    // (H.264 8-bit, plus H.265 at BOTH depths) and put the body on H.265 10-bit,
+                    // so the CODEC picker's advertised rows — and the bit-depth pair the
+                    // two-variant family earns — can be captured without a camera.
+                    model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+                        fromEnum: [0x0000_0801, 0x0001_0800, 0x0001_0A00, 0x0031_0A03])
+                    model.applyDemoProperty(
+                        .movieFileType,
+                        data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data)
                 }
                 if let raw = env["ZC_DEMO_PICKER"], let picker = CameraPicker(rawValue: raw) {
                     // ZC_DEMO_PICKER_MODE opens the picker on a specific mode tab (e.g. WB Tint).
@@ -271,6 +293,20 @@ enum DemoHarness {
                     } else if let look = MonitorLUT(rawValue: raw) {
                         model.assistConfiguration.selectedLUT = .builtIn(look)
                         model.setAssist(.lut, visible: true)
+                    }
+                }
+                if let raw = env["ZC_DEMO_SPLIT"] {
+                    // Demo/screenshot affordance: stage the 50/50 Log-vs-LUT comparison.
+                    // `vertical` / `horizontal`; anything else switches it off.
+                    let orientation: SplitComparisonOrientation? =
+                        switch raw {
+                        case "vertical": .vertical
+                        case "horizontal": .horizontal
+                        default: nil
+                        }
+                    model.preferences.splitComparisonEnabled = orientation != nil
+                    if let orientation {
+                        model.preferences.splitComparisonOrientation = orientation
                     }
                 }
                 if let path = env["ZC_DEMO_RED_ZIP"] {
@@ -375,6 +411,54 @@ enum DemoHarness {
                             in: CGRect(x: 0, y: 0, width: 1, height: 1))
                     }
                 }
+                if let raw = env["ZC_DEMO_CLEAN_PIN"] {
+                    // Demo/screenshot affordance: pin assist tools to clean view (comma-separated
+                    // raw values, e.g. "WAVE,GUIDES") so DISP 2 can be captured both bare and
+                    // with exactly one tool kept.
+                    for value in raw.split(separator: ",") {
+                        if let tool = MonitorAssistTool(rawValue: String(value)) {
+                            model.preferences.cleanViewPinnedTools.insert(tool)
+                        }
+                    }
+                }
+                if let raw = env["ZC_DEMO_CHROME_HIDE"] {
+                    // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated
+                    // `DisplayChromeVisibility.Section` raw values, e.g.
+                    // "lockButton,railMedia,focusBox") so each hidden state can be captured
+                    // headlessly — simctl cannot drive the Settings switches. Applies to the DISP
+                    // mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else the current one,
+                    // on the capture side the body reports.
+                    let target = Self.demoDispMode(env) ?? model.displayMode
+                    let capture = model.captureLayoutMode
+                    var chrome = model.preferences.chrome(for: target, capture: capture)
+                    for value in raw.split(separator: ",") {
+                        // The short names the earlier hooks used, then the section raw values.
+                        let section: DisplayChromeVisibility.Section? =
+                            switch value {
+                            case "lock": .lockButton
+                            case "battery": .batteryIndicators
+                            case "topbar": .statusBar
+                            case "toolbar": .assistToolbar
+                            case "values": .cameraValues
+                            default: DisplayChromeVisibility.Section(rawValue: String(value))
+                            }
+                        if let section, chrome.isVisible(section) { chrome.toggle(section) }
+                        // "rail" is the retired whole-rail blob — expand it to the four controls.
+                        if value == "rail" {
+                            for control in DisplayChromeVisibility.Section.railControls
+                            where chrome.isVisible(control) {
+                                chrome.toggle(control)
+                            }
+                        }
+                    }
+                    model.preferences.setChrome(chrome, for: target, capture: capture)
+                }
+                if let mode = Self.demoDispMode(env), env["ZC_DEMO_CHROME_EDIT"] != nil {
+                    // Demo/screenshot affordance: open the Edit view on one DISP mode
+                    // (ZC_DEMO_CHROME_EDIT=live|clean|command). simctl cannot tap the Settings
+                    // button, and the eye badges only exist while the editor is up.
+                    model.beginChromeEditing(mode)
+                }
                 if let raw = env["ZC_DEMO_ASSIST_ON"] {
                     // Demo/screenshot affordance: switch one or more assist tools on (comma-separated
                     // raw values, e.g. "FALSE,PEAK,WAVE") so the live monitor tools can be captured.
@@ -393,7 +477,12 @@ enum DemoHarness {
                         model.demoSeedAudioMonitor()
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
-                    if model.scopesActive,
+                    // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
+                    // view capture with a pinned scope still gets samples.
+                    let scopesOn = MonitorAssistTool.scopeTools.contains {
+                        model.preferences.visibleAssistTools(for: .liveView).contains($0)
+                    }
+                    if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
                     {
                         Task { await model.refreshScopes(from: mock) }
@@ -461,6 +550,16 @@ enum DemoHarness {
                 }
                 if env["ZC_DEMO_REC"] == "1" {
                     model.cameraState = model.cameraState.updating(recordState: .recording)
+                }
+                if let raw = env["ZC_DEMO_SESSION_LOST"] {
+                    // Demo/screenshot affordance: stage the dropped-session recovery affordance
+                    // over the held frame (`retrying` mid-loop, anything else = budget spent), so
+                    // the #253/#254 recovery UI can be captured without unplugging a real camera.
+                    model.connectionProgressDeviceName = "Nikon ZR"
+                    model.forceSessionRecoveryState(
+                        raw == "retrying"
+                            ? .retrying(attempt: 2, maxAttempts: 8)
+                            : .waitingForOperator(attemptsMade: 8))
                 }
                 if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
                     // Demo/screenshot affordance: start in a specific display mode (live/clean/command).

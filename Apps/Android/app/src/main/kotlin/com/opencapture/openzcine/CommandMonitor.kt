@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -67,6 +68,7 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.openzcine.core.CodecBitDepthOption
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.settings.PanelCloseButton
 import kotlin.math.floor
@@ -143,6 +145,13 @@ internal data class CommandControlRequest(
     val control: CameraControl,
     val currentValue: String,
     val options: List<String>,
+    /**
+     * Bit depths flanking [currentValue] when the core reported a depth choice for that codec
+     * row. Empty for every other control and for codecs the body advertises at one depth.
+     */
+    val bitDepths: List<CodecBitDepthOption> = emptyList(),
+    /** Caption of the depth the body is recording at, so the pair can fill the active side. */
+    val bitDepthSelection: String? = null,
 )
 
 /** The user-visible outcome of an accepted or rejected control write. */
@@ -490,7 +499,23 @@ internal fun commandDashboardPresentation(
             kind = kind,
             title = title,
             value = displayValue ?: currentValue,
-            request = CommandControlRequest(title, control, currentValue, options),
+            request =
+                CommandControlRequest(
+                    title,
+                    control,
+                    currentValue,
+                    options,
+                    // Depth buttons belong to the codec drum only, and only to the row the core
+                    // grouped as a depth choice — never to resolution.
+                    bitDepths =
+                        if (control == CameraControl.CODEC) {
+                            capabilities.codecBitDepths
+                        } else {
+                            emptyList()
+                        },
+                    bitDepthSelection =
+                        snapshot.codecBitDepth.takeIf { control == CameraControl.CODEC },
+                ),
         )
     }
 
@@ -541,7 +566,10 @@ internal fun commandDashboardPresentation(
                     strings.resolve(R.string.command_title_mode),
                     snapshot.exposureMode,
                     CameraControl.EXPOSURE_MODE,
-                    EXPOSURE_MODE_OPTIONS,
+                    // The body's own program enum, in its order; the ladder below is only a
+                    // fallback and deliberately holds no U banks (#274).
+                    capabilities.options(CameraControl.EXPOSURE_MODE)
+                        .ifEmpty { EXPOSURE_MODE_OPTIONS },
                 ),
             CommandTileKind.ISO to
                 run {
@@ -1088,7 +1116,13 @@ internal fun CameraPropertySnapshot.withOptimisticControlValue(
             }
         CameraControl.SHUTTER_LOCK -> copy(shutterLocked = label == "Locked")
         CameraControl.RESOLUTION_FRAMERATE -> copy(resolutionFrameRate = label)
-        CameraControl.CODEC -> copy(codecSelection = label)
+        // A bit-depth button writes a variant label ("H.265 10-bit"), which is not a drum row —
+        // resolve it back through the core-supplied table so the drum keeps its row and only the
+        // depth moves. Never by pulling the depth out of the label.
+        CameraControl.CODEC ->
+            controlCapabilities.codecBitDepths.firstOrNull { it.writeValue == label }
+                ?.let { copy(codecSelection = it.codec, codecBitDepth = it.label) }
+                ?: copy(codecSelection = label)
         CameraControl.VIBRATION_REDUCTION -> copy(vibrationReduction = label)
         CameraControl.ELECTRONIC_VR -> copy(electronicVr = label)
         CameraControl.STILL_DRIVE -> copy(stillCaptureMode = label)
@@ -1104,7 +1138,12 @@ internal fun CameraPropertySnapshot.withOptimisticControlValue(
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
 private const val COLOR_TEMPERATURE_MODE = "Color temp"
 
-private val EXPOSURE_MODE_OPTIONS = listOf("Auto", "P", "A", "S", "M", "U1", "U2", "U3")
+/**
+ * Conservative MODE fallback for a body that has not advertised its
+ * `ExposureProgramMode` enum. No U banks — a body that has them says so, and
+ * inferring them offered a Zf three user modes it does not have (#274).
+ */
+private val EXPOSURE_MODE_OPTIONS = listOf("Auto", "P", "A", "S", "M")
 
 /**
  * iOS `CameraPicker.options` fallbacks for the resolution/codec drums when the
@@ -1153,12 +1192,19 @@ internal fun CommandDashboard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RecordChip(recording)
-                // iOS CommandTimecodeReadout: monospaced 60pt.
-                RetainedCameraTimecodeReadout(
-                    retention = timecodeRetention,
-                    sessionState = sessionState,
-                    sizeSp = 60f,
-                )
+                // iOS CommandTimecodeReadout: monospaced 60pt, shrinking into whatever the
+                // chip leaves (`minimumScaleFactor(0.78)`) — the hero timecode is a hair too
+                // wide for the column on a 16:9 landscape deck, where the dashboard narrows to
+                // clear the side rail.
+                BoxWithConstraints(Modifier.weight(1f)) {
+                    FitScale(maxWidth) {
+                        RetainedCameraTimecodeReadout(
+                            retention = timecodeRetention,
+                            sessionState = sessionState,
+                            sizeSp = 60f,
+                        )
+                    }
+                }
             }
             CommandHealthStrip(
                 presentation = presentation,
@@ -1327,10 +1373,11 @@ private fun CommandStatusBlock(
         )
         Text(
             value,
-            // iOS: 12 medium mono
+            // iOS: 12 medium mono, shrinking to fit (`minimumScaleFactor(0.55)`).
             style = chromeStyle(12f, FontWeight.Medium, mono = true),
             color = if (good) LiveDesign.good else LiveDesign.text,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(6.6.sp, 12.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
     }
@@ -1574,9 +1621,11 @@ private fun CommandTile(
     ) {
         Text(
             tile.title.uppercase(),
+            // iOS CommandTile title: 10 bold, shrinking to fit (`minimumScaleFactor(0.64)`).
             style = chromeStyle(10f, FontWeight.Bold),
             color = LiveDesign.faint,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(6.4.sp, 10.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1812,11 +1861,13 @@ private fun CommandSmallTile(
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        // Both shrink to fit rather than clip, matching iOS's 0.66 / 0.55 minimum scale factors.
         Text(
             cell.title.uppercase(),
             style = chromeStyle(9f, FontWeight.Bold),
             color = LiveDesign.muted,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(5.9.sp, 9.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
         Text(
@@ -1824,6 +1875,7 @@ private fun CommandSmallTile(
             style = chromeStyle(15f, FontWeight.Medium, mono = true),
             color = valueColor,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(8.2.sp, 15.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
     }

@@ -10,6 +10,10 @@ public enum PTPEventCode: UInt16, Sendable {
     case objectAdded = 0x4002
     /// Standard PIMA 15740 event: the capture run finished writing (one per destination).
     case captureComplete = 0x400D
+    /// Standard PIMA 15740 event: a device property changed ON THE CAMERA. Parameter `e1` carries
+    /// the property code. This is how a body-side dial, ring, or menu edit reaches the app promptly
+    /// — the round-robin poll visits any one property only every ~20 s.
+    case devicePropChanged = 0x4006
     case movieRecordInterrupted = 0xC105
     case movieRecordComplete = 0xC108
     case movieRecordStarted = 0xC10A
@@ -72,6 +76,16 @@ public struct PTPEvent: Equatable, Sendable {
         return parameters.first
     }
 
+    /// The device property a `DevicePropChanged` (`0x4006`) event names, when the shared core
+    /// decodes that property. Nikon puts the property code in the first event parameter.
+    ///
+    /// Nil for any other event, for a malformed event with no parameters, and for a property code
+    /// this build does not model — an announcement alone is not evidence the app can decode it.
+    public var changedPropertyCode: PTPPropertyCode? {
+        guard eventCode == .devicePropChanged, let raw = parameters.first else { return nil }
+        return PTPPropertyCode(rawValue: raw)
+    }
+
     /// Infers movie record state from Nikon record lifecycle events (`0xC10A` started,
     /// `0xC108` complete, `0xC105` interrupted). Returns nil for unrelated events.
     public var inferredRecordState: RecordState? {
@@ -80,15 +94,96 @@ public struct PTPEvent: Equatable, Sendable {
             return .recording
         case .movieRecordComplete, .movieRecordInterrupted:
             return .standby
-        case .objectAdded, .captureComplete, .unknown:
+        case .objectAdded, .captureComplete, .devicePropChanged, .unknown:
             return nil
         }
     }
 }
 
-/// Parses the event array a Nikon body returns from the `GetEventEx` (0x941C) poll — the
-/// channel through which capture events (ObjectAdded, CaptureComplete) actually arrive; the
-/// PTP-IP event socket does not carry them, so a shutter fired ON THE BODY only surfaces here.
+/// Ordered, deduplicated queue of properties the CAMERA announced as changed
+/// (`DevicePropChanged` `0x4006`) and that a shell has not re-read yet.
+///
+/// The announcement carries no value, so it can only schedule an authoritative read. Order and
+/// batching both matter. One detent of an aperture ring makes a body announce a burst — the
+/// aperture the operator turned plus its dependents (exposure indicator, working ISO, …). Draining
+/// that one entry per poll tick out of an unordered `Set` let the burst accumulate and could pass
+/// over the one value the operator was watching, tick after tick: the "updates extremely slowly"
+/// half of #268. Announcements drain oldest-first, in whole batches.
+public struct CameraAnnouncedPropertyQueue: Equatable, Sendable {
+    /// Maximum properties re-read in ONE poll tick.
+    ///
+    /// Each entry is a PTP round trip on the same channel that carries the live-view feed, so an
+    /// unbounded batch from a chatty body would monopolise the loop and hitch the picture. Four
+    /// covers a normal ring-detent burst whole; anything past it stays queued for the next tick
+    /// rather than being dropped — a dropped announcement is a readout stuck until the round-robin
+    /// comes back round ~20 s later.
+    public static let batchLimit = 4
+
+    /// Frames between control safe points while nothing has been announced — the background
+    /// round-robin cadence, deliberately slow to spare the radio and the feed.
+    public static let idlePollStride = 8
+
+    /// Frames between control safe points while an announcement is pending.
+    ///
+    /// A camera-announced change is the operator's own hand on the body, so it jumps the
+    /// background cadence: at 24 fps this is ~83 ms rather than ~330 ms. Bounded at every-other
+    /// frame on purpose — servicing every frame would let a body that announces continuously turn
+    /// the poll loop into a per-frame PTP round trip, which is the radio traffic the thermal audit
+    /// cares about.
+    public static let announcedPollStride = 2
+
+    /// Frames the shell should wait before its next control safe point.
+    public var pollStride: Int { isEmpty ? Self.idlePollStride : Self.announcedPollStride }
+
+    /// Creates an empty queue.
+    public init() {}
+
+    /// Pending announcements, oldest first.
+    public private(set) var pending: [PTPPropertyCode] = []
+
+    /// Whether nothing is waiting to be re-read.
+    public var isEmpty: Bool { pending.isEmpty }
+
+    /// Records one announced change, ignoring properties the monitor cannot decode.
+    ///
+    /// A property already pending keeps its original position: a body that re-announces the same
+    /// code while the operator keeps turning must not push the rest of the burst further back.
+    public mutating func note(_ property: PTPPropertyCode) {
+        guard PTPPropertyCode.isMonitoredChange(property), !pending.contains(property) else {
+            return
+        }
+        pending.append(property)
+    }
+
+    /// Drops a property whose current value the shell just established another way (a confirmed
+    /// write readback), so the queue does not spend a read re-confirming it.
+    public mutating func cancel(_ property: PTPPropertyCode) {
+        pending.removeAll { $0 == property }
+    }
+
+    /// Takes the next properties to read, oldest first, capped at `limit`.
+    public mutating func nextBatch(limit: Int = batchLimit) -> [PTPPropertyCode] {
+        let count = min(max(limit, 0), pending.count)
+        defer { pending.removeFirst(count) }
+        return Array(pending.prefix(count))
+    }
+
+    /// Forgets every pending announcement — used when a session ends and its snapshot is reset.
+    public mutating func removeAll() {
+        pending.removeAll()
+    }
+}
+
+/// Parses the event array a Nikon body returns from the `GetEventEx` (0x941C) poll.
+///
+/// This queue — not the PTP-IP event socket — is the channel Nikon bodies use for the events the
+/// monitor depends on: capture events (`ObjectAdded`, `CaptureComplete`) from a shutter fired ON
+/// THE BODY, and `DevicePropChanged` (`0x4006`) from a body-side dial, ring, or menu edit. It is
+/// how libgphoto2 reads Nikon events too — `ptp_check_event` routes a Nikon body to the vendor
+/// event queue instead of the asynchronous channel. So the shells poll it in EVERY chrome: gating
+/// the poll to photography (where it was introduced, for body-fired stills) left cinema mode with
+/// no fast path for a body-side setting change at all (#268). Whether a given event is actionable
+/// stays with each consumer, which is where the chrome test belongs.
 ///
 /// Layout (little-endian): `NumberOfElements(UINT32)`, then per element `EventCode(UINT16)`,
 /// `NumParameters(UINT16)`, `NumParameters × Parameter(UINT32)`. Element count is capped at 2048.

@@ -33,12 +33,17 @@ public enum CameraCaptureSelector: String, Equatable, Sendable, CaseIterable {
 /// the extended-continuous mode are body-dependent). Bodies with a release-mode
 /// dial report `quickSetting` when the dial sits on the quick position and move
 /// the effective mode to `StillCaptureModeQuick` (0xD0F6).
+///
+/// Declaration order is the body's own release-mode order — Single, CL, CH, CH+, then the
+/// high-speed frame-capture positions — NOT ascending raw value. `allCases` is the picker's
+/// fallback list, and ordering it by raw put CH ahead of CL, which is neither the Z6III's order
+/// nor any Z body's (#274). A connected body's advertised descriptor still wins over this.
 public enum StillDriveMode: UInt16, Equatable, Sendable, CaseIterable {
     case single = 0x0001
-    case continuousHigh = 0x0002
     case continuousLow = 0x8010
-    case selfTimer = 0x8011
+    case continuousHigh = 0x0002
     case continuousHighExtended = 0x8019
+    case selfTimer = 0x8011
     case quickSetting = 0x8100
     case highSpeedFrameC15 = 0x810F
     case highSpeedFrameC30 = 0x811E

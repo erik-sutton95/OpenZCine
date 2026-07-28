@@ -1360,4 +1360,225 @@ extension RunnerTests {
             MetalFeedFrameBaker.bakeSize(source: CGRect.infinite.size, drawable: drawable), drawable
         )
     }
+
+    /// The Focus dial is opt-in, and switching the default off must not overrule an operator who
+    /// already made the choice — in either direction. The stored key IS the migration: it only
+    /// exists once the FOCUS-popup toggle wrote it.
+    @MainActor
+    func testFocusDialDefaultsOffAndPreservesAnExplicitOperatorChoice() {
+        let key = "mfDriveScrubEnabled"
+        let original = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let original {
+                UserDefaults.standard.set(original, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+
+        // Fresh install / settings reset: nothing stored, so the dial is off — and a new model
+        // (the relaunch case) reads the same answer.
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertFalse(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertFalse(NativeAppModel().mfDriveScrubEnabled)
+
+        // An operator who deliberately switched the dial ON keeps it across the default change.
+        PreferencesStore.saveMFScrubEnabled(true)
+        XCTAssertTrue(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertTrue(NativeAppModel().mfDriveScrubEnabled)
+
+        // …and one who deliberately switched it OFF is never migrated back on.
+        PreferencesStore.saveMFScrubEnabled(false)
+        XCTAssertFalse(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertFalse(NativeAppModel().mfDriveScrubEnabled)
+    }
+
+    /// Preference off hides the dial whatever else is true — mode included, since the chrome no
+    /// longer gates it. (Visible-when-on needs a live focus mode from a camera; that is the
+    /// simulator/hardware check.)
+    @MainActor
+    func testFocusDialStaysHiddenWhileThePreferenceIsOff() {
+        let key = "mfDriveScrubEnabled"
+        let original = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let original {
+                UserDefaults.standard.set(original, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        let model = NativeAppModel()
+        model.mfDriveScrubEnabled = false
+        model.connection = .connected
+        model.activePanel = nil
+
+        XCTAssertFalse(model.showsMFDriveScrub)
+    }
+
+    /// The camera-values strip must not migrate to the left edge when the assist toolbar is
+    /// hidden — an operator who configures DISP 2 with only the values on would see them move as
+    /// soon as they left the Edit view, which renders with both bars mounted.
+    func testBottomBandKeepsEachStripOnItsOwnSide() {
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: false, assistVisible: true),
+            .leading, "with both bars up the assist strip fills the space and values land trailing")
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: false, assistVisible: false),
+            .trailing, "values alone must stay on the right, not slide to the left edge")
+        XCTAssertEqual(
+            MonitorBottomBandAlignment.alignment(photography: true, assistVisible: false),
+            .center, "photography centres its shared strip under the centred feed")
+    }
+
+    /// #272: no focus-drive exit path may leave focus commands owned. Cancelling with nothing in
+    /// flight, twice, and with no session must all be no-ops that leave the dial usable.
+    @MainActor
+    func testCancellingAFocusDriveIsAlwaysSafeAndNeverLatches() {
+        let model = NativeAppModel()
+
+        model.driveManualFocus(pulses: 400)
+        model.cancelManualFocusDrive()
+        model.cancelManualFocusDrive()
+
+        // Nothing latched: the dial still reports a usable, re-armable position.
+        model.resetMFDriveDial()
+        XCTAssertEqual(model.mfDriveNetPulses, 0)
+        XCTAssertNil(model.mfDriveAtEnd)
+    }
+
+    // MARK: - CODEC bit-depth pair (#276 follow-up)
+
+    /// The Z6III's `MovFileType` enum: H.264 once, H.265 at both depths.
+    private static let hevcBothDepthsEnum: [UInt32] = [0x0000_0801, 0x0001_0800, 0x0001_0A00]
+
+    /// The codec drum lists ONE H.265 row, and the depth beside it is whatever the body's own
+    /// readback reports — never a remembered UI choice that could disagree with the camera.
+    /// Picking a depth writes that exact advertised value; settling the drum on a family carries
+    /// the depth the body is currently recording at, and only falls back to the family's lowest
+    /// advertised depth when the body's current depth is not one it offers.
+    @MainActor
+    func testCodecRowsCarryTheirBitDepthAndKeepItAcrossAFamilySwitch() {
+        let model = NativeAppModel()
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: Self.hevcBothDepthsEnum)
+
+        // One row per family; only the two-variant family offers a depth choice.
+        XCTAssertEqual(model.codecOptions, ["H.264", "H.265"])
+        XCTAssertEqual(model.codecFamilies.map(\.offersBitDepthChoice), [false, true])
+        let hevc = model.codecFamilies[1]
+        XCTAssertEqual(hevc.depths.map(\.bitDepthLabel), ["8-bit", "10-bit"])
+
+        // Body on H.265 8-bit: the drum centres on the family row, the pair reads 8-bit.
+        model.applyDemoProperty(
+            .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0800).data)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.265")
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 8)
+
+        // Tapping "10-bit" writes the advertised 10-bit value.
+        model.applyPickerValue("H.265 10-bit", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 10)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.265")
+
+        // Settling the drum on a family row carries the depth the body is on: H.264 is 8-bit, so
+        // coming back to H.265 records 8-bit, and the pair — not a second row — moves it to 10.
+        model.applyPickerValue("H.264", for: .codec)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.264")
+        model.applyPickerValue("H.265", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0800)
+        model.applyPickerValue("H.265 10-bit", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0A00)
+    }
+
+    /// A depth the body is on but does not advertise for the codec being selected must not be
+    /// carried across — the row falls back to that family's lowest advertised depth instead of
+    /// writing a combination the body never offered.
+    @MainActor
+    func testAFamilyThatCannotHoldTheCurrentDepthFallsBackToItsLowest() {
+        let model = NativeAppModel()
+        // R3D NE is 12-bit only; H.265 is offered at 8 and 10.
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: [0x0031_0C03, 0x0001_0800, 0x0001_0A00])
+        model.applyDemoProperty(
+            .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: 0x0031_0C03).data)
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 12)
+
+        model.applyPickerValue("H.265", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0800)
+    }
+
+    /// A body that advertises one variant of a codec gets no depth buttons at all — a dead button
+    /// for a depth the body cannot record is exactly what this feature must not ship.
+    @MainActor
+    func testASingleVariantCodecOffersNoBitDepthChoice() {
+        let model = NativeAppModel()
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: [0x0031_0A03, 0x0002_0C02, 0x0001_0A01])
+        XCTAssertEqual(model.codecOptions, ["R3D NE", "N-RAW", "H.265"])
+        XCTAssertTrue(model.codecFamilies.allSatisfy { !$0.offersBitDepthChoice })
+    }
+
+    // MARK: - Picker option sourcing (#274)
+
+    /// Every function picker must name the PTP property whose descriptor drives its drum. A nil
+    /// here is a picker silently rendering the app's fixed union again — the whole #274 defect.
+    /// (Which property each one names is asserted in the shared core's `PickerOptionPolicyTests`,
+    /// where the descriptor decoders live; this target does not link the core module.)
+    func testEveryFunctionPickerNamesItsDescriptorProperty() {
+        let sourced: [(CameraPicker, Int)] = [
+            (.mode, 0), (.stillMode, 0), (.stillMode, 1), (.stillDrive, 0),
+            (.stillFocus, 0), (.stillFocus, 1), (.stillFocus, 2),
+            (.stillFlash, 0), (.stillMeter, 0), (.stillQuality, 0), (.stillPicture, 0),
+            (.focus, 0), (.focus, 1), (.focus, 2),
+        ]
+        for (picker, mode) in sourced {
+            XCTAssertNotNil(
+                picker.optionProperty(forMode: mode),
+                "\(picker.rawValue) mode \(mode) is not sourced from the camera")
+        }
+        // Focus mode / area / subject are three separate Nikon settings, so the three tabs must
+        // read three different properties — never collapsed onto one.
+        for picker: CameraPicker in [.focus, .stillFocus] {
+            let properties = (0...2).compactMap { picker.optionProperty(forMode: $0) }
+            XCTAssertEqual(Set(properties).count, 3, "\(picker.rawValue) conflates its focus tabs")
+        }
+        // The Drive picker's two Timer tabs are app state, not camera enums.
+        XCTAssertNil(CameraPicker.stillDrive.optionProperty(forMode: 1))
+        XCTAssertNil(CameraPicker.stillDrive.optionProperty(forMode: 2))
+    }
+
+    /// The fallback a body without a descriptor gets must be conservative: no user banks (the
+    /// reported Zf), and the drive ladder in the body's release order (the reported Z6III).
+    func testPickerFallbackLaddersAreConservativeAndInBodyOrder() {
+        for picker: CameraPicker in [.mode, .stillMode] {
+            XCTAssertFalse(
+                picker.options.contains { $0.hasPrefix("U") },
+                "\(picker.rawValue) invents user banks without a descriptor")
+        }
+        XCTAssertEqual(CameraPicker.stillMode.modes[0].options, ["Auto", "P", "S", "A", "M"])
+        XCTAssertEqual(
+            CameraPicker.stillDrive.options,
+            [
+                "Single", "Continuous L", "Continuous H", "Continuous H+", "C15", "C30", "C60",
+                "C120",
+            ]
+        )
+    }
+
+    /// Focus AREA and subject DETECTION are separate Nikon settings, and neither tab may wear the
+    /// other's name. The core suite proves these exact labels encode back to their own raw values.
+    func testFocusAreaLabelsNameTheBodysSettings() {
+        for picker: CameraPicker in [.focus, .stillFocus] {
+            let areas = picker.modes[1].options
+            let subjects = picker.modes[2].options
+            // The bare forms are the reported confusion: "Subject" reads as the detection tab and
+            // "3D" is not what the body calls 3D-tracking.
+            XCTAssertFalse(areas.contains("Subject"), "\(picker.rawValue) area tab says 'Subject'")
+            XCTAssertFalse(areas.contains("3D"), "\(picker.rawValue) area tab says bare '3D'")
+            // Only "Auto" legitimately names a position in both spaces.
+            XCTAssertTrue(Set(areas).intersection(subjects).isSubset(of: ["Auto"]))
+        }
+        // Each chrome's own tracking position, spelled the way the body spells it.
+        XCTAssertTrue(CameraPicker.focus.modes[1].options.contains("Subject tracking"))
+        XCTAssertTrue(CameraPicker.stillFocus.modes[1].options.contains("3D tracking"))
+    }
 }

@@ -3,7 +3,8 @@ layout(location = 0) in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D uFeed;
 layout(set = 0, binding = 1) uniform sampler2D uLut;
-// std140 layout must match GpuParams in live_feed_vk_renderer.cpp.
+// std140 layout must match GpuParams in live_feed_vk_renderer.cpp — offsets in the comments there,
+// including the pad members that keep the two in step. Edit both, then `just android-shaders`.
 layout(set = 0, binding = 2) uniform Params {
     float lutSize;
     float peakingOn;
@@ -17,10 +18,16 @@ layout(set = 0, binding = 2) uniform Params {
     float zebraHighlight;
     float zebraMidtone;
     float aspectFill;
+    // 50/50 Log-vs-LUT comparison: 1 = on, and 1 = a vertical boundary (Log left, LUT right)
+    // against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
+    float splitOn;
+    float splitVertical;
+    float splitPad;
     vec4 deLogCurve0to3;
     float deLogCurve4;
+    float deLogPad;
     vec2 sourceSize;
-    float pad;
+    vec4 pad;
 } u;
 
 const vec3 LUMA709 = vec3(0.2126, 0.7152, 0.0722);
@@ -72,6 +79,20 @@ vec3 grade(vec3 c) {
 //
 // The de-log members of the uniform block are no longer read here; they are kept so
 // the std140 layout matches GpuParams unchanged.
+//
+// Whether this fragment belongs to the graded half of a 50/50 comparison — always true when the
+// comparison is off, so the LUT stays one predicate rather than two code paths.
+//
+// Takes the RAW `vUv`, not the flipped sampling coordinate: this is a question about where the
+// pixel lands for the operator, and `vUv` is viewport position by construction
+// (`gl_Position = vUv * 2 - 1`, and Vulkan's clip y = -1 is the viewport's top edge). The viewport
+// is already clamped to the letterboxed content rect in `drawFrame`, so 0.5 is the middle of the
+// visible image and the bars are outside this coordinate space entirely.
+bool splitIsGradedSide(vec2 viewportUv) {
+    if (u.splitOn < 0.5) return true;
+    return u.splitVertical > 0.5 ? viewportUv.x >= 0.5 : viewportUv.y >= 0.5;
+}
+
 float sourceGrey(vec2 uv) {
     vec3 c = texture(uFeed, uv).rgb;
     return (c.r + c.g + c.b) / 3.0;
@@ -101,7 +122,7 @@ float peakingRoberts(float a, float b, float c, float d) {
 void main() {
     vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
     vec3 source = texture(uFeed, uv).rgb;
-    vec3 color = grade(source);
+    vec3 color = splitIsGradedSide(vUv) ? grade(source) : source;
 
     if (u.peakingOn > 0.5) {
         vec2 sourceSize = max(u.sourceSize, vec2(1.0));

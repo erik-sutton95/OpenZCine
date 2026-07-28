@@ -56,6 +56,18 @@ import Testing
     #expect(decoded == .builtIn(.log3G10Rec709))
 }
 
+@Test func contributedBuiltInSelectionRoundTrips() throws {
+    // Adding a case must not disturb the persisted shape: the new look has to survive a save/load,
+    // and `removedTealOrangeSelectionFallsBackToDefault` above proves an older blob naming a look
+    // this build doesn't have still falls back instead of resetting the whole assist configuration.
+    var config = AssistConfiguration.defaults
+    config.selectedLUT = .builtIn(.r3dNEMonitor)
+    let data = try JSONEncoder().encode(config)
+    #expect(String(decoding: data, as: UTF8.self).contains(#""_0":"R3D NE Monitor""#))
+    let decoded = try JSONDecoder().decode(AssistConfiguration.self, from: data)
+    #expect(decoded.selectedLUT == .builtIn(.r3dNEMonitor))
+}
+
 @Test func storedSelectionsStillRoundTrip() throws {
     let original = LUTSelection.stored(category: .red, fileName: "ipp2.cube")
     let data = try JSONEncoder().encode(original)

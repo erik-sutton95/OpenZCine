@@ -16,9 +16,7 @@ struct PortraitScopesStack: View {
     /// R8), shown in canonical order. Older active scopes stay remembered and reappear in fill.
     /// Photography drops the cinema-only scopes (histogram survives — it applies to stills).
     private var kinds: [MonitorAssistTool] {
-        model.preferences.displayedFitScopes.filter {
-            !model.isPhotographyMode || $0.appliesToPhotography
-        }
+        model.renderedFitScopes
     }
 
     var body: some View {

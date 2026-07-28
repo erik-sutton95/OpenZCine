@@ -15,6 +15,7 @@ import android.hardware.usb.UsbRequest
 import android.os.Build
 import androidx.core.content.ContextCompat
 import java.io.Closeable
+import java.nio.BufferOverflowException
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeoutException
@@ -494,22 +495,210 @@ private fun ptpResetAndSettle(
     android.util.Log.i(tag, "PTP reset did not settle to OK")
 }
 
+/**
+ * The `UsbRequest` / `UsbDeviceConnection` calls the interrupt-event pump makes.
+ *
+ * Isolated behind an interface so JVM tests can model AOSP's queued-flag
+ * semantics exactly. `UsbRequest.cancel()` only asks the kernel to abort the
+ * transfer; the flag that makes a second `queue()` throw
+ * `IllegalStateException("this request is currently queued")` is cleared in
+ * `UsbRequest.dequeue()`, and only `UsbDeviceConnection.requestWait()` calls
+ * that. A fake that cleared the flag on cancel would hide the whole bug.
+ */
+internal interface UsbInterruptChannel {
+    /** Queues [buffer] on the one interrupt-IN request; false when the connection is gone. */
+    fun queue(buffer: ByteBuffer): Boolean
+
+    /** Asks the kernel to abort the queued transfer. Never dequeues it. */
+    fun cancel()
+
+    /**
+     * Waits for one completion.
+     *
+     * @return true when the completion was this channel's own request, which the
+     *   framework has now dequeued; false for a foreign or error completion,
+     *   which leaves our transfer queued.
+     * @throws TimeoutException when nothing completed within [timeoutMillis].
+     */
+    fun awaitCompletion(timeoutMillis: Long): Boolean
+
+    /** Releases the request itself. The connection is closed by its owner. */
+    fun close()
+}
+
+/**
+ * Owns the single interrupt-IN transfer PTP events arrive on.
+ *
+ * One request stays queued across the sparse-event timeouts a healthy body
+ * produces: a Nikon camera only emits events while the host has a transfer
+ * outstanding, and the ZR stalls its switch into application mode until the
+ * StoreRemoved it posts here is drained. A timeout therefore keeps the exact
+ * request and buffer — that path is load bearing.
+ *
+ * Every other outcome must hand the transfer back to the framework before
+ * anything queues again. Cancelling is not enough: AOSP clears its queued flag
+ * inside `dequeue()`, which runs only when `requestWait()` returns the request,
+ * so a cancelled-but-unreaped request rejects the next `queue()` with
+ * `IllegalStateException` and — because that call sat outside the try — killed
+ * the process. When the abort cannot be reaped the connection is gone, so the
+ * pump retires rather than queue again and its owner closes the session.
+ */
+internal class UsbInterruptEventPump(private val channel: UsbInterruptChannel) {
+    /** Serializes reads against teardown so nothing can queue behind a close. */
+    private val lock = Any()
+    /** Non-null exactly while the framework still owns a queued transfer. */
+    private var queuedBuffer: ByteBuffer? = null
+    @Volatile private var retired: Boolean = false
+    @Volatile private var stopped: Boolean = false
+
+    /** True once no further transfer can be queued and the session must close. */
+    fun isRetired(): Boolean = retired
+
+    /**
+     * Queues the first read at claim time, before the event pump starts. Load
+     * bearing for Nikon application mode — never fold this into the first [read].
+     */
+    fun prime(maxBytes: Int) {
+        synchronized(lock) {
+            if (!stopped && !retired && queuedBuffer == null) queueLocked(maxBytes)
+        }
+    }
+
+    /**
+     * @return the event bytes, an empty array for a healthy sparse-channel
+     *   timeout or a dropped oversized event, or null when this read failed.
+     */
+    fun read(maxBytes: Int, timeoutMillis: Int): ByteArray? =
+        synchronized(lock) {
+            if (stopped || retired) return@synchronized null
+            val buffer = queuedBuffer ?: queueLocked(maxBytes) ?: return@synchronized null
+            try {
+                if (!channel.awaitCompletion(timeoutMillis.toLong())) {
+                    // A null (framework error) or foreign completion leaves our
+                    // transfer queued, so it has to be aborted and reaped here.
+                    releaseQueuedLocked()
+                    return@synchronized null
+                }
+                queuedBuffer = null
+                buffer.array().copyOf(buffer.position())
+            } catch (_: TimeoutException) {
+                // A sparse PTP event channel is healthy. The request stays
+                // queued on purpose and its buffer is still framework-owned, so
+                // neither may be dropped. JNI maps the empty read to a typed
+                // Swift timeout and the session keeps draining.
+                ByteArray(0)
+            } catch (_: BufferOverflowException) {
+                // `requestWait` throws this from inside `dequeue`, so the
+                // request is already dequeued and only the payload is lost.
+                // Drop the oversized event; the pump stays healthy.
+                queuedBuffer = null
+                ByteArray(0)
+            } catch (_: Throwable) {
+                releaseQueuedLocked()
+                null
+            }
+        }
+
+    /**
+     * Aborts any queued transfer and retires the pump for good. No drain here:
+     * the owner closes the connection next, and closing its file descriptor is
+     * what discards anything still outstanding. The request itself is released
+     * by [release] once that has happened.
+     */
+    fun shutdown() {
+        stopped = true
+        // Cancel outside the lock: a reader parked in `awaitCompletion` wakes on
+        // the abort, and it has to release the lock before teardown can proceed.
+        // ponytail: worst case this still waits one event timeout (~1s) for a
+        // reader the abort did not wake. Move teardown off the caller's thread
+        // if a detach ever shows up as a main-thread stall.
+        runCatching { channel.cancel() }
+        synchronized(lock) {
+            retired = true
+            queuedBuffer = null
+        }
+    }
+
+    /** Releases the request. Call after the owning connection is closed. */
+    fun release() {
+        synchronized(lock) { runCatching { channel.close() } }
+    }
+
+    /** Queues a fresh buffer, or retires the pump when the framework refuses. */
+    private fun queueLocked(maxBytes: Int): ByteBuffer? {
+        val fresh = ByteBuffer.allocate(maxBytes)
+        // Guarded, not bare: the framework throws for a closed connection or a
+        // request teardown retired underneath us, and this is the exact call
+        // that used to escape the event pump and kill the process.
+        val queued = runCatching { channel.queue(fresh) }.getOrDefault(false)
+        if (!queued) {
+            retired = true
+            return null
+        }
+        queuedBuffer = fresh
+        return fresh
+    }
+
+    /**
+     * Returns a queued transfer to the framework before anything queues again.
+     * A discarded URB is still reaped, so the abort normally comes straight
+     * back; if it never does, the connection is gone and the request can never
+     * be queued again, so the pump retires instead.
+     */
+    private fun releaseQueuedLocked() {
+        if (queuedBuffer == null) return
+        runCatching { channel.cancel() }
+        repeat(DRAIN_ATTEMPTS) {
+            val reaped =
+                runCatching { channel.awaitCompletion(DRAIN_TIMEOUT_MILLIS) }.getOrDefault(false)
+            if (reaped) {
+                queuedBuffer = null
+                return
+            }
+        }
+        retired = true
+    }
+
+    private companion object {
+        const val DRAIN_ATTEMPTS: Int = 4
+        const val DRAIN_TIMEOUT_MILLIS: Long = 50L
+    }
+}
+
+/** Production [UsbInterruptChannel] over one initialized interrupt-IN request. */
+private class UsbRequestInterruptChannel(
+    private val connection: UsbDeviceConnection,
+    private val request: UsbRequest,
+) : UsbInterruptChannel {
+    override fun queue(buffer: ByteBuffer): Boolean = request.queue(buffer)
+
+    override fun cancel() {
+        request.cancel()
+    }
+
+    override fun awaitCompletion(timeoutMillis: Long): Boolean =
+        connection.requestWait(timeoutMillis) === request
+
+    override fun close() {
+        request.close()
+    }
+}
+
 /** Platform byte adapter for one claimed USB PTP interface. */
 private class AndroidUsbPtpTransport(
     private val connection: UsbDeviceConnection,
     private val usbInterface: UsbInterface,
     private val bulkIn: UsbEndpoint,
     private val bulkOut: UsbEndpoint,
-    private val eventRequest: UsbRequest,
+    eventRequest: UsbRequest,
 ) : UsbPtpTransport {
     private val closeLock = Any()
     private val commandLock = Any()
-    private val eventLock = Any()
+    private val eventPump =
+        UsbInterruptEventPump(UsbRequestInterruptChannel(connection, eventRequest))
     @Volatile private var closed: Boolean = false
     private var deadWriteRecoveryDone: Boolean = false
     private var onClosed: (() -> Unit)? = null
-    /** A timed-out `requestWait` leaves the request queued; retain its buffer until completion. */
-    private var pendingEventBuffer: ByteBuffer? = null
 
     init {
         // Keep one interrupt-IN read pending from claim time: the body only
@@ -518,8 +707,7 @@ private class AndroidUsbPtpTransport(
         // that switch until the event is drained (see the Swift establish's
         // concurrent event pump). This just ensures a buffer is already
         // waiting before the pump's first read.
-        val fresh = ByteBuffer.allocate(INITIAL_EVENT_BYTES)
-        if (eventRequest.queue(fresh)) pendingEventBuffer = fresh
+        eventPump.prime(INITIAL_EVENT_BYTES)
     }
 
     fun setOnClosed(callback: () -> Unit) {
@@ -553,36 +741,16 @@ private class AndroidUsbPtpTransport(
     override fun readBulk(maxBytes: Int, timeoutMillis: Int): ByteArray? =
         read(endpoint = bulkIn, maxBytes = maxBytes, timeoutMillis = timeoutMillis, lock = commandLock)
 
-    override fun readEvent(maxBytes: Int, timeoutMillis: Int): ByteArray? =
-        synchronized(eventLock) {
-            if (closed || maxBytes !in 1..MAX_READ_BYTES) return@synchronized null
-            val buffer = pendingEventBuffer ?: run {
-                val fresh = ByteBuffer.allocate(maxBytes)
-                if (!eventRequest.queue(fresh)) return@synchronized null
-                pendingEventBuffer = fresh
-                fresh
-            }
-            try {
-                val completed = connection.requestWait(timeoutMillis.toLong())
-                if (completed !== eventRequest) {
-                    // There should be no other request on this connection.
-                    // Cancel our queued event read before discarding its
-                    // buffer so a later retry never stacks a second request.
-                    runCatching { eventRequest.cancel() }
-                    pendingEventBuffer = null
-                    return@synchronized null
-                }
-                pendingEventBuffer = null
-                buffer.array().copyOf(buffer.position())
-            } catch (_: TimeoutException) {
-                // A sparse PTP event channel is healthy. JNI maps this empty
-                // read to a typed Swift timeout, and the session keeps draining.
-                ByteArray(0)
-            } catch (_: Throwable) {
-                pendingEventBuffer = null
-                null
-            }
-        }
+    override fun readEvent(maxBytes: Int, timeoutMillis: Int): ByteArray? {
+        if (closed || maxBytes !in 1..MAX_READ_BYTES) return null
+        val bytes = eventPump.read(maxBytes, timeoutMillis)
+        // A retired pump can never queue another interrupt read, so this USB
+        // session is over. Close it here instead of letting the caller retry
+        // into a pipe that will never deliver; Swift then sees a typed
+        // connection-closed failure and the source drops the transport.
+        if (eventPump.isRetired()) close()
+        return bytes
+    }
 
     override fun isClosed(): Boolean = closed
 
@@ -591,16 +759,17 @@ private class AndroidUsbPtpTransport(
         synchronized(closeLock) {
             if (closed) return
             closed = true
-            // `requestWait` may currently be blocked on the sparse interrupt
-            // pipe. Cancel before releasing the interface so it wakes, then
-            // close the request only after the underlying connection is gone.
-            runCatching { eventRequest.cancel() }
-            runCatching { connection.releaseInterface(usbInterface) }
-            connection.close()
-            runCatching { eventRequest.close() }
             callback = onClosed
             onClosed = null
         }
+        // Retire the pump first: `requestWait` may be blocked on the sparse
+        // interrupt pipe, and the abort both wakes it and guarantees no reader
+        // can queue another transfer behind this teardown. Release the interface
+        // next, and close the request only after the connection is gone.
+        eventPump.shutdown()
+        runCatching { connection.releaseInterface(usbInterface) }
+        connection.close()
+        eventPump.release()
         callback?.invoke()
     }
 

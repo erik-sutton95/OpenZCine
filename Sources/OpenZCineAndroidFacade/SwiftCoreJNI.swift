@@ -230,6 +230,20 @@
         return javaString(env, parsed)
     }
 
+    /// `SwiftCore.manualCameraWifiCredentials(ssid, key): String?` — validates
+    /// credentials the operator typed off the camera screen when on-device OCR
+    /// is unavailable. Same shared policy as the iOS manual-entry form, so the
+    /// fallback cannot drift between shells. Never logs or stores either field.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_manualCameraWifiCredentials")
+    public func swiftCoreManualCameraWifiCredentials(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, ssid: jstring?, key: jstring?
+    ) -> jstring? {
+        guard let ssid = swiftString(env, ssid), let key = swiftString(env, key),
+            let wire = AndroidCameraWiFiScreenParserWire.manual(ssid: ssid, key: key)
+        else { return nil }
+        return javaString(env, wire)
+    }
+
     /// `SwiftCore.resolveDisplayName(rawName): String` — operator-facing device
     /// title from the raw PTP name (`ZR_6001234` → `Nikon ZR`).
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_resolveDisplayName")
@@ -720,6 +734,28 @@
             let encoded = AndroidLinkHealthWire.encode(snapshot)
         else { return nil }
         return javaString(env, encoded)
+    }
+
+    /// `SwiftCore.sessionRetryDelayMillis(...)` — the shared monitor reconnect
+    /// schedule. Returns the wait before the next attempt, or a negative value
+    /// once the automatic budget is spent (see `AndroidSessionRecoveryWire`).
+    /// Kotlin owns no retry math of its own.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionRetryDelayMillis")
+    public func swiftCoreSessionRetryDelayMillis(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, failures: jint, jitter: jdouble
+    ) -> jlong {
+        jlong(
+            AndroidSessionRecoveryWire.retryDelayMilliseconds(
+                failures: Int(failures), jitter: Double(jitter)))
+    }
+
+    /// `SwiftCore.sessionMaxAutomaticAttempts()` — the shared attempt budget, so
+    /// the Compose recovery affordance can show a truthful "attempt N of M".
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionMaxAutomaticAttempts")
+    public func swiftCoreSessionMaxAutomaticAttempts(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        jint(AndroidSessionRecoveryWire.maximumAutomaticAttempts)
     }
 
     // MARK: - Callback / streaming shape
