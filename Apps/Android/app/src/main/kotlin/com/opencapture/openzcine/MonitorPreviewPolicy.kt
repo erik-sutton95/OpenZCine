@@ -96,6 +96,9 @@ internal fun renderedFeedEffects(
         falseColor = effects.falseColor?.takeIf { keeps(AssistTool.FALSE) },
         peaking = effects.peaking && keeps(AssistTool.PEAK),
         zebra = effects.zebra && keeps(AssistTool.ZEBRA),
+        // Carried through untouched: `activeSplitComparison` already follows the LUT, so dropping
+        // the look above drops the split, the divider and the labels with it.
+        splitComparison = effects.splitComparison,
     )
 }
 

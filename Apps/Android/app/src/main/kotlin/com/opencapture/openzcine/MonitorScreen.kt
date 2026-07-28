@@ -1687,7 +1687,14 @@ internal fun MonitorScreen(
         val audioMetersEnabled = assist.audioMetersEnabled
         // Mode-filtered render inputs (#256): the operator's stored on/off state is untouched, so
         // leaving clean restores everything exactly.
-        val renderedEffects = renderedFeedEffects(assist.effects, effectiveDisplayMode, cleanViewPins)
+        // The 50/50 comparison is an operator preference rather than a toolbar toggle, so it joins
+        // the effect set here; `FeedEffects.activeSplitComparison` then keeps it tied to the LUT.
+        val renderedEffects =
+            renderedFeedEffects(
+                assist.effects.copy(splitComparison = operatorSettings.activeSplitComparison),
+                effectiveDisplayMode,
+                cleanViewPins,
+            )
         val renderedAudioMeters =
             audioMetersEnabled &&
                 assistToolRendersInMode(AssistTool.AUDIO, effectiveDisplayMode, cleanViewPins)
@@ -2112,6 +2119,7 @@ internal fun MonitorScreen(
                     configuration = renderedFraming,
                     presentationState = liveFeedPresentation,
                     aspectFill = isPortraitFill,
+                    splitComparison = renderedEffects.activeSplitComparison,
                 )
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,

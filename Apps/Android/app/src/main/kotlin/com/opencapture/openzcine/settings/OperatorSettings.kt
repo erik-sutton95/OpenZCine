@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.FeedEffectsConfiguration
 import com.opencapture.openzcine.FeedPeakingColor
+import com.opencapture.openzcine.FeedSplitOrientation
 import com.opencapture.openzcine.FeedPeakingSensitivity
 import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
@@ -840,11 +841,20 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val histogramTrafficLightsEnabled: Toggle =
         Toggle("assist.scopes.histogramTrafficLights.v1", default = true)
 
+    /**
+     * Whether the LUT tool renders as a 50/50 Log-vs-LUT comparison. Off by default; a [Toggle]
+     * only writes its key once flipped, so the default doubles as the migration for every existing
+     * install.
+     */
+    public val splitComparisonEnabled: Toggle =
+        Toggle("assist.lut.splitComparison.enabled.v1", default = false)
+
     private val guideFamilyState = mutableStateOf(loadGuideFamily())
     private val selectedGuideRatiosState = mutableStateOf(loadSelectedGuideRatios())
     private val desqueezeRatioState = mutableStateOf(loadDesqueezeRatio())
     private val desqueezeFactorState = mutableStateOf(loadDesqueezeFactor())
     private val desqueezeOrientationState = mutableStateOf(loadDesqueezeOrientation())
+    private val splitComparisonOrientationState = mutableStateOf(loadSplitComparisonOrientation())
     private val levelStyleState = mutableStateOf(loadLevelStyle())
     private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
     private val feedEffectsConfigurationState = mutableStateOf(loadFeedEffectsConfiguration())
@@ -1030,6 +1040,22 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             desqueezeOrientationState.value = new
             preferences.edit().putString(DESQUEEZE_ORIENTATION_KEY, new.name).apply()
         }
+
+    /**
+     * Which way the 50/50 comparison divides the image. Stored independently of
+     * [splitComparisonEnabled] so switching the comparison off and on again returns to the
+     * operator's own choice rather than the default.
+     */
+    public var splitComparisonOrientation: FeedSplitOrientation
+        get() = splitComparisonOrientationState.value
+        set(new) {
+            splitComparisonOrientationState.value = new
+            preferences.edit().putString(SPLIT_COMPARISON_ORIENTATION_KEY, new.name).apply()
+        }
+
+    /** The comparison to hand the renderer, or `null` when the operator has it switched off. */
+    public val activeSplitComparison: FeedSplitOrientation?
+        get() = splitComparisonOrientation.takeIf { splitComparisonEnabled.value }
 
     /**
      * Toggles an Android-owned framing tool from the monitor toolbar.
@@ -1540,6 +1566,11 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             preferences.getString(DESQUEEZE_ORIENTATION_KEY, null),
         ) ?: LocalDesqueezeOrientation.HORIZONTAL
 
+    private fun loadSplitComparisonOrientation(): FeedSplitOrientation =
+        FeedSplitOrientation.fromStoredName(
+            preferences.getString(SPLIT_COMPARISON_ORIENTATION_KEY, null),
+        ) ?: FeedSplitOrientation.VERTICAL
+
     private fun loadLevelStyle(): LocalLevelStyle =
         LocalLevelStyle.fromStoredName(preferences.getString(LEVEL_STYLE_KEY, null))
             ?: LocalLevelStyle.HORIZON
@@ -1746,6 +1777,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val DESQUEEZE_RATIO_KEY = "assist.local.desqueeze.ratio.v2"
         const val DESQUEEZE_FACTOR_KEY = "assist.local.desqueeze.factor.v1"
         const val DESQUEEZE_ORIENTATION_KEY = "assist.local.desqueeze.orientation.v2"
+        const val SPLIT_COMPARISON_ORIENTATION_KEY = "assist.lut.splitComparison.orientation.v1"
         const val LEGACY_FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val LEGACY_DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
         const val SCOPE_METER_PREFERENCE = "scope-meter-v1"

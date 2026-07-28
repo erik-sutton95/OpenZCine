@@ -63,6 +63,7 @@ import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.FeedPeakingColor
 import com.opencapture.openzcine.FeedPeakingSensitivity
+import com.opencapture.openzcine.FeedSplitOrientation
 import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.IosPanelRevealSpec
@@ -382,7 +383,7 @@ private fun PlaybackAssistOptionsContent(
     lutLibrary: AndroidLutLibrary?,
 ) {
     when (tool) {
-        AssistTool.LUT -> LutOptions(actions, lutLibrary)
+        AssistTool.LUT -> LutOptions(actions, lutLibrary, settings)
         AssistTool.FALSE -> FalseColorOptions(actions, settings)
         AssistTool.PEAK -> PeakingOptions(settings)
         AssistTool.ZEBRA -> ZebraOptions(settings, cameraInput)
@@ -433,6 +434,7 @@ private data class LutWheelEntry(
 private fun LutOptions(
     actions: AssistOptionsActions,
     lutLibrary: AndroidLutLibrary?,
+    settings: OperatorSettings,
 ) {
     val storedEntries = lutLibrary?.entries?.collectAsState()?.value.orEmpty()
     val scope = rememberCoroutineScope()
@@ -600,6 +602,31 @@ private fun LutOptions(
                 )
             }
             LutImportButton(lutLibrary, scope, actions) { feedback = it }
+        }
+    }
+    // 50/50 Log-vs-LUT comparison. The orientation row only appears while it is on; the stored
+    // orientation itself survives either way, so switching back on returns to the operator's
+    // choice rather than the default.
+    CircleToggleRow(
+        title = "50/50 Comparison",
+        isOn = settings.splitComparisonEnabled.value,
+    ) {
+        settings.splitComparisonEnabled.toggle()
+        // Comparison is meaningless with the grade off, so switching it on switches the tool on.
+        if (settings.splitComparisonEnabled.value) actions.setVisible(AssistTool.LUT, true)
+    }
+    if (settings.splitComparisonEnabled.value) {
+        AssistInlineRow(
+            title = "Split",
+            help =
+                "Log on one half, the selected LUT on the other, divided at the centre of the " +
+                    "image. Monitor only — nothing is written to the camera or the recording.",
+        ) {
+            CompactSegmented(
+                FeedSplitOrientation.entries.toList(),
+                FeedSplitOrientation::label,
+                selected = { settings.splitComparisonOrientation == it },
+            ) { settings.splitComparisonOrientation = it }
         }
     }
     pendingDelete?.let { entry ->

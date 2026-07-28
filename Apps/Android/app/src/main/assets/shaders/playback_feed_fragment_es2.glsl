@@ -8,6 +8,10 @@ uniform sampler2D uLimitsPaintCube;
 uniform sampler2D uLimitsWeightCube;
 uniform float uFlipInputY;
 uniform float uLutSize;
+// 50/50 Log-vs-LUT comparison: 1 = on, and 1 = a vertical boundary (Log left, LUT right)
+// against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
+uniform float uSplitOn;
+uniform float uSplitVertical;
 uniform float uLimitsPaintSize;
 uniform float uLimitsWeightSize;
 uniform float uLimitsOn;
@@ -77,6 +81,25 @@ vec3 grade(vec3 color) {
 vec3 sampleSource(vec2 coordinate) {
     float y = mix(coordinate.y, 1.0 - coordinate.y, uFlipInputY);
     return texture2D(uTexSampler, vec2(coordinate.x, y)).rgb;
+}
+
+// Whether this fragment belongs to the graded half of a 50/50 comparison — always true when the
+// comparison is off, so the LUT stays one predicate rather than two code paths. A branch inside an
+// existing kernel is close to free; a second pass would not be.
+//
+// `vTexSamplingCoord` spans exactly the visible image rectangle: the caller sets the viewport to
+// `liveFeedContentRect` before drawing, so 0.5 is the middle of the IMAGE and letterbox, pillarbox
+// and chrome are all outside the quad entirely.
+//
+// Top/bottom uses the same display convention as the zebra block below — GL fragments count up, so
+// the top of the display is `coordinate.y == 1`, not 0. NOT the `uFlipInputY` sampling fold: that
+// one is about where a texel lives in the input texture, and the operator's "top" is where the
+// pixel lands on screen.
+bool splitIsGradedSide(vec2 coordinate) {
+    if (uSplitOn < 0.5) {
+        return true;
+    }
+    return uSplitVertical > 0.5 ? coordinate.x >= 0.5 : coordinate.y < 0.5;
 }
 
 vec3 limitsPaint(vec3 color) {
@@ -151,7 +174,7 @@ float peakingClosedStroke(vec2 centre, vec2 texel) {
 
 void main() {
     vec3 source = sampleSource(vTexSamplingCoord);
-    vec3 color = grade(source);
+    vec3 color = splitIsGradedSide(vTexSamplingCoord) ? grade(source) : source;
 
     if (uLimitsOn > 0.5) {
         color = mix(color, limitsPaint(source), limitsWeight(source));
