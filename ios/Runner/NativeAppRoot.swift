@@ -693,7 +693,7 @@ final class NativeAppModel {
     var focusPointLocked = false
     /// Whether the live view is punched in. Transient by design — see `Magnification`; a session
     /// that restored itself already magnified would read as a broken feed.
-    var magnificationActive = false
+    var magnificationActive = DemoHarness.magnificationActive
     var cameraState = CameraDisplayState.preview
     // Per-frame telemetry (timecode, FPS) is held separately from `cameraState` so updating it
     // never invalidates every view observing the heavy HUD struct — only the readouts re-render.

@@ -603,8 +603,8 @@ public data class LocalFramingAssistConfiguration(
     }
 
     /**
-     * The punch-in scale to apply to the settled feed rect, about its centre. Mirrors the shared
-     * core's `Magnification.scale(factor:isActive:)`.
+     * The punch-in scale to apply to the whole settled feed stack. Mirrors the shared core's
+     * `Magnification.scale(factor:isActive:)`.
      *
      * Exactly 1 when inactive, so the feed can apply it unconditionally and punching out lands on a
      * framing identical to never having punched in — not a re-derived one. That identity is what
@@ -612,7 +612,9 @@ public data class LocalFramingAssistConfiguration(
      *
      * Ordering is forced, not chosen: de-squeeze changes the image's SHAPE, so it has to settle
      * before anything decides how big to draw the result. Applying the punch-in earlier would make
-     * it interact with the fit and the image would jump sideways as it zoomed.
+     * it interact with the fit and the image would jump sideways as it zoomed. It is applied as its
+     * own layer over the de-squeeze rather than multiplied into it, because the two need different
+     * origins — de-squeeze about the centre, punch-in about the focus box.
      */
     public fun magnificationScale(isActive: Boolean): Float {
         if (!isActive || !magnificationEnabled) return 1f
@@ -628,6 +630,44 @@ public data class LocalFramingAssistConfiguration(
             } else {
                 1f
             }
+}
+
+/**
+ * Which AF box the punch-in follows (iOS `Magnification.anchorBoxIndex`).
+ *
+ * The subject the body selected, else the AF area (box 0). With subject detection on, the selected
+ * box is the face or eye actually being focused — at 4× the difference between "the face" and "the
+ * eye" is the whole question, so the enclosing AF rectangle is the wrong target.
+ */
+internal fun magnificationAnchorBoxIndex(boxCount: Int, selectedBoxIndex: Int?): Int? {
+    if (boxCount <= 0) return null
+    val selected = selectedBoxIndex ?: return 0
+    return if (selected in 0 until boxCount) selected else 0
+}
+
+/**
+ * The punch-in's fixed point, in unit coordinates of the feed rect (iOS `Magnification.anchor`).
+ *
+ * The camera's own focus box, not the middle of the frame: focus is rarely in the middle of the
+ * shot, so centring magnifies whatever happens to be there instead of the thing being focused.
+ *
+ * It is the FIXED POINT of the scale, not a point moved to the middle — the box stays where it is
+ * drawn and the picture grows outward around it. That is what keeps the result in bounds at every
+ * factor without clamping, and identical near an edge as in the middle.
+ */
+internal fun magnificationAnchor(
+    boxCenterX: Int?,
+    boxCenterY: Int?,
+    coordinateWidth: Int,
+    coordinateHeight: Int,
+): Pair<Float, Float> {
+    val centre = 0.5f to 0.5f
+    if (boxCenterX == null || boxCenterY == null) return centre
+    if (coordinateWidth <= 0 || coordinateHeight <= 0) return centre
+    val x = boxCenterX.toFloat() / coordinateWidth.toFloat()
+    val y = boxCenterY.toFloat() / coordinateHeight.toFloat()
+    if (!x.isFinite() || !y.isFinite()) return centre
+    return x.coerceIn(0f, 1f) to y.coerceIn(0f, 1f)
 }
 
 /**

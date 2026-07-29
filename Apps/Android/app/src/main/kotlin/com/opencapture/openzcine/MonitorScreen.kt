@@ -56,6 +56,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.CornerRadius
@@ -127,6 +128,8 @@ import com.opencapture.openzcine.settings.CaptureLayoutMode
 import com.opencapture.openzcine.settings.ChromeSection
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.labelResource
+import com.opencapture.openzcine.settings.magnificationAnchor
+import com.opencapture.openzcine.settings.magnificationAnchorBoxIndex
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
 import com.opencapture.openzcine.wear.WearRecordCommandSafety
@@ -1845,6 +1848,22 @@ internal fun MonitorScreen(
         // portrait fill centre-crops the image and every feed-aligned overlay
         // through the same content-rect resolver. Command unmounts the feed.
         val feedFocus = liveFeedPresentation.focus
+        // Read fresh each frame, so moving the focus point — by tap or on the body — takes the
+        // magnified view with it. Centre when there is no box to aim at.
+        val punchInAnchor =
+            magnificationAnchorBoxIndex(
+                    boxCount = feedFocus?.boxes?.size ?: 0,
+                    selectedBoxIndex = feedFocus?.selectedBoxIndex,
+                )
+                .let { index -> index?.let { feedFocus?.boxes?.get(it) } }
+                .let { box ->
+                    magnificationAnchor(
+                        boxCenterX = box?.centerX,
+                        boxCenterY = box?.centerY,
+                        coordinateWidth = feedFocus?.coordinateWidth ?: 0,
+                        coordinateHeight = feedFocus?.coordinateHeight ?: 0,
+                    )
+                }
         val feedContent =
             liveFeedContentRect(
                 containerWidth = feedPointerSize.width.toFloat(),
@@ -2032,6 +2051,17 @@ internal fun MonitorScreen(
                         },
                     )
                     .clipToBounds()
+                    // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
+                    // AF box and focus ring are siblings of it, so scaling the raster alone would
+                    // leave them behind at unmagnified positions over a magnified picture. Inside
+                    // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
+                    // of the gestures so Compose maps a touch back through the scale and
+                    // tap-to-focus still lands on the pixel under the finger.
+                    .graphicsLayer {
+                        scaleX = punchIn
+                        scaleY = punchIn
+                        transformOrigin = TransformOrigin(punchInAnchor.first, punchInAnchor.second)
+                    }
                     .onSizeChanged { feedPointerSize = it }
                     // Canvas content is not exposed as an accessibility node
                     // by every Android view bridge. The feed container is the
@@ -2089,13 +2119,12 @@ internal fun MonitorScreen(
                 } else if (monitorFrameSource != null) {
                     LiveFeedView(
                         monitorFrameSource,
-                        // Punch-in multiplies into the de-squeeze scales rather than sitting in its
-                        // own layer, which is exactly the composition iOS gets from stacking the two
-                        // `scaleEffect`s: shape settles first, then the settled result is scaled
-                        // about its centre. The parent Box already clips.
+                        // De-squeeze only. The punch-in is a separate layer on the feed container
+                        // so it also carries the AF box and focus ring, and so it can take its own
+                        // origin — the two transforms need different ones.
                         Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = localFraming.horizontalPresentationScale * punchIn
-                            scaleY = localFraming.verticalPresentationScale * punchIn
+                            scaleX = localFraming.horizontalPresentationScale
+                            scaleY = localFraming.verticalPresentationScale
                         },
                         onPresentedFrame = { frame, bitmap, baker ->
                             // TC is owned by the stream collector above; present
@@ -2142,10 +2171,8 @@ internal fun MonitorScreen(
                     FeedTextureOverlay(
                         presentationState = liveFeedPresentation,
                         aspectFill = isPortraitFill,
-                        horizontalPresentationScale =
-                            localFraming.horizontalPresentationScale * punchIn,
-                        verticalPresentationScale =
-                            localFraming.verticalPresentationScale * punchIn,
+                        horizontalPresentationScale = localFraming.horizontalPresentationScale,
+                        verticalPresentationScale = localFraming.verticalPresentationScale,
                     )
                 } else {
                     // Hop-aware status: after RED/Frame.io internet hop the session is
