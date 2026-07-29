@@ -1,5 +1,5 @@
-- Fixed: a USB-C camera error or unplug could crash the app.
-- Fixed: the Wi-Fi detail scanner no longer gives up after one bad frame, and you can always type the network and key by hand.
-- Fixed: aperture, ISO and shutter changes made on the camera now reach the app promptly.
-- Fixed: HEIF photos were missing from the media browser; connecting a second body no longer alters its settings.
-- New: per-DISP display settings, an Edit view that hides any monitor element, split video/photo layouts.
+- Fixed: a USB-C error or unplug could crash the app; the Wi-Fi scanner survives bad frames.
+- Fixed: aperture, ISO and shutter changes on the camera reach the app promptly.
+- Fixed: HEIF photos missing from the media browser; a second body keeps its settings.
+- New: per-DISP display settings, an Edit view that hides any monitor element, split layouts.
+- New: live-view magnifier (2x/3x/4x), clean-view playback, conform preview, photo de-squeeze, tap-to-show star rating.

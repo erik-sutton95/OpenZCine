@@ -17,7 +17,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.layout.ContentScale
+import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -211,6 +213,8 @@ internal fun InstantReviewOverlay(
     onDismiss: () -> Unit,
     onToggleStar: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** De-squeeze configuration; the ratio is derived here, where the still's size is known. */
+    desqueeze: LocalFramingAssistConfiguration? = null,
 ) {
     // The countdown starts only once the full image (or its failure fallback)
     // lands — the operator gets the whole duration with the real image.
@@ -220,6 +224,8 @@ internal fun InstantReviewOverlay(
             onDismiss()
         }
     }
+    val desqueezeAspectRatio =
+        desqueeze?.desqueezedAspectRatio(review.image.width, review.image.height)
     Box(
         modifier
             .fillMaxSize()
@@ -231,9 +237,18 @@ internal fun InstantReviewOverlay(
         Image(
             bitmap = review.image,
             contentDescription = null,
-            contentScale = ContentScale.Fit,
+            // With a ratio the parent Box's max constraints make `aspectRatio` the fit, and
+            // FillBounds stretches the squeezed pixels into it; without one nothing changes.
+            contentScale =
+                if (desqueezeAspectRatio != null) ContentScale.FillBounds else ContentScale.Fit,
             modifier =
-                Modifier.fillMaxSize().blur(if (review.isFullResolution) 0.dp else 16.dp),
+                (
+                    if (desqueezeAspectRatio != null) {
+                        Modifier.aspectRatio(desqueezeAspectRatio)
+                    } else {
+                        Modifier.fillMaxSize()
+                    }
+                ).blur(if (review.isFullResolution) 0.dp else 16.dp),
         )
         if (!review.isFullResolution) {
             CircularProgressIndicator(

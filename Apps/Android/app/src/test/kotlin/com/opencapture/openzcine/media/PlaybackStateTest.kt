@@ -3,6 +3,7 @@ package com.opencapture.openzcine.media
 import androidx.media3.common.Player
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 /** Pure playback policy coverage; Media3 and camera I/O remain outside JVM tests. */
@@ -184,4 +185,63 @@ class PlaybackStateTest {
                     null
                 },
         )
+
+    /**
+     * Hiding the controls must not take transport away from the picture: tap-to-pause works
+     * identically in clean view. The way back rides on the restore control that stays on screen
+     * and on the swipe, not on this tap (iOS `testCleanViewKeepsTapToPause`).
+     */
+    @Test
+    fun `clean view keeps tap to pause`() {
+        for (chromeVisible in listOf(true, false)) {
+            assertEquals(
+                PlaybackFrameTap.TOGGLE_TRANSPORT,
+                playbackFrameTapAction(chromeVisible = chromeVisible, reachedEnd = false),
+            )
+            assertEquals(
+                PlaybackFrameTap.RESTART_PLAYBACK,
+                playbackFrameTapAction(chromeVisible = chromeVisible, reachedEnd = true),
+            )
+        }
+    }
+
+    /** Mirrors `ConformPreviewTests` in shared core, so the two platforms cannot drift apart. */
+    @Test
+    fun `conform preview offers only meaningfully slower targets and refuses untrustworthy sources`() {
+        // The worked example: 60 to 24 is 40%.
+        assertEquals(0.4, conformPreviewSpeed(60.0, 24.0), 1e-9)
+        assertEquals(0.2, conformPreviewSpeed(120.0, 24.0), 1e-9)
+        // Real time leaves the player untouched.
+        assertEquals(1.0, conformPreviewSpeed(60.0, null), 1e-9)
+        assertEquals(1.0, conformPreviewSpeed(null, 24.0), 1e-9)
+
+        // A 30 fps clip is not offered 29.97 (pulldown, not slow motion) nor 30 (a no-op).
+        assertEquals(
+            listOf(23.976, 24.0, 25.0),
+            conformPreviewAvailability(30.0, variableFrameRate = false).targets,
+        )
+        // 24 fps has nothing meaningfully slower, so the control is inert and says why.
+        val twentyFour = conformPreviewAvailability(24.0, variableFrameRate = false)
+        assertFalse(twentyFour.isAvailable)
+        assertEquals("Not a high-frame-rate clip", twentyFour.unavailableReason)
+
+        // Untrustworthy sources refuse rather than conform against a guess.
+        assertFalse(conformPreviewAvailability(null, variableFrameRate = false).isAvailable)
+        assertFalse(conformPreviewAvailability(120.0, variableFrameRate = true).isAvailable)
+    }
+
+    @Test
+    fun `conform target cycles through every offer and back to real time`() {
+        val targets = conformPreviewAvailability(60.0, variableFrameRate = false).targets
+        var current: Double? = null
+        val visited = mutableListOf<Double?>()
+        repeat(targets.size + 1) {
+            current = nextConformTarget(current, targets)
+            visited.add(current)
+        }
+        // Every target once, then back to real time — no state the operator cannot leave.
+        assertEquals(targets + listOf<Double?>(null), visited)
+        // With nothing on offer the control cannot select anything.
+        assertNull(nextConformTarget(null, emptyList()))
+    }
 }

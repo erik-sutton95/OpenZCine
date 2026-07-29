@@ -2411,6 +2411,18 @@ struct AssistPanel: View {
                 }
 
                 switch tool {
+                case .magnification:
+                    // Punch-in factor only. The punched-in state itself is driven by the button on
+                    // the feed, not from here — a popup you must reopen to leave a magnified view
+                    // would be worse than no shortcut at all.
+                    SegmentedButtons(
+                        items: AssistConfiguration.Magnification.Factor.allCases.map(\.rawValue),
+                        selected: model.assistConfiguration.magnification.factor.rawValue
+                    ) { value in
+                        if let factor = AssistConfiguration.Magnification.Factor(rawValue: value) {
+                            model.assistConfiguration.magnification.factor = factor
+                        }
+                    }
                 case .guides:
                     SegmentedButtons(
                         items: AssistConfiguration.Guides.Family.allCases.map(\.rawValue),

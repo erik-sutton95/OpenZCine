@@ -213,6 +213,7 @@
     <string name="assist_label_level">LEVEL</string>
     <string name="assist_label_ev_meter">EV</string>
     <string name="assist_label_desqueeze">DE-SQ</string>
+    <string name="assist_label_magnification">MAG</string>
     <string name="assist_label_audio">AUDIO</string>
     <string name="assist_label_play">PLAY</string>
     <string name="assist_title_focus_peaking">Peaking</string>
@@ -229,6 +230,7 @@
     <string name="assist_title_horizon">Horizon</string>
     <string name="assist_title_ev_meter">EV Meter</string>
     <string name="assist_title_desqueeze">Desqueeze</string>
+    <string name="assist_title_magnification">Magnification</string>
     <string name="assist_title_audio_levels">Audio Levels</string>
     <string name="assist_title_instant_playback">Instant Playback</string>
     <string name="assist_view">VIEW</string>
@@ -517,6 +519,8 @@
     <string name="focus_reset_moving">Reset focus point unavailable while moving focus</string>
     <string name="focus_reset">Reset focus point to center</string>
     <string name="split_comparison_key">Show or hide the 50/50 Log and LUT comparison</string>
+    <string name="magnification_key_enter">Magnify %1$s</string>
+    <string name="magnification_key_exit">Exit %1$s magnification</string>
     <string name="record_start_title">Start recording?</string>
     <string name="record_stop_title">Stop recording?</string>
     <string name="record_start_message">Send the record command to the camera.</string>

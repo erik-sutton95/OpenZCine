@@ -691,6 +691,9 @@ final class NativeAppModel {
     /// moving it; the camera remains the source of truth, this just suppresses our ChangeAfArea
     /// sends. Session-only.
     var focusPointLocked = false
+    /// Whether the live view is punched in. Transient by design — see `Magnification`; a session
+    /// that restored itself already magnified would read as a broken feed.
+    var magnificationActive = false
     var cameraState = CameraDisplayState.preview
     // Per-frame telemetry (timecode, FPS) is held separately from `cameraState` so updating it
     // never invalidates every view observing the heavy HUD struct — only the readouts re-render.
@@ -8728,6 +8731,12 @@ final class NativeAppModel {
         AssistToolActivation.set(
             tool, visible: visible, context: context, preferences: &preferences,
             configuration: &assistConfiguration)
+        // Switching the tool off cannot leave the feed punched in: the button goes with the tool,
+        // so an armed transform would have no visible control explaining it. `Magnification`
+        // states the rule; this is the only place the tool can be turned off.
+        if tool == .magnification, !visible {
+            magnificationActive = Magnification.activeAfterDisabling()
+        }
         if tool == .instantReview, visible {
             // Arm the post-capture diff with the card's current handles right away.
             seedInstantReviewBaseline()
@@ -9448,6 +9457,7 @@ extension MonitorAssistTool {
         case .level: "gyroscope"
         case .evMeter: "plusminus"
         case .desqueeze: "arrow.left.and.right"
+        case .magnification: "plus.magnifyingglass"
         case .instantReview: "photo.badge.checkmark"
         }
     }
@@ -9470,6 +9480,7 @@ extension MonitorAssistTool {
         case .level: "Horizon"
         case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
+        case .magnification: "Magnify"
         case .instantReview: "Instant Playback"
         }
     }

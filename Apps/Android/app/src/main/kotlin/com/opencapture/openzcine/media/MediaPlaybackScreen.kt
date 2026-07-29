@@ -37,10 +37,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VolumeOff
@@ -66,6 +71,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -164,10 +170,16 @@ import kotlinx.coroutines.withContext
 private const val PLAYBACK_ZOOM_MAX = 4f
 
 /** iOS `PlaybackChrome` — compact transport metrics. */
+/**
+ * Sized so the full transport row fits the narrowest supported width, matching iOS
+ * `MediaClipPlayerView.PlaybackChrome`. The row grew to eight controls when the conform preview
+ * landed; on iOS that overflow dragged the top bar off screen, and the same arithmetic applies
+ * here. Visual size only — the buttons keep their 44dp minimum touch target.
+ */
 private object PlaybackChrome {
-    val transportButtonWidth = 40.dp
+    val transportButtonWidth = 38.dp
     val transportButtonHeight = 36.dp
-    val actionButtonWidth = 38.dp
+    val actionButtonWidth = 32.dp
     val actionButtonHeight = 36.dp
     val transportIconSize = 18.dp
     val primaryTransportIconSize = 22.dp
@@ -326,6 +338,9 @@ private fun PlaybackClipSession(
     val latestDeliveryJob = rememberUpdatedState(deliveryJob)
     val actionInProgress = pendingAction != null
     var chromeVisible by remember(clip.handle) { mutableStateOf(true) }
+    // Pulled down to rate, and left open across clips until pushed back up — so NOT keyed to the
+    // clip, unlike the rating value itself (iOS `ratingShadeOpen`).
+    var ratingShadeOpen by remember { mutableStateOf(false) }
     // Camera-read star rating (null until read, or unreachable — row hidden).
     // Seeded by read, confirmed by the entry point's built-in readback: the
     // camera stays source of truth for every write.
@@ -575,6 +590,8 @@ private fun PlaybackClipSession(
                     lutLibrary = lutLibrary,
                     chromeVisible = chromeVisible,
                     onChromeVisibleChanged = { chromeVisible = it },
+                    ratingShadeOpen = ratingShadeOpen,
+                    onRatingShadeOpenChanged = { ratingShadeOpen = it },
                     onPlayerChanged = { activePlayer = it },
                     shareReady = shareState == PlaybackShareState.READY,
                     deliveryInProgress = deliveryInProgress,
@@ -725,11 +742,17 @@ private fun ProgressivePlayer(
     lutLibrary: AndroidLutLibrary?,
     chromeVisible: Boolean,
     onChromeVisibleChanged: (Boolean) -> Unit,
+    /** Owned by the parent so it survives clip changes, like the operator left it. */
+    ratingShadeOpen: Boolean,
+    onRatingShadeOpenChanged: (Boolean) -> Unit,
     onPlayerChanged: (Player?) -> Unit,
     shareReady: Boolean = false,
     deliveryInProgress: Boolean = false,
     onShare: () -> Unit = {},
-    /** Camera-read clip star rating; null hides the row (offline/unreadable). */
+    /**
+     * Camera-read clip star rating; null means offline or unreadable. The shade shows zero stars
+     * in that case rather than nothing — an opened shade that renders empty reads as broken.
+     */
     ratingStars: Int? = null,
     /** Transient rating-write refusal line (with the body's response code); null hides it. */
     ratingMessage: String? = null,
@@ -809,6 +832,11 @@ private fun ProgressivePlayer(
     var pan by remember(entry) { mutableStateOf(PlaybackPan()) }
     var viewport by remember(entry) { mutableStateOf(IntSize.Zero) }
     var videoSize by remember(entry) { mutableStateOf(VideoSize.UNKNOWN) }
+    // Conform preview: what the track says it was shot at, and the target the operator picked.
+    // Real time (null) is always the default — this is a preview transform, never the clip.
+    var conformCaptureRate by remember(entry) { mutableStateOf<Float?>(null) }
+    var conformVariableRate by remember(entry) { mutableStateOf(false) }
+    var conformTarget by remember(entry) { mutableStateOf<Double?>(null) }
     var videoColorMode by
         remember(entry, player) {
             mutableStateOf(selectedPlaybackVideoColorMode(player.currentTracks))
@@ -836,6 +864,29 @@ private fun ProgressivePlayer(
     fun resetZoom() {
         zoom = 1f
         pan = PlaybackPan()
+    }
+
+    fun enterCleanView() {
+        onChromeVisibleChanged(false)
+    }
+
+    fun restoreChrome() {
+        onChromeVisibleChanged(true)
+    }
+
+    val conformAvailability =
+        conformPreviewAvailability(conformCaptureRate?.toDouble(), conformVariableRate)
+    val conformSpeed =
+        conformPreviewSpeed(conformCaptureRate?.toDouble(), conformTarget)
+
+    // The conform is a clock change, so it rides on the player's speed rather than on the media.
+    LaunchedEffect(conformSpeed) {
+        player.setPlaybackSpeed(conformSpeed.toFloat())
+    }
+    // Audio at 40% without pitch correction still SOUNDS like audio, just wrong — the request
+    // rules that out, so a conform forces silence regardless of the mute toggle.
+    LaunchedEffect(conformTarget, audioMode) {
+        player.volume = if (conformTarget != null) 0f else audioMode.volume
     }
 
     fun togglePlayback(showFlash: Boolean = false) {
@@ -949,6 +1000,12 @@ private fun ProgressivePlayer(
 
                 override fun onTracksChanged(tracks: Tracks) {
                     videoColorMode = selectedPlaybackVideoColorMode(tracks)
+                    // The container's nominal rate is all a proxy MP4 carries. `NO_VALUE` means
+                    // the demuxer never established one, which the policy treats as unknown and
+                    // refuses — better than conforming against a guess.
+                    val rate = selectedPlaybackVideoFrameRate(tracks)
+                    conformCaptureRate = rate
+                    if (rate == null) conformTarget = null
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -1251,11 +1308,37 @@ private fun ProgressivePlayer(
                 .transformable(transformState)
                 .pointerInput(zoom, scrubbing, reachedEnd) {
                     detectTapGestures(
-                        onTap = { if (!scrubbing) togglePlayback(showFlash = true) },
+                        onTap = {
+                            if (scrubbing) return@detectTapGestures
+                            togglePlayback(showFlash = true)
+                        },
                         onDoubleTap = { resetZoom() },
                     )
                 },
         )
+        if (!chromeVisible) {
+            // The one control clean view keeps. Every other affordance is hidden, but the way back
+            // cannot be: the swipe restores it for operators who know the gesture, and this is
+            // here for everyone who does not. Dimmed so it is findable without competing with the
+            // picture, which is the whole reason the rest was hidden.
+            Box(
+                Modifier.align(Alignment.BottomEnd)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                        ),
+                    )
+                    .padding(end = 16.dp, bottom = 24.dp)
+                    .alpha(0.85f),
+            ) {
+                PlaybackIconButton(
+                    icon = Icons.Filled.FullscreenExit,
+                    contentDescription = "Show playback controls",
+                    circular = true,
+                    onClick = { restoreChrome() },
+                )
+            }
+        }
         if (framingAssistsVisible) {
             LocalFramingAssistOverlay(
                 configuration = playbackFramingConfiguration,
@@ -1365,6 +1448,70 @@ private fun ProgressivePlayer(
         }
 
         if (chromeVisible) {
+            // Star rating, pulled down from the top and left there until pushed back up. It used
+            // to sit above the transport, costing a permanent band of picture for a control only
+            // wanted while actually rating. The handle is not decoration: a pull-down nobody knows
+            // about is the mistake the clean-view button exists to correct, so the shade always
+            // shows where to reach it. Tap only: pulling a shade down over a moving picture is
+            // fussy on a handheld rig, and the scrub is the gesture that has to stay reliable.
+            // Nothing at all without a camera-read rating: null means the clip has no handle or
+            // there is no session, so the rating could not be written either and the handle would
+            // advertise a control that cannot work (iOS `ratingShade`).
+            if (ratingStars != null) {
+            Column(
+                Modifier.align(Alignment.TopCenter)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
+                        ),
+                    )
+                    .padding(top = 54.dp)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (ratingShadeOpen) {
+                    StarRatingRow(
+                        stars = ratingStars,
+                        modifier =
+                            Modifier.padding(bottom = 6.dp)
+                                .glass(CircleShape)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        onSelect = onSelectRating,
+                    )
+                }
+                Row(
+                    Modifier.size(width = 52.dp, height = 20.dp)
+                        .glass(CircleShape)
+                        .alpha(0.9f)
+                        .chromeClickable(onClick = { onRatingShadeOpenChanged(!ratingShadeOpen) })
+                        .semantics {
+                            contentDescription =
+                                if (ratingShadeOpen) "Hide star rating" else "Show star rating"
+                        },
+                    horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Star,
+                        contentDescription = null,
+                        tint = LiveDesign.muted,
+                        modifier = Modifier.size(11.dp),
+                    )
+                    Icon(
+                        imageVector =
+                            if (ratingShadeOpen) {
+                                Icons.Filled.KeyboardArrowUp
+                            } else {
+                                Icons.Filled.KeyboardArrowDown
+                            },
+                        contentDescription = null,
+                        tint = LiveDesign.muted,
+                        modifier = Modifier.size(13.dp),
+                    )
+                }
+            }
+            }
+
             Column(
                 Modifier.align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -1386,13 +1533,6 @@ private fun ProgressivePlayer(
                             Modifier.padding(bottom = 6.dp, start = 16.dp, end = 16.dp)
                                 .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
-                }
-                if (ratingStars != null) {
-                    StarRatingRow(
-                        stars = ratingStars,
-                        modifier = Modifier.padding(bottom = 2.dp),
-                        onSelect = onSelectRating,
                     )
                 }
                 Column(
@@ -1541,6 +1681,32 @@ private fun ProgressivePlayer(
                                 audioMode = audioMode.toggled()
                                 player.volume = audioMode.volume
                             },
+                        )
+                        // Conform preview cycles Real time -> each offered target -> Real time.
+                        // A cycle rather than a menu because the list is short and ordered, and
+                        // the current state is spelled out in full on the transport above.
+                        PlaybackIconButton(
+                            icon = Icons.Filled.SlowMotionVideo,
+                            contentDescription =
+                                conformAvailability.unavailableReason
+                                    ?: "Conform preview",
+                            enabled = conformAvailability.isAvailable,
+                            highlighted = conformTarget != null,
+                            action = true,
+                            onClick = {
+                                conformTarget =
+                                    nextConformTarget(conformTarget, conformAvailability.targets)
+                            },
+                        )
+                        // The swipe-down gesture has always hidden the chrome, but an
+                        // undisclosed gesture is indistinguishable from a missing feature — so
+                        // the capability gets a control you can see. The gesture stays for
+                        // operators who already know it.
+                        PlaybackIconButton(
+                            icon = Icons.Filled.Fullscreen,
+                            contentDescription = "Hide playback controls",
+                            action = true,
+                            onClick = { enterCleanView() },
                         )
                         PlaybackIconButton(
                             icon = Icons.Outlined.CenterFocusWeak,

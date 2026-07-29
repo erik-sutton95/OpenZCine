@@ -208,14 +208,20 @@ public enum StillCapturePolicy: Sendable {
 extension MonitorAssistTool {
     /// Assist tools that apply to still photography — the exposure aids (peaking, false
     /// color, zebra, histogram) plus the composition aids photographers actually use
-    /// (grid, level). Everything else is cinema-only, which keeps the photo toolbar
+    /// (grid, level, de-squeeze). Everything else is cinema-only, which keeps the photo toolbar
     /// deliberately shorter so the stills strip gets the bar width.
+    ///
+    /// De-squeeze is here because anamorphic lenses are used for stills too, and a squeezed
+    /// preview makes faces, framing and edge behaviour impossible to judge on a tethered shoot.
+    /// It is a display transform in every surface it reaches — the camera original is never
+    /// touched.
     public var appliesToPhotography: Bool {
         switch self {
-        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview:
+        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
+            .desqueeze, .magnification:
             true
         case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
-            .guides, .crosshair, .desqueeze:
+            .guides, .crosshair:
             false
         }
     }

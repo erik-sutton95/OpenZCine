@@ -101,10 +101,18 @@ class PlaybackAssistStateTest {
         // has no live camera indicator) never lists it.
         assertFalse(hasPlaybackAssistOptions(AssistTool.EV))
         assertTrue(hasPlaybackAssistOptions(AssistTool.CROSS))
+        // MAG is driven by an on-feed key playback never mounts, so listing the tool there would
+        // be a switch with nothing behind it.
         assertEquals(
             listOf(AssistTool.LUT, AssistTool.AUDIO),
             playbackAssistToolbarTools(
-                listOf(AssistTool.LUT, AssistTool.LEVEL, AssistTool.EV, AssistTool.AUDIO),
+                listOf(
+                    AssistTool.LUT,
+                    AssistTool.LEVEL,
+                    AssistTool.EV,
+                    AssistTool.MAG,
+                    AssistTool.AUDIO,
+                ),
             ),
         )
     }

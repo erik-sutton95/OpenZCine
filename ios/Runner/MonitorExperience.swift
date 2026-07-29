@@ -395,7 +395,18 @@ private struct LiveFrameRaster: View {
             height: height
         )
         .scaleEffect(
-            desqueezeScale(model.assistConfiguration.desqueeze), anchor: .center)
+            desqueezeScale(model.assistConfiguration.desqueeze), anchor: .center
+        )
+        // Punch-in goes LAST, on the settled and framed image — see `Magnification`. Applied here
+        // it scales exactly what the operator is looking at, so punching out lands on the identical
+        // framing and the overlays registered to this layer come along magnified.
+        .scaleEffect(
+            Magnification.scale(
+                factor: model.assistConfiguration.magnification.factor.scale,
+                isActive: model.magnificationActive),
+            anchor: .center
+        )
+        .clipped()
     }
 }
 
@@ -671,8 +682,13 @@ struct InstantReviewOverlay: View {
             ZStack(alignment: .topTrailing) {
                 Color.black
                 GeometryReader { proxy in
+                    // Fit the de-squeezed size rather than scaling after the fit: the AF boxes
+                    // below derive their scale from `fitted`, so de-squeezing here carries them
+                    // with the image instead of leaving them on the squeezed geometry.
                     let fitted = Self.fittedRect(
-                        image: review.image.size, container: proxy.size)
+                        image: desqueezedSize(
+                            review.image.size, model.assistConfiguration.desqueeze),
+                        container: proxy.size)
                     // The stand-in thumb shows blurred; the upgrade animates the blur away
                     // as the full image swaps underneath, reading as one continuous sharpen.
                     Image(uiImage: review.image)

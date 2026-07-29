@@ -2411,7 +2411,13 @@ struct MediaPhotoViewer: View {
                 GeometryReader { geo in
                     Image(uiImage: image)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        // Anamorphic stills are judged at their intended geometry; the file is
+                        // never touched. `nil` (de-squeeze off) means the image's own ratio.
+                        .aspectRatio(
+                            desqueezedAspectRatio(
+                                image.size, model.assistConfiguration.desqueeze),
+                            contentMode: .fit
+                        )
                         .frame(width: geo.size.width, height: geo.size.height)
                         .scaleEffect(zoom.scale)
                         .offset(zoom.offset)
@@ -2871,6 +2877,13 @@ struct MediaPlayerView: View {
     @State private var isMuted = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
+    /// What we managed to learn about the clip's capture rate; drives whether conform is offered.
+    @State private var conformSource = ConformPreview.Source()
+    /// The selected conform target, or nil for real-time playback (the default, always).
+    @State private var conformTarget: Double?
+    /// Whether the star-rating shade is open. Deliberately NOT reset per clip: the operator opened
+    /// it to rate a run of shots, so it stays open across them until it is closed again.
+    @State private var ratingShadeOpen = DemoHarness.ratingShade == "open"
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var reachedEnd = false
@@ -2884,7 +2897,7 @@ struct MediaPlayerView: View {
 
     @State private var isClipReady = false
     @State private var streamPollTask: Task<Void, Never>?
-    @State private var chromeVisible = true
+    @State private var chromeVisible = !DemoHarness.playbackCleanView
     @State private var assistMode = false
     @State private var assistOptionsTool: MonitorAssistTool?
     @State private var playbackBarFrame: CGRect = .zero
@@ -3090,32 +3103,31 @@ struct MediaPlayerView: View {
             }
 
             VStack {
-                if chromeVisible { topBar }
-                Spacer()
-                if chromeVisible, let toastMessage { toastView(toastMessage) }
-                if chromeVisible, let stars = playerRatingStars {
-                    // Clip star rating, written to the card — the camera stays source of truth
-                    // (the model confirms by readback). A refusal surfaces the body's response
-                    // code in a toast instead of a silent rollback.
-                    StarRatingRow(stars: stars) { target in
-                        let previous = playerRatingStars
-                        playerRatingStars = target
-                        let clip = activeClip
-                        Task {
-                            switch await model.setMediaStarRating(target, for: clip) {
-                            case .confirmed(let confirmed):
-                                playerRatingStars = confirmed
-                            case .refused(_, let message):
-                                playerRatingStars = previous
-                                showToast(message)
-                            case .offline:
-                                playerRatingStars = previous
-                            }
+                if chromeVisible {
+                    // Handle sits on the top bar's own row, centred between the title and the
+                    // favourite button — the row's middle was dead space.
+                    ZStack {
+                        topBar
+                        if ratingShadeMounts {
+                            ratingShadeHandle
                         }
                     }
-                    .padding(.bottom, 2)
+                    if ratingShadeOpen, ratingShadeMounts {
+                        ratingStarRow
+                    }
                 }
+                Spacer()
+                if chromeVisible, let toastMessage { toastView(toastMessage) }
                 if chromeVisible { bottomBar }
+                if !chromeVisible {
+                    // The one control clean view keeps. Every other affordance is hidden, but the
+                    // way back cannot be: the swipe restores it for operators who know the
+                    // gesture, and this is here for everyone who does not.
+                    HStack {
+                        Spacer()
+                        restoreChromeButton
+                    }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
@@ -3239,7 +3251,7 @@ struct MediaPlayerView: View {
 
     private func resumePlaybackIfNeeded() {
         if wasPlayingBeforeDelivery {
-            player.play()
+            startPlayback()
             isPlaying = true
             wasPlayingBeforeDelivery = false
         }
@@ -3364,8 +3376,11 @@ struct MediaPlayerView: View {
                 guard !isFrameScrubbing else { return }
                 let dy = value.translation.height
                 guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
-                withAnimation(.spring(duration: 0.32)) {
-                    chromeVisible = dy < 0
+                if dy < 0 {
+                    restoreChrome()
+                } else {
+                    // The gesture is for operators who already know it; no hint.
+                    withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
                 }
             }
     }
@@ -3537,16 +3552,41 @@ struct MediaPlayerView: View {
     // MARK: Bottom bar (playback transport or inline view-assist)
 
     /// Compact playback chrome — primary controls use 44pt hit targets via `ZCTapTargetButtonStyle`.
-    private enum PlaybackChrome {
-        static let barPaddingH: CGFloat = 12
+    ///
+    /// Sized so the full transport row fits the narrowest supported width. It grew to eight
+    /// controls when the conform preview landed and silently overflowed: an HStack of fixed-size
+    /// children does not compress, so the row widened the whole chrome stack and pushed the TOP
+    /// bar's back and favourite buttons off both screen edges. Visual size only — `.zcTapTarget`
+    /// keeps every hit target at 44pt regardless.
+    enum PlaybackChrome {
+        static let barPaddingH: CGFloat = 10
         static let barPaddingV: CGFloat = 9
-        static let transportRowSpacing: CGFloat = 8
+        static let transportRowSpacing: CGFloat = 5
         static let scrubberRowSpacing: CGFloat = 5
-        static let transportButtonSize = CGSize(width: 40, height: 36)
-        static let actionButtonSize = CGSize(width: 38, height: 36)
+        static let transportButtonSize = CGSize(width: 38, height: 36)
+        static let actionButtonSize = CGSize(width: 32, height: 36)
         static let transportIconSize: CGFloat = 18
         static let primaryTransportIconSize: CGFloat = 22
         static let actionIconSize: CGFloat = 16
+
+        /// Narrowest screen the app ships on (iPhone SE class), in points. The row is checked
+        /// against this in `RunnerTests` so the next control added here fails a test rather than
+        /// silently shoving the top bar off the screen.
+        static let narrowestScreenWidth: CGFloat = 375
+        /// Horizontal padding the chrome stack applies outside the bar.
+        static let chromeHorizontalPadding: CGFloat = 16
+
+        /// Width the transport row needs: three transport buttons, five actions, the gaps between
+        /// them, the bar's own padding, and the minimum spacer.
+        static func transportRowWidth(
+            transportCount: Int = 3, actionCount: Int = 5, minimumSpacer: CGFloat = 6
+        ) -> CGFloat {
+            let buttons =
+                transportButtonSize.width * CGFloat(transportCount)
+                + actionButtonSize.width * CGFloat(actionCount)
+            let gaps = transportRowSpacing * CGFloat(transportCount + actionCount - 1)
+            return buttons + gaps + barPaddingH * 2 + minimumSpacer
+        }
     }
 
     private var bottomBar: some View {
@@ -3578,7 +3618,7 @@ struct MediaPlayerView: View {
     private var playbackTransportBar: some View {
         VStack(spacing: 6) {
             HStack(spacing: PlaybackChrome.scrubberRowSpacing) {
-                Text(timeLabel(isScrubbing ? scrubTime : currentTime))
+                Text(conformedLabel(isScrubbing ? scrubTime : currentTime))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(LiveDesign.muted)
                     .frame(width: 40, alignment: .leading)
@@ -3619,12 +3659,12 @@ struct MediaPlayerView: View {
                         isScrubbing = false
                         clearEndStateIfSeeking(to: time)
                         if wasPlayingBeforeScrub {
-                            player.play()
+                            startPlayback()
                             isPlaying = true
                         }
                     }
                 )
-                Text(timeLabel(duration))
+                Text(conformedLabel(duration))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(LiveDesign.muted)
                     .frame(width: 40, alignment: .trailing)
@@ -3648,11 +3688,13 @@ struct MediaPlayerView: View {
                 }
                 transportButton("goforward.15") { seek(by: 15) }
 
-                Spacer(minLength: 12)
+                Spacer(minLength: 6)
 
                 actionToggle("speaker.slash.fill", "speaker.wave.2.fill", on: isMuted) {
                     toggleMute()
                 }
+                conformButton
+                cleanViewButton
                 viewAssistButton
                 shareButton
             }
@@ -3669,9 +3711,13 @@ struct MediaPlayerView: View {
         }
     }
 
+    /// Playback drops the live-only tools. The horizon needs a camera to read, and magnification is
+    /// driven by an on-feed key playback does not mount — offering it here would be a switch with
+    /// nothing behind it.
     private var visiblePlaybackToolbarTools: [MonitorAssistTool] {
         model.preferences.assistToolbarOrder.filter {
-            $0 != .level && model.preferences.isAssistToolbarButtonVisible($0)
+            $0 != .level && $0 != .magnification
+                && model.preferences.isAssistToolbarButtonVisible($0)
         }
     }
 
@@ -3706,6 +3752,184 @@ struct MediaPlayerView: View {
                     }
             }
         }
+    }
+
+    /// Conform preview: play a high-frame-rate clip at the rate the edit will conform it to.
+    ///
+    /// Real time is the default and always the first item — this is a preview transform, and the
+    /// menu should never leave an operator unsure whether they are looking at the clip or at an
+    /// interpretation of it. When the clip cannot be conformed the control states WHY rather than
+    /// vanishing, because a missing control reads as a missing feature.
+    private var conformButton: some View {
+        let availability = ConformPreview.availability(for: conformSource)
+        let rate = conformSource.captureRate ?? 0
+        return Menu {
+            // A Picker, not hand-rolled rows. The previous version passed an EMPTY SF Symbol name
+            // for unselected items, which is the ragged gap down the left of the menu; a Picker
+            // gets the platform's own selection treatment for free and stays legible.
+            Picker(ConformPreview.menuHeader(captureRate: rate), selection: $conformTarget) {
+                Text("Real time").tag(Double?.none)
+                ForEach(availability.targets, id: \.self) { target in
+                    // Target and speed only — the source rate is in the section header rather than
+                    // repeated on every row, which is what wrapped each row onto two lines.
+                    Text(ConformPreview.targetLabel(captureRate: rate, targetRate: target))
+                        .tag(Double?.some(target))
+                }
+            }
+            .pickerStyle(.inline)
+            if let reason = availability.unavailableReason {
+                Section { Text(reason) }
+            } else if conformTarget != nil {
+                Section { Text(ConformPreview.audioLabel) }
+            }
+        } label: {
+            Image(systemName: "timelapse")
+                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
+                .foregroundStyle(
+                    conformTarget != nil
+                        ? LiveDesign.accent
+                        : (availability.isAvailable ? LiveDesign.text : LiveDesign.faint)
+                )
+                .frame(
+                    width: PlaybackChrome.actionButtonSize.width,
+                    height: PlaybackChrome.actionButtonSize.height
+                )
+                .background(
+                    conformTarget != nil ? LiveDesign.accentDim : Color.clear,
+                    in: RoundedRectangle(
+                        cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+                )
+                .liquidGlass(
+                    in: RoundedRectangle(
+                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
+                    interactive: true)
+        }
+        .disabled(!availability.isAvailable)
+        .accessibilityLabel("Conform preview")
+        .onChange(of: conformTarget) { _, _ in
+            applyMute()
+            if isPlaying { startPlayback() }
+        }
+    }
+
+    /// Star rating, pulled down from the top edge and left there until pushed back up.
+    ///
+    /// It used to sit above the transport, where it cost a permanent band of picture for a control
+    /// that is only wanted while actually rating. Up here it is out of the frame's way, and closed
+    /// it costs a handle.
+    ///
+    /// The handle is not decoration. A pull-down nobody knows about is the same mistake the
+    /// clean-view button exists to correct, so the shade always shows where to grab it — and the
+    /// handle is a tap target too, since a tap is easier than a drag on a moving picture.
+    /// The star row itself, revealed by dragging the handle down.
+    @ViewBuilder
+    private var ratingStarRow: some View {
+        // Written to the card — the camera stays source of truth (the model confirms by readback).
+        // A refusal surfaces the body's response code rather than rolling back silently.
+        StarRatingRow(stars: playerRatingStars ?? 0) { target in
+            let previous = playerRatingStars
+            playerRatingStars = target
+            let clip = activeClip
+            Task {
+                switch await model.setMediaStarRating(target, for: clip) {
+                case .confirmed(let confirmed):
+                    playerRatingStars = confirmed
+                case .refused(_, let message):
+                    playerRatingStars = previous
+                    showToast(message)
+                case .offline:
+                    playerRatingStars = previous
+                    showToast("Connect the camera to rate this clip")
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .liquidGlass(in: Capsule(), interactive: false)
+        .padding(.top, 4)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    /// Nothing at all without a camera-read rating: nil means the clip has no handle or there is no
+    /// session, so the rating could not be written either and the handle would advertise a control
+    /// that cannot work.
+    private var ratingShadeMounts: Bool {
+        playerRatingStars != nil || DemoHarness.ratingShade != nil
+    }
+
+    /// Tap toggles it. A bare chevron says "something is under here" without saying what; the
+    /// star makes it self-describing.
+    ///
+    /// The drag it used to want is gone: pulling a shade down over a moving picture is fussy on a
+    /// handheld rig, and the one gesture that has to stay reliable here is the scrub.
+    private var ratingShadeHandle: some View {
+        Button {
+            withAnimation(.spring(duration: 0.28)) { ratingShadeOpen.toggle() }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(LiveDesign.muted)
+            .frame(width: 52, height: 20)
+            .liquidGlass(in: Capsule(), interactive: true)
+            .opacity(0.9)
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
+    }
+
+    /// The only control clean view keeps: it brings everything else back.
+    ///
+    /// Deliberately dimmed and small — it has to be findable without competing with the picture,
+    /// which is the whole reason the operator hid the rest.
+    private var restoreChromeButton: some View {
+        Button {
+            restoreChrome()
+        } label: {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
+                .foregroundStyle(LiveDesign.text.opacity(0.75))
+                .frame(
+                    width: PlaybackChrome.actionButtonSize.width,
+                    height: PlaybackChrome.actionButtonSize.height
+                )
+                .liquidGlass(in: Circle(), interactive: true)
+                .opacity(0.85)
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Show playback controls")
+    }
+
+    /// Hides every non-critical control, leaving the frame alone.
+    ///
+    /// The swipe-down gesture has always done this, but an undisclosed gesture is indistinguishable
+    /// from a missing feature — so the capability gets a control you can see. The gesture stays for
+    /// operators who already know it.
+    private var cleanViewButton: some View {
+        Button {
+            enterCleanView()
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
+                .foregroundStyle(LiveDesign.text)
+                .frame(
+                    width: PlaybackChrome.actionButtonSize.width,
+                    height: PlaybackChrome.actionButtonSize.height
+                )
+                .contentShape(
+                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+                )
+                .liquidGlass(
+                    in: RoundedRectangle(
+                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
+                    interactive: true)
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Hide playback controls")
+        .accessibilityHint("A restore control stays in the corner")
     }
 
     private var viewAssistButton: some View {
@@ -3954,7 +4178,7 @@ struct MediaPlayerView: View {
         player.replaceCurrentItem(with: item)
         observePlaybackEnd(for: item)
         player.automaticallyWaitsToMinimizeStalling = false
-        player.isMuted = isMuted
+        player.isMuted = isMuted || conformTarget != nil
         playbackScopeController.stop()
         syncPlaybackScopeSampling()
         Task {
@@ -3962,6 +4186,13 @@ struct MediaPlayerView: View {
                 guard generation == playerLoadGeneration else { return }
                 videoDisplaySize = size
             }
+        }
+        conformTarget = nil
+        conformSource = ConformPreview.Source()
+        Task {
+            let probed = await loadConformSource(from: asset)
+            guard generation == playerLoadGeneration else { return }
+            conformSource = probed
         }
         let interval = CMTime(seconds: isScrubbing ? 0.05 : 0.2, preferredTimescale: 600)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
@@ -3979,8 +4210,40 @@ struct MediaPlayerView: View {
         // audio, negligible cost); polling below follows the toggle.
         audioMeterController.attach(to: item)
         syncPlaybackAudioMetering()
-        player.play()
+        startPlayback()
         isPlaying = true
+    }
+
+    /// What the asset can tell us about how it was shot.
+    ///
+    /// The container's nominal rate is all a proxy MP4 carries, so that is the capture rate here —
+    /// with one guard. If the track's own minimum frame duration disagrees with that nominal rate,
+    /// the file is not constant-rate and no single conform factor is correct, so it is marked
+    /// variable and the feature refuses rather than showing a plausible wrong speed.
+    ///
+    /// `isAlreadyConformed` stays false: a file the camera already conformed reports its PLAYBACK
+    /// rate here with nothing generic to distinguish it, so detecting it needs vendor metadata off
+    /// a real high-frame-rate recording. Until that is confirmed on hardware the honest position is
+    /// that we cannot tell, which means an in-camera slow-motion clip would be offered a conform it
+    /// should not be. [verify-on-HW]
+    private func loadConformSource(from asset: AVURLAsset) async -> ConformPreview.Source {
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first else {
+            return ConformPreview.Source()
+        }
+        guard let nominal = try? await track.load(.nominalFrameRate), nominal.isFinite, nominal > 0
+        else { return ConformPreview.Source() }
+        let rate = Double(nominal)
+        guard let minimum = try? await track.load(.minFrameDuration), minimum.isValid,
+            minimum.seconds > 0
+        else {
+            // No per-frame timing to cross-check against; take the nominal rate at face value.
+            return ConformPreview.Source(captureRate: rate)
+        }
+        // A constant-rate track's shortest frame is 1/rate. Anything materially shorter means the
+        // clip runs faster somewhere than its nominal rate claims.
+        let impliedPeak = 1 / minimum.seconds
+        let varies = impliedPeak > rate * 1.05
+        return ConformPreview.Source(captureRate: rate, isVariableFrameRate: varies)
     }
 
     private func teardownPlayer() {
@@ -4094,11 +4357,30 @@ struct MediaPlayerView: View {
 
     private func togglePlay() {
         isPlaying.toggle()
-        isPlaying ? player.play() : player.pause()
+        isPlaying ? startPlayback() : player.pause()
+    }
+
+    /// Real seconds shown on the conformed timeline: a 6 s clip at 40% reads 15 s.
+    private func conformedLabel(_ seconds: Double) -> String {
+        timeLabel(ConformPreview.conformedDuration(sourceSeconds: seconds, speed: conformSpeed))
+    }
+
+    /// Playback rate for the active conform, or 1 in real time.
+    private var conformSpeed: Double {
+        guard let target = conformTarget, let rate = conformSource.captureRate else { return 1 }
+        return ConformPreview.speed(captureRate: rate, targetRate: target)
+    }
+
+    /// Starts playback at the conform rate. Setting a non-zero `rate` IS play, so this replaces
+    /// `player.play()` everywhere — calling `play()` would snap back to 1x and silently drop the
+    /// conform the operator selected.
+    private func startPlayback() {
+        player.rate = Float(conformSpeed)
     }
 
     /// Tap on the video frame toggles transport; at end-of-clip restarts from the beginning.
     private func handlePlaybackFrameTap() {
+        // Decision in `PlaybackFrameTap` so it can be tested; the view only performs it.
         guard isClipReady else { return }
         guard deliveryPresentation == nil, assistOptionsTool == nil else { return }
         guard !isFrameScrubbing else { return }
@@ -4106,10 +4388,11 @@ struct MediaPlayerView: View {
             suppressNextPlaybackTap = false
             return
         }
-        if reachedEnd {
+        switch PlaybackFrameTap.action(chromeVisible: chromeVisible, reachedEnd: reachedEnd) {
+        case .restartPlayback:
             restartPlayback()
             showPlaybackFlash(symbol: "play.fill")
-        } else {
+        case .toggleTransport:
             let willPlay = !isPlaying
             togglePlay()
             showPlaybackFlash(symbol: willPlay ? "play.fill" : "pause.fill")
@@ -4172,7 +4455,7 @@ struct MediaPlayerView: View {
         isFrameScrubbing = false
         clearEndStateIfSeeking(to: scrubTime)
         if wasPlayingBeforeScrub {
-            player.play()
+            startPlayback()
             isPlaying = true
         }
         suppressNextPlaybackTap = true
@@ -4182,7 +4465,7 @@ struct MediaPlayerView: View {
         reachedEnd = false
         currentTime = 0
         player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-        player.play()
+        startPlayback()
         isPlaying = true
     }
 
@@ -4194,7 +4477,13 @@ struct MediaPlayerView: View {
 
     private func toggleMute() {
         isMuted.toggle()
-        player.isMuted = isMuted
+        applyMute()
+    }
+
+    /// A conform preview forces silence regardless of the mute toggle, so unmuting during one
+    /// cannot produce audio at the wrong speed.
+    private func applyMute() {
+        player.isMuted = isMuted || conformTarget != nil
     }
 
     /// Installs one `AVVideoComposition` per clip; assist toggles only mutate `playbackEffectsBox`.
@@ -4212,6 +4501,18 @@ struct MediaPlayerView: View {
             item.videoComposition != nil
         else { return }
         item.videoComposition = playbackEffectsBox.makeVideoComposition(for: item.asset)
+    }
+
+    /// Hides the chrome and says how to get it back. The hint is shown every time the BUTTON is
+    /// used rather than once ever: it costs nothing to re-read, it is self-limiting (only the
+    /// button raises it, and only the operator who wanted clean view presses that), and a
+    /// once-ever tutorial is forgotten long before the one time it is needed.
+    private func enterCleanView() {
+        withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
+    }
+
+    private func restoreChrome() {
+        withAnimation(.spring(duration: 0.32)) { chromeVisible = true }
     }
 
     private func showToast(_ message: String) {
@@ -4334,3 +4635,26 @@ private struct PlayerLayerView: UIViewRepresentable {
 }
 
 // MARK: - Supporting views
+
+/// What a tap on the playback frame means.
+///
+/// Lifted out of the view so the rule below is covered by a test. It cannot be checked by driving
+/// the simulator — synthetic input does not reach this app — so the alternative to a test is
+/// reading the gesture code and hoping.
+enum PlaybackFrameTap: Equatable {
+    case restartPlayback
+    case toggleTransport
+
+    /// The tap means the same thing whether the chrome is up or hidden — play, pause, or restart
+    /// at the end of a clip. Hiding the controls must not take transport away from the picture.
+    ///
+    /// Two earlier attempts got this wrong. The first spent the tap on restoring the chrome, to
+    /// guarantee the clean-view button could not strand anyone — built on a false premise, since
+    /// swipe-up already restored it. The second kept the tap but flashed a hint teaching the
+    /// gesture, which is still a transient answer to a question the operator may ask at any time.
+    /// A small restore control that stays on screen answers it permanently and costs one glyph, so
+    /// the tap is free to mean what it always meant.
+    static func action(chromeVisible: Bool, reachedEnd: Bool) -> PlaybackFrameTap {
+        reachedEnd ? .restartPlayback : .toggleTransport
+    }
+}

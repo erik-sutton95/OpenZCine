@@ -80,6 +80,7 @@ import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.LocalFramingGuideFamily
 import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.openzcine.settings.LocalMagnificationFactor
 import com.opencapture.openzcine.settings.GlassPillSlider
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.PanelCloseButton
@@ -98,10 +99,16 @@ import kotlinx.coroutines.launch
 internal fun hasPlaybackAssistOptions(tool: AssistTool): Boolean =
     tool.hasConfiguration && tool != AssistTool.LEVEL
 
-/** Mirrors iOS by keeping the live-only camera horizon and EV meter out of playback's toolbar. */
+/**
+ * Mirrors iOS by keeping the live-only camera horizon and EV meter out of playback's toolbar.
+ *
+ * MAG joins them: the punch-in is a live-view focus check driven by an on-feed key that playback
+ * does not mount, so offering the tool there would be a switch with nothing behind it.
+ */
 internal fun playbackAssistToolbarTools(tools: List<AssistTool>): List<AssistTool> =
     tools.filterNot {
-        it == AssistTool.LEVEL || it == AssistTool.EV || it.isPhotographyOnly
+        it == AssistTool.LEVEL || it == AssistTool.EV || it == AssistTool.MAG ||
+            it.isPhotographyOnly
     }
 
 /** Returns whether a live quick-settings panel still belongs to the visible monitor lifecycle. */
@@ -403,6 +410,7 @@ private fun PlaybackAssistOptionsContent(
         AssistTool.PLAY ->
             OptionCopy("Shows the just-captured still full-screen after each release.")
         AssistTool.DESQ -> DesqueezeOptions(settings)
+        AssistTool.MAG -> MagnificationOptions(settings)
         AssistTool.AUDIO ->
             OptionCopy("Meters the playing clip's audio. Available during media playback.")
     }
@@ -1296,6 +1304,18 @@ private fun LevelOptions(actions: AssistOptionsActions, settings: OperatorSettin
         LocalLevelStyle::label,
         selected = { settings.levelStyle == it },
     ) { settings.levelStyle = it }
+}
+
+@Composable
+private fun MagnificationOptions(settings: OperatorSettings) {
+    // On/off is the assist-bar MAG chip, and the punch-in itself is the on-feed key; this panel
+    // only picks how far in that key goes.
+    SegmentedChoice(
+        LocalMagnificationFactor.entries.toList(),
+        LocalMagnificationFactor::label,
+        selected = { settings.magnificationFactor == it },
+    ) { settings.magnificationFactor = it }
+    OptionCopy("Tap the magnify key on the feed to punch in and out.")
 }
 
 @Composable

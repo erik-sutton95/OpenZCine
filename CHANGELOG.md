@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Slow-motion conform preview** for high-frame-rate clips: pick the rate the edit will conform
+  to and watch the clip at that speed, stated in full (`60 → 24 fps · 40%`). Real time stays the
+  default, audio is muted while a conform runs, and the clip itself is never touched. Where the
+  source cannot be trusted — unknown rate, variable frame rate — the control says why instead of
+  showing a plausible wrong speed.
+- **A visible clean-view button in playback**, hiding every non-essential control. The swipe-down
+  gesture still works; the button makes it discoverable. A tap on the picture always brings the
+  controls back.
+- **Anamorphic de-squeeze in photo mode** — live view, instant playback and the media-page still
+  viewer, with the same presets and custom 1.00–2.00× ratio the cinema path uses. Display only:
+  the camera original and any export are unchanged.
+
 - **Photography (stills) mode** (iOS + Android): dedicated stills chrome with a real shutter
   (hold-to-burst in continuous drives, tap-to-AF, bulb/time), built-in and app self-timers, and
   capture-bar pickers for mode (incl. U1–U3), ISO Auto, focus mode/area/subject, drive, white
@@ -185,6 +197,11 @@ All notable changes to this project are documented here. The format is based on
   the AF point moves while the preview loads.
 
 ### Changed
+
+- The **star rating in playback** moved from a permanent band above the transport to a shade at the
+  top of the picture: tap the star handle to reveal the stars, tap it again to put them away. They
+  stay put until you do. The handle only appears when a camera is connected, since the rating is
+  written to the card. Both platforms.
 
 - The **Focus dial** is available in video mode as well as photo mode, and is now **off by default**
   on a new install. An operator who already switched it on (or off) keeps that choice.

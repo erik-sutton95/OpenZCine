@@ -5,6 +5,7 @@ import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalFramingGuideFamily
+import com.opencapture.openzcine.settings.LocalMagnificationFactor
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -187,6 +188,8 @@ class FramingAssistsTest {
         desqueezeEnabled: Boolean = false,
         desqueezeRatio: LocalDesqueezeRatio = LocalDesqueezeRatio.X100,
         desqueezeOrientation: LocalDesqueezeOrientation = LocalDesqueezeOrientation.HORIZONTAL,
+        magnificationEnabled: Boolean = false,
+        magnificationFactor: LocalMagnificationFactor = LocalMagnificationFactor.X2,
     ): LocalFramingAssistConfiguration =
         LocalFramingAssistConfiguration(
             guidesVisible = guidesVisible,
@@ -201,5 +204,67 @@ class FramingAssistsTest {
             desqueezeEnabled = desqueezeEnabled,
             desqueezeRatio = desqueezeRatio,
             desqueezeOrientation = desqueezeOrientation,
+            magnificationEnabled = magnificationEnabled,
+            magnificationFactor = magnificationFactor,
         )
+
+    /**
+     * The punch-in is exactly 1 unless the tool is on AND the key is pressed, which is what makes
+     * punching out land on the identical framing rather than a re-derived one. Every guard here is
+     * a way the feed could otherwise be left magnified with no visible control explaining it.
+     */
+    @Test
+    fun `punch-in only scales when the tool is on and the key is pressed`() {
+        val off = framingConfiguration()
+        assertEquals(1f, off.magnificationScale(isActive = true))
+        assertEquals(1f, off.magnificationScale(isActive = false))
+
+        val armed =
+            framingConfiguration(
+                magnificationEnabled = true,
+                magnificationFactor = LocalMagnificationFactor.X3,
+            )
+        assertEquals(1f, armed.magnificationScale(isActive = false))
+        assertEquals(3f, armed.magnificationScale(isActive = true))
+
+        // Every offered factor is a real punch-in; none quietly resolves to 1.
+        LocalMagnificationFactor.entries.forEach { factor ->
+            val scale =
+                framingConfiguration(magnificationEnabled = true, magnificationFactor = factor)
+                    .magnificationScale(isActive = true)
+            assertEquals(factor.scale, scale)
+            assertTrue(scale > 1f)
+        }
+    }
+
+    /**
+     * De-squeeze settles the image's SHAPE, so it has to compose with the punch-in rather than be
+     * replaced by it. Applying the punch-in first would re-fit to a different rectangle and the
+     * image would jump sideways as it zoomed.
+     */
+    @Test
+    fun `punch-in composes with desqueeze instead of replacing it`() {
+        val both =
+            framingConfiguration(
+                desqueezeEnabled = true,
+                desqueezeRatio = LocalDesqueezeRatio.X200,
+                desqueezeOrientation = LocalDesqueezeOrientation.HORIZONTAL,
+                magnificationEnabled = true,
+                magnificationFactor = LocalMagnificationFactor.X2,
+            )
+        val punchIn = both.magnificationScale(isActive = true)
+        // 2x squeeze halves the horizontal scale; a 2x punch-in brings it back to 1 while the
+        // vertical axis doubles — the anamorphic shape is preserved, not undone.
+        assertEquals(1f, both.horizontalPresentationScale * punchIn)
+        assertEquals(2f, both.verticalPresentationScale * punchIn)
+        // The de-squeezed still ratio is untouched: punch-in is a presentation scale, not a shape.
+        assertEquals(
+            both.desqueezedAspectRatio(4_000, 2_000),
+            framingConfiguration(
+                desqueezeEnabled = true,
+                desqueezeRatio = LocalDesqueezeRatio.X200,
+                desqueezeOrientation = LocalDesqueezeOrientation.HORIZONTAL,
+            ).desqueezedAspectRatio(4_000, 2_000),
+        )
+    }
 }

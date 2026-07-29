@@ -122,6 +122,39 @@ internal fun splitComparisonKeyFrame(
 }
 
 /**
+ * The punch-in key's slot: the focus-reset lane mirrored to the OTHER side of the feed.
+ *
+ * Sharing the lane's vertical position keeps the on-feed keys on one line, and taking the opposite
+ * horizontal edge clears the recenter/50-50 stack entirely — so the magnify key never lifts or
+ * shifts as those two come and go, which matters for a control the operator reaches for by muscle
+ * memory while watching focus rather than the button.
+ */
+internal fun magnificationKeyFrame(
+    feed: ZoneFrame,
+    isPortrait: Boolean,
+    bottomChromeInset: Float,
+): ZoneFrame {
+    val lane = focusResetButtonBaseFrame(feed, isPortrait, bottomChromeInset)
+    // focusResetButtonBaseFrame hugs the trailing edge in portrait and the leading edge in
+    // landscape, so the mirror is the opposite edge in each.
+    val x =
+        if (isPortrait) {
+            feed.x + FOCUS_RESET_PANEL_GAP_DP
+        } else {
+            feed.x + feed.width - FOCUS_RESET_PANEL_GAP_DP - FOCUS_RESET_BUTTON_SIZE_DP
+        }
+    return clampScopeFrame(
+        ZoneFrame(
+            x = x,
+            y = lane.y,
+            width = FOCUS_RESET_BUTTON_SIZE_DP,
+            height = FOCUS_RESET_BUTTON_SIZE_DP,
+        ),
+        feed,
+    )
+}
+
+/**
  * Lifts the focus-reset affordance above overlapping movable analysis panels.
  *
  * Panels are considered from lowest to highest so a crowded stack is climbed one panel at a time.

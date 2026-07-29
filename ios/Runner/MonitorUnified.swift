@@ -1435,6 +1435,45 @@ struct MonitorShell: View {
             && !model.interfaceLocked && model.chromeEditorMode == nil
     }
 
+    /// Whether the punch-in quick key mounts. Deliberately independent of the recenter/50-50
+    /// lane: the punch-in has to be reachable even when neither of those keys is up. The two
+    /// trailing clauses are the ones every on-feed key carries.
+    private var magnificationKeyMounts: Bool {
+        Magnification.showsButton(
+            toolEnabled: model.renderedLiveAssistTools.contains(.magnification))
+            && !model.interfaceLocked && model.chromeEditorMode == nil
+    }
+
+    /// The punch-in quick key itself, shared by both orientations so only the seat differs.
+    ///
+    /// One tap in, one tap out — reopening a popup to leave a magnified view would defeat the
+    /// point of a focus check. The icon's active state reads off the same flag that drives the
+    /// transform, so the two cannot disagree.
+    @ViewBuilder private func magnificationKey(size: CGFloat) -> some View {
+        Button {
+            model.magnificationActive.toggle()
+        } label: {
+            Image(
+                systemName: model.magnificationActive
+                    ? "minus.magnifyingglass" : "plus.magnifyingglass"
+            )
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(model.magnificationActive ? LiveDesign.accent : LiveDesign.text)
+            .frame(width: size, height: size)
+            .background(.black.opacity(0.55), in: Circle())
+            .overlay(
+                Circle().strokeBorder(
+                    model.magnificationActive ? LiveDesign.accent : LiveDesign.hairline,
+                    lineWidth: 1))
+        }
+        .buttonStyle(.zcTapTarget)
+        .transition(.scale(scale: 0.6).combined(with: .opacity))
+        .accessibilityLabel(
+            Magnification.buttonLabel(
+                factor: model.assistConfiguration.magnification.factor,
+                isActive: model.magnificationActive))
+    }
+
     /// The live/clean chrome: full-width info deck and the bottom assist/capture strips. Every
     /// region is per-DISP-mode configuration now — no mode branches here.
     @ViewBuilder private func landscapeChrome(
@@ -1637,6 +1676,20 @@ struct MonitorShell: View {
                         .animation(.easeOut(duration: 0.2), value: y)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
+            }
+
+            // Punch-in quick key, on the feed's far edge OPPOSITE the recenter/50-50 lane, level
+            // with it. Landscape stacks those two bottom-left, so the punch-in takes bottom-right.
+            if magnificationKeyMounts {
+                let size: CGFloat = 40
+                let laneY =
+                    map.assistStrip.map { CGFloat($0.frame.y) - 30 }
+                    ?? CGFloat(context.viewportHeight) - 40
+                magnificationKey(size: size)
+                    .position(
+                        x: CGFloat(map.feed.x + map.feed.width) - 10 - size / 2,
+                        y: min(laneY, CGFloat(map.feed.y + map.feed.height) - 10 - size / 2)
+                    )
             }
 
             // MF focus-by-wire scrub: beside the right system rail whenever the operator has
@@ -1963,6 +2016,20 @@ struct MonitorShell: View {
                             - (recenterMounted ? size + 10 : 0)
                     )
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+
+            // Punch-in quick key — the portrait counterpart. Portrait's recenter/50-50 lane is
+            // bottom-RIGHT and the collapsed assist rail owns bottom-LEFT, so the punch-in stacks
+            // directly above that rail: still one thumb-reach from the corner, and clear of both.
+            if model.displayMode != .command, magnificationKeyMounts {
+                let size: CGFloat = 40
+                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let bottomClearance = isFill ? controlsHeight + 10 : 10
+                magnificationKey(size: size)
+                    .offset(
+                        x: feed.x + 10 + size / 2,
+                        y: feed.y + feed.height - bottomClearance - 44 - 10 - size / 2
+                    )
             }
 
             // Bottom system band. The opaque glass draws only when the band still carries a

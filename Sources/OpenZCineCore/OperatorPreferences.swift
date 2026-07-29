@@ -26,6 +26,8 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     case evMeter = "EV"
     case desqueeze = "DE-SQ"
     case instantReview = "PLAY"
+    /// Monitoring punch-in for critical focus (see `Magnification`).
+    case magnification = "MAG"
 
     public var id: String { rawValue }
 
@@ -37,7 +39,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .lut, .peaking, .falseColor, .zebra, .waveform, .parade, .histogram, .vectorscope,
             .trafficLights,
             .guides, .grid,
-            .crosshair, .level, .desqueeze, .instantReview:
+            .crosshair, .level, .desqueeze, .instantReview, .magnification:
             true
         case .audioMeters, .evMeter:
             // Tap-only tools — the meters carry no operator-tunable options.
@@ -88,6 +90,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
         case .instantReview: "Instant Playback"
+        case .magnification: "Magnification"
         }
     }
 }
@@ -1135,6 +1138,41 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         public var style: Style
     }
 
+    /// Live-view punch-in for checking critical focus, and nothing more.
+    ///
+    /// A MONITORING transform: it never touches the camera's crop mode, resolution, recorded
+    /// image or camera-side digital zoom. The operator punches in, confirms focus, and punches
+    /// back out to the identical framing they left.
+    ///
+    /// Only the factor is persisted. Whether the view is currently punched in is transient by
+    /// design — coming back to a session already magnified, with no memory of having done it,
+    /// would read as a broken feed rather than a restored preference.
+    public struct Magnification: Codable, Equatable, Sendable {
+        /// The punch-in factors offered. Deliberately a closed set: this is a focus check, and a
+        /// continuous zoom invites fiddling with a number that has no right answer.
+        public enum Factor: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
+            case x2 = "2x"
+            case x3 = "3x"
+            case x4 = "4x"
+
+            public var id: String { rawValue }
+
+            public var scale: Double {
+                switch self {
+                case .x2: 2
+                case .x3: 3
+                case .x4: 4
+                }
+            }
+        }
+
+        public init(factor: Factor = .x2) {
+            self.factor = factor
+        }
+
+        public var factor: Factor
+    }
+
     public struct Desqueeze: Codable, Equatable, Sendable {
         /// Common anamorphic squeeze chips (including 1.6×). Custom values use [factor].
         public enum Ratio: String, CaseIterable, Codable, Equatable, Sendable {
@@ -1710,6 +1748,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     public var grid: Grid
     public var level: Level
     public var desqueeze: Desqueeze
+    /// Punch-in factor for the magnification assist; the punched-in state itself is not persisted.
+    public var magnification: Magnification = Magnification()
     public var falseColorReferenceEnabled: Bool
     /// Which false-colour ramp the overlay reads against (stop landmarks, monitor IRE, or limits).
     public var falseColorScale: FalseColorScale
@@ -1739,7 +1779,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case guides, grid, level, desqueeze, falseColorReferenceEnabled, falseColorScale,
+        case guides, grid, level, desqueeze, magnification, falseColorReferenceEnabled,
+            falseColorScale,
             zebra, trafficLights,
             zebraHighlightIRE, peakingColor, peakingSensitivity, scopes, selectedLUT,
             instantReviewSeconds, instantReviewShowsFocusPoint, instantReviewShowsCaptureInfo
@@ -1758,6 +1799,9 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         grid = try c.decode(Grid.self, forKey: .grid)
         level = try c.decode(Level.self, forKey: .level)
         desqueeze = try c.decode(Desqueeze.self, forKey: .desqueeze)
+        // Added after the first persisted version, so an older saved config still loads.
+        magnification =
+            try c.decodeIfPresent(Magnification.self, forKey: .magnification) ?? Magnification()
         falseColorReferenceEnabled = try c.decode(Bool.self, forKey: .falseColorReferenceEnabled)
         selectedLUT = try c.decode(LUTSelection.self, forKey: .selectedLUT)
         let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
@@ -1816,6 +1860,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         try c.encode(grid, forKey: .grid)
         try c.encode(level, forKey: .level)
         try c.encode(desqueeze, forKey: .desqueeze)
+        try c.encode(magnification, forKey: .magnification)
         try c.encode(falseColorReferenceEnabled, forKey: .falseColorReferenceEnabled)
         try c.encode(falseColorScale, forKey: .falseColorScale)
         try c.encode(zebra, forKey: .zebra)

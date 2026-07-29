@@ -51,7 +51,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.layout.ContentScale
+import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -120,6 +122,12 @@ internal fun MediaStillViewer(
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
+    /**
+     * De-squeeze configuration; only this screen knows the decoded size, so the ratio is derived
+     * here. A display transform — the camera original is never touched, and share/export are
+     * unaffected.
+     */
+    desqueeze: LocalFramingAssistConfiguration? = null,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -295,6 +303,9 @@ internal fun MediaStillViewer(
                 bitmap = displayedImage,
                 filename = displayClip.filename,
                 modifier = Modifier.fillMaxSize(),
+                desqueezeAspectRatio =
+                    desqueeze?.desqueezedAspectRatio(
+                        displayedImage.width, displayedImage.height),
             )
         } else {
             StillPreviewPlaceholder(previewState)
@@ -576,6 +587,7 @@ private fun ZoomableStillPreview(
     bitmap: Bitmap,
     filename: String,
     modifier: Modifier = Modifier,
+    desqueezeAspectRatio: Float? = null,
 ) {
     var scale by remember(bitmap) { mutableFloatStateOf(1f) }
     var panOffset by remember(bitmap) { mutableStateOf(Offset.Zero) }
@@ -649,13 +661,22 @@ private fun ZoomableStillPreview(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = null,
             modifier =
-                Modifier.fillMaxSize().graphicsLayer {
+                (
+                    if (desqueezeAspectRatio != null) {
+                        Modifier.aspectRatio(desqueezeAspectRatio)
+                    } else {
+                        Modifier.fillMaxSize()
+                    }
+                ).graphicsLayer {
                     scaleX = scale
                     scaleY = scale
                     translationX = panOffset.x
                     translationY = panOffset.y
                 },
-            contentScale = ContentScale.Fit,
+            // The pinch zoom rides on top of the de-squeezed box, so focus inspection happens at
+            // the intended geometry rather than on squeezed pixels.
+            contentScale =
+                if (desqueezeAspectRatio != null) ContentScale.FillBounds else ContentScale.Fit,
         )
     }
 }
