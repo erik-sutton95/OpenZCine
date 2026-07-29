@@ -1637,6 +1637,42 @@ struct MonitorShell: View {
                         .animation(.easeOut(duration: 0.2), value: y)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
+
+                // Punch-in quick key, on the TRAILING side of the same lane so it clears the
+                // recenter/50-50 stack and the camera-settings bar below. One tap in, one tap out —
+                // reopening a popup to leave a magnified view would defeat the point of a focus
+                // check. The filled icon is the active state, which is read off the same flag that
+                // drives the transform, so the two cannot disagree.
+                if Magnification.showsButton(
+                    toolEnabled: model.renderedLiveAssistTools.contains(.magnification))
+                {
+                    let factor = model.assistConfiguration.magnification.factor
+                    Button {
+                        model.magnificationActive.toggle()
+                    } label: {
+                        Image(
+                            systemName: model.magnificationActive
+                                ? "minus.magnifyingglass" : "plus.magnifyingglass"
+                        )
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(
+                            model.magnificationActive ? LiveDesign.accent : LiveDesign.text
+                        )
+                        .frame(width: size, height: size)
+                        .background(.black.opacity(0.55), in: Circle())
+                        .overlay(
+                            Circle().strokeBorder(
+                                model.magnificationActive
+                                    ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1))
+                    }
+                    .buttonStyle(.zcTapTarget)
+                    .position(x: CGFloat(context.viewportWidth) - 24 - size / 2, y: baseY)
+                    .animation(.easeOut(duration: 0.2), value: baseY)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    .accessibilityLabel(
+                        Magnification.buttonLabel(
+                            factor: factor, isActive: model.magnificationActive))
+                }
             }
 
             // MF focus-by-wire scrub: beside the right system rail whenever the operator has

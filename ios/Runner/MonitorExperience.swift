@@ -395,7 +395,18 @@ private struct LiveFrameRaster: View {
             height: height
         )
         .scaleEffect(
-            desqueezeScale(model.assistConfiguration.desqueeze), anchor: .center)
+            desqueezeScale(model.assistConfiguration.desqueeze), anchor: .center
+        )
+        // Punch-in goes LAST, on the settled and framed image — see `Magnification`. Applied here
+        // it scales exactly what the operator is looking at, so punching out lands on the identical
+        // framing and the overlays registered to this layer come along magnified.
+        .scaleEffect(
+            Magnification.scale(
+                factor: model.assistConfiguration.magnification.factor.scale,
+                isActive: model.magnificationActive),
+            anchor: .center
+        )
+        .clipped()
     }
 }
 

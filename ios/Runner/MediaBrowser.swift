@@ -3103,8 +3103,19 @@ struct MediaPlayerView: View {
             }
 
             VStack {
-                if chromeVisible { topBar }
-                if chromeVisible { ratingShade }
+                if chromeVisible {
+                    // Handle sits on the top bar's own row, centred between the title and the
+                    // favourite button — the row's middle was dead space.
+                    ZStack {
+                        topBar
+                        if playerRatingStars != nil || DemoHarness.ratingShadeOpen {
+                            ratingShadeHandle
+                        }
+                    }
+                    if ratingShadeOpen, playerRatingStars != nil || DemoHarness.ratingShadeOpen {
+                        ratingStarRow
+                    }
+                }
                 Spacer()
                 if chromeVisible, let toastMessage { toastView(toastMessage) }
                 if chromeVisible { bottomBar }
@@ -3806,87 +3817,65 @@ struct MediaPlayerView: View {
     /// The handle is not decoration. A pull-down nobody knows about is the same mistake the
     /// clean-view button exists to correct, so the shade always shows where to grab it — and the
     /// handle is a tap target too, since a tap is easier than a drag on a moving picture.
+    /// The star row itself, revealed by dragging the handle down.
     @ViewBuilder
-    private var ratingShade: some View {
-        // Nothing at all without a camera-read rating. `mediaStarRating` returns nil when the clip
-        // has no handle or there is no session, i.e. the rating cannot be written either — so the
-        // handle would be advertising a control that could not work. Offering nothing is clearer
-        // than offering zero stars that refuse to stick.
-        // The demo hook stages the shade for headless capture; without it the state is
-        // unreachable, which is how an empty shade shipped once already.
-        if playerRatingStars != nil || DemoHarness.ratingShadeOpen {
-            ratingShadeContent
-        }
-    }
-
-    @ViewBuilder
-    private var ratingShadeContent: some View {
-        VStack(spacing: 4) {
-            if ratingShadeOpen {
-                // Written to the card — the camera stays source of truth (the model confirms by
-                // readback). A refusal surfaces the body's response code in a toast rather than
-                // rolling back silently.
-                //
-                // Zero when the rating is unknown: `mediaStarRating` returns nil for a clip with no
-                // camera handle or no session, and binding that away rendered an EMPTY shade — the
-                // arrow toggled, nothing appeared, and nothing said why.
-                StarRatingRow(stars: playerRatingStars ?? 0) { target in
-                    let previous = playerRatingStars
-                    playerRatingStars = target
-                    let clip = activeClip
-                    Task {
-                        switch await model.setMediaStarRating(target, for: clip) {
-                        case .confirmed(let confirmed):
-                            playerRatingStars = confirmed
-                        case .refused(_, let message):
-                            playerRatingStars = previous
-                            showToast(message)
-                        case .offline:
-                            playerRatingStars = previous
-                            showToast("Connect the camera to rate this clip")
-                        }
-                    }
+    private var ratingStarRow: some View {
+        // Written to the card — the camera stays source of truth (the model confirms by readback).
+        // A refusal surfaces the body's response code rather than rolling back silently.
+        StarRatingRow(stars: playerRatingStars ?? 0) { target in
+            let previous = playerRatingStars
+            playerRatingStars = target
+            let clip = activeClip
+            Task {
+                switch await model.setMediaStarRating(target, for: clip) {
+                case .confirmed(let confirmed):
+                    playerRatingStars = confirmed
+                case .refused(_, let message):
+                    playerRatingStars = previous
+                    showToast(message)
+                case .offline:
+                    playerRatingStars = previous
+                    showToast("Connect the camera to rate this clip")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .liquidGlass(in: Capsule(), interactive: false)
             }
-            // A bare chevron says "something is under here" without saying what. The star makes
-            // the handle self-describing, so the pull is discoverable without being used first.
-            //
-            // NOT a Button. A Button claims drags that begin inside it, so the handle could only
-            // ever be tapped — a `simultaneousGesture` on the container never saw the drag start.
-            // A plain view with both recognisers lets tap and pull coexist, which is what a handle
-            // is supposed to do.
-            HStack(spacing: 3) {
-                Image(systemName: "star.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(LiveDesign.muted)
-            .frame(width: 52, height: 20)
-            .liquidGlass(in: Capsule(), interactive: true)
-            .opacity(0.9)
-            // Visual height stays 20pt; the touch target is padded out to 44.
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(duration: 0.32)) { ratingShadeOpen.toggle() }
-            }
-            .gesture(ratingShadePullGesture)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, -6)
-        .contentShape(Rectangle())
-        // The handle owns the pull now; a second recogniser on the container would only race it.
-        .simultaneousGesture(ratingShadePullGesture)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .liquidGlass(in: Capsule(), interactive: false)
+        .padding(.top, 4)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    /// Settles on `onChanged`, not `onEnded`: a pull should follow the finger, and a shade that
-    /// only moves once you let go feels like a button with extra steps — which is what it was.
+    /// Drag-only handle. A bare chevron says "something is under here" without saying what; the
+    /// star makes it self-describing.
+    ///
+    /// Tapping does NOT toggle it. A handle that both taps and drags trains the tap, and the drag —
+    /// the gesture that actually makes this feel like a shade rather than a switch — never gets
+    /// discovered. A tap instead says what to do, which teaches it once at the moment of confusion.
+    private var ratingShadeHandle: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "star.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(LiveDesign.muted)
+        .frame(width: 52, height: 20)
+        .liquidGlass(in: Capsule(), interactive: true)
+        .opacity(0.9)
+        // Visual height stays 20pt; the touch target is padded out to 44.
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            showToast(
+                ratingShadeOpen ? "Drag up to hide the rating" : "Drag down to rate this clip")
+        }
+        .gesture(ratingShadePullGesture)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
+        .accessibilityHint("Drag down to reveal, up to hide")
+    }
+
     private var ratingShadePullGesture: some Gesture {
         DragGesture(minimumDistance: 6)
             .onChanged { value in
