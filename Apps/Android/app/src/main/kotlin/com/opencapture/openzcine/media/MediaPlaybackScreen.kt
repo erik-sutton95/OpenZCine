@@ -14,7 +14,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -1453,8 +1452,8 @@ private fun ProgressivePlayer(
             // to sit above the transport, costing a permanent band of picture for a control only
             // wanted while actually rating. The handle is not decoration: a pull-down nobody knows
             // about is the mistake the clean-view button exists to correct, so the shade always
-            // shows where to grab it — and the handle is a tap target too, since a tap is easier
-            // than a drag on a moving picture.
+            // shows where to reach it. Tap only: pulling a shade down over a moving picture is
+            // fussy on a handheld rig, and the scrub is the gesture that has to stay reliable.
             // Nothing at all without a camera-read rating: null means the clip has no handle or
             // there is no session, so the rating could not be written either and the handle would
             // advertise a control that cannot work (iOS `ratingShade`).
@@ -1467,12 +1466,7 @@ private fun ProgressivePlayer(
                         ),
                     )
                     .padding(top = 54.dp)
-                    .fillMaxWidth()
-                    .pointerInput(ratingShadeOpen) {
-                        detectVerticalDragGestures { _, delta ->
-                            ratingShadePull(delta)?.let(onRatingShadeOpenChanged)
-                        }
-                    },
+                    .fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (ratingShadeOpen) {
@@ -1490,13 +1484,6 @@ private fun ProgressivePlayer(
                         .glass(CircleShape)
                         .alpha(0.9f)
                         .chromeClickable(onClick = { onRatingShadeOpenChanged(!ratingShadeOpen) })
-                        // The handle owns the pull as well as the tap. Without this the clickable
-                        // consumes the pointer and the handle can only ever be tapped.
-                        .pointerInput(ratingShadeOpen) {
-                            detectVerticalDragGestures { _, delta ->
-                                ratingShadePull(delta)?.let(onRatingShadeOpenChanged)
-                            }
-                        }
                         .semantics {
                             contentDescription =
                                 if (ratingShadeOpen) "Hide star rating" else "Show star rating"

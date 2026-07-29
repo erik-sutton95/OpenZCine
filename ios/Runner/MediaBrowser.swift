@@ -2881,9 +2881,9 @@ struct MediaPlayerView: View {
     @State private var conformSource = ConformPreview.Source()
     /// The selected conform target, or nil for real-time playback (the default, always).
     @State private var conformTarget: Double?
-    /// Whether the star-rating shade is pulled down. Deliberately NOT reset per clip: the operator
-    /// pulled it open to rate a run of shots, so it stays open across them until pushed back up.
-    @State private var ratingShadeOpen = DemoHarness.ratingShadeOpen
+    /// Whether the star-rating shade is open. Deliberately NOT reset per clip: the operator opened
+    /// it to rate a run of shots, so it stays open across them until it is closed again.
+    @State private var ratingShadeOpen = DemoHarness.ratingShade == "open"
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var reachedEnd = false
@@ -3108,11 +3108,11 @@ struct MediaPlayerView: View {
                     // favourite button — the row's middle was dead space.
                     ZStack {
                         topBar
-                        if playerRatingStars != nil || DemoHarness.ratingShadeOpen {
+                        if ratingShadeMounts {
                             ratingShadeHandle
                         }
                     }
-                    if ratingShadeOpen, playerRatingStars != nil || DemoHarness.ratingShadeOpen {
+                    if ratingShadeOpen, ratingShadeMounts {
                         ratingStarRow
                     }
                 }
@@ -3850,47 +3850,35 @@ struct MediaPlayerView: View {
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    /// Drag-only handle. A bare chevron says "something is under here" without saying what; the
-    /// star makes it self-describing.
-    ///
-    /// Tapping does NOT toggle it. A handle that both taps and drags trains the tap, and the drag —
-    /// the gesture that actually makes this feel like a shade rather than a switch — never gets
-    /// discovered. A tap instead says what to do, which teaches it once at the moment of confusion.
-    private var ratingShadeHandle: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "star.fill")
-                .font(.system(size: 10, weight: .semibold))
-            Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(LiveDesign.muted)
-        .frame(width: 52, height: 20)
-        .liquidGlass(in: Capsule(), interactive: true)
-        .opacity(0.9)
-        // Visual height stays 20pt; the touch target is padded out to 44.
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            showToast(
-                ratingShadeOpen ? "Drag up to hide the rating" : "Drag down to rate this clip")
-        }
-        .gesture(ratingShadePullGesture)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
-        .accessibilityHint("Drag down to reveal, up to hide")
+    /// Nothing at all without a camera-read rating: nil means the clip has no handle or there is no
+    /// session, so the rating could not be written either and the handle would advertise a control
+    /// that cannot work.
+    private var ratingShadeMounts: Bool {
+        playerRatingStars != nil || DemoHarness.ratingShade != nil
     }
 
-    private var ratingShadePullGesture: some Gesture {
-        DragGesture(minimumDistance: 6)
-            .onChanged { value in
-                guard
-                    let open = RatingShadePull.resolve(
-                        verticalDelta: value.translation.height,
-                        horizontalDelta: value.translation.width),
-                    open != ratingShadeOpen
-                else { return }
-                withAnimation(.spring(duration: 0.28)) { ratingShadeOpen = open }
+    /// Tap toggles it. A bare chevron says "something is under here" without saying what; the
+    /// star makes it self-describing.
+    ///
+    /// The drag it used to want is gone: pulling a shade down over a moving picture is fussy on a
+    /// handheld rig, and the one gesture that has to stay reliable here is the scrub.
+    private var ratingShadeHandle: some View {
+        Button {
+            withAnimation(.spring(duration: 0.28)) { ratingShadeOpen.toggle() }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
             }
+            .foregroundStyle(LiveDesign.muted)
+            .frame(width: 52, height: 20)
+            .liquidGlass(in: Capsule(), interactive: true)
+            .opacity(0.9)
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
     }
 
     /// The only control clean view keeps: it brings everything else back.
@@ -4653,32 +4641,6 @@ private struct PlayerLayerView: UIViewRepresentable {
 /// Lifted out of the view so the rule below is covered by a test. It cannot be checked by driving
 /// the simulator — synthetic input does not reach this app — so the alternative to a test is
 /// reading the gesture code and hoping.
-/// The rating shade's pull, as a decision rather than a condition inside a gesture handler.
-///
-/// It has to coexist with the chrome swipe, which already owns vertical drags on the picture
-/// (down hides, up reveals). Resolving that by re-mapping the chrome gesture would break muscle
-/// memory for a control most operators use constantly, so the shade is pulled from the TOP EDGE
-/// instead — the notification-shade idiom, physically where the stars live, and a zone the chrome
-/// gesture never claimed.
-enum RatingShadePull {
-    /// Shorter than the chrome swipe's 44. That threshold is for a swipe anywhere on the
-    /// picture, where a low bar would fire by accident; this one starts on a 52pt handle the
-    /// operator has deliberately grabbed, so it should give way almost at once — a pull that
-    /// needs 44pt of travel reads as a stuck control.
-    static let minimumTravel: Double = 16
-    /// A drag must be this much more vertical than horizontal to count, so a scrub does not open it.
-    static let verticalBias: Double = 8
-
-    /// The shade's new state, or `nil` when the drag was too small or too horizontal to mean
-    /// anything — in which case whatever else wanted the gesture keeps it.
-    static func resolve(verticalDelta: Double, horizontalDelta: Double) -> Bool? {
-        guard abs(verticalDelta) > abs(horizontalDelta) + verticalBias,
-            abs(verticalDelta) > minimumTravel
-        else { return nil }
-        return verticalDelta > 0
-    }
-}
-
 enum PlaybackFrameTap: Equatable {
     case restartPlayback
     case toggleTransport

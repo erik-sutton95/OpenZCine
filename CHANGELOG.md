@@ -198,6 +198,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- The **star rating in playback** moved from a permanent band above the transport to a shade at the
+  top of the picture: tap the star handle to reveal the stars, tap it again to put them away. They
+  stay put until you do. The handle only appears when a camera is connected, since the rating is
+  written to the card. Both platforms.
+
 - The **Focus dial** is available in video mode as well as photo mode, and is now **off by default**
   on a new install. An operator who already switched it on (or off) keeps that choice.
 

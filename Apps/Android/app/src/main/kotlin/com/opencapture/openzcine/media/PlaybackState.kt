@@ -177,19 +177,6 @@ internal fun nextConformTarget(current: Double?, targets: List<Double>): Double?
     }
 }
 
-/**
- * The rating shade's pull (iOS `RatingShadePull`).
- *
- * It has to coexist with the chrome swipe, which already owns vertical drags on the picture.
- * Re-mapping that would break muscle memory for a control operators use constantly, so the shade
- * is pulled from the TOP band instead — where the stars live, and a zone the chrome gesture never
- * claimed. Returns the new open state, or null when the drag is too small to mean anything.
- */
-internal fun ratingShadePull(verticalDeltaDp: Float): Boolean? {
-    if (abs(verticalDeltaDp) < 6f) return null
-    return verticalDeltaDp > 0f
-}
-
 /** What a tap on the playback frame means (iOS `PlaybackFrameTap`). */
 internal enum class PlaybackFrameTap {
     RESTART_PLAYBACK,
