@@ -186,26 +186,23 @@ class PlaybackStateTest {
                 },
         )
 
+    /**
+     * Hiding the controls must not take transport away from the picture: tap-to-pause works
+     * identically in clean view. The way back rides on the restore control that stays on screen
+     * and on the swipe, not on this tap (iOS `testCleanViewKeepsTapToPause`).
+     */
     @Test
-    fun `tapping a hidden chrome always restores it rather than toggling transport`() {
-        // Hidden chrome wins even at end-of-clip, where the tap would otherwise restart playback.
-        assertEquals(
-            PlaybackFrameTap.RESTORE_CHROME,
-            playbackFrameTapAction(chromeVisible = false, reachedEnd = false),
-        )
-        assertEquals(
-            PlaybackFrameTap.RESTORE_CHROME,
-            playbackFrameTapAction(chromeVisible = false, reachedEnd = true),
-        )
-        // With the chrome up, the tap keeps its old meaning.
-        assertEquals(
-            PlaybackFrameTap.TOGGLE_TRANSPORT,
-            playbackFrameTapAction(chromeVisible = true, reachedEnd = false),
-        )
-        assertEquals(
-            PlaybackFrameTap.RESTART_PLAYBACK,
-            playbackFrameTapAction(chromeVisible = true, reachedEnd = true),
-        )
+    fun `clean view keeps tap to pause`() {
+        for (chromeVisible in listOf(true, false)) {
+            assertEquals(
+                PlaybackFrameTap.TOGGLE_TRANSPORT,
+                playbackFrameTapAction(chromeVisible = chromeVisible, reachedEnd = false),
+            )
+            assertEquals(
+                PlaybackFrameTap.RESTART_PLAYBACK,
+                playbackFrameTapAction(chromeVisible = chromeVisible, reachedEnd = true),
+            )
+        }
     }
 
     /** Mirrors `ConformPreviewTests` in shared core, so the two platforms cannot drift apart. */

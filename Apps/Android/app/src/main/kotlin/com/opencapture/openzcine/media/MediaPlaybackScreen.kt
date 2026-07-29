@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -68,6 +69,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -805,8 +807,6 @@ private fun ProgressivePlayer(
     var reachedEnd by remember(entry) { mutableStateOf(false) }
     var scrubPosition by remember(entry) { mutableFloatStateOf(0f) }
     var scrubbing by remember(entry) { mutableStateOf(false) }
-    // When the clean-view hint was raised; 0 once it has been dismissed or expired.
-    var cleanViewHintShownAt by remember(entry) { mutableLongStateOf(0L) }
     var wasPlayingBeforeScrub by remember(entry) { mutableStateOf(false) }
     var lastPreviewSeekAt by remember(entry) { mutableLongStateOf(0L) }
     var zoom by remember(entry) { mutableFloatStateOf(1f) }
@@ -847,25 +847,11 @@ private fun ProgressivePlayer(
         pan = PlaybackPan()
     }
 
-    /**
-     * Hides the chrome and says how to get it back. The hint is shown every time the BUTTON is
-     * used rather than once ever: it costs nothing to re-read, it is self-limiting (only the
-     * button raises it, and only the operator who wanted clean view presses that), and a
-     * once-ever tutorial is forgotten long before the one time it is needed.
-     */
-    LaunchedEffect(cleanViewHintShownAt) {
-        if (cleanViewHintShownAt == 0L) return@LaunchedEffect
-        delay(PLAYBACK_CLEAN_VIEW_HINT_MILLIS)
-        cleanViewHintShownAt = 0L
-    }
-
     fun enterCleanView() {
         onChromeVisibleChanged(false)
-        cleanViewHintShownAt = SystemClock.elapsedRealtime()
     }
 
     fun restoreChrome() {
-        cleanViewHintShownAt = 0L
         onChromeVisibleChanged(true)
     }
 
@@ -1305,29 +1291,34 @@ private fun ProgressivePlayer(
                     detectTapGestures(
                         onTap = {
                             if (scrubbing) return@detectTapGestures
-                            when (playbackFrameTapAction(chromeVisible, reachedEnd)) {
-                                PlaybackFrameTap.RESTORE_CHROME -> restoreChrome()
-                                else -> togglePlayback(showFlash = true)
-                            }
+                            togglePlayback(showFlash = true)
                         },
                         onDoubleTap = { resetZoom() },
                     )
                 },
         )
-        if (!chromeVisible && cleanViewHintShownAt != 0L) {
-            Text(
-                "Tap to show controls",
-                modifier =
-                    Modifier.align(Alignment.BottomCenter)
-                        .windowInsetsPadding(
-                            WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
-                        )
-                        .padding(bottom = 24.dp)
-                        .glass(CircleShape)
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                style = chromeStyle(12f, FontWeight.Medium),
-                color = LiveDesign.text,
-            )
+        if (!chromeVisible) {
+            // The one control clean view keeps. Every other affordance is hidden, but the way back
+            // cannot be: the swipe restores it for operators who know the gesture, and this is
+            // here for everyone who does not. Dimmed so it is findable without competing with the
+            // picture, which is the whole reason the rest was hidden.
+            Box(
+                Modifier.align(Alignment.BottomEnd)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                        ),
+                    )
+                    .padding(end = 16.dp, bottom = 24.dp)
+                    .alpha(0.85f),
+            ) {
+                PlaybackIconButton(
+                    icon = Icons.Filled.FullscreenExit,
+                    contentDescription = "Show playback controls",
+                    circular = true,
+                    onClick = { restoreChrome() },
+                )
+            }
         }
         if (framingAssistsVisible) {
             LocalFramingAssistOverlay(

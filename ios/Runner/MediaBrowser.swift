@@ -2927,13 +2927,6 @@ struct MediaPlayerView: View {
     @State private var zoomContainerSize: CGSize = .zero
     /// Suppresses play/pause tap recognition after pinch, pan, or frame scrub so those gestures do not toggle transport.
     @State private var suppressNextPlaybackTap = false
-    /// Shown for a beat when the clean-view button hides the chrome, so the way back is never a
-    /// guess. Deliberately not the `toastMessage` toast — that one only renders while the chrome
-    /// is up, which is exactly when this is not needed.
-    /// Seeded by the demo hook so the hint is in the headless capture; in the app only
-    /// `enterCleanView()` raises it, and it dismisses itself.
-    @State private var cleanViewHintVisible = DemoHarness.playbackCleanView
-    @State private var cleanViewHintTask: Task<Void, Never>?
     /// Brief play/pause symbol shown centered on the video after a frame tap toggles transport.
     @State private var playbackFlashSymbol: String?
     @State private var playbackFlashVisible = false
@@ -3133,16 +3126,14 @@ struct MediaPlayerView: View {
                     .padding(.bottom, 2)
                 }
                 if chromeVisible { bottomBar }
-                if !chromeVisible && cleanViewHintVisible {
-                    Text("Tap to show controls")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(LiveDesign.text)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .liquidGlass(in: Capsule(), interactive: false)
-                        .transition(.opacity)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                if !chromeVisible {
+                    // The one control clean view keeps. Every other affordance is hidden, but the
+                    // way back cannot be: the swipe restores it for operators who know the
+                    // gesture, and this is here for everyone who does not.
+                    HStack {
+                        Spacer()
+                        restoreChromeButton
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -3396,7 +3387,6 @@ struct MediaPlayerView: View {
                     restoreChrome()
                 } else {
                     // The gesture is for operators who already know it; no hint.
-                    cleanViewHintTask?.cancel()
                     withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
                 }
             }
@@ -3802,6 +3792,28 @@ struct MediaPlayerView: View {
         .accessibilityLabel("Conform preview")
     }
 
+    /// The only control clean view keeps: it brings everything else back.
+    ///
+    /// Deliberately dimmed and small — it has to be findable without competing with the picture,
+    /// which is the whole reason the operator hid the rest.
+    private var restoreChromeButton: some View {
+        Button {
+            restoreChrome()
+        } label: {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
+                .foregroundStyle(LiveDesign.text.opacity(0.75))
+                .frame(
+                    width: PlaybackChrome.actionButtonSize.width,
+                    height: PlaybackChrome.actionButtonSize.height
+                )
+                .liquidGlass(in: Circle(), interactive: true)
+                .opacity(0.85)
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Show playback controls")
+    }
+
     /// Hides every non-critical control, leaving the frame alone.
     ///
     /// The swipe-down gesture has always done this, but an undisclosed gesture is indistinguishable
@@ -3828,7 +3840,7 @@ struct MediaPlayerView: View {
         }
         .buttonStyle(.zcTapTarget)
         .accessibilityLabel("Hide playback controls")
-        .accessibilityHint("Tap the video to bring them back")
+        .accessibilityHint("A restore control stays in the corner")
     }
 
     private var viewAssistButton: some View {
@@ -4288,8 +4300,6 @@ struct MediaPlayerView: View {
             return
         }
         switch PlaybackFrameTap.action(chromeVisible: chromeVisible, reachedEnd: reachedEnd) {
-        case .restoreChrome:
-            restoreChrome()
         case .restartPlayback:
             restartPlayback()
             showPlaybackFlash(symbol: "play.fill")
@@ -4410,21 +4420,10 @@ struct MediaPlayerView: View {
     /// once-ever tutorial is forgotten long before the one time it is needed.
     private func enterCleanView() {
         withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
-        cleanViewHintTask?.cancel()
-        withAnimation { cleanViewHintVisible = true }
-        cleanViewHintTask = Task {
-            try? await Task.sleep(for: .seconds(1.8))
-            guard !Task.isCancelled else { return }
-            withAnimation { cleanViewHintVisible = false }
-        }
     }
 
     private func restoreChrome() {
-        cleanViewHintTask?.cancel()
-        withAnimation(.spring(duration: 0.32)) {
-            chromeVisible = true
-            cleanViewHintVisible = false
-        }
+        withAnimation(.spring(duration: 0.32)) { chromeVisible = true }
     }
 
     private func showToast(_ message: String) {
@@ -4554,19 +4553,19 @@ private struct PlayerLayerView: UIViewRepresentable {
 /// the simulator — synthetic input does not reach this app — so the alternative to a test is
 /// reading the gesture code and hoping.
 enum PlaybackFrameTap: Equatable {
-    case restoreChrome
     case restartPlayback
     case toggleTransport
 
-    /// A hidden chrome wins over everything else.
+    /// The tap means the same thing whether the chrome is up or hidden — play, pause, or restart
+    /// at the end of a clip. Hiding the controls must not take transport away from the picture.
     ///
-    /// The clean-view button hands the operator a screen with no visible controls, so the tap that
-    /// brings them back cannot also be the tap that plays or pauses. Without this the button would
-    /// create precisely the trap it exists to remove — and it would be a worse trap than the swipe
-    /// gesture ever was, because a gesture nobody knows about is undiscoverable, while a button
-    /// that strands you is inescapable.
+    /// Two earlier attempts got this wrong. The first spent the tap on restoring the chrome, to
+    /// guarantee the clean-view button could not strand anyone — built on a false premise, since
+    /// swipe-up already restored it. The second kept the tap but flashed a hint teaching the
+    /// gesture, which is still a transient answer to a question the operator may ask at any time.
+    /// A small restore control that stays on screen answers it permanently and costs one glyph, so
+    /// the tap is free to mean what it always meant.
     static func action(chromeVisible: Bool, reachedEnd: Bool) -> PlaybackFrameTap {
-        guard chromeVisible else { return .restoreChrome }
-        return reachedEnd ? .restartPlayback : .toggleTransport
+        reachedEnd ? .restartPlayback : .toggleTransport
     }
 }

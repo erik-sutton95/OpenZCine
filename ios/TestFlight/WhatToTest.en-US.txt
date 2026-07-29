@@ -4,7 +4,7 @@ New and changed
 - DISP 2 now offers exactly the same elements as DISP 1, with different defaults: the picture, the side rail, the focus box and the batteries, everything else off. Switch on whatever else you want. The recording tally, the record control while rolling and camera warnings always stay.
 - The focus dial works in video as well as photo. Off by default, in the FOCUS popup; if you already switched it on, it stays on.
 - H.265 8-bit and 10-bit are separate choices: the codec popup shows one H.265 row with 8-bit and 10-bit either side, so you pick the depth directly. Stream Preset and Quality Bias now both read Fast, Balanced, Quality - Quality Bias had only two positions, so the middle grade was unreachable. New installs start on Quality.
-- Playback gains a clean-view button that hides every control; tap the picture to bring them back. High-frame-rate clips can be watched at their edit speed - pick a rate and it shows what you get, e.g. 60 to 24 fps at 40%, with audio muted while it runs. De-squeeze now works in photo mode too: live view, instant playback and the media viewer.
+- Playback gains a clean-view button that hides every control, leaving one small button in the corner to bring them back. Swipe and tap-to-pause both still work. High-frame-rate clips can be watched at their edit speed - pick a rate and it shows what you get, e.g. 60 to 24 fps at 40%, audio muted. De-squeeze now works in photo mode: live view, instant playback and the media viewer.
 - Media filters match the tab you are on: Photos offers JPEG, HEIF and NEF, an L/M/S size row, and Today / 7 days / 30 days.
 
 Fixes
@@ -14,8 +14,8 @@ Fixes
 - Connecting a second camera no longer changes its settings. Moving between bodies could flip shutter angle back to shutter speed and disturb other settings; connecting is now read-only.
 - Pickers show what your camera actually supports, in the order it uses. Bodies without U1-U3 are no longer offered them, drive modes read Single, CL, CH, CH+, and 3D tracking and subject detection are named apart instead of both reading "Subject".
 - Unplugging the cable or power-cycling the camera used to wedge the app until you force-quit it. Both now recover on their own, or offer you Retry connection and Operator menu on the last frame.
-- The first connection attempt no longer needs cancelling and retrying before it will work.
-- Command view keeps the timecode running. It used to freeze at whatever the clock read when you switched, which looked convincing and was wrong while rolling.
+- The first connection attempt no longer needs cancelling and retrying.
+- Command view keeps the timecode running. It used to freeze at whatever the clock read when you switched - convincing, and wrong while rolling.
 - The focus dial no longer stalls and take tap-to-focus down with it, and the media filter popup fits on smaller phones instead of sliding off the edge.
 
 What to test
