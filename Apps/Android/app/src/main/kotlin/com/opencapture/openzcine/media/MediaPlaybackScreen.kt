@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -39,6 +40,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -168,10 +171,16 @@ import kotlinx.coroutines.withContext
 private const val PLAYBACK_ZOOM_MAX = 4f
 
 /** iOS `PlaybackChrome` — compact transport metrics. */
+/**
+ * Sized so the full transport row fits the narrowest supported width, matching iOS
+ * `MediaClipPlayerView.PlaybackChrome`. The row grew to eight controls when the conform preview
+ * landed; on iOS that overflow dragged the top bar off screen, and the same arithmetic applies
+ * here. Visual size only — the buttons keep their 44dp minimum touch target.
+ */
 private object PlaybackChrome {
-    val transportButtonWidth = 40.dp
+    val transportButtonWidth = 38.dp
     val transportButtonHeight = 36.dp
-    val actionButtonWidth = 38.dp
+    val actionButtonWidth = 32.dp
     val actionButtonHeight = 36.dp
     val transportIconSize = 18.dp
     val primaryTransportIconSize = 22.dp
@@ -330,6 +339,9 @@ private fun PlaybackClipSession(
     val latestDeliveryJob = rememberUpdatedState(deliveryJob)
     val actionInProgress = pendingAction != null
     var chromeVisible by remember(clip.handle) { mutableStateOf(true) }
+    // Pulled down to rate, and left open across clips until pushed back up — so NOT keyed to the
+    // clip, unlike the rating value itself (iOS `ratingShadeOpen`).
+    var ratingShadeOpen by remember { mutableStateOf(false) }
     // Camera-read star rating (null until read, or unreachable — row hidden).
     // Seeded by read, confirmed by the entry point's built-in readback: the
     // camera stays source of truth for every write.
@@ -579,6 +591,8 @@ private fun PlaybackClipSession(
                     lutLibrary = lutLibrary,
                     chromeVisible = chromeVisible,
                     onChromeVisibleChanged = { chromeVisible = it },
+                    ratingShadeOpen = ratingShadeOpen,
+                    onRatingShadeOpenChanged = { ratingShadeOpen = it },
                     onPlayerChanged = { activePlayer = it },
                     shareReady = shareState == PlaybackShareState.READY,
                     deliveryInProgress = deliveryInProgress,
@@ -729,6 +743,9 @@ private fun ProgressivePlayer(
     lutLibrary: AndroidLutLibrary?,
     chromeVisible: Boolean,
     onChromeVisibleChanged: (Boolean) -> Unit,
+    /** Owned by the parent so it survives clip changes, like the operator left it. */
+    ratingShadeOpen: Boolean,
+    onRatingShadeOpenChanged: (Boolean) -> Unit,
     onPlayerChanged: (Player?) -> Unit,
     shareReady: Boolean = false,
     deliveryInProgress: Boolean = false,
@@ -1429,6 +1446,63 @@ private fun ProgressivePlayer(
         }
 
         if (chromeVisible) {
+            // Star rating, pulled down from the top and left there until pushed back up. It used
+            // to sit above the transport, costing a permanent band of picture for a control only
+            // wanted while actually rating. The handle is not decoration: a pull-down nobody knows
+            // about is the mistake the clean-view button exists to correct, so the shade always
+            // shows where to grab it — and the handle is a tap target too, since a tap is easier
+            // than a drag on a moving picture.
+            Column(
+                Modifier.align(Alignment.TopCenter)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
+                        ),
+                    )
+                    .padding(top = 62.dp)
+                    .fillMaxWidth()
+                    .pointerInput(ratingShadeOpen) {
+                        detectVerticalDragGestures { _, delta ->
+                            ratingShadePull(delta)?.let(onRatingShadeOpenChanged)
+                        }
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (ratingShadeOpen && ratingStars != null) {
+                    StarRatingRow(
+                        stars = ratingStars,
+                        modifier =
+                            Modifier.padding(bottom = 6.dp)
+                                .glass(CircleShape)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        onSelect = onSelectRating,
+                    )
+                }
+                Box(
+                    Modifier.size(width = 44.dp, height = 20.dp)
+                        .glass(CircleShape)
+                        .alpha(0.9f)
+                        .chromeClickable(onClick = { onRatingShadeOpenChanged(!ratingShadeOpen) })
+                        .semantics {
+                            contentDescription =
+                                if (ratingShadeOpen) "Hide star rating" else "Show star rating"
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector =
+                            if (ratingShadeOpen) {
+                                Icons.Filled.KeyboardArrowUp
+                            } else {
+                                Icons.Filled.KeyboardArrowDown
+                            },
+                        contentDescription = null,
+                        tint = LiveDesign.muted,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+
             Column(
                 Modifier.align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -1450,13 +1524,6 @@ private fun ProgressivePlayer(
                             Modifier.padding(bottom = 6.dp, start = 16.dp, end = 16.dp)
                                 .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
-                }
-                if (ratingStars != null) {
-                    StarRatingRow(
-                        stars = ratingStars,
-                        modifier = Modifier.padding(bottom = 2.dp),
-                        onSelect = onSelectRating,
                     )
                 }
                 Column(

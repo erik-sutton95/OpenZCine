@@ -2881,6 +2881,9 @@ struct MediaPlayerView: View {
     @State private var conformSource = ConformPreview.Source()
     /// The selected conform target, or nil for real-time playback (the default, always).
     @State private var conformTarget: Double?
+    /// Whether the star-rating shade is pulled down. Deliberately NOT reset per clip: the operator
+    /// pulled it open to rate a run of shots, so it stays open across them until pushed back up.
+    @State private var ratingShadeOpen = false
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var reachedEnd = false
@@ -3101,30 +3104,9 @@ struct MediaPlayerView: View {
 
             VStack {
                 if chromeVisible { topBar }
+                if chromeVisible { ratingShade }
                 Spacer()
                 if chromeVisible, let toastMessage { toastView(toastMessage) }
-                if chromeVisible, let stars = playerRatingStars {
-                    // Clip star rating, written to the card — the camera stays source of truth
-                    // (the model confirms by readback). A refusal surfaces the body's response
-                    // code in a toast instead of a silent rollback.
-                    StarRatingRow(stars: stars) { target in
-                        let previous = playerRatingStars
-                        playerRatingStars = target
-                        let clip = activeClip
-                        Task {
-                            switch await model.setMediaStarRating(target, for: clip) {
-                            case .confirmed(let confirmed):
-                                playerRatingStars = confirmed
-                            case .refused(_, let message):
-                                playerRatingStars = previous
-                                showToast(message)
-                            case .offline:
-                                playerRatingStars = previous
-                            }
-                        }
-                    }
-                    .padding(.bottom, 2)
-                }
                 if chromeVisible { bottomBar }
                 if !chromeVisible {
                     // The one control clean view keeps. Every other affordance is hidden, but the
@@ -3559,16 +3541,41 @@ struct MediaPlayerView: View {
     // MARK: Bottom bar (playback transport or inline view-assist)
 
     /// Compact playback chrome — primary controls use 44pt hit targets via `ZCTapTargetButtonStyle`.
-    private enum PlaybackChrome {
-        static let barPaddingH: CGFloat = 12
+    ///
+    /// Sized so the full transport row fits the narrowest supported width. It grew to eight
+    /// controls when the conform preview landed and silently overflowed: an HStack of fixed-size
+    /// children does not compress, so the row widened the whole chrome stack and pushed the TOP
+    /// bar's back and favourite buttons off both screen edges. Visual size only — `.zcTapTarget`
+    /// keeps every hit target at 44pt regardless.
+    enum PlaybackChrome {
+        static let barPaddingH: CGFloat = 10
         static let barPaddingV: CGFloat = 9
-        static let transportRowSpacing: CGFloat = 8
+        static let transportRowSpacing: CGFloat = 5
         static let scrubberRowSpacing: CGFloat = 5
-        static let transportButtonSize = CGSize(width: 40, height: 36)
-        static let actionButtonSize = CGSize(width: 38, height: 36)
+        static let transportButtonSize = CGSize(width: 38, height: 36)
+        static let actionButtonSize = CGSize(width: 32, height: 36)
         static let transportIconSize: CGFloat = 18
         static let primaryTransportIconSize: CGFloat = 22
         static let actionIconSize: CGFloat = 16
+
+        /// Narrowest screen the app ships on (iPhone SE class), in points. The row is checked
+        /// against this in `RunnerTests` so the next control added here fails a test rather than
+        /// silently shoving the top bar off the screen.
+        static let narrowestScreenWidth: CGFloat = 375
+        /// Horizontal padding the chrome stack applies outside the bar.
+        static let chromeHorizontalPadding: CGFloat = 16
+
+        /// Width the transport row needs: three transport buttons, five actions, the gaps between
+        /// them, the bar's own padding, and the minimum spacer.
+        static func transportRowWidth(
+            transportCount: Int = 3, actionCount: Int = 5, minimumSpacer: CGFloat = 6
+        ) -> CGFloat {
+            let buttons =
+                transportButtonSize.width * CGFloat(transportCount)
+                + actionButtonSize.width * CGFloat(actionCount)
+            let gaps = transportRowSpacing * CGFloat(transportCount + actionCount - 1)
+            return buttons + gaps + barPaddingH * 2 + minimumSpacer
+        }
     }
 
     private var bottomBar: some View {
@@ -3670,7 +3677,7 @@ struct MediaPlayerView: View {
                 }
                 transportButton("goforward.15") { seek(by: 15) }
 
-                Spacer(minLength: 12)
+                Spacer(minLength: 6)
 
                 actionToggle("speaker.slash.fill", "speaker.wave.2.fill", on: isMuted) {
                     toggleMute()
@@ -3790,6 +3797,77 @@ struct MediaPlayerView: View {
         }
         .disabled(!availability.isAvailable)
         .accessibilityLabel("Conform preview")
+    }
+
+    /// Star rating, pulled down from the top edge and left there until pushed back up.
+    ///
+    /// It used to sit above the transport, where it cost a permanent band of picture for a control
+    /// that is only wanted while actually rating. Up here it is out of the frame's way, and closed
+    /// it costs a handle.
+    ///
+    /// The handle is not decoration. A pull-down nobody knows about is the same mistake the
+    /// clean-view button exists to correct, so the shade always shows where to grab it — and the
+    /// handle is a tap target too, since a tap is easier than a drag on a moving picture.
+    @ViewBuilder
+    private var ratingShade: some View {
+        VStack(spacing: 6) {
+            if ratingShadeOpen, let stars = playerRatingStars {
+                // Written to the card — the camera stays source of truth (the model confirms by
+                // readback). A refusal surfaces the body's response code in a toast rather than
+                // rolling back silently.
+                StarRatingRow(stars: stars) { target in
+                    let previous = playerRatingStars
+                    playerRatingStars = target
+                    let clip = activeClip
+                    Task {
+                        switch await model.setMediaStarRating(target, for: clip) {
+                        case .confirmed(let confirmed):
+                            playerRatingStars = confirmed
+                        case .refused(_, let message):
+                            playerRatingStars = previous
+                            showToast(message)
+                        case .offline:
+                            playerRatingStars = previous
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .liquidGlass(in: Capsule(), interactive: false)
+            }
+            Button {
+                withAnimation(.spring(duration: 0.32)) { ratingShadeOpen.toggle() }
+            } label: {
+                Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LiveDesign.muted)
+                    .frame(width: 44, height: 20)
+                    .contentShape(Rectangle())
+                    .liquidGlass(in: Capsule(), interactive: true)
+                    .opacity(0.9)
+            }
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
+        }
+        // Full-width so the pull is a band under the top bar rather than a hunt for the handle.
+        // NOT a separate greedy ZStack child: an earlier attempt at that took the chrome's
+        // horizontal padding with it and clipped the back and favourite buttons off the edges.
+        .frame(maxWidth: .infinity)
+        .padding(.top, 6)
+        .contentShape(Rectangle())
+        .gesture(ratingShadePullGesture)
+    }
+
+    private var ratingShadePullGesture: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onEnded { value in
+                guard
+                    let open = RatingShadePull.resolve(
+                        verticalDelta: value.translation.height,
+                        horizontalDelta: value.translation.width)
+                else { return }
+                withAnimation(.spring(duration: 0.32)) { ratingShadeOpen = open }
+            }
     }
 
     /// The only control clean view keeps: it brings everything else back.
@@ -4552,6 +4630,29 @@ private struct PlayerLayerView: UIViewRepresentable {
 /// Lifted out of the view so the rule below is covered by a test. It cannot be checked by driving
 /// the simulator — synthetic input does not reach this app — so the alternative to a test is
 /// reading the gesture code and hoping.
+/// The rating shade's pull, as a decision rather than a condition inside a gesture handler.
+///
+/// It has to coexist with the chrome swipe, which already owns vertical drags on the picture
+/// (down hides, up reveals). Resolving that by re-mapping the chrome gesture would break muscle
+/// memory for a control most operators use constantly, so the shade is pulled from the TOP EDGE
+/// instead — the notification-shade idiom, physically where the stars live, and a zone the chrome
+/// gesture never claimed.
+enum RatingShadePull {
+    /// Same thresholds as the chrome swipe, so one hand learns one movement.
+    static let minimumTravel: Double = 44
+    /// A drag must be this much more vertical than horizontal to count, so a scrub does not open it.
+    static let verticalBias: Double = 8
+
+    /// The shade's new state, or `nil` when the drag was too small or too horizontal to mean
+    /// anything — in which case whatever else wanted the gesture keeps it.
+    static func resolve(verticalDelta: Double, horizontalDelta: Double) -> Bool? {
+        guard abs(verticalDelta) > abs(horizontalDelta) + verticalBias,
+            abs(verticalDelta) > minimumTravel
+        else { return nil }
+        return verticalDelta > 0
+    }
+}
+
 enum PlaybackFrameTap: Equatable {
     case restartPlayback
     case toggleTransport
