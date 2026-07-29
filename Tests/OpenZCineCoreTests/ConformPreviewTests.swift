@@ -120,4 +120,20 @@ struct ConformPreviewTests {
         let odd = ConformPreview.label(captureRate: 120, targetRate: 25)
         #expect(odd == "120 → 25 fps · 20.8%")
     }
+
+    /// The per-row label drops the source rate, which is stated once in the header. Repeating it
+    /// on every row is what made the menu wrap to two lines a row.
+    @Test("Menu rows name the target and its speed, and the header names the source once")
+    func menuLabels() {
+        #expect(ConformPreview.targetLabel(captureRate: 50, targetRate: 24) == "24 fps · 48%")
+        #expect(ConformPreview.targetLabel(captureRate: 50, targetRate: 30) == "30 fps · 60%")
+        // The pulldown rates keep a decimal on both the rate and the percentage.
+        #expect(
+            ConformPreview.targetLabel(captureRate: 50, targetRate: 29.97) == "29.97 fps · 59.9%")
+        #expect(ConformPreview.menuHeader(captureRate: 50) == "Conform 50 fps to")
+        // Every row stays short enough not to wrap in a menu.
+        for target in ConformPreview.targetRates {
+            #expect(ConformPreview.targetLabel(captureRate: 120, targetRate: target).count <= 18)
+        }
+    }
 }

@@ -2883,7 +2883,7 @@ struct MediaPlayerView: View {
     @State private var conformTarget: Double?
     /// Whether the star-rating shade is pulled down. Deliberately NOT reset per clip: the operator
     /// pulled it open to rate a run of shots, so it stays open across them until pushed back up.
-    @State private var ratingShadeOpen = false
+    @State private var ratingShadeOpen = DemoHarness.ratingShadeOpen
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var reachedEnd = false
@@ -3747,30 +3747,24 @@ struct MediaPlayerView: View {
     /// vanishing, because a missing control reads as a missing feature.
     private var conformButton: some View {
         let availability = ConformPreview.availability(for: conformSource)
+        let rate = conformSource.captureRate ?? 0
         return Menu {
-            Button {
-                conformTarget = nil
-                applyMute()
-                if isPlaying { startPlayback() }
-            } label: {
-                Label("Real time", systemImage: conformTarget == nil ? "checkmark" : "")
-            }
-            ForEach(availability.targets, id: \.self) { target in
-                Button {
-                    conformTarget = target
-                    applyMute()
-                    if isPlaying { startPlayback() }
-                } label: {
-                    Label(
-                        ConformPreview.label(
-                            captureRate: conformSource.captureRate ?? 0, targetRate: target),
-                        systemImage: conformTarget == target ? "checkmark" : "")
+            // A Picker, not hand-rolled rows. The previous version passed an EMPTY SF Symbol name
+            // for unselected items, which is the ragged gap down the left of the menu; a Picker
+            // gets the platform's own selection treatment for free and stays legible.
+            Picker(ConformPreview.menuHeader(captureRate: rate), selection: $conformTarget) {
+                Text("Real time").tag(Double?.none)
+                ForEach(availability.targets, id: \.self) { target in
+                    // Target and speed only — the source rate is in the section header rather than
+                    // repeated on every row, which is what wrapped each row onto two lines.
+                    Text(ConformPreview.targetLabel(captureRate: rate, targetRate: target))
+                        .tag(Double?.some(target))
                 }
             }
+            .pickerStyle(.inline)
             if let reason = availability.unavailableReason {
                 Section { Text(reason) }
-            }
-            if conformTarget != nil {
+            } else if conformTarget != nil {
                 Section { Text(ConformPreview.audioLabel) }
             }
         } label: {
@@ -3797,6 +3791,10 @@ struct MediaPlayerView: View {
         }
         .disabled(!availability.isAvailable)
         .accessibilityLabel("Conform preview")
+        .onChange(of: conformTarget) { _, _ in
+            applyMute()
+            if isPlaying { startPlayback() }
+        }
     }
 
     /// Star rating, pulled down from the top edge and left there until pushed back up.
@@ -3810,12 +3808,16 @@ struct MediaPlayerView: View {
     /// handle is a tap target too, since a tap is easier than a drag on a moving picture.
     @ViewBuilder
     private var ratingShade: some View {
-        VStack(spacing: 6) {
-            if ratingShadeOpen, let stars = playerRatingStars {
+        VStack(spacing: 4) {
+            if ratingShadeOpen {
                 // Written to the card — the camera stays source of truth (the model confirms by
                 // readback). A refusal surfaces the body's response code in a toast rather than
                 // rolling back silently.
-                StarRatingRow(stars: stars) { target in
+                //
+                // Zero when the rating is unknown: `mediaStarRating` returns nil for a clip with no
+                // camera handle or no session, and binding that away rendered an EMPTY shade — the
+                // arrow toggled, nothing appeared, and nothing said why.
+                StarRatingRow(stars: playerRatingStars ?? 0) { target in
                     let previous = playerRatingStars
                     playerRatingStars = target
                     let clip = activeClip
@@ -3828,6 +3830,7 @@ struct MediaPlayerView: View {
                             showToast(message)
                         case .offline:
                             playerRatingStars = previous
+                            showToast("Connect the camera to rate this clip")
                         }
                     }
                 }
@@ -3835,27 +3838,33 @@ struct MediaPlayerView: View {
                 .padding(.vertical, 8)
                 .liquidGlass(in: Capsule(), interactive: false)
             }
+            // A bare chevron says "something is under here" without saying what. The star makes
+            // the handle self-describing, so the pull is discoverable without being used first.
             Button {
                 withAnimation(.spring(duration: 0.32)) { ratingShadeOpen.toggle() }
             } label: {
-                Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(LiveDesign.muted)
-                    .frame(width: 44, height: 20)
-                    .contentShape(Rectangle())
-                    .liquidGlass(in: Capsule(), interactive: true)
-                    .opacity(0.9)
+                HStack(spacing: 3) {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundStyle(LiveDesign.muted)
+                .frame(width: 52, height: 20)
+                .contentShape(Rectangle())
+                .liquidGlass(in: Capsule(), interactive: true)
+                .opacity(0.9)
             }
             .buttonStyle(.zcTapTarget)
             .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
         }
-        // Full-width so the pull is a band under the top bar rather than a hunt for the handle.
-        // NOT a separate greedy ZStack child: an earlier attempt at that took the chrome's
-        // horizontal padding with it and clipped the back and favourite buttons off the edges.
         .frame(maxWidth: .infinity)
-        .padding(.top, 6)
+        .padding(.top, -6)
         .contentShape(Rectangle())
-        .gesture(ratingShadePullGesture)
+        // `simultaneousGesture`, not `gesture`: a plain drag recogniser on the container competes
+        // with the handle's Button and can eat the tap, which is the other half of "tapping the
+        // arrow did nothing".
+        .simultaneousGesture(ratingShadePullGesture)
     }
 
     private var ratingShadePullGesture: some Gesture {

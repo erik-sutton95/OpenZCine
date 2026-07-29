@@ -750,7 +750,10 @@ private fun ProgressivePlayer(
     shareReady: Boolean = false,
     deliveryInProgress: Boolean = false,
     onShare: () -> Unit = {},
-    /** Camera-read clip star rating; null hides the row (offline/unreadable). */
+    /**
+     * Camera-read clip star rating; null means offline or unreadable. The shade shows zero stars
+     * in that case rather than nothing — an opened shade that renders empty reads as broken.
+     */
     ratingStars: Int? = null,
     /** Transient rating-write refusal line (with the body's response code); null hides it. */
     ratingMessage: String? = null,
@@ -1459,7 +1462,7 @@ private fun ProgressivePlayer(
                             WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
                         ),
                     )
-                    .padding(top = 62.dp)
+                    .padding(top = 54.dp)
                     .fillMaxWidth()
                     .pointerInput(ratingShadeOpen) {
                         detectVerticalDragGestures { _, delta ->
@@ -1468,9 +1471,9 @@ private fun ProgressivePlayer(
                     },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (ratingShadeOpen && ratingStars != null) {
+                if (ratingShadeOpen) {
                     StarRatingRow(
-                        stars = ratingStars,
+                        stars = ratingStars ?: 0,
                         modifier =
                             Modifier.padding(bottom = 6.dp)
                                 .glass(CircleShape)
@@ -1478,8 +1481,8 @@ private fun ProgressivePlayer(
                         onSelect = onSelectRating,
                     )
                 }
-                Box(
-                    Modifier.size(width = 44.dp, height = 20.dp)
+                Row(
+                    Modifier.size(width = 52.dp, height = 20.dp)
                         .glass(CircleShape)
                         .alpha(0.9f)
                         .chromeClickable(onClick = { onRatingShadeOpenChanged(!ratingShadeOpen) })
@@ -1487,8 +1490,15 @@ private fun ProgressivePlayer(
                             contentDescription =
                                 if (ratingShadeOpen) "Hide star rating" else "Show star rating"
                         },
-                    contentAlignment = Alignment.Center,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Icon(
+                        imageVector = Icons.Filled.Star,
+                        contentDescription = null,
+                        tint = LiveDesign.muted,
+                        modifier = Modifier.size(11.dp),
+                    )
                     Icon(
                         imageVector =
                             if (ratingShadeOpen) {
@@ -1498,7 +1508,7 @@ private fun ProgressivePlayer(
                             },
                         contentDescription = null,
                         tint = LiveDesign.muted,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(13.dp),
                     )
                 }
             }

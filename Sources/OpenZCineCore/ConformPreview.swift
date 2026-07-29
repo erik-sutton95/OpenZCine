@@ -179,6 +179,25 @@ public enum ConformPreview {
         return "\(rateLabel(captureRate)) → \(rateLabel(targetRate)) fps · \(formatted)%"
     }
 
+    /// One menu row: the target rate and the speed it produces, without repeating the source rate
+    /// on every line — `24 fps · 48%`.
+    ///
+    /// The full `label` form belongs where the conform is stated once (a header, a badge); repeated
+    /// down a list it is the same eight characters five times over, which is what pushed the rows
+    /// to two lines and made the menu unreadable.
+    public static func targetLabel(captureRate: Double, targetRate: Double) -> String {
+        let percent = speed(captureRate: captureRate, targetRate: targetRate) * 100
+        let formatted =
+            abs(percent - percent.rounded()) < 0.05
+            ? String(Int(percent.rounded())) : String(format: "%.1f", percent)
+        return "\(rateLabel(targetRate)) fps · \(formatted)%"
+    }
+
+    /// Header for the list of targets, naming the source rate once: `Conform 50 fps to`.
+    public static func menuHeader(captureRate: Double) -> String {
+        "Conform \(rateLabel(captureRate)) fps to"
+    }
+
     /// Audio during a conform preview.
     ///
     /// Muted, and labelled as muted. Playing a track at 40% without pitch correction is misleading
