@@ -3711,9 +3711,13 @@ struct MediaPlayerView: View {
         }
     }
 
+    /// Playback drops the live-only tools. The horizon needs a camera to read, and magnification is
+    /// driven by an on-feed key playback does not mount — offering it here would be a switch with
+    /// nothing behind it.
     private var visiblePlaybackToolbarTools: [MonitorAssistTool] {
         model.preferences.assistToolbarOrder.filter {
-            $0 != .level && model.preferences.isAssistToolbarButtonVisible($0)
+            $0 != .level && $0 != .magnification
+                && model.preferences.isAssistToolbarButtonVisible($0)
         }
     }
 

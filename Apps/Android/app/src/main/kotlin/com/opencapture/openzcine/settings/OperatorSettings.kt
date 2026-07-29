@@ -324,6 +324,30 @@ public enum class LocalDesqueezeRatio(
     }
 }
 
+/**
+ * Live-view punch-in factors, mirroring the shared core's
+ * `AssistConfiguration.Magnification.Factor`.
+ *
+ * A closed set on purpose: this is a focus check, and a continuous zoom invites fiddling with a
+ * number that has no right answer.
+ */
+public enum class LocalMagnificationFactor(
+    /** Operator-facing label, also the accessibility wording. */
+    public val label: String,
+    /** The scale applied to the settled feed rect. */
+    public val scale: Float,
+) {
+    X2("2x", 2f),
+    X3("3x", 3f),
+    X4("4x", 4f),
+    ;
+
+    internal companion object {
+        fun fromStoredName(value: String?): LocalMagnificationFactor? =
+            entries.firstOrNull { it.name == value }
+    }
+}
+
 /** The source axis compressed by an anamorphic capture. */
 public enum class LocalDesqueezeOrientation(
     /** Operator-facing source-axis label. */
@@ -537,6 +561,10 @@ public data class LocalFramingAssistConfiguration(
     public val desqueezeFactor: Float = desqueezeRatio.factor,
     /** The source axis compressed by the anamorphic capture. */
     public val desqueezeOrientation: LocalDesqueezeOrientation,
+    /** Whether the punch-in tool is on, i.e. whether its quick key is on the feed. */
+    public val magnificationEnabled: Boolean = false,
+    /** The punch-in factor the quick key applies. */
+    public val magnificationFactor: LocalMagnificationFactor = LocalMagnificationFactor.X2,
 ) {
     /** Whether at least one selected guide is currently visible. */
     public val drawsGuides: Boolean
@@ -572,6 +600,24 @@ public data class LocalFramingAssistConfiguration(
         if (width <= 0f || height <= 0f) return null
         val ratio = width / height
         return if (ratio == sourceWidth.toFloat() / sourceHeight) null else ratio
+    }
+
+    /**
+     * The punch-in scale to apply to the settled feed rect, about its centre. Mirrors the shared
+     * core's `Magnification.scale(factor:isActive:)`.
+     *
+     * Exactly 1 when inactive, so the feed can apply it unconditionally and punching out lands on a
+     * framing identical to never having punched in — not a re-derived one. That identity is what
+     * stops repeated toggling from accumulating drift.
+     *
+     * Ordering is forced, not chosen: de-squeeze changes the image's SHAPE, so it has to settle
+     * before anything decides how big to draw the result. Applying the punch-in earlier would make
+     * it interact with the fit and the image would jump sideways as it zoomed.
+     */
+    public fun magnificationScale(isActive: Boolean): Float {
+        if (!isActive || !magnificationEnabled) return 1f
+        val scale = magnificationFactor.scale
+        return if (scale.isFinite() && scale > 1f) scale else 1f
     }
 
     /** Local vertical monitor scale after applying the selected de-squeeze. */
@@ -856,6 +902,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val evMeterAssistEnabled: Toggle = Toggle("assist.local.evMeter", default = false)
     public val desqueezeEnabled: Toggle =
         Toggle(DESQUEEZE_ENABLED_KEY, default = legacyDesqueezeWasEnabled())
+    /** Puts the punch-in quick key on the feed; the punch-in itself is session-only. */
+    public val magnificationEnabled: Toggle =
+        Toggle("assist.local.magnification.enabled.v1", default = false)
     /** Shows the shared Swift meter's RGB edge blocks on the histogram. */
     public val histogramTrafficLightsEnabled: Toggle =
         Toggle("assist.scopes.histogramTrafficLights.v1", default = true)
@@ -873,6 +922,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     private val desqueezeRatioState = mutableStateOf(loadDesqueezeRatio())
     private val desqueezeFactorState = mutableStateOf(loadDesqueezeFactor())
     private val desqueezeOrientationState = mutableStateOf(loadDesqueezeOrientation())
+    private val magnificationFactorState = mutableStateOf(loadMagnificationFactor())
     private val splitComparisonOrientationState = mutableStateOf(loadSplitComparisonOrientation())
     private val levelStyleState = mutableStateOf(loadLevelStyle())
     private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
@@ -1052,6 +1102,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             preferences.edit().putString(LEVEL_STYLE_KEY, new.name).apply()
         }
 
+    /** The punch-in factor the feed's magnify key applies; persisted immediately on change. */
+    public var magnificationFactor: LocalMagnificationFactor
+        get() = magnificationFactorState.value
+        set(new) {
+            magnificationFactorState.value = new
+            preferences.edit().putString(MAGNIFICATION_FACTOR_KEY, new.name).apply()
+        }
+
     /** The source axis compressed by the selected local anamorphic factor. */
     public var desqueezeOrientation: LocalDesqueezeOrientation
         get() = desqueezeOrientationState.value
@@ -1109,6 +1167,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.LEVEL -> levelAssistEnabled.toggle()
             AssistTool.EV -> evMeterAssistEnabled.toggle()
             AssistTool.DESQ -> desqueezeEnabled.toggle()
+            AssistTool.MAG -> magnificationEnabled.toggle()
             else -> Unit
         }
     }
@@ -1122,6 +1181,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.LEVEL -> levelAssistEnabled.value
             AssistTool.EV -> evMeterAssistEnabled.value
             AssistTool.DESQ -> desqueezeEnabled.value
+            AssistTool.MAG -> magnificationEnabled.value
             else -> false
         }
 
@@ -1268,6 +1328,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 desqueezeRatio = desqueezeRatio,
                 desqueezeFactor = desqueezeFactor,
                 desqueezeOrientation = desqueezeOrientation,
+                magnificationEnabled = magnificationEnabled.value,
+                magnificationFactor = magnificationFactor,
             )
 
     private val assistToolbarOrderState = mutableStateOf(loadAssistToolbarOrder())
@@ -1405,6 +1467,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             levelAssistEnabled,
             evMeterAssistEnabled,
             desqueezeEnabled,
+            magnificationEnabled,
         )
 
     private fun loadDisplayModeOrder(): List<MonitorDisplayMode> {
@@ -1507,6 +1570,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             editor.putBoolean(EV_METER_VISIBILITY_MIGRATED_KEY, true)
             changed = true
         }
+        if (!preferences.getBoolean(MAGNIFICATION_VISIBILITY_MIGRATED_KEY, false)) {
+            // MAG joined the framing group after its migration marker shipped, same as LEVEL.
+            // Add it exactly once so an existing custom toolbar sees the punch-in, then retain
+            // every later manual hide.
+            migrated += AssistTool.MAG
+            editor.putBoolean(MAGNIFICATION_VISIBILITY_MIGRATED_KEY, true)
+            changed = true
+        }
         if (changed) {
             editor.putStringSet(VISIBLE_ASSIST_TOOLS_KEY, migrated.mapTo(linkedSetOf()) { it.name }).apply()
         }
@@ -1584,6 +1655,11 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         LocalDesqueezeOrientation.fromStoredName(
             preferences.getString(DESQUEEZE_ORIENTATION_KEY, null),
         ) ?: LocalDesqueezeOrientation.HORIZONTAL
+
+    private fun loadMagnificationFactor(): LocalMagnificationFactor =
+        LocalMagnificationFactor.fromStoredName(
+            preferences.getString(MAGNIFICATION_FACTOR_KEY, null),
+        ) ?: LocalMagnificationFactor.X2
 
     private fun loadSplitComparisonOrientation(): FeedSplitOrientation =
         FeedSplitOrientation.fromStoredName(
@@ -1796,6 +1872,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val DESQUEEZE_RATIO_KEY = "assist.local.desqueeze.ratio.v2"
         const val DESQUEEZE_FACTOR_KEY = "assist.local.desqueeze.factor.v1"
         const val DESQUEEZE_ORIENTATION_KEY = "assist.local.desqueeze.orientation.v2"
+        const val MAGNIFICATION_FACTOR_KEY = "assist.local.magnification.factor.v1"
+        const val MAGNIFICATION_VISIBILITY_MIGRATED_KEY =
+            "assist.toolbar.magnificationVisibility.migrated.v1"
         const val SPLIT_COMPARISON_ORIENTATION_KEY = "assist.lut.splitComparison.orientation.v1"
         const val LEGACY_FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val LEGACY_DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"

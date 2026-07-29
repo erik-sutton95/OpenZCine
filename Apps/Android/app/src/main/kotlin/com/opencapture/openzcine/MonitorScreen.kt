@@ -1704,6 +1704,18 @@ internal fun MonitorScreen(
         LaunchedEffect(operatorSettings.splitComparisonEnabled.value) {
             if (operatorSettings.splitComparisonEnabled.value) splitComparisonMuted = false
         }
+        // The punch-in is session-only for the same reason: it is a focus check, not a setting, and
+        // a monitor that reopens already magnified is a monitor that lies about the framing.
+        var magnificationActive by remember { mutableStateOf(false) }
+        // Switching the tool off clears the punch-in. Leaving it armed behind a disabled tool is
+        // how the key and the transform desynchronise — a magnified feed with no visible control
+        // that explains it (shared core `Magnification.activeAfterDisabling`).
+        LaunchedEffect(operatorSettings.magnificationEnabled.value) {
+            if (!operatorSettings.magnificationEnabled.value) magnificationActive = false
+        }
+        // Read off `renderedFraming`, so a DISP mode that suppresses the tool drops the punch-in
+        // with it — the same rule that takes the key away.
+        val punchIn = renderedFraming.magnificationScale(magnificationActive)
         val renderedEffects =
             renderedFeedEffects(
                 assist.effects.copy(
@@ -2077,9 +2089,13 @@ internal fun MonitorScreen(
                 } else if (monitorFrameSource != null) {
                     LiveFeedView(
                         monitorFrameSource,
+                        // Punch-in multiplies into the de-squeeze scales rather than sitting in its
+                        // own layer, which is exactly the composition iOS gets from stacking the two
+                        // `scaleEffect`s: shape settles first, then the settled result is scaled
+                        // about its centre. The parent Box already clips.
                         Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = localFraming.horizontalPresentationScale
-                            scaleY = localFraming.verticalPresentationScale
+                            scaleX = localFraming.horizontalPresentationScale * punchIn
+                            scaleY = localFraming.verticalPresentationScale * punchIn
                         },
                         onPresentedFrame = { frame, bitmap, baker ->
                             // TC is owned by the stream collector above; present
@@ -2126,8 +2142,10 @@ internal fun MonitorScreen(
                     FeedTextureOverlay(
                         presentationState = liveFeedPresentation,
                         aspectFill = isPortraitFill,
-                        horizontalPresentationScale = localFraming.horizontalPresentationScale,
-                        verticalPresentationScale = localFraming.verticalPresentationScale,
+                        horizontalPresentationScale =
+                            localFraming.horizontalPresentationScale * punchIn,
+                        verticalPresentationScale =
+                            localFraming.verticalPresentationScale * punchIn,
                     )
                 } else {
                     // Hop-aware status: after RED/Frame.io internet hop the session is
@@ -2910,6 +2928,47 @@ internal fun MonitorScreen(
                     text = "50/50",
                     style = chromeStyle(11f, FontWeight.Bold),
                     color = if (splitComparisonMuted) LiveDesign.muted else LiveDesign.accent,
+                )
+            }
+        }
+        // Punch-in quick key, opposite the recenter/50-50 lane so it never lifts or shifts as those
+        // two come and go. One tap in, one tap out — reopening a popup to leave a magnified view
+        // would defeat the point of a focus check. The accent state is read off the same flag that
+        // drives the transform, so the two cannot disagree.
+        if (renderedFraming.magnificationEnabled && !locked && chromeEditorMode == null) {
+            val bottomChromeInset = with(density) { levelGaugeBottomChromeInset.toDp().value }
+            val factorLabel = operatorSettings.magnificationFactor.label
+            val magnifyDescription =
+                stringResource(
+                    if (magnificationActive) R.string.magnification_key_exit
+                    else R.string.magnification_key_enter,
+                    factorLabel,
+                )
+            Box(
+                Modifier
+                    .zone(
+                        magnificationKeyFrame(
+                            feed = effectiveFeed,
+                            isPortrait = isPortrait,
+                            bottomChromeInset = bottomChromeInset,
+                        ),
+                    )
+                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    .border(
+                        1.dp,
+                        if (magnificationActive) LiveDesign.accent else LiveDesign.hairline,
+                        CircleShape,
+                    )
+                    .chromeClickable { magnificationActive = !magnificationActive }
+                    .testTag("magnification_key")
+                    .semantics { contentDescription = magnifyDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                // iOS `plus.magnifyingglass` / `minus.magnifyingglass` in a 40pt black circle.
+                MagnifyKeyGlyph(
+                    tint = if (magnificationActive) LiveDesign.accent else LiveDesign.text,
+                    active = magnificationActive,
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
