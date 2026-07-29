@@ -1455,6 +1455,10 @@ private fun ProgressivePlayer(
             // about is the mistake the clean-view button exists to correct, so the shade always
             // shows where to grab it — and the handle is a tap target too, since a tap is easier
             // than a drag on a moving picture.
+            // Nothing at all without a camera-read rating: null means the clip has no handle or
+            // there is no session, so the rating could not be written either and the handle would
+            // advertise a control that cannot work (iOS `ratingShade`).
+            if (ratingStars != null) {
             Column(
                 Modifier.align(Alignment.TopCenter)
                     .windowInsetsPadding(
@@ -1473,7 +1477,7 @@ private fun ProgressivePlayer(
             ) {
                 if (ratingShadeOpen) {
                     StarRatingRow(
-                        stars = ratingStars ?: 0,
+                        stars = ratingStars,
                         modifier =
                             Modifier.padding(bottom = 6.dp)
                                 .glass(CircleShape)
@@ -1486,6 +1490,13 @@ private fun ProgressivePlayer(
                         .glass(CircleShape)
                         .alpha(0.9f)
                         .chromeClickable(onClick = { onRatingShadeOpenChanged(!ratingShadeOpen) })
+                        // The handle owns the pull as well as the tap. Without this the clickable
+                        // consumes the pointer and the handle can only ever be tapped.
+                        .pointerInput(ratingShadeOpen) {
+                            detectVerticalDragGestures { _, delta ->
+                                ratingShadePull(delta)?.let(onRatingShadeOpenChanged)
+                            }
+                        }
                         .semantics {
                             contentDescription =
                                 if (ratingShadeOpen) "Hide star rating" else "Show star rating"
@@ -1511,6 +1522,7 @@ private fun ProgressivePlayer(
                         modifier = Modifier.size(13.dp),
                     )
                 }
+            }
             }
 
             Column(

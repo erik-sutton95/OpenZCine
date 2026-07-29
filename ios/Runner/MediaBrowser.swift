@@ -3808,6 +3808,19 @@ struct MediaPlayerView: View {
     /// handle is a tap target too, since a tap is easier than a drag on a moving picture.
     @ViewBuilder
     private var ratingShade: some View {
+        // Nothing at all without a camera-read rating. `mediaStarRating` returns nil when the clip
+        // has no handle or there is no session, i.e. the rating cannot be written either — so the
+        // handle would be advertising a control that could not work. Offering nothing is clearer
+        // than offering zero stars that refuse to stick.
+        // The demo hook stages the shade for headless capture; without it the state is
+        // unreachable, which is how an empty shade shipped once already.
+        if playerRatingStars != nil || DemoHarness.ratingShadeOpen {
+            ratingShadeContent
+        }
+    }
+
+    @ViewBuilder
+    private var ratingShadeContent: some View {
         VStack(spacing: 4) {
             if ratingShadeOpen {
                 // Written to the card — the camera stays source of truth (the model confirms by
@@ -3840,42 +3853,50 @@ struct MediaPlayerView: View {
             }
             // A bare chevron says "something is under here" without saying what. The star makes
             // the handle self-describing, so the pull is discoverable without being used first.
-            Button {
-                withAnimation(.spring(duration: 0.32)) { ratingShadeOpen.toggle() }
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                    Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                }
-                .foregroundStyle(LiveDesign.muted)
-                .frame(width: 52, height: 20)
-                .contentShape(Rectangle())
-                .liquidGlass(in: Capsule(), interactive: true)
-                .opacity(0.9)
+            //
+            // NOT a Button. A Button claims drags that begin inside it, so the handle could only
+            // ever be tapped — a `simultaneousGesture` on the container never saw the drag start.
+            // A plain view with both recognisers lets tap and pull coexist, which is what a handle
+            // is supposed to do.
+            HStack(spacing: 3) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
             }
-            .buttonStyle(.zcTapTarget)
+            .foregroundStyle(LiveDesign.muted)
+            .frame(width: 52, height: 20)
+            .liquidGlass(in: Capsule(), interactive: true)
+            .opacity(0.9)
+            // Visual height stays 20pt; the touch target is padded out to 44.
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(duration: 0.32)) { ratingShadeOpen.toggle() }
+            }
+            .gesture(ratingShadePullGesture)
+            .accessibilityAddTraits(.isButton)
             .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
         }
         .frame(maxWidth: .infinity)
         .padding(.top, -6)
         .contentShape(Rectangle())
-        // `simultaneousGesture`, not `gesture`: a plain drag recogniser on the container competes
-        // with the handle's Button and can eat the tap, which is the other half of "tapping the
-        // arrow did nothing".
+        // The handle owns the pull now; a second recogniser on the container would only race it.
         .simultaneousGesture(ratingShadePullGesture)
     }
 
+    /// Settles on `onChanged`, not `onEnded`: a pull should follow the finger, and a shade that
+    /// only moves once you let go feels like a button with extra steps — which is what it was.
     private var ratingShadePullGesture: some Gesture {
-        DragGesture(minimumDistance: 20)
-            .onEnded { value in
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
                 guard
                     let open = RatingShadePull.resolve(
                         verticalDelta: value.translation.height,
-                        horizontalDelta: value.translation.width)
+                        horizontalDelta: value.translation.width),
+                    open != ratingShadeOpen
                 else { return }
-                withAnimation(.spring(duration: 0.32)) { ratingShadeOpen = open }
+                withAnimation(.spring(duration: 0.28)) { ratingShadeOpen = open }
             }
     }
 
@@ -4647,8 +4668,11 @@ private struct PlayerLayerView: UIViewRepresentable {
 /// instead — the notification-shade idiom, physically where the stars live, and a zone the chrome
 /// gesture never claimed.
 enum RatingShadePull {
-    /// Same thresholds as the chrome swipe, so one hand learns one movement.
-    static let minimumTravel: Double = 44
+    /// Shorter than the chrome swipe's 44. That threshold is for a swipe anywhere on the
+    /// picture, where a low bar would fire by accident; this one starts on a 52pt handle the
+    /// operator has deliberately grabbed, so it should give way almost at once — a pull that
+    /// needs 44pt of travel reads as a stuck control.
+    static let minimumTravel: Double = 16
     /// A drag must be this much more vertical than horizontal to count, so a scrub does not open it.
     static let verticalBias: Double = 8
 
