@@ -9448,6 +9448,7 @@ extension MonitorAssistTool {
         case .level: "gyroscope"
         case .evMeter: "plusminus"
         case .desqueeze: "arrow.left.and.right"
+        case .magnification: "plus.magnifyingglass"
         case .instantReview: "photo.badge.checkmark"
         }
     }
@@ -9470,6 +9471,7 @@ extension MonitorAssistTool {
         case .level: "Horizon"
         case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
+        case .magnification: "Magnify"
         case .instantReview: "Instant Playback"
         }
     }

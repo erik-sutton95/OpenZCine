@@ -218,7 +218,7 @@ extension MonitorAssistTool {
     public var appliesToPhotography: Bool {
         switch self {
         case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
-            .desqueeze:
+            .desqueeze, .magnification:
             true
         case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
             .guides, .crosshair:
