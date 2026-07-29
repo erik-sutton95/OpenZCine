@@ -2,4 +2,4 @@
 - Fixed: aperture, ISO and shutter changes on the camera reach the app promptly.
 - Fixed: HEIF photos missing from the media browser; a second body keeps its settings.
 - New: per-DISP display settings, an Edit view that hides any monitor element, split layouts.
-- New: live-view magnifier (2x/3x/4x), clean-view playback, conform preview, photo de-squeeze, tap-to-show star rating.
+- New: live-view magnifier (2x/3x/4x) at the focus point, clean-view playback, conform preview, photo de-squeeze, tap-to-show star rating.
