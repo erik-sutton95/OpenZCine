@@ -44,6 +44,10 @@ enum DemoHarness {
     /// the clean view and its "tap to show controls" hint can be captured headlessly. Synthetic
     /// taps do not reach this app, so the state is otherwise only reachable by hand.
     static let playbackCleanView = flag("ZC_DEMO_PLAYBACK_CLEAN_VIEW")
+    /// `ZC_DEMO_MAGNIFY=1` starts the live view punched in, so the punch-in and the focus box it is
+    /// anchored to can be captured together. Synthetic taps do not reach this app, so the state is
+    /// otherwise only reachable by pressing the key by hand.
+    static let magnificationActive = flag("ZC_DEMO_MAGNIFY")
     /// `ZC_DEMO_RATING_SHADE=handle|open` mounts the star-rating shade in the clip player without a
     /// camera session, closed or already open. Both states need capturing: the rating is read from
     /// the card, so neither is reachable headlessly, and synthetic taps do not reach this app —

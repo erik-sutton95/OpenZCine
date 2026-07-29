@@ -16,12 +16,13 @@ import Foundation
 /// Applying it earlier would make the punch-in interact with the fit: a 2× punch on a de-squeezed
 /// frame would re-fit to a different rectangle and the image would jump sideways as it zoomed.
 ///
-/// ## Overlays come along for free, and that is the point
+/// ## It wraps the overlays, not just the raster
 ///
-/// Peaking, guides, the grid and the AF boxes are all registered to the feed rect. Scaling that
-/// rect carries them with it, so a magnified view shows peaking on the magnified pixels rather
-/// than a stale overlay floating over a zoomed image — which is the only way a punch-in is useful
-/// for judging focus at all.
+/// The transform belongs on the whole feed stack — raster AND the AF box, focus ring and guides
+/// drawn over it. Applied to the raster alone the overlays stay at their unmagnified positions
+/// while the picture grows under them, so the box the operator is using to judge focus no longer
+/// sits on the thing it is measuring. (Peaking is baked into the frame upstream, so it travels
+/// either way; the geometry overlays do not.)
 ///
 /// This is a MONITORING transform. It never changes the camera's crop mode, resolution, recorded
 /// image, or camera-side digital zoom.
@@ -38,6 +39,52 @@ public enum Magnification {
     public static func scale(factor: Double, isActive: Bool) -> Double {
         guard isActive, factor.isFinite, factor > 1 else { return 1 }
         return factor
+    }
+
+    /// Which AF box the punch-in follows: the subject the body selected, else the AF area (box 0).
+    ///
+    /// Shared so both shells aim at the same box. With subject detection on, the selected box is
+    /// the face or eye actually being focused — the AF area rectangle around it is the wrong
+    /// target at 4×, where the difference between "the face" and "the eye" is the whole question.
+    public static func anchorBoxIndex(boxCount: Int, selectedBoxIndex: Int?) -> Int? {
+        guard boxCount > 0 else { return nil }
+        guard let selectedBoxIndex, selectedBoxIndex >= 0, selectedBoxIndex < boxCount else {
+            return 0
+        }
+        return selectedBoxIndex
+    }
+
+    /// The punch-in's fixed point, in unit coordinates of the feed rect.
+    ///
+    /// The camera's own focus box, not the middle of the frame. A centred punch-in is close to
+    /// useless for the job this tool exists to do: focus is rarely in the middle of the shot, so
+    /// centring magnifies whatever happens to be there instead of the thing being focused.
+    ///
+    /// It is the FIXED POINT of the scale, not a point that gets moved to the middle. The box
+    /// stays exactly where it is drawn and the picture grows outward around it, which is what
+    /// makes the result always in bounds: a fixed point inside the unit square keeps the visible
+    /// window inside it at every factor, so there is no clamping and no different behaviour near
+    /// an edge. Recentring instead would need both, and could not deliver at the edges anyway.
+    ///
+    /// Recomputed per frame rather than latched at punch-in, so moving the focus point — by tap or
+    /// on the body — takes the magnified view with it.
+    ///
+    /// `[verify-on-HW]` With subject detection driving the box, this follows the detection frame
+    /// by frame; if that reads as swimming at 4× on real hardware the fix is hysteresis here, not
+    /// a change of anchor.
+    public static func anchor(
+        boxCenterX: Int?,
+        boxCenterY: Int?,
+        coordinateWidth: Int,
+        coordinateHeight: Int
+    ) -> (x: Double, y: Double) {
+        let centre = (x: 0.5, y: 0.5)
+        guard let boxCenterX, let boxCenterY, coordinateWidth > 0, coordinateHeight > 0
+        else { return centre }
+        let x = Double(boxCenterX) / Double(coordinateWidth)
+        let y = Double(boxCenterY) / Double(coordinateHeight)
+        guard x.isFinite, y.isFinite else { return centre }
+        return (x: min(max(x, 0), 1), y: min(max(y, 0), 1))
     }
 
     /// Whether the quick-access button belongs on screen: the tool is on, and live view is the

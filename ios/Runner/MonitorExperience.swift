@@ -245,6 +245,28 @@ struct LiveFeedModule: View {
     /// 0→1: how much of the AF box outline has traced in during a lock long-press.
     @State private var lockProgress: CGFloat = 0
 
+    private var punchInScale: CGFloat {
+        CGFloat(
+            Magnification.scale(
+                factor: model.assistConfiguration.magnification.factor.scale,
+                isActive: model.magnificationActive))
+    }
+
+    /// The focus box the punch-in is pinned to, read fresh each frame so moving the point — on the
+    /// body or by tap — takes the magnified view with it. Falls back to centre with no box to aim at.
+    private var punchInAnchor: UnitPoint {
+        let focus = model.liveViewFocus
+        let index = Magnification.anchorBoxIndex(
+            boxCount: focus?.boxes.count ?? 0, selectedBoxIndex: focus?.selectedBoxIndex)
+        let box = index.flatMap { focus?.boxes[$0] }
+        let anchor = Magnification.anchor(
+            boxCenterX: box?.centerX,
+            boxCenterY: box?.centerY,
+            coordinateWidth: focus?.coordinateWidth ?? 0,
+            coordinateHeight: focus?.coordinateHeight ?? 0)
+        return UnitPoint(x: anchor.x, y: anchor.y)
+    }
+
     var body: some View {
         ZStack(alignment: .leading) {
             LiveDesign.background
@@ -302,6 +324,14 @@ struct LiveFeedModule: View {
                 DemoFocusPointerSurface(model: model, size: CGSize(width: width, height: height))
             }
         }
+        // Punch-in goes LAST and wraps the WHOLE stack, not the raster — see `Magnification`. The
+        // AF box and focus ring are siblings of the raster, so scaling the raster alone would leave
+        // them behind at unmagnified positions over a magnified picture.
+        //
+        // Anchoring on the box also fixes tap-to-focus while punched in for free: SwiftUI reports
+        // gesture locations in the pre-transform space, so a tap still lands on the source pixel
+        // under the finger.
+        .scaleEffect(punchInScale, anchor: punchInAnchor)
         .frame(width: width, height: height)
         .clipped()
         .contentShape(Rectangle())
@@ -396,15 +426,6 @@ private struct LiveFrameRaster: View {
         )
         .scaleEffect(
             desqueezeScale(model.assistConfiguration.desqueeze), anchor: .center
-        )
-        // Punch-in goes LAST, on the settled and framed image — see `Magnification`. Applied here
-        // it scales exactly what the operator is looking at, so punching out lands on the identical
-        // framing and the overlays registered to this layer come along magnified.
-        .scaleEffect(
-            Magnification.scale(
-                factor: model.assistConfiguration.magnification.factor.scale,
-                isActive: model.magnificationActive),
-            anchor: .center
         )
         .clipped()
     }
