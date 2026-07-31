@@ -826,9 +826,11 @@ final class NativeAppModel {
     /// One definition, shared with Android's policy and with the tests.
     var monitorAvailability: MonitorDataAvailability {
         MonitorDataAvailability(
-            source: videoSource, hasCameraControl: hasCameraControl,
-            // A relay viewer has every reading the host forwards and no ability to write.
-            receivesCameraMetadata: hasCameraControl || videoSource == .relay)
+            source: videoSource, ownsCameraSession: hasCameraControl,
+            // A relay viewer has every reading the host forwards.
+            receivesCameraMetadata: hasCameraControl || videoSource == .relay,
+            // ...and drives the camera only while the host has handed it the token.
+            holdsRelayControl: relayHoldsControl)
     }
 
     // MARK: Relay
@@ -846,6 +848,13 @@ final class NativeAppModel {
 
     var isRelayBroadcasting = false
     var relayPeerCount = 0
+    /// Viewer side: whether this device currently holds the camera.
+    var relayHoldsControl = false
+    /// Viewer side: who does, when it is not us.
+    var relayControlHolderName: String?
+    /// Host side: a viewer waiting on an answer, and who currently holds the camera.
+    var relayPendingControlRequest: String?
+    var relayControlHeldBy: String?
     var discoveredRelayHosts: [MonitorRelayDiscovery] = []
     var relayClientState: MonitorRelayClient.State = .idle
 
@@ -863,6 +872,12 @@ final class NativeAppModel {
                 self?.connectionMessage = message
                 self?.isRelayBroadcasting = false
             }
+            host.onControlChanged = { [weak self, weak host] in
+                guard let self, let host else { return }
+                self.relayPendingControlRequest = host.pendingRequestName
+                self.relayControlHeldBy = host.controlHolderName
+            }
+            host.onCommand = { [weak self] command in self?.executeRelayCommand(command) }
             host.start(
                 hostName: UIDevice.current.name,
                 cameraName: connectedIdentity?.displayName ?? cameraState.cameraName)
@@ -874,6 +889,30 @@ final class NativeAppModel {
             relayHost = nil
             relayPeerCount = 0
             isRelayBroadcasting = false
+        }
+    }
+
+    func grantRelayControl() { relayHost?.grantPendingControl() }
+    func declineRelayControl() { relayHost?.declinePendingControl() }
+    /// Takes the camera back from a viewer. Always available — this device owns the session, so it
+    /// never needs the viewer's cooperation, which is what makes handing control out safe at all.
+    func reclaimRelayControl() { relayHost?.reclaimControl() }
+
+    /// Runs a command a viewer issued, on this device's own session.
+    ///
+    /// Routed through the same entry points the local UI uses rather than a parallel path, so a
+    /// relayed record or focus point is subject to every guard, queue and safe point a local one
+    /// is — including the confirmation setting and the interface lock.
+    private func executeRelayCommand(_ command: MonitorRelayCommand) {
+        switch command {
+        case .toggleRecording:
+            toggleRecording()
+        case .focusPoint(let x, let y, let width, let height):
+            applyFocusPoint(
+                cameraX: x, cameraY: y, coordinateWidth: width, coordinateHeight: height)
+        case .pickerValue(let picker, let value):
+            guard let picker = CameraPicker(rawValue: picker) else { return }
+            applyPickerValue(value, for: picker)
         }
     }
 
@@ -1032,17 +1071,36 @@ final class NativeAppModel {
             }
         }
         client.onRelayState = { [weak self] state in self?.applyRelayState(state) }
+        client.onControlToken = { [weak self] token in
+            guard let self else { return }
+            self.relayHoldsControl = token.holderIsRecipient
+            self.relayControlHolderName = token.holderIsRecipient ? nil : token.holderName
+            // Losing control mid-gesture must not leave a drum open over a camera that has stopped
+            // listening to this device.
+            if !token.holderIsRecipient { self.dismissActivePanel() }
+        }
         client.onFrame = { [weak self] metadata, image in
             self?.applyRelayFrame(metadata: metadata, image: image)
         }
+        relayHoldsControl = false
+        relayControlHolderName = nil
         relayClient = client
         client.connect(to: discovery.endpoint)
+        client.introduce(deviceName: UIDevice.current.name)
+    }
+
+    func requestRelayControl() { relayClient?.requestControl() }
+    func releaseRelayControl() {
+        relayClient?.releaseControl()
+        relayHoldsControl = false
     }
 
     func leaveRelay() {
         relayClient?.stop()
         relayClient = nil
         relayClientState = .idle
+        relayHoldsControl = false
+        relayControlHolderName = nil
         videoSource = .cameraLiveView
         liveFrameImage = nil
         isMonitorPresented = false
@@ -7046,6 +7104,14 @@ final class NativeAppModel {
     ) {
         // The tap wins over the dial: drop any in-flight/queued focus drive so `ChangeAfArea`
         // gets the command channel now instead of behind a retrying drive.
+        if videoSource == .relay {
+            guard relayHoldsControl else { return }
+            relayClient?.send(
+                command: .focusPoint(
+                    cameraX: cameraX, cameraY: cameraY, coordinateWidth: coordinateWidth,
+                    coordinateHeight: coordinateHeight))
+            return
+        }
         cancelManualFocusDrive()
         guard !isDemoSession else {
             let boxWidth = max(40, coordinateWidth / 7)
@@ -8330,6 +8396,14 @@ final class NativeAppModel {
     }
 
     private func executeRecordToggle() {
+        if videoSource == .relay {
+            // A viewer has no session; the host runs it. The guard is belt-and-braces — the host
+            // ignores commands from a non-holder too — but it keeps a revoked device from firing
+            // a command it will never see rejected.
+            guard relayHoldsControl else { return }
+            relayClient?.send(command: .toggleRecording)
+            return
+        }
         if isDemoSession {
             isRecording.toggle()
             // `updating` preserves every other field — crucially `mediaStatus`, so the top-bar MEDIA
@@ -9580,6 +9654,12 @@ final class NativeAppModel {
     }
 
     func applyPickerValue(_ value: String, for picker: CameraPicker) {
+        if videoSource == .relay {
+            guard relayHoldsControl else { return }
+            relayClient?.send(
+                command: .pickerValue(picker: picker.rawValue, value: value))
+            return
+        }
         guard !isDemoSession else {
             applyLocalPickerValue(value, for: picker)
             return

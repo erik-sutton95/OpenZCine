@@ -67,8 +67,24 @@ final class MonitorRelayHost {
     private(set) var isBroadcasting = false
     var onFailure: (@MainActor (String) -> Void)?
 
+    /// A connected viewer, and how it introduced itself.
+    private struct Peer {
+        let connection: NWConnection
+        var name: String
+    }
+
+    /// The viewer currently allowed to drive the camera; nil means the host itself does.
+    private(set) var controlHolder: ObjectIdentifier?
+    private(set) var controlHolderName: String?
+    /// A viewer that has asked and not yet been answered.
+    private(set) var pendingRequestName: String?
+    private var pendingRequest: ObjectIdentifier?
+    var onControlChanged: (@MainActor () -> Void)?
+    /// Called with a command the holder issued, for the model to execute on its own session.
+    var onCommand: (@MainActor (MonitorRelayCommand) -> Void)?
+
     private var listener: NWListener?
-    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    private var peers: [ObjectIdentifier: Peer] = [:]
     private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-host")
     /// Sent to every viewer that connects, so a late joiner is not staring at nothing until the
     /// next state change happens to come along.
@@ -105,14 +121,18 @@ final class MonitorRelayHost {
     func stop() {
         listener?.cancel()
         listener = nil
-        for connection in connections.values { connection.cancel() }
-        connections.removeAll()
+        for peer in peers.values { peer.connection.cancel() }
+        peers.removeAll()
+        controlHolder = nil
+        controlHolderName = nil
+        pendingRequest = nil
+        pendingRequestName = nil
         isBroadcasting = false
         updatePeerCount()
     }
 
     private func accept(_ connection: NWConnection) {
-        connections[ObjectIdentifier(connection)] = connection
+        peers[ObjectIdentifier(connection)] = Peer(connection: connection, name: "A device")
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
             switch state {
@@ -142,12 +162,21 @@ final class MonitorRelayHost {
 
     private func drop(_ connection: NWConnection) {
         connection.cancel()
-        connections.removeValue(forKey: ObjectIdentifier(connection))
+        let key = ObjectIdentifier(connection)
+        peers.removeValue(forKey: key)
+        // A viewer that disappears cannot keep the camera hostage: control returns to the host,
+        // which is the device that actually holds the session and can always act.
+        if controlHolder == key { reclaimControl() }
+        if pendingRequest == key {
+            pendingRequest = nil
+            pendingRequestName = nil
+            onControlChanged?()
+        }
         updatePeerCount()
     }
 
     private func updatePeerCount() {
-        let count = connections.count
+        let count = peers.count
         guard count != peerCount else { return }
         peerCount = count
         onPeerCountChanged?(count)
@@ -158,20 +187,92 @@ final class MonitorRelayHost {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             [weak self, weak connection] data, _, isComplete, error in
             guard let connection else { return }
+            var messages: [MonitorRelayFraming.Decoded] = []
             if let data, !data.isEmpty {
                 do {
-                    _ = try reader.append(data)
+                    messages = try reader.append(data)
                 } catch {
                     // A desynchronised stream cannot be recovered by reading further.
                     Task { @MainActor in self?.drop(connection) }
                     return
                 }
             }
-            if isComplete || error != nil {
-                Task { @MainActor in self?.drop(connection) }
-                return
+            Task { @MainActor in
+                guard let self else { return }
+                for message in messages { self.handle(message, from: connection) }
+                if isComplete || error != nil {
+                    self.drop(connection)
+                    return
+                }
+                self.receive(on: connection, reader: reader)
             }
-            Task { @MainActor in self?.receive(on: connection, reader: reader) }
+        }
+    }
+
+    private func handle(_ message: MonitorRelayFraming.Decoded, from connection: NWConnection) {
+        let key = ObjectIdentifier(connection)
+        switch message.kind {
+        case .hello:
+            // The viewer introduces itself so a request can name who is asking. "Someone wants
+            // control" is not a question an operator can answer.
+            guard
+                let hello = try? JSONDecoder().decode(
+                    MonitorRelayHello.self, from: message.payload)
+            else { return }
+            peers[key]?.name = hello.hostName
+            if controlHolder == key { controlHolderName = hello.hostName }
+        case .requestControl:
+            guard let peer = peers[key] else { return }
+            pendingRequest = key
+            pendingRequestName = peer.name
+            onControlChanged?()
+        case .releaseControl:
+            if controlHolder == key { reclaimControl() }
+        case .command:
+            // Honoured only from the holder. A stale command from a device that has just lost
+            // control must not land on the camera.
+            guard controlHolder == key,
+                let command = try? JSONDecoder().decode(
+                    MonitorRelayCommand.self, from: message.payload)
+            else { return }
+            onCommand?(command)
+        case .state, .frame, .controlToken:
+            break  // Host → viewer only.
+        }
+    }
+
+    /// Grants the outstanding request.
+    func grantPendingControl() {
+        guard let pendingRequest, let peer = peers[pendingRequest] else { return }
+        controlHolder = pendingRequest
+        controlHolderName = peer.name
+        self.pendingRequest = nil
+        pendingRequestName = nil
+        publishControlToken()
+        onControlChanged?()
+    }
+
+    func declinePendingControl() {
+        pendingRequest = nil
+        pendingRequestName = nil
+        onControlChanged?()
+    }
+
+    /// Takes the camera back. Always available: the host owns the session, so this can never fail
+    /// or need the viewer's cooperation — which is what makes handing control out safe.
+    func reclaimControl() {
+        controlHolder = nil
+        controlHolderName = nil
+        publishControlToken()
+        onControlChanged?()
+    }
+
+    /// Tells every viewer who holds control, each from its own point of view.
+    private func publishControlToken() {
+        for (key, peer) in peers {
+            let token = MonitorRelayControlToken(
+                holderName: controlHolderName ?? hostName, holderIsRecipient: controlHolder == key)
+            send(kind: .controlToken, payload: encode(token), to: peer.connection)
         }
     }
 
@@ -183,7 +284,7 @@ final class MonitorRelayHost {
     }
 
     func broadcast(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
-        guard !connections.isEmpty else { return }
+        guard !peers.isEmpty else { return }
         guard
             let payload = try? MonitorRelayFramePayload.encode(
                 metadata: frameMetadata, image: image)
@@ -192,7 +293,7 @@ final class MonitorRelayHost {
     }
 
     private func broadcast(kind: MonitorRelayProtocol.Kind, payload: Data) {
-        for connection in connections.values { send(kind: kind, payload: payload, to: connection) }
+        for peer in peers.values { send(kind: kind, payload: payload, to: peer.connection) }
     }
 
     private func send(kind: MonitorRelayProtocol.Kind, payload: Data, to connection: NWConnection) {
@@ -291,8 +392,25 @@ final class MonitorRelayClient {
         if state != .idle { update(.idle) }
     }
 
+    /// Introduces this device so a control request can name who is asking.
+    func introduce(deviceName: String) {
+        guard
+            let payload = try? JSONEncoder().encode(
+                MonitorRelayHello(
+                    version: MonitorRelayProtocol.version, hostName: deviceName, cameraName: nil))
+        else { return }
+        send(kind: .hello, payload: payload)
+    }
+
     func requestControl() { send(kind: .requestControl, payload: Data()) }
     func releaseControl() { send(kind: .releaseControl, payload: Data()) }
+
+    /// Issues a camera command. The host ignores it unless this device holds the token, so a
+    /// command racing a revocation lands nowhere rather than on the camera.
+    func send(command: MonitorRelayCommand) {
+        guard let payload = try? JSONEncoder().encode(command) else { return }
+        send(kind: .command, payload: payload)
+    }
 
     private func send(kind: MonitorRelayProtocol.Kind, payload: Data) {
         connection?.send(
@@ -360,7 +478,7 @@ final class MonitorRelayClient {
                     MonitorRelayControlToken.self, from: message.payload)
             else { return }
             onControlToken?(token)
-        case .requestControl, .releaseControl:
+        case .requestControl, .releaseControl, .command:
             break  // Viewer → host only.
         }
     }

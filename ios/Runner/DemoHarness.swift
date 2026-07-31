@@ -301,6 +301,18 @@ enum DemoHarness {
                     // path so a second simulator can join and prove the whole chain. Demo-only, so
                     // the ticker deliberately runs for the app's lifetime.
                     model.setRelayBroadcasting(true)
+                    if env["ZC_DEMO_RELAY_GRANT"] == "1" {
+                        // Auto-answer the first request so the grant path runs without a tap.
+                        Task { @MainActor in
+                            for _ in 0..<200 {
+                                if model.relayPendingControlRequest != nil {
+                                    model.grantRelayControl()
+                                    return
+                                }
+                                try? await Task.sleep(for: .milliseconds(250))
+                            }
+                        }
+                    }
                     Task { @MainActor in
                         while !Task.isCancelled {
                             model.demoBroadcastRelayFrame()
@@ -676,6 +688,12 @@ enum DemoHarness {
                     for _ in 0..<120 {
                         if let host = model.discoveredRelayHosts.first {
                             model.joinRelay(host)
+                            // Verification affordance: also exercise the control handshake, so a
+                            // two-simulator run proves request -> grant -> drive end to end.
+                            if env["ZC_DEMO_RELAY_CONTROL"] == "1" {
+                                try? await Task.sleep(for: .milliseconds(1200))
+                                model.requestRelayControl()
+                            }
                             return
                         }
                         try? await Task.sleep(for: .milliseconds(250))

@@ -4084,6 +4084,57 @@ struct OperatorSettingsPanel: View {
                     SettingsValueText(value: model.hdmiCaptureState.shortStatus)
                 }
             }
+            if model.videoSource == .relay {
+                SettingsInlineRow(
+                    title: "Camera Control",
+                    help:
+                        "The camera answers one device at a time, so control is passed rather than shared. Ask for it and the broadcasting device decides; it can also take it back at any moment, because it is the one actually holding the camera link."
+                ) {
+                    SettingsActionPill(
+                        title: model.relayHoldsControl ? "Give back" : "Ask for control"
+                    ) {
+                        if model.relayHoldsControl {
+                            model.releaseRelayControl()
+                        } else {
+                            model.requestRelayControl()
+                        }
+                    }
+                }
+                SettingsInlineRow(
+                    title: "Held By",
+                    help: "Which device the camera is currently taking commands from."
+                ) {
+                    SettingsValueText(
+                        value: model.relayHoldsControl
+                            ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
+                }
+            }
+            if let requester = model.relayPendingControlRequest {
+                SettingsInlineRow(
+                    title: "Control Requested",
+                    help:
+                        "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
+                ) {
+                    HStack(spacing: 8) {
+                        SettingsActionPill(title: "Decline") { model.declineRelayControl() }
+                        SettingsActionPill(title: "Grant to \(requester)") {
+                            model.grantRelayControl()
+                        }
+                    }
+                }
+            }
+            if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
+                SettingsInlineRow(
+                    title: "Camera Control",
+                    help:
+                        "Take the camera back. This device holds the link, so it never has to ask."
+                ) {
+                    HStack(spacing: 8) {
+                        SettingsValueText(value: holder)
+                        SettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
+                    }
+                }
+            }
             SettingsInlineRow(
                 title: "Share This Feed",
                 help:

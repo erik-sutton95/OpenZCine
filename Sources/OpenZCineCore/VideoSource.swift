@@ -53,33 +53,43 @@ public enum VideoSourceKind: String, CaseIterable, Codable, Equatable, Identifia
 public struct MonitorDataAvailability: Equatable, Sendable {
     /// - Parameters:
     ///   - receivesCameraMetadata: Whether the camera's readings are reaching this device at all.
-    ///     Deliberately separate from `hasCameraControl`, because a relay viewer has every reading
+    ///     Deliberately separate from `ownsCameraSession`, because a relay viewer has every reading
     ///     — the host forwards them — and no ability to write. Collapsing the two would either
     ///     blank a viewer's readouts or offer it controls the camera will never hear.
     public init(
-        source: VideoSourceKind, hasCameraControl: Bool, receivesCameraMetadata: Bool
+        source: VideoSourceKind, ownsCameraSession: Bool, receivesCameraMetadata: Bool,
+        holdsRelayControl: Bool = false
     ) {
         self.source = source
-        self.hasCameraControl = hasCameraControl
+        self.ownsCameraSession = ownsCameraSession
         self.receivesCameraMetadata = receivesCameraMetadata
+        self.holdsRelayControl = holdsRelayControl
     }
+
+    /// Whether this device may issue camera commands at all — over its own session, or proxied
+    /// through a relay host. Deliberately distinct from owning the session: a viewer holding the
+    /// token drives the camera without ever touching the camera link.
+    public var canDriveCamera: Bool { ownsCameraSession || holdsRelayControl }
 
     public let source: VideoSourceKind
     /// Whether a PTP session is live — the camera can be read and written.
-    public let hasCameraControl: Bool
+    public let ownsCameraSession: Bool
+    /// Whether this device currently holds the relay's control token — it drives the camera
+    /// through the host rather than over a link of its own.
+    public let holdsRelayControl: Bool
     /// Whether the camera's readings are arriving, from our own session or a relay host's.
     public let receivesCameraMetadata: Bool
 
     /// Exposure/focus tiles, their pickers, and the command-mode grid. Purely a control-link
     /// question: PTP properties keep arriving over Wi-Fi while the picture comes over HDMI.
-    public var cameraControls: Bool { hasCameraControl }
+    public var cameraControls: Bool { canDriveCamera }
 
     /// The record button and its state readout. Record is an operation, and the camera reports
     /// the resulting state over PTP events as well as in the frame header, so it survives HDMI.
-    public var recordControl: Bool { hasCameraControl }
+    public var recordControl: Bool { canDriveCamera }
 
     /// Browsing and downloading what is on the card — a control-link operation.
-    public var mediaBrowser: Bool { hasCameraControl }
+    public var mediaBrowser: Bool { ownsCameraSession }
 
     /// The AF box overlay, and the body's focus confirmation behind it.
     public var focusBoxes: Bool { receivesCameraMetadata }
@@ -100,7 +110,7 @@ public struct MonitorDataAvailability: Equatable, Sendable {
 
     /// Whether the operator can pick a picture source at all: only worth offering once a control
     /// session exists to switch back to.
-    public var offersSourceSwitch: Bool { hasCameraControl }
+    public var offersSourceSwitch: Bool { ownsCameraSession }
 
     /// Whether the camera's own live-view frame loop is running.
     ///
@@ -108,7 +118,7 @@ public struct MonitorDataAvailability: Equatable, Sendable {
     /// writes, AF-point taps, record start/stop, still release, device-event polls and the property
     /// round-robin are serviced. Reading a source as "just where the picture comes from" is what
     /// made that easy to miss.
-    public var runsCameraFrameLoop: Bool { source == .cameraLiveView && hasCameraControl }
+    public var runsCameraFrameLoop: Bool { source == .cameraLiveView && ownsCameraSession }
 
     /// Whether a standalone control pump has to run.
     ///
@@ -117,5 +127,8 @@ public struct MonitorDataAvailability: Equatable, Sendable {
     /// leaves the chrome fully live and every write queued forever: pickers move, nothing reaches
     /// the camera. The idle drain does not cover it, because it deliberately refuses while the
     /// monitor is up, on the assumption that the frame loop is there.
-    public var requiresControlPump: Bool { cameraControls && !runsCameraFrameLoop }
+    /// Deliberately `ownsCameraSession`, not `canDriveCamera`: the pump services a PTP session,
+    /// and a relay viewer holding the token has none — it drives the camera by asking the host to.
+    /// Pumping on `canDriveCamera` would spin a loop against a session that does not exist.
+    public var requiresControlPump: Bool { ownsCameraSession && !runsCameraFrameLoop }
 }

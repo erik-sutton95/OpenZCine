@@ -26,7 +26,7 @@ struct VideoSourceTests {
     @Test("HDMI keeps every control that PTP properties feed")
     func hybridKeepsControl() {
         let hybrid = MonitorDataAvailability(
-            source: .hdmiCapture, hasCameraControl: true, receivesCameraMetadata: true)
+            source: .hdmiCapture, ownsCameraSession: true, receivesCameraMetadata: true)
         #expect(hybrid.cameraControls)
         #expect(hybrid.recordControl)
         #expect(hybrid.mediaBrowser)
@@ -44,7 +44,7 @@ struct VideoSourceTests {
     func headerFollowsTheControlLinkNotThePicture() {
         for source in VideoSourceKind.allCases {
             let available = MonitorDataAvailability(
-                source: source, hasCameraControl: true, receivesCameraMetadata: true)
+                source: source, ownsCameraSession: true, receivesCameraMetadata: true)
             #expect(available.focusBoxes)
             #expect(available.focusConfirmation)
             #expect(available.subjectDetectionBoxes)
@@ -59,7 +59,7 @@ struct VideoSourceTests {
     @Test("With no session there is no header to pull, and nothing claims otherwise")
     func captureOnlyMonitorHasNoHeader() {
         let monitorOnly = MonitorDataAvailability(
-            source: .hdmiCapture, hasCameraControl: false, receivesCameraMetadata: false)
+            source: .hdmiCapture, ownsCameraSession: false, receivesCameraMetadata: false)
         #expect(!monitorOnly.focusBoxes)
         #expect(!monitorOnly.focusConfirmation)
         #expect(!monitorOnly.subjectDetectionBoxes)
@@ -73,7 +73,7 @@ struct VideoSourceTests {
     @Test("A capture source with no session claims nothing about a camera")
     func monitorOnly() {
         let monitorOnly = MonitorDataAvailability(
-            source: .hdmiCapture, hasCameraControl: false, receivesCameraMetadata: false)
+            source: .hdmiCapture, ownsCameraSession: false, receivesCameraMetadata: false)
         #expect(!monitorOnly.cameraControls)
         #expect(!monitorOnly.recordControl)
         #expect(!monitorOnly.mediaBrowser)
@@ -91,7 +91,7 @@ struct VideoSourceTests {
     func controlAlwaysFollowsTheSession() {
         for source in VideoSourceKind.allCases {
             let availability = MonitorDataAvailability(
-                source: source, hasCameraControl: false, receivesCameraMetadata: false)
+                source: source, ownsCameraSession: false, receivesCameraMetadata: false)
             #expect(!availability.cameraControls)
             #expect(!availability.recordControl)
             #expect(!availability.focusBoxes)
@@ -106,7 +106,7 @@ struct VideoSourceTests {
     @Test("A source that stands the frame loop down must pump control itself")
     func controlPumpIsRequiredOffTheCameraStream() {
         let hybrid = MonitorDataAvailability(
-            source: .hdmiCapture, hasCameraControl: true, receivesCameraMetadata: true)
+            source: .hdmiCapture, ownsCameraSession: true, receivesCameraMetadata: true)
         #expect(hybrid.cameraControls)
         #expect(!hybrid.runsCameraFrameLoop)
         #expect(hybrid.requiresControlPump)
@@ -114,7 +114,7 @@ struct VideoSourceTests {
         // On the camera's own stream the loop is the pump, so a second one would double every
         // write and poll.
         let live = MonitorDataAvailability(
-            source: .cameraLiveView, hasCameraControl: true, receivesCameraMetadata: true)
+            source: .cameraLiveView, ownsCameraSession: true, receivesCameraMetadata: true)
         #expect(live.runsCameraFrameLoop)
         #expect(!live.requiresControlPump)
     }
@@ -125,7 +125,7 @@ struct VideoSourceTests {
     func noPumpWithoutASession() {
         for source in VideoSourceKind.allCases {
             let availability = MonitorDataAvailability(
-                source: source, hasCameraControl: false, receivesCameraMetadata: false)
+                source: source, ownsCameraSession: false, receivesCameraMetadata: false)
             #expect(!availability.runsCameraFrameLoop)
             #expect(!availability.requiresControlPump)
         }
@@ -141,7 +141,7 @@ struct VideoSourceTests {
     @Test("A relay viewer shows every reading and offers no control")
     func relayViewer() {
         let viewer = MonitorDataAvailability(
-            source: .relay, hasCameraControl: false, receivesCameraMetadata: true)
+            source: .relay, ownsCameraSession: false, receivesCameraMetadata: true)
         #expect(viewer.focusBoxes)
         #expect(viewer.focusConfirmation)
         #expect(viewer.subjectDetectionBoxes)
@@ -156,6 +156,35 @@ struct VideoSourceTests {
         // No session of its own, so nothing for a control pump to service.
         #expect(!viewer.runsCameraFrameLoop)
         #expect(!viewer.requiresControlPump)
+    }
+
+    /// Control is proxied, never transferred: the camera serves one initiator, so the host keeps
+    /// the session and runs the holder's commands. A viewer holding the token therefore DRIVES the
+    /// camera while owning no session at all — which is why the two are tracked apart.
+    @Test("A viewer holding the token drives the camera without owning a session")
+    func relayControlHolder() {
+        let holder = MonitorDataAvailability(
+            source: .relay, ownsCameraSession: false, receivesCameraMetadata: true,
+            holdsRelayControl: true)
+        #expect(holder.canDriveCamera)
+        #expect(holder.cameraControls)
+        #expect(holder.recordControl)
+        // It still owns nothing: no frame loop, no control pump, and no media browser — card
+        // operations are not proxied.
+        #expect(!holder.ownsCameraSession)
+        #expect(!holder.runsCameraFrameLoop)
+        #expect(!holder.requiresControlPump)
+        #expect(!holder.mediaBrowser)
+
+        // The same viewer without the token watches and nothing more.
+        let watcher = MonitorDataAvailability(
+            source: .relay, ownsCameraSession: false, receivesCameraMetadata: true)
+        #expect(!watcher.canDriveCamera)
+        #expect(!watcher.cameraControls)
+        #expect(!watcher.recordControl)
+        // ...while still seeing everything the host forwards.
+        #expect(watcher.focusBoxes)
+        #expect(watcher.cameraTimecode)
     }
 
     @Test("The blank display state states nothing it cannot know")

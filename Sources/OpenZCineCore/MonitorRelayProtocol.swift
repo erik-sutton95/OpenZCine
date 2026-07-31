@@ -45,6 +45,8 @@ public enum MonitorRelayProtocol {
         case requestControl = 0x10
         /// Viewer → host: handing it back.
         case releaseControl = 0x11
+        /// Viewer → host: a camera command, honoured only from the control holder.
+        case command = 0x12
     }
 
     /// Maximum payload a single message may carry.
@@ -200,6 +202,20 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
     public let levelRoll: Double?
     public let levelPitch: Double?
     public let sound: Sound?
+}
+
+/// A camera command issued by a viewer and executed by the host.
+///
+/// Control is proxied, never transferred: the camera serves one initiator, so the host keeps the
+/// session and runs the command on the holder's behalf. A viewer "taking control" is the app
+/// agreeing whose commands are honoured — nothing about the camera link moves.
+public enum MonitorRelayCommand: Codable, Equatable, Sendable {
+    case toggleRecording
+    /// Already in the camera's own AF coordinate space. The viewer's feed is a different size
+    /// from the host's, so a point in view coordinates would land somewhere else entirely.
+    case focusPoint(cameraX: Int, cameraY: Int, coordinateWidth: Int, coordinateHeight: Int)
+    /// `picker` is a `CameraPicker` raw value; the shells share that vocabulary already.
+    case pickerValue(picker: String, value: String)
 }
 
 /// Who holds the camera. Exactly one device does at a time — the camera itself enforces that, so
