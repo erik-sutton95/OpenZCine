@@ -172,6 +172,15 @@ public enum CameraWiFiJoinPolicy {
         {
             return nil
         }
+        // A DISCOVERED camera is by definition reachable on the network this device is already on
+        // — discovery is what found it there. Joining its access point would leave that network to
+        // reach a camera we can already see.
+        //
+        // This is what a camera on a set or travel router needs, and it has to be phrased as
+        // reachability rather than as another topology exclusion: the saved record's transport
+        // collapses camera-AP, phone hotspot and router into one "Wi-Fi" string, so the record
+        // cannot tell them apart. Reachability can.
+        if discoveredCamera != nil { return nil }
         guard
             let ssid = resolvedSSID(
                 savedCamera: savedCamera,

@@ -37,6 +37,31 @@ import Testing
     #expect(CameraWiFiSSID.resolve(for: saved) == "NIKON_ZR_CUSTOM")
 }
 
+/// The router regression, caught by a tester: a saved camera record collapses camera-AP, hotspot
+/// and router into one "Wi-Fi" transport, so when the same body was later found on a set router,
+/// the join policy resolved the record's stored SSID and told iOS to LEAVE that router for the
+/// camera's own access point — a join prompt for a camera the phone could already see. Cancelling
+/// and retrying "worked" only because the second attempt raced discovery. A discovered camera is
+/// by definition reachable on the network this device is already on, so no join may ever fire.
+@Test func cameraWiFiJoinPolicyNeverJoinsForADiscoveredCamera() {
+    let saved = PTPIPSavedCameraRecord(
+        host: "10.99.0.20",
+        displayName: "ZR_6001234",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        presentation: PTPIPSavedCameraPresentation(wifiSSID: "NIKON_ZR_02199")
+    )
+    let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
+        transportKind: .ptpIP,
+        // On the router's subnet, NOT the camera-AP one — precisely the trap.
+        localAddresses: ["10.99.0.7"],
+        savedCamera: saved,
+        discoveredCamera: DiscoveredCamera(ip: "10.99.0.20", name: "ZR_6001234", source: .bonjour),
+        connectedSSID: "SET-ROUTER"
+    )
+    #expect(target == nil)
+}
+
 @Test func cameraWiFiJoinPolicySkipsJoinOnCameraSubnet() {
     let saved = PTPIPSavedCameraRecord(
         host: "192.168.1.1",

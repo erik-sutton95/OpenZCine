@@ -1,5 +1,8 @@
 import Foundation
 import Network
+import os
+
+private let relayLogger = Logger(subsystem: "com.opencapture.openzcine", category: "relay")
 
 /// Accumulates bytes off a stream and yields whole protocol messages.
 ///
@@ -71,6 +74,9 @@ final class MonitorRelayHost {
     private struct Peer {
         let connection: NWConnection
         var name: String
+        /// Frames handed to the socket and not yet reported processed. The backpressure signal:
+        /// a peer that stops draining stops being sent to, rather than being queued for.
+        var inFlightFrames = 0
     }
 
     /// The viewer currently allowed to drive the camera; nil means the host itself does.
@@ -132,6 +138,7 @@ final class MonitorRelayHost {
     }
 
     private func accept(_ connection: NWConnection) {
+        relayLogger.info("relay host: viewer connected (\(self.peers.count + 1) total)")
         peers[ObjectIdentifier(connection)] = Peer(connection: connection, name: "A device")
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
@@ -161,6 +168,7 @@ final class MonitorRelayHost {
     }
 
     private func drop(_ connection: NWConnection) {
+        relayLogger.info("relay host: viewer left (\(max(0, self.peers.count - 1)) remain)")
         connection.cancel()
         let key = ObjectIdentifier(connection)
         peers.removeValue(forKey: key)
@@ -283,13 +291,31 @@ final class MonitorRelayHost {
         broadcast(kind: .state, payload: encode(state))
     }
 
+    /// Frames a peer may have queued but not yet drained before new ones stop being offered.
+    /// Two = one on the wire and one behind it; more is latency the viewer can never win back.
+    private static let maxInFlightFramesPerPeer = 2
+
     func broadcast(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
         guard !peers.isEmpty else { return }
         guard
             let payload = try? MonitorRelayFramePayload.encode(
                 metadata: frameMetadata, image: image)
         else { return }
-        broadcast(kind: .frame, payload: payload)
+        let framed = MonitorRelayFraming.encode(kind: .frame, payload: payload)
+        for (key, peer) in peers {
+            // A monitor shows the newest frame or it is not a monitor. A peer that has not
+            // drained is SKIPPED, never queued for: fire-and-forget sends buffer without bound,
+            // so a link slower than the source accumulates minutes of latency that presents as
+            // "no picture at all". The state and control messages stay unconditional — they are
+            // tiny, and a late reading is better than none.
+            guard peer.inFlightFrames < Self.maxInFlightFramesPerPeer else { continue }
+            peers[key]?.inFlightFrames += 1
+            peer.connection.send(
+                content: framed,
+                completion: .contentProcessed { [weak self] _ in
+                    Task { @MainActor in self?.peers[key]?.inFlightFrames -= 1 }
+                })
+        }
     }
 
     private func broadcast(kind: MonitorRelayProtocol.Kind, payload: Data) {
@@ -354,6 +380,10 @@ final class MonitorRelayClient {
     enum State: Equatable {
         case idle
         case connecting
+        /// The route to the host is not coming up — Wi-Fi isolation, a blocked port, a stale
+        /// Bonjour record. Distinct from `connecting` because it carries the network's own reason,
+        /// and from `failed` because the connection is still retrying underneath.
+        case waiting(String)
         case connected(hostName: String, cameraName: String?)
         case failed(String)
     }
@@ -373,6 +403,11 @@ final class MonitorRelayClient {
         let connection = NWConnection(to: endpoint, using: relayParameters())
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
+            case .waiting(let error):
+                relayLogger.info("relay client: waiting — \(error.localizedDescription)")
+                Task { @MainActor in self?.update(.waiting(error.localizedDescription)) }
+            case .ready:
+                relayLogger.info("relay client: transport ready")
             case .failed(let error):
                 Task { @MainActor in self?.update(.failed(error.localizedDescription)) }
             case .cancelled:

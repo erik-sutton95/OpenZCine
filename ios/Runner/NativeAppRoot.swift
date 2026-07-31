@@ -1084,20 +1084,31 @@ final class NativeAppModel {
         isMonitorPresented = true
         connection = .connected
         connectionMessage = "Joining \(discovery.name)…"
+        liveFPS = "LINK"
         if !displayOrder.contains(displayMode) { displayMode = displayOrder.first ?? .live }
 
         let client = MonitorRelayClient()
         client.onStateChanged = { [weak self] state in
             guard let self else { return }
             self.relayClientState = state
+            // `connectionMessage` is invisible on the monitor, so the FPS chip carries the link
+            // state — the same idiom the camera loop uses (RECOV/LINK). Without this, a route
+            // that never comes up is indistinguishable from a connected feed with no frames,
+            // which is exactly how it was reported from set.
             switch state {
+            case .connecting:
+                self.liveFPS = "LINK"
+            case .waiting(let reason):
+                self.liveFPS = "LINK"
+                self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
             case .connected(let hostName, let cameraName):
                 self.connectionMessage =
                     cameraName.map { "Watching \(hostName) — \($0)." }
                     ?? "Watching \(hostName)."
             case .failed(let reason):
+                self.liveFPS = "FAIL"
                 self.connectionMessage = reason
-            default:
+            case .idle:
                 break
             }
         }
@@ -3761,6 +3772,9 @@ final class NativeAppModel {
         discoveredCamera: DiscoveredCamera?,
         deviceName: String
     ) async throws {
+        // The operator picked a path that never puts this device on the camera's own access point,
+        // so joining one is wrong however tempting a saved SSID makes it look.
+        if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint { return }
         guard
             let joinTarget = CameraWiFiJoinPolicy.joinTargetIfNeeded(
                 transportKind: transportKind,
