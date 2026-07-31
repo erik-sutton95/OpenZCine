@@ -395,19 +395,90 @@ final class MonitorRelayClient {
     var onControlToken: (@MainActor (MonitorRelayControlToken) -> Void)?
 
     private var connection: NWConnection?
+    /// Both candidate transports while the race runs; empty once one is adopted.
+    private var racingConnections: [NWConnection] = []
+    /// Messages issued before a transport won the race — `introduce` fires immediately after
+    /// `connect`, so there is always at least one.
+    private var pendingSends: [Data] = []
+    private var connectTimeout: Task<Void, Never>?
+    /// The most recent reason a candidate gave for waiting, for the timeout's failure message.
+    private var lastWaitingReason: String?
     private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-client")
+
+    /// A join that has produced no transport by now is not going to; report it rather than let
+    /// "connecting" stand in for "stuck". On a healthy network adoption takes well under a second.
+    private static let connectTimeoutSeconds: Double = 15
 
     func connect(to endpoint: NWEndpoint) {
         stop()
         update(.connecting)
-        let connection = NWConnection(to: endpoint, using: relayParameters())
-        connection.stateUpdateHandler = { [weak self] state in
+        // RACE two transports rather than letting one connection choose internally. With
+        // `includePeerToPeer` the single-connection path can spend 30–45 s trying to bring up the
+        // peer-to-peer radio — which time-slices against the very Wi-Fi link the host is
+        // streaming the camera over — before settling on the infrastructure route that was ready
+        // all along. Racing an infrastructure-only candidate against a peer-to-peer-enabled one
+        // and adopting whichever is READY first makes the same-network case instant while keeping
+        // the no-network case working; the loser is cancelled.
+        let infrastructureOnly = NWParameters.tcp
+        if let tcp = infrastructureOnly.defaultProtocolStack.transportProtocol
+            as? NWProtocolTCP.Options
+        {
+            tcp.noDelay = true
+        }
+        let candidates = [
+            NWConnection(to: endpoint, using: infrastructureOnly),
+            NWConnection(to: endpoint, using: relayParameters()),
+        ]
+        racingConnections = candidates
+        for candidate in candidates {
+            candidate.stateUpdateHandler = { [weak self, weak candidate] state in
+                guard let candidate else { return }
+                switch state {
+                case .ready:
+                    Task { @MainActor in self?.adopt(candidate) }
+                case .waiting(let error):
+                    relayLogger.info("relay client: waiting — \(error.localizedDescription)")
+                    Task { @MainActor in
+                        guard let self, self.connection == nil else { return }
+                        self.lastWaitingReason = error.localizedDescription
+                        self.update(.waiting(error.localizedDescription))
+                    }
+                case .failed(let error):
+                    Task { @MainActor in self?.candidateFailed(candidate, error: error) }
+                default:
+                    break
+                }
+            }
+            candidate.start(queue: queue)
+        }
+        connectTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.connectTimeoutSeconds))
+            guard !Task.isCancelled, let self, self.connection == nil else { return }
+            let reason = self.lastWaitingReason.map { " (\($0))" } ?? ""
+            self.update(
+                .failed("Couldn't reach the broadcasting device\(reason). Try joining again."))
+            self.stop()
+        }
+    }
+
+    /// First transport to become ready carries the session; the rest are cancelled.
+    private func adopt(_ winner: NWConnection) {
+        guard connection == nil else {
+            if winner !== connection { winner.cancel() }
+            return
+        }
+        relayLogger.info("relay client: transport ready, adopted")
+        connection = winner
+        for candidate in racingConnections where candidate !== winner { candidate.cancel() }
+        racingConnections = []
+        connectTimeout?.cancel()
+        connectTimeout = nil
+        // Post-adoption lifecycle: the race handler above stops mattering once adopted, so the
+        // winner gets the plain session handler.
+        winner.stateUpdateHandler = { [weak self] state in
             switch state {
             case .waiting(let error):
-                relayLogger.info("relay client: waiting — \(error.localizedDescription)")
                 Task { @MainActor in self?.update(.waiting(error.localizedDescription)) }
-            case .ready:
-                relayLogger.info("relay client: transport ready")
             case .failed(let error):
                 Task { @MainActor in self?.update(.failed(error.localizedDescription)) }
             case .cancelled:
@@ -416,12 +487,31 @@ final class MonitorRelayClient {
                 break
             }
         }
-        connection.start(queue: queue)
-        self.connection = connection
+        for framed in pendingSends {
+            winner.send(content: framed, completion: .contentProcessed { _ in })
+        }
+        pendingSends = []
         receive(reader: MonitorRelayStreamReader())
     }
 
+    private func candidateFailed(_ candidate: NWConnection, error: NWError) {
+        guard connection == nil else { return }
+        racingConnections.removeAll { $0 === candidate }
+        // Only when EVERY candidate has failed is the join dead — one failing while the other is
+        // still trying is the expected shape of the race.
+        if racingConnections.isEmpty {
+            update(.failed(error.localizedDescription))
+            stop()
+        }
+    }
+
     func stop() {
+        connectTimeout?.cancel()
+        connectTimeout = nil
+        for candidate in racingConnections { candidate.cancel() }
+        racingConnections = []
+        pendingSends = []
+        lastWaitingReason = nil
         connection?.cancel()
         connection = nil
         if state != .idle { update(.idle) }
@@ -448,9 +538,13 @@ final class MonitorRelayClient {
     }
 
     private func send(kind: MonitorRelayProtocol.Kind, payload: Data) {
-        connection?.send(
-            content: MonitorRelayFraming.encode(kind: kind, payload: payload),
-            completion: .contentProcessed { _ in })
+        let framed = MonitorRelayFraming.encode(kind: kind, payload: payload)
+        guard let connection else {
+            // The race has no winner yet; deliver on adoption so `introduce` is never lost.
+            pendingSends.append(framed)
+            return
+        }
+        connection.send(content: framed, completion: .contentProcessed { _ in })
     }
 
     private func receive(reader: MonitorRelayStreamReader) {
