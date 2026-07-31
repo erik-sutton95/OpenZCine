@@ -276,14 +276,27 @@ struct LiveFeedModule: View {
                 // 1:1, 16:9) so the whole photo frame shows; cinema keeps the native 16:9.
                 let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
                     selector: model.cameraPropertySnapshot.captureSelector)
+                // A capture device describes its own shape — the HDMI signal is whatever the
+                // camera is sending, which need not be the 16:9 the camera's own live view uses.
+                // The raster fills and clips, so an assumed aspect does not letterbox a mismatch,
+                // it crops it: the operator loses exactly the frame edges they are checking.
+                // Cinema and photography keep describing the camera's frame.
+                let hdmiAspect: Double? = {
+                    guard model.videoSource == .hdmiCapture,
+                        let size = model.liveFrameImage?.size,
+                        size.width > 0, size.height > 0
+                    else { return nil }
+                    return Double(size.width / size.height)
+                }()
                 let feedFrame = MonitorFeedLayout.fullBleedFrame(
                     viewportWidth: viewportWidth,
                     viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
                     safeArea: safeArea,
                     horizontalDirection: horizontalDirection,
-                    aspect: isPhotography
-                        ? model.cameraPropertySnapshot.photographyFeedAspect
-                        : MonitorFeedLayout.aspectRatio,
+                    aspect: hdmiAspect
+                        ?? (isPhotography
+                            ? model.cameraPropertySnapshot.photographyFeedAspect
+                            : MonitorFeedLayout.aspectRatio),
                     centered: isPhotography
                 )
                 let imageWidth = CGFloat(feedFrame.width)

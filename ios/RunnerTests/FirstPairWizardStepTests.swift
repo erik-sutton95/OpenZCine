@@ -14,7 +14,7 @@ struct FirstPairWizardStepTests {
         #expect(count == 4)
         #expect(
             NativeAppModel.FirstPairWizardStep.connectNetwork.displayNumber(
-                skipsPermissions: false) == 4)
+                transport: .cameraAccessPoint, skipsPermissions: false) == 4)
         #expect(
             NativeAppModel.FirstPairWizardStep.connectNetwork.isFinalStep(
                 for: .cameraAccessPoint))
@@ -32,10 +32,10 @@ struct FirstPairWizardStepTests {
         #expect(count == 3)
         #expect(
             NativeAppModel.FirstPairWizardStep.chooseTransport.displayNumber(
-                skipsPermissions: true) == 1)
+                transport: .cameraAccessPoint, skipsPermissions: true) == 1)
         #expect(
             NativeAppModel.FirstPairWizardStep.connectNetwork.displayNumber(
-                skipsPermissions: true) == 3)
+                transport: .cameraAccessPoint, skipsPermissions: true) == 3)
     }
 
     @Test("Phone Hotspot and USB-C keep five steps when permissions are shown")
@@ -52,7 +52,7 @@ struct FirstPairWizardStepTests {
                 !NativeAppModel.FirstPairWizardStep.connectNetwork.isFinalStep(for: transport))
             #expect(
                 NativeAppModel.FirstPairWizardStep.discoverAndPair.displayNumber(
-                    skipsPermissions: false) == 5)
+                    transport: transport, skipsPermissions: false) == 5)
         }
     }
 
@@ -66,8 +66,75 @@ struct FirstPairWizardStepTests {
             #expect(count == 4)
             #expect(
                 NativeAppModel.FirstPairWizardStep.discoverAndPair.displayNumber(
-                    skipsPermissions: true) == 4)
+                    transport: transport, skipsPermissions: true) == 4)
         }
+    }
+
+    /// HDMI capture reaches the camera through a cable and a capture device: there is no network
+    /// to set up, so it visits one step fewer than the other cable path and ends on the capture
+    /// step instead of a camera list.
+    @Test("HDMI capture skips the network step")
+    func hdmiCaptureSkipsNetwork() {
+        let steps = NativeAppModel.FirstPairWizardStep.sequence(
+            transport: .hdmiCapture, skipsPermissions: false)
+        #expect(steps == [.permissions, .chooseTransport, .prepareCamera, .discoverAndPair])
+        #expect(
+            NativeAppModel.FirstPairWizardStep.stepCount(
+                transport: .hdmiCapture, skipsPermissions: false) == 4)
+        #expect(
+            NativeAppModel.FirstPairWizardStep.stepCount(
+                transport: .hdmiCapture, skipsPermissions: true) == 3)
+        #expect(NativeAppModel.FirstPairWizardStep.discoverAndPair.isFinalStep(for: .hdmiCapture))
+        // The numbering is contiguous even though the visited steps are not — the whole reason the
+        // sequence replaced `rawValue` arithmetic, which would have numbered this one 5 of 4.
+        #expect(
+            NativeAppModel.FirstPairWizardStep.discoverAndPair.displayNumber(
+                transport: .hdmiCapture, skipsPermissions: false) == 4)
+        // A step this path never visits reports no number rather than a misleading one.
+        #expect(
+            NativeAppModel.FirstPairWizardStep.connectNetwork.displayNumber(
+                transport: .hdmiCapture, skipsPermissions: false) == 0)
+    }
+
+    /// Walking the path in both directions has to stay on it — the bug a hand-written switch
+    /// invites is stepping into `connectNetwork` because it happens to be the next raw value.
+    @Test("Advancing and retreating skip the steps the path omits")
+    func hdmiCaptureWalk() {
+        let transport = NativeAppModel.FirstPairTransportMethod.hdmiCapture
+        #expect(
+            NativeAppModel.FirstPairWizardStep.prepareCamera.next(
+                transport: transport, skipsPermissions: false) == .discoverAndPair)
+        #expect(
+            NativeAppModel.FirstPairWizardStep.discoverAndPair.previous(
+                transport: transport, skipsPermissions: false) == .prepareCamera)
+        #expect(
+            NativeAppModel.FirstPairWizardStep.discoverAndPair.next(
+                transport: transport, skipsPermissions: false) == nil)
+        // Skipping permissions removes the only step before the choice, so Back disappears there.
+        #expect(
+            NativeAppModel.FirstPairWizardStep.chooseTransport.previous(
+                transport: transport, skipsPermissions: true) == nil)
+        #expect(
+            NativeAppModel.FirstPairWizardStep.chooseTransport.previous(
+                transport: transport, skipsPermissions: false) == .permissions)
+    }
+
+    /// The wizard offers three cards; the two cable paths share the third one.
+    @Test("HDMI capture is a nested option, not a fourth card")
+    func cableLinkCardGrouping() {
+        #expect(
+            NativeAppModel.FirstPairTransportMethod.cardCases == [
+                .cameraAccessPoint, .phoneHotspot, .usbC,
+            ])
+        #expect(
+            NativeAppModel.FirstPairTransportMethod.usbC.nestedOptions == [.usbC, .hdmiCapture])
+        #expect(NativeAppModel.FirstPairTransportMethod.cameraAccessPoint.nestedOptions.isEmpty)
+        #expect(NativeAppModel.FirstPairTransportMethod.phoneHotspot.nestedOptions.isEmpty)
+        #expect(NativeAppModel.FirstPairTransportMethod.usbC.cardTitle == "Cable Link")
+        #expect(NativeAppModel.FirstPairTransportMethod.hdmiCapture.cardTitle == "Cable Link")
+        #expect(NativeAppModel.FirstPairTransportMethod.hdmiCapture.isCableLink)
+        #expect(NativeAppModel.FirstPairTransportMethod.usbC.isCableLink)
+        #expect(!NativeAppModel.FirstPairTransportMethod.phoneHotspot.isCableLink)
     }
 
     @MainActor

@@ -396,15 +396,51 @@ final class NativeAppModel {
     enum FirstPairTransportMethod: String, CaseIterable, Sendable, Identifiable {
         case cameraAccessPoint
         case phoneHotspot
+        /// Camera control over the device's data port — USB-C, or Lightning through Apple's
+        /// camera adapter.
         case usbC
+        /// The picture over an HDMI capture device on that same port. Video only: a capture device
+        /// digitises a signal, it does not speak to the camera.
+        case hdmiCapture
 
         var id: String { rawValue }
+
+        /// The three cards the choose step offers.
+        ///
+        /// `hdmiCapture` is deliberately not one of them: it is the same cable and the same port
+        /// as `usbC`, so the two share the Cable Link card as a nested choice. A fourth top-level
+        /// card would also not fit — the landscape row is a fixed `HStack` with no wrap, and the
+        /// intro column beside it is sized for exactly three.
+        static var cardCases: [FirstPairTransportMethod] {
+            [.cameraAccessPoint, .phoneHotspot, .usbC]
+        }
+
+        /// Whether this path reaches the camera through the device's data port.
+        var isCableLink: Bool { self == .usbC || self == .hdmiCapture }
+
+        /// The nested choices this card offers, empty when it is a leaf.
+        var nestedOptions: [FirstPairTransportMethod] {
+            self == .usbC ? [.usbC, .hdmiCapture] : []
+        }
 
         var title: String {
             switch self {
             case .cameraAccessPoint: "Camera's Access Point"
             case .phoneHotspot: "Phone's Hotspot"
             case .usbC: "USB-C"
+            case .hdmiCapture: "HDMI capture"
+            }
+        }
+
+        /// Title of the *card* this path appears on — the two cable paths share one.
+        var cardTitle: String { isCableLink ? "Cable Link" : title }
+
+        /// Short label for the nested option pills inside the Cable Link card.
+        var optionTitle: String {
+            switch self {
+            case .usbC: DeviceUSBConnector.current == .lightning ? "Lightning" : "USB-C"
+            case .hdmiCapture: "HDMI"
+            default: title
             }
         }
 
@@ -414,6 +450,7 @@ final class NativeAppModel {
             case .cameraAccessPoint: .connectionPathCameraAp
             case .phoneHotspot: .connectionPathPhoneHotspot
             case .usbC: .connectionPathUsb
+            case .hdmiCapture: .connectionPathHDMICapture
             }
         }
 
@@ -427,6 +464,8 @@ final class NativeAppModel {
                 DeviceUSBConnector.current == .lightning
                     ? "Connect through Apple's Lightning to USB camera adapter — a USB-C to Lightning cable can't host the camera."
                     : "Plug the camera into this iPhone with a USB-C cable."
+            case .hdmiCapture:
+                "Feed the camera's HDMI output into a USB capture device — full-quality picture, no camera control."
             }
         }
 
@@ -435,6 +474,7 @@ final class NativeAppModel {
             case .cameraAccessPoint: "antenna.radiowaves.left.and.right"
             case .phoneHotspot: "personalhotspot"
             case .usbC: "cable.connector"
+            case .hdmiCapture: "display"
             }
         }
     }
@@ -461,32 +501,67 @@ final class NativeAppModel {
 
         static var stepCount: Int { allCases.count }
 
+        /// The steps a path actually visits, in order.
+        ///
+        /// Everything below derives from this one list — the count, the displayed number, the
+        /// final step, advancing and retreating — so a path declares its shape here and nowhere
+        /// else. It replaced four hand-written switches plus a hardcoded `transport ==
+        /// .cameraAccessPoint ? 4 : 5`, which silently assumed every path visited a contiguous run
+        /// of the enum. Android's `PairingFlowState` has always been written this way; the fourth
+        /// path is what made the divergence expensive.
+        static func sequence(
+            transport: FirstPairTransportMethod,
+            skipsPermissions: Bool
+        ) -> [FirstPairWizardStep] {
+            var steps: [FirstPairWizardStep] = skipsPermissions ? [] : [.permissions]
+            steps.append(.chooseTransport)
+            steps.append(.prepareCamera)
+            // HDMI capture is a cable and a capture device: there is no network to set up.
+            if transport != .hdmiCapture { steps.append(.connectNetwork) }
+            // Camera-AP pairing ends at the network step — joining the camera's Wi-Fi is the last
+            // operator action, and connect then runs against the fixed AP address.
+            if transport != .cameraAccessPoint { steps.append(.discoverAndPair) }
+            return steps
+        }
+
         /// Total visible steps for the active transport and whether the permissions step is omitted.
         static func stepCount(
             transport: FirstPairTransportMethod,
             skipsPermissions: Bool
         ) -> Int {
-            let base = transport == .cameraAccessPoint ? 4 : 5
-            return skipsPermissions ? base - 1 : base
+            sequence(transport: transport, skipsPermissions: skipsPermissions).count
         }
 
-        /// 1-based step index shown in the wizard chrome.
-        func displayNumber(skipsPermissions: Bool) -> Int {
-            if skipsPermissions {
-                guard self != .permissions else { return 0 }
-                return rawValue
-            }
-            return rawValue + 1
+        /// 1-based step index shown in the wizard chrome; 0 when this step is not on the path.
+        func displayNumber(transport: FirstPairTransportMethod, skipsPermissions: Bool) -> Int {
+            let steps = Self.sequence(transport: transport, skipsPermissions: skipsPermissions)
+            guard let index = steps.firstIndex(of: self) else { return 0 }
+            return index + 1
         }
 
         /// Whether this step is the last one for the chosen transport.
         func isFinalStep(for transport: FirstPairTransportMethod) -> Bool {
-            switch transport {
-            case .cameraAccessPoint:
-                return self == .connectNetwork
-            case .phoneHotspot, .usbC:
-                return self == .discoverAndPair
+            Self.sequence(transport: transport, skipsPermissions: false).last == self
+        }
+
+        /// The next step on this path, or nil at the end of it.
+        func next(
+            transport: FirstPairTransportMethod, skipsPermissions: Bool
+        ) -> FirstPairWizardStep? {
+            let steps = Self.sequence(transport: transport, skipsPermissions: skipsPermissions)
+            guard let index = steps.firstIndex(of: self), index + 1 < steps.count else {
+                return nil
             }
+            return steps[index + 1]
+        }
+
+        /// The previous step on this path, or nil at the start of it.
+        func previous(
+            transport: FirstPairTransportMethod, skipsPermissions: Bool
+        ) -> FirstPairWizardStep? {
+            let steps = Self.sequence(transport: transport, skipsPermissions: skipsPermissions)
+            guard let index = steps.firstIndex(of: self), index > 0 else { return nil }
+            return steps[index - 1]
         }
     }
 
@@ -694,6 +769,57 @@ final class NativeAppModel {
     /// Whether the live view is punched in. Transient by design — see `Magnification`; a session
     /// that restored itself already magnified would read as a broken feed.
     var magnificationActive = DemoHarness.magnificationActive
+    /// Where the monitor's picture comes from.
+    ///
+    /// Deliberately independent of the control link: a camera reached over Wi-Fi keeps every
+    /// control while its picture arrives over HDMI through a capture device, and a capture device
+    /// can drive the monitor with no camera session behind it at all.
+    var videoSource: VideoSourceKind = .cameraLiveView
+    /// What the HDMI capture path is doing. Only meaningful while it is the active source.
+    var hdmiCaptureState: UVCVideoSourceState = .waitingForDevice
+    /// The live capture session. Non-nil only while `videoSource == .hdmiCapture`.
+    @ObservationIgnored private var uvcSource: UVCVideoSource?
+    /// Frame-rate sampler for the capture path, mirroring the camera stream's `liveFPS` readout.
+    @ObservationIgnored private var hdmiFrameRate = FrameRateSampler()
+
+    /// Whether this monitor session has a camera behind it at all.
+    ///
+    /// Deliberately NOT `cameraSession != nil`. A reconnect clears the session for seconds at a
+    /// time while the monitor stays up on purpose, holding the last frame in RECOV — gating chrome
+    /// on the live transport would make the status bar and capture strip vanish and return on
+    /// every recovery, which reads as the app breaking rather than the link blipping. This tracks
+    /// the *kind* of session, so it survives the gap and only clears when the operator leaves the
+    /// monitor or starts a capture-only one.
+    /// Observed, not `@ObservationIgnored`: the chrome mounts read through it, so a change has to
+    /// invalidate the views that hang off it.
+    private var isCameraControlSession = false
+
+    /// Whether the camera can actually be read and written.
+    ///
+    /// The demo session counts: it has no transport, but it deliberately simulates a camera so the
+    /// screenshot harness exercises the full chrome. An HDMI capture source with no camera behind
+    /// it does not, which is the whole point — nothing may offer to change a setting on a camera
+    /// that cannot hear it.
+    var hasCameraControl: Bool {
+        #if DEBUG
+            if demoSuppressesCameraControl { return false }
+        #endif
+        return isCameraControlSession || isDemoSession
+    }
+
+    #if DEBUG
+        /// Screenshot affordance: forces the no-control path even inside a demo session. The
+        /// simulator exposes no UVC device, so a capture-only monitor cannot be reached for real
+        /// there — but its chrome is exactly what needs checking. Compiled out of Release.
+        var demoSuppressesCameraControl = false
+    #endif
+
+    /// What the monitor may truthfully display, given the picture source and the control link.
+    /// One definition, shared with Android's policy and with the tests.
+    var monitorAvailability: MonitorDataAvailability {
+        MonitorDataAvailability(source: videoSource, hasCameraControl: hasCameraControl)
+    }
+
     var cameraState = CameraDisplayState.preview
     // Per-frame telemetry (timecode, FPS) is held separately from `cameraState` so updating it
     // never invalidates every view observing the heavy HUD struct — only the readouts re-render.
@@ -770,7 +896,19 @@ final class NativeAppModel {
     var cameraBatteryCharging = false
     var liveFrameImage: UIImage?
     /// AF / face-detection boxes from the latest live-view frame's header, drawn over the feed.
-    var liveViewFocus: PTPLiveViewFocusInfo?
+    var liveViewFocus: PTPLiveViewFocusInfo? {
+        didSet {
+            // The AF coordinate space belongs to the body, not to one frame, so remember it. Off
+            // the camera's own stream no header ever arrives to state it again, and tap-to-focus
+            // has to map the tap into that same space or the point lands somewhere else entirely.
+            if let focus = liveViewFocus, focus.coordinateWidth > 0, focus.coordinateHeight > 0 {
+                lastFocusCoordinateSpace = (focus.coordinateWidth, focus.coordinateHeight)
+            }
+        }
+    }
+    /// Last AF coordinate space the camera reported. Survives a switch away from its own stream —
+    /// deliberately not cleared by `clearFrameHeaderDerivedState`, which is what makes it useful.
+    @ObservationIgnored private var lastFocusCoordinateSpace: (width: Int, height: Int)?
     /// Camera-reported audio levels from the live-view header's sound indicator (bytes 824–827),
     /// mapped onto the meter's dBFS scale for the audio-levels panel. Silent until frames carry it.
     var liveAudioLevels: AudioMeterLevels = .silent
@@ -829,6 +967,7 @@ final class NativeAppModel {
     /// Whether `section` mounts on the monitor right now: switched on for the active DISP mode,
     /// or force-mounted (dimmed, badged) because that mode's chrome is being edited.
     func chromeSectionMounts(_ section: DisplayChromeVisibility.Section) -> Bool {
+        guard sectionHasASource(section) else { return false }
         if let mode = chromeEditorMode, mode == displayMode,
             DisplayChromeVisibility.isConfigurable(section, in: mode)
         {
@@ -836,10 +975,41 @@ final class NativeAppModel {
         }
         return monitorChrome.isVisible(section)
     }
+
+    /// Whether anything is actually feeding `section` right now.
+    ///
+    /// Chrome the operator switched on still hides when nothing can fill it. This is not tidiness:
+    /// a readout with no source behind it still looks like an instrument, and the bottom strip in
+    /// particular offers pickers that would write to a camera that cannot hear them. Hiding beats
+    /// showing "—", which reads as a camera that is attached and silent.
+    ///
+    /// Only readouts fed by the camera appear here. The assist toolbar, the scopes, the lock and
+    /// the FPS chip all keep working on any picture source, because none of them need the camera.
+    private func sectionHasASource(_ section: DisplayChromeVisibility.Section) -> Bool {
+        let available = monitorAvailability
+        switch section {
+        case .cameraValues, .codecReadout, .mediaReadout, .resolutionReadout, .batteryIndicators:
+            return available.cameraControls
+        case .recReadout, .railRecord:
+            return available.recordControl
+        case .railMedia:
+            return available.mediaBrowser
+        case .timecodeReadout:
+            return available.cameraTimecode
+        case .focusBox:
+            return available.focusBoxes
+        case .statusBar, .assistToolbar, .lockButton, .fpsReadout, .railSettings, .railDisp,
+            .sideRails:
+            return true
+        }
+    }
     /// Whether a side-rail control mounts: its plan entry, or force-mounted while editing.
     func railControlMounts(
         _ section: DisplayChromeVisibility.Section, plan: MonitorChromePolicy.SideRailPlan
     ) -> Bool {
+        // Same gate as `chromeSectionMounts`, applied here too because the rail cases below read
+        // their plan entry directly instead of falling through to it.
+        guard sectionHasASource(section) else { return false }
         if chromeEditorMode == displayMode, chromeEditorMode != nil,
             DisplayChromeVisibility.isConfigurable(section, in: displayMode)
         {
@@ -1037,8 +1207,11 @@ final class NativeAppModel {
 
     var displayOrder: [DispMode] {
         // Photography hides the command monitor (its dashboard is still movie-shaped);
-        // the DISP indicator and cycle follow this filtered order.
-        preferences.enabledDispOrder.filter { !isPhotographyMode || $0 != .command }
+        // the DISP indicator and cycle follow this filtered order. Command is entirely a
+        // camera-control surface and has no per-element mount gate of its own, so a session with
+        // no camera behind it drops it from the cycle rather than offering an empty dashboard.
+        let hidesCommand = isPhotographyMode || !monitorAvailability.cameraControls
+        return preferences.enabledDispOrder.filter { !hidesCommand || $0 != .command }
     }
 
     var isConnected: Bool {
@@ -1102,7 +1275,8 @@ final class NativeAppModel {
     /// True when the operator can manually trigger a camera Wi‑Fi join from the link screen.
     var showsManualJoinCameraWiFiAction: Bool {
         if discoveryTransportFilter == .usbC { return false }
-        if shouldShowFirstPairWizard, firstPairTransportMethod == .usbC { return false }
+        // Neither cable path has a phone-side camera-Wi-Fi join to offer.
+        if shouldShowFirstPairWizard, firstPairTransportMethod.isCableLink { return false }
         // The hotspot path has no phone-side camera-Wi-Fi join: the camera joins the iPhone's
         // Personal Hotspot, so there is no camera SSID to scan or join — the scanner and join
         // button are camera-AP mechanisms only and would dead-end the operator here.
@@ -1285,7 +1459,7 @@ final class NativeAppModel {
         guard !isConnectionProgressPresented else { return false }
         guard !isMonitorPresented else { return false }
         guard discoveryTransportFilter != .usbC else { return false }
-        if shouldShowFirstPairWizard, firstPairTransportMethod == .usbC {
+        if shouldShowFirstPairWizard, firstPairTransportMethod.isCableLink {
             return false
         }
         return true
@@ -1586,55 +1760,40 @@ final class NativeAppModel {
 
     func advanceFirstPairWizard() {
         guard shouldShowFirstPairWizard else { return }
-        switch firstPairWizardStep {
-        case .permissions:
-            firstPairWizardStep = .chooseTransport
-        case .chooseTransport:
-            firstPairWizardStep = .prepareCamera
-        case .prepareCamera:
-            firstPairWizardStep = .connectNetwork
-        case .connectNetwork:
-            if firstPairTransportMethod == .cameraAccessPoint {
-                presentCameraWiFiScanner()
-            } else {
-                enterFirstPairDiscoveryStep()
-            }
-        case .discoverAndPair:
-            break
+        // Camera-AP's last step hands off to the Wi-Fi scanner rather than to another step.
+        if firstPairWizardStep == .connectNetwork, firstPairTransportMethod == .cameraAccessPoint {
+            presentCameraWiFiScanner()
+            return
+        }
+        guard
+            let next = firstPairWizardStep.next(
+                transport: firstPairTransportMethod,
+                skipsPermissions: firstPairWizardSkipsPermissions)
+        else { return }
+        if next == .discoverAndPair {
+            enterFirstPairDiscoveryStep()
+        } else {
+            firstPairWizardStep = next
         }
     }
 
     func retreatFirstPairWizard() {
         guard shouldShowFirstPairWizard else { return }
-        switch firstPairWizardStep {
-        case .permissions:
-            break
-        case .chooseTransport:
-            if firstPairWizardSkipsPermissions {
-                break
-            } else {
-                firstPairWizardStep = .permissions
-            }
-        case .prepareCamera:
-            firstPairWizardStep = .chooseTransport
-        case .connectNetwork:
-            firstPairWizardStep = .prepareCamera
-        case .discoverAndPair:
-            stopDiscoveryLoop()
-            firstPairWizardStep = .connectNetwork
-        }
+        guard
+            let previous = firstPairWizardStep.previous(
+                transport: firstPairTransportMethod,
+                skipsPermissions: firstPairWizardSkipsPermissions)
+        else { return }
+        // Leaving discovery must stop the scan it started; nothing else here has a side effect.
+        if firstPairWizardStep == .discoverAndPair { stopDiscoveryLoop() }
+        firstPairWizardStep = previous
     }
 
     /// Whether the wizard shows a Back control on the current step.
     func firstPairWizardCanRetreat(from step: FirstPairWizardStep) -> Bool {
-        switch step {
-        case .permissions:
-            return false
-        case .chooseTransport:
-            return !firstPairWizardSkipsPermissions
-        default:
-            return true
-        }
+        step.previous(
+            transport: firstPairTransportMethod,
+            skipsPermissions: firstPairWizardSkipsPermissions) != nil
     }
 
     /// Total visible steps for the active wizard session.
@@ -1647,7 +1806,9 @@ final class NativeAppModel {
 
     /// 1-based step index for wizard progress chrome.
     func firstPairWizardDisplayStepNumber(for step: FirstPairWizardStep) -> Int {
-        step.displayNumber(skipsPermissions: firstPairWizardSkipsPermissions)
+        step.displayNumber(
+            transport: firstPairTransportMethod,
+            skipsPermissions: firstPairWizardSkipsPermissions)
     }
 
     /// Seeds the wizard at permissions or the first post-permissions step.
@@ -1667,7 +1828,11 @@ final class NativeAppModel {
 
     private func enterFirstPairDiscoveryStep() {
         firstPairWizardStep = .discoverAndPair
-        discoveryTransportFilter = firstPairTransportMethod == .usbC ? .usbC : .wiFi
+        discoveryTransportFilter = firstPairTransportMethod.isCableLink ? .usbC : .wiFi
+        // HDMI has nothing to discover: a capture device is either attached or it isn't, and the
+        // step shows its status instead of a camera list. Starting a scan here would spin the
+        // radios looking for a camera the operator has already said they aren't connecting to.
+        guard firstPairTransportMethod != .hdmiCapture else { return }
         beginPairingDiscovery()
     }
 
@@ -2035,6 +2200,9 @@ final class NativeAppModel {
                 discoveredCameras = []
                 pendingPairingChallenge = nil
                 cameraSession = session
+                // This monitor session has a camera behind it, and stays that way across reconnect
+                // gaps — see `isCameraControlSession`.
+                isCameraControlSession = true
                 connectedIdentity = session.identity
                 startKeepAlive(session: session)
                 startEventDraining(session: session)
@@ -2533,6 +2701,12 @@ final class NativeAppModel {
     private var discoveryLoopTask: Task<Void, Never>?
     private var discoveryLoopGeneration = 0
     private var liveViewTask: Task<Void, Never>?
+    /// The serial consumer of the HDMI capture stream. Mutually exclusive with `liveViewTask` —
+    /// only one picture source drives the monitor at a time.
+    private var hdmiConsumerTask: Task<Void, Never>?
+    /// Services camera control while the picture comes from somewhere other than the camera's own
+    /// stream. Mutually exclusive with `liveViewTask`, whose safe point does this job otherwise.
+    private var cameraControlPumpTask: Task<Void, Never>?
     private var keepAliveTask: Task<Void, Never>?
     private var linkHealthUpdateTask: Task<Void, Never>?
     /// The in-flight connection establishment, stored so teardown can cancel it. Guarded by
@@ -3693,6 +3867,8 @@ final class NativeAppModel {
         pairedReconnectSawCameraLeave = false
         liveViewTask?.cancel()
         liveViewTask = nil
+        cameraControlPumpTask?.cancel()
+        cameraControlPumpTask = nil
         keepAliveTask?.cancel()
         keepAliveTask = nil
         linkHealthUpdateTask?.cancel()
@@ -3724,6 +3900,15 @@ final class NativeAppModel {
             // new camera, internet hop). Retries must die with it — a late reconnect resurrecting
             // a session the operator just left is the duplicate-session bug in #253.
             cancelSessionRecovery()
+            // The capture path is owned by the monitor, not by the camera session — a control link
+            // that drops while the picture is on HDMI degrades to monitor-only rather than going
+            // dark (which is why this sits inside the dismissal branch, not beside the session
+            // teardown above). Leaving the monitor for real does end it.
+            stopHDMICapture()
+            videoSource = .cameraLiveView
+            // Leaving the monitor ends the session's *kind*, not just its transport — the next one
+            // declares itself when it connects.
+            isCameraControlSession = false
             liveFrameImage = nil
             isMonitorPresented = false
             activePanel = nil
@@ -3754,6 +3939,17 @@ final class NativeAppModel {
     }
 
     private func startLiveView(session: NativeCameraSession, skipPropertyBootstrap: Bool = false) {
+        // The picture is on HDMI: a session establishing or recovering underneath must not start
+        // pulling camera frames and fight the capture path for the monitor. But the frame loop is
+        // not only a picture — its safe point is where every control operation runs — so the pump
+        // takes over here rather than this simply returning. Standing the loop down without it is
+        // what made the whole camera go deaf while HDMI streamed perfectly.
+        guard videoSource == .cameraLiveView else {
+            startCameraControlPump(session: session, skipPropertyBootstrap: skipPropertyBootstrap)
+            return
+        }
+        cameraControlPumpTask?.cancel()
+        cameraControlPumpTask = nil
         liveViewTask?.cancel()
         resetCameraPropertyState()
         liveViewTask = Task {
@@ -3870,6 +4066,248 @@ final class NativeAppModel {
         }
     }
 
+    // MARK: - Picture source
+
+    /// Enters a monitor-only session driven by an HDMI capture device, with no camera behind it.
+    ///
+    /// The wizard's Cable Link → HDMI path lands here: an operator monitoring a camera they cannot
+    /// or do not want to control still gets the whole assist stack — LUTs, peaking, false colour,
+    /// zebras, scopes, guides, magnification — on a picture that never went through the live-view
+    /// JPEG encoder.
+    func startHDMIMonitorSession() {
+        // A camera is already connected: this is a source change, not a new session. Falling
+        // through would tear that session down and silently cost the operator every control they
+        // had — the wizard's HDMI card must not be a way to lose a working camera link.
+        if cameraSession != nil {
+            selectVideoSource(.hdmiCapture)
+            return
+        }
+        stopDiscoveryLoop()
+        disconnectCameraSession(resetConnection: false)
+        // Nothing may claim a reading from a camera that isn't attached. Without this the display
+        // state keeps the `.preview` fixture — a plausible, entirely fictional ISO 800 on a
+        // "Nikon ZR" — because applying an empty property snapshot preserves existing values.
+        cameraState = .blank
+        resetCameraPropertyState()
+        resetLinkHealthMeasurements()
+        discoveredCameras = []
+        connectedIdentity = nil
+        liveFrameImage = nil
+        isMonitorPresented = true
+        connection = .connected
+        videoSource = .hdmiCapture
+        // Command is a camera-control dashboard and has no per-element mount gate of its own, so a
+        // session that starts on it would open to an empty grid. `displayOrder` has already
+        // dropped it; land on whatever the operator's order offers instead.
+        if !displayOrder.contains(displayMode) { displayMode = displayOrder.first ?? .live }
+        startHDMICapture()
+    }
+
+    /// Switches where the monitor's picture comes from, leaving the control session untouched.
+    ///
+    /// This is the hybrid the feature exists for: exposure, focus mode, record and the media
+    /// browser all keep working over PTP while the picture arrives over HDMI at the quality the
+    /// camera actually outputs.
+    func selectVideoSource(_ kind: VideoSourceKind) {
+        guard !interfaceLocked, kind != videoSource else { return }
+        videoSource = kind
+        logConnection("picture source → \(kind.rawValue)")
+        switch kind {
+        case .hdmiCapture:
+            startHDMICapture()
+        case .cameraLiveView:
+            stopHDMICapture()
+            if let session = cameraSession {
+                // Live view stayed running on the body while HDMI held the picture (focus needs
+                // it), so end it before the frame loop starts it again: `StartLiveView` against a
+                // body that is already streaming does not answer OK, and the loop reads a non-OK
+                // start as a failed one and escalates into recovery.
+                Task { [weak self] in
+                    await session.stopLiveView()
+                    guard let self, self.cameraSession === session,
+                        self.videoSource == .cameraLiveView
+                    else { return }
+                    // Skips the property burst: the snapshot is already warm, and re-running it
+                    // would freeze the feed for seconds on what should read as an instant change.
+                    self.startLiveView(session: session, skipPropertyBootstrap: true)
+                }
+            }
+        }
+    }
+
+    /// Brings the capture path up and stands the camera's own stream down.
+    private func startHDMICapture() {
+        // The two sources must never drive the monitor at once. Ending live view on the body is
+        // not just tidiness: sensor readout plus JPEG encode is the dominant camera-heat source,
+        // and stopping it hands the whole command channel back to property polling.
+        liveViewTask?.cancel()
+        liveViewTask = nil
+        if let session = cameraSession {
+            // DELIBERATELY not `stopLiveView()`. Focus is live-view-scoped on the body:
+            // `ChangeAfArea` moves the *live-view* AF area, and AF/MF drive belong to the same
+            // mode. A body whose live view has ended rejects all of them, which presented as the
+            // AF box moving on screen — we draw that ourselves — while focus never followed.
+            //
+            // Cancelling the frame loop above already stops the JPEG transfers and frees the
+            // command channel, which is the bulk of the win. Ending live view on the body as well
+            // bought back some camera heat and cost every focus control to get it; that is the
+            // wrong side of the trade for a monitor whose whole job is judging focus.
+            startCameraControlPump(session: session, skipPropertyBootstrap: true)
+        }
+        // Only a capture-only monitor loses the header. With a session up the pump keeps pulling
+        // it, so clearing here would blank the AF box and meters for one tick and nothing more.
+        if cameraSession == nil { clearFrameHeaderDerivedState() }
+        hdmiFrameRate = FrameRateSampler()
+        let source = UVCVideoSource(
+            onStateChange: { [weak self] state in self?.applyHDMICaptureState(state) })
+        uvcSource = source
+        hdmiCaptureState = .starting
+        connectionMessage = UVCVideoSourceState.starting.message
+        hdmiConsumerTask?.cancel()
+        // One serial consumer, mirroring the camera stream's loop: the source buffers newest-only,
+        // so a slow bake drops frames rather than queueing them behind the picture on screen.
+        hdmiConsumerTask = Task { [weak self] in
+            guard let self else { return }
+            for await handoff in source.frames {
+                guard !Task.isCancelled, self.videoSource == .hdmiCapture else { break }
+                await self.presentHDMIFrame(handoff.image)
+            }
+        }
+        Task { await source.start() }
+    }
+
+    /// Tears the capture path down. Safe when it was never started.
+    private func stopHDMICapture() {
+        hdmiConsumerTask?.cancel()
+        hdmiConsumerTask = nil
+        // The frame loop takes control servicing back when it restarts; two pumps would double
+        // every write and poll.
+        cameraControlPumpTask?.cancel()
+        cameraControlPumpTask = nil
+        uvcSource?.stop()
+        uvcSource = nil
+        hdmiCaptureState = .waitingForDevice
+    }
+
+    /// Displays one captured frame, and feeds the scope tap and watch relay from it.
+    private func presentHDMIFrame(_ image: UIImage) async {
+        guard videoSource == .hdmiCapture else { return }
+        guard let display = await displayReadyLiveFrame(from: image) else { return }
+        guard videoSource == .hdmiCapture else { return }
+        hdmiFrameRate.recordFrame(at: CACurrentMediaTime())
+        measuredLiveViewFPS = hdmiFrameRate.displayFPS
+        let label = hdmiFrameRate.formatted
+        if label != liveFPS { liveFPS = label }
+        lastGoodFrameAt = Date()
+        consecutiveBadLiveFrames = 0
+        // Publish the picture ONLY — deliberately not through `publishLiveFrameDisplay`, which
+        // also writes the focus box. On a header-less source the only thing that knows where the
+        // AF point is, is our own `ChangeAfArea`; passing nil here wiped the box about one frame
+        // after the tap drew it, which reads exactly like tap-to-focus doing nothing at all.
+        if liveFrameImage !== display { liveFrameImage = display }
+        sampleScopesIfDue(clean: image) { [weak self] in
+            self?.videoSource == .hdmiCapture
+        }
+        // The CPU path returns a distinct display-baked image; the Metal path returns the clean
+        // frame because its bake stays GPU-side, so the relay grades its own thumbnail instead.
+        watchRelay.ingestFrame(
+            image: display,
+            applying: display === image ? liveImageEffects : nil,
+            timecode: liveTimecode,
+            isRecording: isRecording)
+        if !isMonitorPresented { isMonitorPresented = true }
+        if isStreamRecovering { isStreamRecovering = false }
+    }
+
+    private func applyHDMICaptureState(_ state: UVCVideoSourceState) {
+        hdmiCaptureState = state
+        guard videoSource == .hdmiCapture else { return }
+        connectionMessage = state.message
+        // Nothing is arriving, so the feed must not keep the last captured frame on screen
+        // pretending to be live.
+        if !state.isStreaming {
+            liveFrameImage = nil
+            liveFPS = "—"
+        }
+    }
+
+    /// How often the control pump runs its safe point.
+    ///
+    /// Deliberately a frame-like cadence rather than something faster: the safe point's internal
+    /// throttles (device-event polls every 4th call, the property round-robin's poll stride) are
+    /// written against a per-frame counter, so ticking at roughly the live-view rate reproduces
+    /// exactly the command pattern the camera saw before — minus the JPEG pulls, which is the
+    /// whole point of moving the picture off the camera.
+    private static let controlPumpInterval: Duration = .milliseconds(40)
+
+    /// Services camera control when the camera's own frame loop isn't running.
+    ///
+    /// The frame loop's per-frame safe point (`runControlSafePoint`) is the ONLY place queued
+    /// property writes, AF-point taps, record start/stop, still release, device-event polls and
+    /// the property round-robin are serviced. `drainPendingWritesIfIdle` does not cover the gap:
+    /// it refuses while the monitor is up, precisely because the frame loop is normally there.
+    ///
+    /// So this runs the same safe point on the same cadence. See
+    /// `MonitorDataAvailability.requiresControlPump` for when it has to exist.
+    private func startCameraControlPump(
+        session: NativeCameraSession, skipPropertyBootstrap: Bool
+    ) {
+        cameraControlPumpTask?.cancel()
+        cameraControlPumpTask = Task { [weak self] in
+            guard let self else { return }
+            if !skipPropertyBootstrap {
+                // Same burst the frame loop runs before its first frame: without it the pickers
+                // have no advertised option lists to offer.
+                await self.bootstrapCameraProperties(session: session)
+            }
+            // Live view stays RUNNING on the body, at the smallest frame it offers, and the pump
+            // keeps pulling it. The picture is coming from HDMI; this stream exists purely as the
+            // carrier for its HEADER — the AF boxes, subject and eye detection, focus result,
+            // level, audio meter and timecode all ride there and have no other source. Command
+            // mode has always worked exactly this way, and its own note is the reason the cost is
+            // acceptable: our pull rate does not change camera heat, the frame SIZE does.
+            //
+            // Focus is also live-view-scoped, so this doubles as the reason `ChangeAfArea` works
+            // at all here: a body whose live view has ended rejects it.
+            await session.configureLiveView(
+                size: self.effectiveStreamImageSize,
+                compression: self.preferences.qualityBias.liveViewImageCompression)
+            // Already-running answers not-OK, which is why the result is discarded rather than
+            // treated as a failed start.
+            try? await session.startLiveView()
+            var frameCounter = 0
+            while !Task.isCancelled {
+                guard self.cameraSession === session, self.monitorAvailability.requiresControlPump
+                else { return }
+                frameCounter &+= 1
+                if let frame = try? await self.liveFrameTask(session).value,
+                    self.cameraSession === session
+                {
+                    self.liveViewFocus = frame.focus
+                    self.applyLiveViewHeaderState(frame)
+                    self.applyLiveViewHeaderTimecode(frame.timecode)
+                }
+                await self.runLiveViewControlSafePoint(
+                    session: session, frameCounter: frameCounter)
+                try? await Task.sleep(for: Self.controlPumpInterval)
+            }
+        }
+    }
+
+    /// Clears everything that only the camera's live-view frame header can supply.
+    ///
+    /// Leaving the last values up would pin a stale AF box over a live picture and freeze the
+    /// audio meter mid-reading — both read as working instruments showing wrong numbers, which is
+    /// worse than showing nothing. The level angles fall back to the phone's own CoreMotion
+    /// attitude once the camera stops reporting, so the horizon overlay survives the switch.
+    private func clearFrameHeaderDerivedState() {
+        liveViewFocus = nil
+        liveAudioLevels = .silent
+        liveTimecode = Timecode(on: false, hour: 0, minute: 0, second: 0, frame: 0)
+        cameraLevelRoll = nil
+        cameraLevelPitch = nil
+    }
+
     /// Keeps an idle command channel warm: a quiet TCP session is exactly what a Wi-Fi/hotspot NAT
     /// times out, surfacing as a drop on the next operation. While the feed isn't pulling frames,
     /// ping every 10s with a side-effect-free GetDeviceInfo (tuned TCP keepalive backs this up at
@@ -3975,9 +4413,12 @@ final class NativeAppModel {
     /// progress. A smaller preview is less sensor-readout/encode work for the body to do while
     /// things are hot. Never enlarges beyond the operator's chosen preset.
     private var effectiveStreamImageSize: UInt8 {
-        // Command shows no image at all — ask for the smallest frame the body offers, purely as a
-        // carrier for the header's timecode and record state.
-        if streamsHeaderOnly { return OperatorPreferences.StreamPreset.fast.liveViewImageSize }
+        // Command shows no image at all, and on HDMI the picture comes from the capture device —
+        // either way the live-view stream is only a carrier for its header, so ask for the
+        // smallest frame the body offers.
+        if streamsHeaderOnly || videoSource != .cameraLiveView {
+            return OperatorPreferences.StreamPreset.fast.liveViewImageSize
+        }
         return preferences.streamPreset.liveViewImageSize
     }
 
@@ -4189,6 +4630,8 @@ final class NativeAppModel {
         guard let session = cameraSession else { return }
         liveViewTask?.cancel()
         liveViewTask = nil
+        cameraControlPumpTask?.cancel()
+        cameraControlPumpTask = nil
         keepAliveTask?.cancel()
         keepAliveTask = nil
         eventDrainTask?.cancel()
@@ -4446,48 +4889,8 @@ final class NativeAppModel {
                         isRecording: frame.isRecording)
                     // Overlap the next camera fetch with scope work — one JPEG in flight, not two.
                     nextFrameTask = liveFrameTask(session)
-                    // One shared scope sample per throttle tick feeds histogram, waveform, parade,
-                    // and traffic lights (see `ScopeAssistSampling`); the portrait scopes stack
-                    // renders exactly these tools, so this set already covers it.
-                    // Mode-filtered: clean view with nothing pinned samples no scopes at all.
-                    let visibleScopes = renderedLiveAssistTools
-                    let shouldSampleScopes = ScopeAssistSampling.shouldSample(
-                        visible: visibleScopes)
-                    if shouldSampleScopes {
-                        let now = CFAbsoluteTimeGetCurrent()
-                        let scopeInterval = ScopeAssistSampling.thermalScopeInterval(
-                            activeScopeCount: ScopeAssistSampling.activeScopeCount(
-                                visible: visibleScopes),
-                            thermalTier: thermalTier)
-                        if !scopeSampleInFlight, now - lastScopeSampleTime >= scopeInterval {
-                            lastScopeSampleTime = now
-                            // Meter the clean frame: false colour / LUT / zebra / peaking are
-                            // display-only assists and must not shift histogram, waveform,
-                            // parade, or traffic-light readings.
-                            if true {
-                                scopeSampleInFlight = true
-                                let scopeImage = cleanFrame
-                                let visible = visibleScopes
-                                let tier = thermalTier
-                                Task {
-                                    // `defer` so an early exit can never leave the in-flight gate
-                                    // stuck true (which would silently stop all scope sampling).
-                                    defer { scopeSampleInFlight = false }
-                                    let samples = await sampleLiveScopeAssist(
-                                        image: scopeImage, visibleScopes: visible,
-                                        thermalTier: tier)
-                                    // Session torn down while sampling — drop the stale publish.
-                                    guard cameraSession === session, !Task.isCancelled else {
-                                        return
-                                    }
-                                    await publishScopeAssist(samples: samples)
-                                }
-                            } else if scopeAssist != .empty {
-                                clearScopeAssist()
-                            }
-                        }
-                    } else if scopeAssist != .empty {
-                        clearScopeAssist()
+                    sampleScopesIfDue(clean: cleanFrame) { [weak self] in
+                        self?.cameraSession === session
                     }
                     applyLiveViewHeaderTimecode(frame.timecode)
                     let fpsLabel = frameRate.formatted
@@ -4589,8 +4992,14 @@ final class NativeAppModel {
                     focusAFSettlePolls = 4
                 }
             } catch {
-                connectionMessage =
-                    "Camera rejected the focus point: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                // `connectionMessage` is written all over the monitor and rendered nowhere on it —
+                // it surfaces on the connect screens only. A focus point the camera refused was
+                // therefore completely silent to the operator, and indistinguishable from a tap
+                // that never registered. Log it too, with the body's own response code.
+                let reason =
+                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                logConnection("focus point rejected at (\(point.0),\(point.1)): \(reason)")
+                connectionMessage = "Camera rejected the focus point: \(reason)"
             }
             return
         }
@@ -4742,6 +5151,45 @@ final class NativeAppModel {
     private func publishLiveFrameDisplay(image: UIImage, focus: PTPLiveViewFocusInfo?) {
         if liveFrameImage !== image { liveFrameImage = image }
         if liveViewFocus != focus { liveViewFocus = focus }
+    }
+
+    /// One shared scope sample per throttle tick, feeding histogram, waveform, parade and traffic
+    /// lights (see `ScopeAssistSampling`); the portrait scopes stack renders exactly these tools,
+    /// so this set already covers it. Mode-filtered: a clean view with nothing pinned samples no
+    /// scopes at all.
+    ///
+    /// Always metered on the CLEAN frame — false colour, LUT, zebra and peaking are display-only
+    /// assists and must not shift histogram, waveform, parade or traffic-light readings. Both
+    /// picture sources land here, so the scopes read identically whether the frame came off the
+    /// camera's own stream or an HDMI capture device.
+    ///
+    /// `isStillCurrent` is re-checked after the async sample so a source torn down mid-sample
+    /// cannot publish a reading for a picture that has already left the screen.
+    private func sampleScopesIfDue(
+        clean: UIImage, isStillCurrent: @escaping @MainActor () -> Bool
+    ) {
+        let visibleScopes = renderedLiveAssistTools
+        guard ScopeAssistSampling.shouldSample(visible: visibleScopes) else {
+            if scopeAssist != .empty { clearScopeAssist() }
+            return
+        }
+        let scopeInterval = ScopeAssistSampling.thermalScopeInterval(
+            activeScopeCount: ScopeAssistSampling.activeScopeCount(visible: visibleScopes),
+            thermalTier: thermalTier)
+        let now = CFAbsoluteTimeGetCurrent()
+        guard !scopeSampleInFlight, now - lastScopeSampleTime >= scopeInterval else { return }
+        lastScopeSampleTime = now
+        scopeSampleInFlight = true
+        let tier = thermalTier
+        Task {
+            // `defer` so an early exit can never leave the in-flight gate stuck true (which would
+            // silently stop all scope sampling).
+            defer { scopeSampleInFlight = false }
+            let samples = await sampleLiveScopeAssist(
+                image: clean, visibleScopes: visibleScopes, thermalTier: tier)
+            guard isStillCurrent(), !Task.isCancelled else { return }
+            await publishScopeAssist(samples: samples)
+        }
     }
 
     private func focusResetStepAfterCancel(_ context: FocusResetContext) -> FocusResetStep {
@@ -5803,7 +6251,11 @@ final class NativeAppModel {
     /// Publishes property snapshot → monitor readouts, including ZR RAW `[FX]` / `[DX]` tags on the
     /// resolution/frame-rate bar (shared policy with Android).
     private func publishCameraDisplayState(mediaStatus: MediaStatus? = nil) {
-        var next = cameraState.applyingCameraProperties(
+        // With no camera to read, the baseline is the blank state rather than whatever was last
+        // published: `applyingCameraProperties` falls back to the *existing* value on every branch,
+        // so an empty snapshot over a populated state leaves the old readings standing.
+        let baseline = hasCameraControl ? cameraState : CameraDisplayState.blank
+        var next = baseline.applyingCameraProperties(
             cameraPropertySnapshot,
             mediaStatus: mediaStatus ?? currentMediaStatus())
         let labeled = NikonZRRawCropPresentation.label(
@@ -6141,11 +6593,13 @@ final class NativeAppModel {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let normalizedX = min(max(point.x / feedSize.width, 0), 1)
         let normalizedY = min(max(point.y / feedSize.height, 0), 1)
-        // Coordinate space from the latest live-view header; fall back to a 16:9 default before the
-        // first frame has reported one.
-        let coordinateWidth = liveViewFocus?.coordinateWidth ?? 1000
+        // Coordinate space from the latest live-view header, then the last one the camera reported
+        // (which outlives a switch to a source that carries no header), then a 16:9 default before
+        // any frame has stated one.
+        let coordinateWidth =
+            liveViewFocus?.coordinateWidth ?? lastFocusCoordinateSpace?.width ?? 1000
         let coordinateHeight =
-            liveViewFocus?.coordinateHeight
+            liveViewFocus?.coordinateHeight ?? lastFocusCoordinateSpace?.height
             ?? Int((Double(coordinateWidth) * feedSize.height / feedSize.width).rounded())
         applyFocusPoint(
             cameraX: Int((Double(coordinateWidth) * normalizedX).rounded()),
@@ -6301,6 +6755,10 @@ final class NativeAppModel {
             return
         }
         pendingFocusPoint = (UInt32(max(0, cameraX)), UInt32(max(0, cameraY)))
+        // No optimistic box here on purpose. An app-drawn rectangle looks like the real AF box and
+        // behaves like nothing — it cannot track, cannot show an eye, cannot go green — so it
+        // implies the camera is doing work it isn't. The header pull reports the body's real boxes
+        // on any picture source, so the honest thing is to wait the one tick for them.
     }
 
     func toggleRecording() {
@@ -7535,8 +7993,12 @@ final class NativeAppModel {
     /// the cinema-only overlays (video scopes, audio meters, …); the persisted set stays untouched
     /// for the flip back to video, and for the return to DISP 1.
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
-        let tools = MonitorChromePolicy.visibleTools(
+        var tools = MonitorChromePolicy.visibleTools(
             mode: displayMode, preferences: preferences)
+        // The camera's audio meter rides in the live-view frame header, and there is no substitute
+        // — the phone's microphone is not what the camera is recording. On any other picture source
+        // the meter leaves rather than holding its last reading, which would look live.
+        if !monitorAvailability.audioMeters { tools.remove(.audioMeters) }
         guard isPhotographyMode else { return tools }
         return tools.filter(\.appliesToPhotography)
     }

@@ -4056,6 +4056,34 @@ struct OperatorSettingsPanel: View {
             ) {
                 SettingsValueText(value: transportLabel)
             }
+            // HDMI capture needs an iPad — iOS doesn't expose UVC devices to apps — so the whole
+            // control stays away on iPhone rather than offering a switch that can't succeed.
+            if UVCVideoSource.isSupportedHardware, model.monitorAvailability.offersSourceSwitch {
+                SettingsInlineRow(
+                    title: "Picture Source",
+                    help:
+                        "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
+                ) {
+                    SettingsSegmented(
+                        options: VideoSourceKind.allCases.map(\.title),
+                        selected: model.videoSource.title
+                    ) { value in
+                        guard
+                            let kind = VideoSourceKind.allCases.first(where: { $0.title == value })
+                        else { return }
+                        model.selectVideoSource(kind)
+                    }
+                }
+            }
+            if model.videoSource == .hdmiCapture {
+                SettingsInlineRow(
+                    title: "Capture Device",
+                    help:
+                        "The attached USB capture device, and the format it is sending. If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture."
+                ) {
+                    SettingsValueText(value: model.hdmiCaptureState.shortStatus)
+                }
+            }
             SettingsInlineRow(
                 title: "Stream Preset",
                 help:

@@ -296,6 +296,18 @@ enum DemoHarness {
                         model.captureStill()
                     }
                 }
+                if let raw = env["ZC_DEMO_HDMI_SOURCE"] {
+                    // Stages the HDMI picture source. The simulator has no UVC device to attach,
+                    // so the mock feed stands in for the captured picture and only the resulting
+                    // state is staged. `hybrid` keeps the simulated camera behind it (control
+                    // chrome stays, header-fed overlays go); anything else is the capture-only
+                    // monitor, where every camera affordance has to disappear.
+                    model.videoSource = .hdmiCapture
+                    model.hdmiCaptureState = .streaming(
+                        deviceName: "Capture Device", format: "1920×1080 @30")
+                    model.demoSuppressesCameraControl = raw != "hybrid"
+                    if raw != "hybrid" { model.cameraState = .blank }
+                }
                 if let raw = env["ZC_DEMO_LUT"] {
                     // Demo/screenshot affordance: seed a LUT and switch the tool on. `custom:<file>`
                     // selects a stored custom cube; otherwise the value names a built-in look.

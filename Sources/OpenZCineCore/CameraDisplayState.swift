@@ -94,6 +94,41 @@ public struct CameraDisplayState: Equatable, Sendable {
         PTPCameraPropertyDecoders.availableApertures(forLens: lens)
     }
 
+    /// The value shown where the camera has told us nothing. Matches the Android shells'
+    /// `UNAVAILABLE_MONITOR_VALUE` so a readout that survives into a control-less session reads
+    /// the same on both platforms.
+    public static let unavailableValue = "—"
+
+    /// State for a monitor with no camera control behind it — an HDMI capture source on its own.
+    ///
+    /// This exists because `applyingCameraProperties` maps over the *existing* values and falls
+    /// back to `existing` on every branch, so a snapshot that has never received a property leaves
+    /// whatever was there before untouched. Starting from `preview` in that situation renders a
+    /// wholly fictional camera: ISO 800, f/2.8, "6K · 25p", "Nikon ZR". Chrome gating hides most
+    /// of these anyway; this is the honest floor underneath it, so anything that does slip through
+    /// says "—" rather than lying.
+    public static let blank = CameraDisplayState(
+        recordState: .standby,
+        timecode: Timecode(on: false, hour: 0, minute: 0, second: 0, frame: 0),
+        resolutionFrameRate: unavailableValue,
+        codec: unavailableValue,
+        media: unavailableValue,
+        liveFPS: unavailableValue,
+        cameraBatteryPercent: 0,
+        phoneBatteryPercent: 0,
+        cameraName: unavailableValue,
+        lens: unavailableValue,
+        temperature: unavailableValue,
+        values: [
+            CameraValue(label: "ISO", value: unavailableValue, isSettable: false),
+            CameraValue(label: "SHUTTER", value: unavailableValue, isSettable: false),
+            CameraValue(label: "IRIS", value: unavailableValue, isSettable: false),
+            CameraValue(label: "WB", value: unavailableValue, isSettable: false),
+            CameraValue(label: "FOCUS", value: unavailableValue, isSettable: false),
+        ],
+        mediaStatus: nil
+    )
+
     /// Preview state for design and testing.
     public static let preview = CameraDisplayState(
         recordState: .standby,

@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// Maps technical connection/discovery status strings to operator-friendly copy for startup screens.
@@ -1200,6 +1201,12 @@ enum StartupWizardContent {
                 "Connect the USB‑C cable between the camera and your iPhone.",
                 "Leave the camera switched on — no network profile is needed.",
             ]
+        case .hdmiCapture:
+            return [
+                "Connect the capture device to this iPad, and the camera's HDMI output to it.",
+                "Set the camera's HDMI output to 1080p and turn its display info off — 4K is often more than a capture device can lock onto, and anything the camera draws becomes part of the signal.",
+                "Nothing is sent to the camera on this path: it's a picture, not a connection.",
+            ]
         }
     }
 
@@ -1272,6 +1279,10 @@ enum StartupWizardContent {
                         ]
                 ),
             ]
+        case .hdmiCapture:
+            // Unreachable: `FirstPairWizardStep.sequence` omits the network step for HDMI, which
+            // reaches the camera through a cable and has no network to set up.
+            return []
         }
     }
 
@@ -1291,6 +1302,8 @@ enum StartupWizardContent {
             return tight
                 ? "Plug in the cable, allow camera access, then find your camera."
                 : "Connect the cable, confirm the camera's prompt, and allow camera access on this iPhone when asked."
+        case .hdmiCapture:
+            return ""  // Unreachable — HDMI has no network step.
         }
     }
 }
@@ -1643,6 +1656,15 @@ struct StartupFirstPairWizardView: View {
 
     /// Left-column helper line, kept relevant to the current step (the transport-tradeoff
     /// blurb only makes sense while choosing a transport).
+    /// The step heading, overridden where a path makes the generic wording wrong: HDMI capture
+    /// finds nothing and pairs with nothing, so "Find and pair" would misdescribe the whole step.
+    private var stepTitle: String {
+        if step == .discoverAndPair, model.firstPairTransportMethod == .hdmiCapture {
+            return "Connect the capture device"
+        }
+        return step.title
+    }
+
     private var introFooterText: String {
         switch step {
         case .permissions:
@@ -1655,7 +1677,10 @@ struct StartupFirstPairWizardView: View {
         case .connectNetwork:
             return "Get both devices onto the same network — we'll find the camera automatically."
         case .discoverAndPair:
-            return "Keep the camera powered on and nearby while we find it."
+            // Nothing is found or paired on the HDMI path — it reads a signal off a cable.
+            return model.firstPairTransportMethod == .hdmiCapture
+                ? "The capture device appears here as soon as it's plugged in."
+                : "Keep the camera powered on and nearby while we find it."
         }
     }
 
@@ -1667,7 +1692,7 @@ struct StartupFirstPairWizardView: View {
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .tracking(1.4)
                 .foregroundStyle(StartupColors.muted)
-            Text(step.title)
+            Text(stepTitle)
                 .font(.system(size: style.titleFontSize + 2, weight: .bold, design: .rounded))
                 .foregroundStyle(StartupColors.ink)
                 .padding(.top, 6)
@@ -1710,8 +1735,14 @@ struct StartupFirstPairWizardView: View {
         case .connectNetwork:
             StartupWizardNetworkStep(style: style).environment(model)
         case .discoverAndPair:
-            StartupDiscoveryView(isBusy: isBusy)
-                .environment(model)
+            // HDMI has no camera to find: the capture device is either attached or it isn't, so
+            // this step reports its state and starts the monitor rather than listing cameras.
+            if model.firstPairTransportMethod == .hdmiCapture {
+                StartupWizardHDMICaptureStep().environment(model)
+            } else {
+                StartupDiscoveryView(isBusy: isBusy)
+                    .environment(model)
+            }
         }
     }
 
@@ -1719,10 +1750,12 @@ struct StartupFirstPairWizardView: View {
     /// columns are too narrow (truncated titles) — gated on the style's transport-split flag.
     @ViewBuilder
     private var transportCards: some View {
-        let cards = ForEach(NativeAppModel.FirstPairTransportMethod.allCases) { method in
-            StartupWizardTransportCard(method: method) {
-                model.firstPairTransportMethod = method
-                AppDiagnostics.shared.record(method.diagnosticEvent)
+        // `cardCases`, not `allCases`: HDMI capture is a nested option inside the Cable Link card
+        // rather than a fourth column — see `FirstPairTransportMethod.cardCases`.
+        let cards = ForEach(NativeAppModel.FirstPairTransportMethod.cardCases) { method in
+            StartupWizardTransportCard(method: method) { chosen in
+                model.firstPairTransportMethod = chosen
+                AppDiagnostics.shared.record(chosen.diagnosticEvent)
                 model.advanceFirstPairWizard()
             }
             .frame(maxWidth: .infinity)
@@ -1842,55 +1875,156 @@ struct StartupCardBackground: View {
 /// battery / stream / wireless readout. Neutral — no option is crowned as the recommended one.
 struct StartupWizardTransportCard: View {
     let method: NativeAppModel.FirstPairTransportMethod
-    let onSelect: () -> Void
+    /// The chosen path — this card's own, or one of its nested options.
+    let onSelect: (NativeAppModel.FirstPairTransportMethod) -> Void
+
+    /// Whether the nested choice is open. Cards without nested options never set it.
+    @State private var showsOptions = false
+
+    private var options: [NativeAppModel.FirstPairTransportMethod] { method.nestedOptions }
 
     var body: some View {
-        Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 0) {
-                Image(systemName: iconName)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        StartupColors.accent.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 9)
-                    )
-                    .padding(.bottom, 10)
-                Text(method.title)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(headline)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+        // A leaf card is one big Button, as it has always been — the whole tile is the target.
+        // A card with nested options cannot be, because a Button may not contain Buttons, so it
+        // splits into a tappable header plus its option pills.
+        if options.isEmpty {
+            Button {
+                onSelect(method)
+            } label: {
+                cardSurface {
+                    header
+                    tradeoffs.padding(.top, 10)
+                }
+            }
+            .buttonStyle(.zcTapTarget)
+        } else {
+            // A Button may NOT contain Buttons: SwiftUI hands the gesture to the outer one and the
+            // nested options never fire — they render perfectly and do nothing when tapped. So only
+            // the header is a button here, and the options are its siblings on the same surface.
+            cardSurface {
+                Button {
+                    withAnimation(.spring(duration: 0.26)) { showsOptions.toggle() }
+                } label: {
+                    header
+                }
+                .buttonStyle(.zcTapTarget)
+
+                if showsOptions {
+                    optionPills.padding(.top, 10)
+                } else {
+                    tradeoffs.padding(.top, 10)
+                }
+            }
+        }
+    }
+
+    /// The card's tile: padding, fill and border, with an accent edge while its options are open.
+    private func cardSurface<Content: View>(
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(StartupColors.tile.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(
+                    showsOptions
+                        ? StartupColors.accent.opacity(0.45) : StartupColors.border.opacity(0.1),
+                    lineWidth: 1)
+        )
+    }
+
+    /// Glyph, title and one-word headline — the part that is always tappable.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Image(systemName: iconName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(StartupColors.accent)
+                .frame(width: 34, height: 34)
+                .background(
+                    StartupColors.accent.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 9)
+                )
+                .padding(.bottom, 10)
+            Text(method.cardTitle)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(StartupColors.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(headline)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(StartupColors.accent)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(StartupColors.accent.opacity(0.15), in: Capsule())
+                .fixedSize()
+                .padding(.top, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private var tradeoffs: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(pros, id: \.self) { pro in
+                tradeoffRow(symbol: "plus", color: StartupColors.ready, text: pro)
+            }
+            tradeoffRow(symbol: "minus", color: StartupColors.dim, text: con)
+        }
+    }
+
+    /// The nested choice: which end of the cable is doing the work.
+    @ViewBuilder private var optionPills: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(options) { option in
+                Button {
+                    onSelect(option)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: option.systemImage)
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 14)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(option.optionTitle)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(StartupColors.ink)
+                            Text(optionCaption(option))
+                                .font(.system(size: 10, weight: .regular, design: .rounded))
+                                .foregroundStyle(StartupColors.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                    }
                     .foregroundStyle(StartupColors.accent)
                     .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(StartupColors.accent.opacity(0.15), in: Capsule())
-                    .fixedSize()
-                    .padding(.top, 8)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(pros, id: \.self) { pro in
-                        tradeoffRow(symbol: "plus", color: StartupColors.ready, text: pro)
-                    }
-                    tradeoffRow(symbol: "minus", color: StartupColors.dim, text: con)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        StartupColors.accent.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 9))
                 }
-                .padding(.top, 10)
-
-                Spacer(minLength: 0)
+                .buttonStyle(.zcTapTarget)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(StartupColors.tile.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(StartupColors.border.opacity(0.1), lineWidth: 1)
-            )
         }
-        .buttonStyle(.zcTapTarget)
+    }
+
+    private func optionCaption(_ option: NativeAppModel.FirstPairTransportMethod) -> String {
+        switch option {
+        case .hdmiCapture:
+            UVCVideoSource.isDocumentedHardware
+                ? "Picture only, full quality"
+                : (UVCVideoSource.isSupportedHardware
+                    ? "Picture only — unsupported here" : "Needs an iPad")
+        default:
+            "Full camera control"
+        }
     }
 
     /// A single pro (+) or con (−) line.
@@ -1916,7 +2050,7 @@ struct StartupWizardTransportCard: View {
         switch method {
         case .cameraAccessPoint: "antenna.radiowaves.left.and.right"
         case .phoneHotspot: "iphone.radiowaves.left.and.right"
-        case .usbC: "cable.connector"
+        case .usbC, .hdmiCapture: "cable.connector"
         }
     }
 
@@ -1925,7 +2059,9 @@ struct StartupWizardTransportCard: View {
         switch method {
         case .cameraAccessPoint: "Simplest"
         case .phoneHotspot: "Best wireless"
-        case .usbC: "Most stable"
+        // Card-level, so the two cable paths share it: whichever end of the cable does the work,
+        // a wire is the steady one.
+        case .usbC, .hdmiCapture: "Most stable"
         }
     }
 
@@ -1935,7 +2071,7 @@ struct StartupWizardTransportCard: View {
             ["Lightest battery use", "No phone setup needed"]
         case .phoneHotspot:
             ["Best wireless quality", "Stable at high settings"]
-        case .usbC:
+        case .usbC, .hdmiCapture:
             ["Most stable, lowest latency", "No Wi‑Fi radio draining battery"]
         }
     }
@@ -1944,8 +2080,98 @@ struct StartupWizardTransportCard: View {
         switch method {
         case .cameraAccessPoint: "Softer link, lower quality"
         case .phoneHotspot: "Heavier battery drain"
-        case .usbC: "Less freedom to move"
+        case .usbC, .hdmiCapture: "Less freedom to move"
         }
+    }
+}
+
+/// The HDMI path's final step: is the capture device there, and start monitoring.
+///
+/// It replaces the camera list because there is nothing on a network to look for — a capture
+/// device is attached or it is not, and the answer arrives from AVFoundation immediately rather
+/// than from a scan.
+struct StartupWizardHDMICaptureStep: View {
+    @Environment(NativeAppModel.self) private var model
+    @State private var attachedDeviceName: String? = UVCVideoSource.attachedDeviceName
+
+    private var isSupported: Bool { UVCVideoSource.isSupportedHardware }
+    private var isReady: Bool { isSupported && attachedDeviceName != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: isReady ? "checkmark.circle.fill" : "display")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isReady ? StartupColors.ready : StartupColors.accent)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        (isReady ? StartupColors.ready : StartupColors.accent).opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isReady ? "Capture device ready" : statusTitle)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(StartupColors.ink)
+                    Text(statusDetail)
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(StartupColors.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(StartupColors.tile.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
+
+            Text(
+                "The camera isn't contacted on this path — nothing is sent to it, so exposure, focus and record stay on the body. Connect over Wi‑Fi as well if you want to control it from here."
+            )
+            .font(.system(size: 11, weight: .regular, design: .rounded))
+            .foregroundStyle(StartupColors.dim)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Button("Start monitoring") { model.startHDMIMonitorSession() }
+                .buttonStyle(StartupWizardFilledButtonStyle())
+                .disabled(!isSupported)
+                .frame(maxWidth: 240)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // The dongle is very often plugged in *after* landing here, so the readout follows the
+        // hardware rather than reporting whatever was true when the step opened.
+        .onReceive(
+            NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)
+        ) { _ in attachedDeviceName = UVCVideoSource.attachedDeviceName }
+        .onReceive(
+            NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)
+        ) { _ in attachedDeviceName = UVCVideoSource.attachedDeviceName }
+        .onAppear { attachedDeviceName = UVCVideoSource.attachedDeviceName }
+    }
+
+    private var statusTitle: String {
+        isSupported ? "Waiting for the capture device" : "Needs an iPad"
+    }
+
+    private var statusDetail: String {
+        guard isSupported else {
+            return
+                "iOS doesn't expose USB capture devices to apps — this path works on iPad. Use USB‑C or Wi‑Fi on this device."
+        }
+        if let attachedDeviceName {
+            return "\(attachedDeviceName) — connect the camera's HDMI output to it and start."
+        }
+        #if DEBUG
+            // The Debug-only phone experiment: without this, a phone that enumerates nothing looks
+            // identical to an iPad with the cable unplugged, and the result would be unreadable.
+            if !UVCVideoSource.isDocumentedHardware {
+                return
+                    "Debug build: this device isn't documented to expose USB capture devices, so it will most likely find nothing. Plug one in and see."
+            }
+        #endif
+        return "Connect the capture device to this iPad, then the camera's HDMI output into it."
     }
 }
 

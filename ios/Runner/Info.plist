@@ -66,7 +66,7 @@
 		<string>NIKON_ZR_</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>OpenZCine uses the camera to scan the Wi-Fi SSID and key shown on your Nikon camera's screen so it can connect to the camera.</string>
+	<string>OpenZCine uses the camera to scan the Wi-Fi SSID and key shown on your Nikon camera's screen so it can connect to the camera, and on iPad to read the picture from a connected USB video capture device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenZCine needs access to your Nikon camera over the local Wi-Fi network (when your iPhone is connected to the camera's WiFi hotspot) for live view streaming and camera control.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
