@@ -59,6 +59,11 @@ final class FakeZRServer: @unchecked Sendable {
         /// sequence (`GetPairingInfo` + `ConfirmPairing`) completes — the
         /// first-time-pairing camera behavior.
         var acceptsAppControlImmediately = true
+        /// OperationsSupported advertised in DeviceInfo. Empty (the default) leaves the array
+        /// empty, which the capability policy reads as UNKNOWN — today's modern-surface
+        /// behaviour. A gen-1 personality lists that generation's ops so the connect sequence
+        /// can be proven against a body with no pairing surface and no app-mode operation.
+        var advertisedOperations: [UInt16] = []
         /// Closes the command channel when app control is probed, simulating a
         /// transport failure rather than a recoverable saved-profile rejection.
         var disconnectsOnChangeApplicationMode = false
@@ -987,7 +992,11 @@ final class FakeZRServer: @unchecked Sendable {
         bytes += ByteCoding.uint16LE(0)  // VendorExtensionVersion
         bytes += ptpString("")  // VendorExtensionDesc
         bytes += ByteCoding.uint16LE(0)  // FunctionalMode
-        for _ in 0..<5 {  // Operations/Events/Properties/CaptureFormats/ImageFormats
+        bytes += ByteCoding.uint32LE(UInt32(options.advertisedOperations.count))
+        for code in options.advertisedOperations {
+            bytes += ByteCoding.uint16LE(code)
+        }
+        for _ in 0..<4 {  // Events/Properties/CaptureFormats/ImageFormats
             bytes += ByteCoding.uint32LE(0)
         }
         bytes += ptpString(options.manufacturer)

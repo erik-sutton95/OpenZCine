@@ -817,7 +817,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase: (CameraConnectionPhase, String) -> Void
     ) throws {
         try session.openSession()
-        guard try session.enableAppControl() else {
+        let policy = session.probeOperationPolicy()
+        guard try session.enableAppControl(policy: policy) else {
             throw PTPIPClientSessionError.savedProfileRequired
         }
         try session.identify()
@@ -885,6 +886,18 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase: (CameraConnectionPhase, String) -> Void
     ) throws {
         try session.openSession()
+        let policy = session.probeOperationPolicy()
+        guard policy.supportsPairing else {
+            // No pairing surface on this body (gen 1): joining its access point IS the trust
+            // boundary, so first-time connect is just the saved-profile shape. Polling
+            // GetPairingInfo here is what put the wireless error on the Z 5's screen (#292).
+            guard try session.enableAppControl(policy: policy) else {
+                throw PTPIPClientSessionError.savedProfileRequired
+            }
+            try session.identify()
+            onPhase(.connected, session.identity.displayName)
+            return
+        }
         onPhase(.pairing, "")
         let challenge = try session.waitForPairingChallenge()
         try session.transactExpectingOK(
@@ -1029,18 +1042,44 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
-    /// Nikon app-control gate. `true` when the camera accepted app control —
-    /// `false` routes the caller to first-time pairing (core probe policy).
-    private func enableAppControl() throws -> Bool {
-        try enableAppControlResponse() == .ok
+    /// DeviceInfo as a gate, before pairing or the app-control switch: both must follow what this
+    /// body actually advertises. Sending gen-3 operations at a gen-1 body is not a harmless
+    /// rejection — a Z 5 polled with a pairing op it never implemented put a wireless error on its
+    /// own screen (#292). Best-effort: a failed fetch yields an unknown policy, which keeps the
+    /// modern-surface behaviour on every path. [verify-on-HW: Z 5 over camera AP]
+    private func probeOperationPolicy() -> ZCameraOperationPolicy {
+        guard let probe = try? executeTransaction(.getDeviceInfo, dataPhase: .dataIn),
+            probe.operationResponse.responseCode == .ok,
+            let info = try? PTPDeviceInfo(data: probe.data)
+        else {
+            return ZCameraOperationPolicy(operations: [])
+        }
+        return ZCameraOperationPolicy(deviceInfo: info)
     }
 
-    /// `ChangeApplicationMode` returning the raw response so the USB path can
-    /// branch on Access_Denied vs OK (Session_Already_Open never applies to
-    /// this op).
-    func enableAppControlResponse() throws -> PTPResponseCode {
-        try executeTransaction(.changeApplicationMode, parameters: [1])
-            .operationResponse.responseCode
+    /// Nikon app-control gate. `true` when the camera accepted app control —
+    /// `false` routes the caller to first-time pairing (core probe policy).
+    private func enableAppControl(policy: ZCameraOperationPolicy) throws -> Bool {
+        try enableAppControlResponse(policy: policy) == .ok
+    }
+
+    /// The app-control switch, by whichever surface this body has: the `ChangeApplicationMode`
+    /// operation on gen 2+, a write of 1 to the `ApplicationMode` property (UINT8) on gen 1 —
+    /// where the operation does not exist and sending it broke the Z 5 connect (#292).
+    /// Raw response so the USB path can branch on Access_Denied vs OK.
+    func enableAppControlResponse(
+        policy: ZCameraOperationPolicy = ZCameraOperationPolicy(operations: [])
+    ) throws -> PTPResponseCode {
+        if policy.appModeViaOperation {
+            return try executeTransaction(.changeApplicationMode, parameters: [1])
+                .operationResponse.responseCode
+        }
+        return try executeTransaction(
+            .setDevicePropValue,
+            parameters: [PTPPropertyCode.applicationMode.rawValue],
+            dataPhase: .dataOut,
+            dataOut: Data([1])
+        ).operationResponse.responseCode
     }
 
     #if os(Android)

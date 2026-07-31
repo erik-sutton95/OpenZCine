@@ -60,7 +60,10 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         return displayName
     }
 
-    public var id: String { host }
+    /// Host plus name, because two bodies legitimately share an address (every camera-AP Nikon
+    /// is 192.168.1.1) and a bare-host id gave SwiftUI duplicate identities the moment both were
+    /// saved.
+    public var id: String { host + "|" + displayName.lowercased() }
 
     /// Whether this camera was saved from a USB-C tethered pairing. USB records carry a
     /// `usb:<device-id>` host key, so network availability checks do not apply to them.
@@ -159,12 +162,19 @@ public enum PTPIPSavedCameraRecords {
 
     public static func removing(
         _ rawHost: String,
+        displayName: String? = nil,
         from records: [PTPIPSavedCameraRecord]
     ) -> [PTPIPSavedCameraRecord] {
         guard let host = PTPIPPairedHosts.normalizedHost(rawHost) else {
             return canonicalized(records)
         }
-        return canonicalized(records).filter { $0.host != host }
+        return canonicalized(records).filter { record in
+            guard record.host == host else { return true }
+            // With two bodies legitimately sharing an address (camera-AP), the name narrows the
+            // removal to the one the operator forgot — else forgetting one deletes both.
+            guard let displayName, !displayName.isEmpty else { return false }
+            return !namesCompatible(record.displayName, displayName)
+        }
     }
 
     private static func normalizedDisplayName(_ displayName: String, host: String) -> String {
@@ -194,8 +204,24 @@ public enum PTPIPSavedCameraRecords {
         _ lhs: PTPIPSavedCameraRecord,
         _ rhs: PTPIPSavedCameraRecord
     ) -> Bool {
-        lhs.host == rhs.host
-            || cameraNamesMatch(savedName: lhs.displayName, discoveredName: rhs.displayName)
+        // A shared address only means "same camera" when the names don't contradict it. Every
+        // camera-AP Nikon is 192.168.1.1, so a bare host match let a newly paired second body
+        // swallow the first one's record (#293); DHCP reuse does the same on a router. Two
+        // non-empty, different names on one address are two different bodies.
+        if lhs.host == rhs.host {
+            return namesCompatible(lhs.displayName, rhs.displayName)
+        }
+        return cameraNamesMatch(savedName: lhs.displayName, discoveredName: rhs.displayName)
+    }
+
+    /// Whether two display names could describe one body. Uses the same normalization as
+    /// `cameraNamesMatch`: a generic or placeholder name carries no identity, so it contradicts
+    /// nothing — only two *assigned* names that differ prove two different bodies.
+    private static func namesCompatible(_ lhs: String, _ rhs: String) -> Bool {
+        guard let left = normalizedAssignedCameraName(lhs),
+            let right = normalizedAssignedCameraName(rhs)
+        else { return true }
+        return left == right
     }
 
     private static func preferredRecord(

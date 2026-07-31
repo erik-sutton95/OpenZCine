@@ -828,7 +828,9 @@ public fun SavedCamerasExperience(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onRecordsChanged(SavedCameraRecords.removing(record.host, cameras))
+                        onRecordsChanged(
+                            SavedCameraRecords.removing(record.host, record.cameraName, cameras)
+                        )
                         removalTarget = null
                     },
                 ) {

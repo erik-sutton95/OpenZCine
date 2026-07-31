@@ -51,6 +51,16 @@ public struct ZCameraOperationPolicy: Equatable, Sendable {
         !isKnown || supports(.changeApplicationMode)
     }
 
+    /// Whether the network pairing handshake (`GetPairingInfo`/`ConfirmPairing`) exists on this
+    /// body. Gen-1 bodies don't implement it — joining their access point IS the trust boundary —
+    /// and polling an op a body never advertised is how a Z 5 ends up showing a wireless error on
+    /// its own screen while the app spins. Unknown ops keep today's behaviour (attempt pairing),
+    /// so a failed DeviceInfo fetch can never lock a gen-3 body out of first pairing.
+    /// [verify-on-HW: Z 5 over camera AP]
+    public var supportsPairing: Bool {
+        !isKnown || supports(.getPairingInfo)
+    }
+
     /// Vendor code discovery: `GetVendorCodes` (ops + props) on gen-3 bodies,
     /// `GetVendorPropCodes` (props only) before that, nil when neither is advertised.
     public var vendorCodeDiscoveryOperation: PTPOperationCode? {

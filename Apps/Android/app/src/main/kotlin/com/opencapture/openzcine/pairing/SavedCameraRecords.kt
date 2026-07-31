@@ -83,8 +83,16 @@ public object SavedCameraRecords {
             val normalized = normalized(record) ?: continue
             val existingIndex =
                 output.indexOfFirst { existing ->
-                    existing.profileID == normalized.profileID ||
-                        existing.host == normalized.host ||
+                    // A shared address (or the profileID defaulted from it) only means "same
+                    // camera" when the names don't contradict it: every camera-AP Nikon is
+                    // 192.168.1.1, and the bare host match let a newly paired second body swallow
+                    // the first one's record (#293).
+                    (
+                        (
+                            existing.profileID == normalized.profileID ||
+                                existing.host == normalized.host
+                        ) && namesCompatible(existing.cameraName, normalized.cameraName)
+                    ) ||
                         (
                             existing.transport == normalized.transport &&
                                 cameraNamesMatch(existing.cameraName, normalized.cameraName)
@@ -136,9 +144,18 @@ public object SavedCameraRecords {
     }
 
     /** Removes the profile identified by [host]. Wi-Fi credentials remain private to their store. */
-    public fun removing(host: String, records: List<SavedCameraRecord>): List<SavedCameraRecord> {
+    public fun removing(
+        host: String,
+        cameraName: String? = null,
+        records: List<SavedCameraRecord>,
+    ): List<SavedCameraRecord> {
         val normalizedHost = normalizedHost(host) ?: return canonicalized(records)
-        return canonicalized(records).filterNot { it.host == normalizedHost }
+        return canonicalized(records).filterNot {
+            it.host == normalizedHost &&
+                // Two bodies legitimately share an address (camera-AP): the name narrows the
+                // removal to the one the operator forgot — else forgetting one deletes both.
+                (cameraName.isNullOrBlank() || namesCompatible(it.cameraName, cameraName))
+        }
     }
 
     /** True when two camera-assigned names are trustworthy identity matches. */
@@ -158,6 +175,17 @@ public object SavedCameraRecords {
             wifiSsid = normalizedTag(record.wifiSsid),
             customName = normalizedTag(record.customName),
         )
+    }
+
+    /**
+     * Whether two names could describe one body. Same normalization as [cameraNamesMatch]: a
+     * generic or placeholder name carries no identity, so it contradicts nothing — only two
+     * *assigned* names that differ prove two different bodies.
+     */
+    private fun namesCompatible(lhs: String, rhs: String): Boolean {
+        val left = normalizedAssignedCameraName(lhs) ?: return true
+        val right = normalizedAssignedCameraName(rhs) ?: return true
+        return left == right
     }
 
     private fun preferred(

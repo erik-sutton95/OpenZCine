@@ -18,6 +18,10 @@ struct ZCameraCapabilityProfileTests {
         let policy = ZCameraOperationPolicy(operations: Self.gen1Ops)
         #expect(policy.isKnown)
         #expect(!policy.appModeViaOperation)
+        // No pairing handshake on gen 1: joining the body's access point is the trust boundary.
+        // Polling GetPairingInfo against a body that never advertised it is how a Z 5 ends up
+        // showing a wireless error on its own screen (#292).
+        #expect(!policy.supportsPairing)
         #expect(policy.vendorCodeDiscoveryOperation == .getVendorPropCodes)
         #expect(!policy.supportsExtendedPropertyOps)
         #expect(!policy.supportsOpenCapture)
@@ -31,7 +35,8 @@ struct ZCameraCapabilityProfileTests {
     }
 
     @Test func gen3AddsVendorCodesExOpsAndOpenCapture() {
-        let policy = ZCameraOperationPolicy(operations: Self.gen3Ops)
+        let policy = ZCameraOperationPolicy(operations: Self.gen3Ops.union([0x952B]))
+        #expect(policy.supportsPairing)
         #expect(policy.vendorCodeDiscoveryOperation == .getVendorCodes)
         #expect(policy.supportsExtendedPropertyOps)
         #expect(policy.supportsOpenCapture)
@@ -44,6 +49,8 @@ struct ZCameraCapabilityProfileTests {
         #expect(policy.appModeViaOperation)
         #expect(policy.supportsExtendedPropertyOps)
         #expect(!policy.supportsOpenCapture)
+        // A failed DeviceInfo fetch must never lock a gen-3 body out of first pairing.
+        #expect(policy.supportsPairing)
     }
 
     @Test func missingMediaCaptureFallsBackToStandardCapture() {

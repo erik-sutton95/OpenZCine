@@ -130,6 +130,39 @@ class SavedCameraRecordsTest {
             )
 
         assertNull(renamed.single().customName)
-        assertEquals(emptyList(), SavedCameraRecords.removing("192.168.1.1", renamed))
+        assertEquals(emptyList(), SavedCameraRecords.removing("192.168.1.1", records = renamed))
+    }
+
+    /**
+     * The #293 report: pairing a second body removed the first. Every camera-AP Nikon is
+     * 192.168.1.1, so both records share one address — a shared host (or a profileID defaulted
+     * from it) merges records only when the names don't contradict it, and forgetting one of the
+     * two must not delete the other.
+     */
+    @Test
+    fun `two bodies sharing the access-point address both survive`() {
+        val first =
+            SavedCameraRecords.upserting(
+                host = "192.168.1.1",
+                cameraName = "Z 6III_1234567",
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                lastSeenAtEpochMillis = 1_000L,
+                wifiSsid = "Z6III_AP",
+                records = emptyList(),
+            )
+        val both =
+            SavedCameraRecords.upserting(
+                host = "192.168.1.1",
+                cameraName = "Z 5_7654321",
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                lastSeenAtEpochMillis = 2_000L,
+                wifiSsid = "Z5_AP",
+                records = first,
+            )
+        assertEquals(listOf("Z 6III_1234567", "Z 5_7654321"), both.map { it.cameraName })
+
+        // Forgetting the Z 5 by name leaves the Z 6III standing.
+        val afterForget = SavedCameraRecords.removing("192.168.1.1", "Z 5_7654321", both)
+        assertEquals(listOf("Z 6III_1234567"), afterForget.map { it.cameraName })
     }
 }

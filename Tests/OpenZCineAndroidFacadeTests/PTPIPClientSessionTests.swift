@@ -69,7 +69,9 @@ struct PTPIPClientSessionTests {
         let operations = server.receivedOperations()
         #expect(!operations.contains(.getPairingInfo))
         #expect(!operations.contains(.confirmPairing))
-        #expect(operations.prefix(2) == [.openSession, .changeApplicationMode])
+        // The capability probe sits between them — DeviceInfo is what gates pairing and the
+        // app-mode surface on what the body actually advertises (#292).
+        #expect(operations.prefix(3) == [.openSession, .getDeviceInfo, .changeApplicationMode])
     }
 
     @Test func compatibilityStrategyFallsBackToFirstTimePairingWhenAppControlIsRefused() throws {
@@ -90,14 +92,17 @@ struct PTPIPClientSessionTests {
         #expect(session.identity.model.isEmpty || session.identity.model == "ZR")
 
         let operations = server.receivedOperations()
-        // Probe attempt: open + refused app mode + graceful CloseSession…
-        #expect(operations.prefix(3) == [.openSession, .changeApplicationMode, .closeSession])
+        // Probe attempt: open + capability probe + refused app mode + graceful CloseSession…
+        #expect(
+            operations.prefix(4) == [
+                .openSession, .getDeviceInfo, .changeApplicationMode, .closeSession,
+            ])
         // …then the temporary pairing session. No ChangeApplicationMode after
         // ConfirmPairing — that races the body-confirm AP restart on hardware.
         #expect(
-            operations.dropFirst(3).prefix(3)
+            operations.dropFirst(4).prefix(4)
                 == [
-                    .openSession, .getPairingInfo, .confirmPairing,
+                    .openSession, .getDeviceInfo, .getPairingInfo, .confirmPairing,
                 ])
     }
 
@@ -128,8 +133,42 @@ struct PTPIPClientSessionTests {
         #expect(
             server.receivedOperations()
                 == [
-                    .openSession, .getPairingInfo, .confirmPairing,
+                    .openSession, .getDeviceInfo, .getPairingInfo, .confirmPairing,
                 ])
+    }
+
+    /// The Z 5 report (#292): a gen-1 body has NO pairing surface and NO app-mode operation, and
+    /// firing either at it is not a harmless rejection — the tester's camera put a wireless error
+    /// on its own screen. Against a body advertising the gen-1 op set, first-time connect must
+    /// probe DeviceInfo, send nothing the body never advertised, and enter app control by the
+    /// property write.
+    @Test func gen1BodyConnectsWithoutPairingOrAppModeOperation() throws {
+        var options = FakeZRServer.Options()
+        options.advertisedOperations = [
+            0x90CA, 0x90C2, 0x9201, 0x9202, 0x9203, 0x9428, 0x90C7, 0x941C, 0x90C8,
+            0x100E, 0x9207, 0x90C0, 0x90CB, 0x920C, 0x1016, 0x1001, 0x1002, 0x1003,
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [CameraConnectionPhase] = []
+        let session = try connect(to: server, strategy: .firstTimePairing) { phase, _ in
+            phases.append(phase)
+        }
+        defer { session.disconnect() }
+
+        // Straight to connected: joining the body's access point was the trust boundary.
+        #expect(phases == [.handshaking, .connected])
+        let operations = server.receivedOperations()
+        #expect(!operations.contains(.getPairingInfo))
+        #expect(!operations.contains(.confirmPairing))
+        #expect(!operations.contains(.changeApplicationMode))
+        #expect(operations.prefix(3) == [.openSession, .getDeviceInfo, .setDevicePropValue])
+        // The app-mode entry is a write of 1 to the ApplicationMode property, UINT8.
+        let write = server.receivedPropertyWrites().first
+        #expect(write?.operation == .setDevicePropValue)
+        #expect(write?.property == PTPPropertyCode.applicationMode.rawValue)
+        #expect(write?.data == Data([1]))
     }
 
     @Test func savedProfileRejectsWithoutStartingFirstTimePairing() throws {
@@ -148,7 +187,7 @@ struct PTPIPClientSessionTests {
         #expect(phases == [.handshaking])
         #expect(
             server.receivedOperations()
-                == [.openSession, .changeApplicationMode, .closeSession])
+                == [.openSession, .getDeviceInfo, .changeApplicationMode, .closeSession])
     }
 
     @Test func restoreStrategyDoesNotPairAfterTransportFailure() throws {
@@ -162,7 +201,7 @@ struct PTPIPClientSessionTests {
         }
 
         let operations = server.receivedOperations()
-        #expect(operations.prefix(2) == [.openSession, .changeApplicationMode])
+        #expect(operations.prefix(3) == [.openSession, .getDeviceInfo, .changeApplicationMode])
         #expect(!operations.contains(.getPairingInfo))
         #expect(!operations.contains(.confirmPairing))
     }

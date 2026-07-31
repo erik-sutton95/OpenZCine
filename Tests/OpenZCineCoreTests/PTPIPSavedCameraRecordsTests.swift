@@ -6,10 +6,12 @@ import Testing
 @Test func savedCameraRecordsUpsertCanonicalizesAndPreservesMetadata() {
     let oldSeen = Date(timeIntervalSince1970: 1_700_000_000)
     let newSeen = Date(timeIntervalSince1970: 1_800_000_000)
+    // The saved record's name is unknown (pre-identify pairing writes an empty display name), so
+    // the refreshed connection with the real name merges into it rather than duplicating.
     let records = [
         PTPIPSavedCameraRecord(
             host: " 192.168.1.42 ",
-            displayName: "Old Name",
+            displayName: "",
             transport: "USB-C",
             lastSeenAt: oldSeen
         )
@@ -34,6 +36,37 @@ import Testing
         ])
 }
 
+/// The #293 report: pairing a second body removed the first. Every camera-AP Nikon is
+/// 192.168.1.1, so both records share one address — a shared host must merge records only when
+/// the names don't contradict it, and forgetting one of the two must not delete the other.
+@Test func savedCameraRecordsKeepTwoBodiesSharingTheAccessPointAddress() {
+    let seen = Date(timeIntervalSince1970: 1_800_000_000)
+    let records = PTPIPSavedCameraRecords.upserting(
+        host: "192.168.1.1",
+        displayName: "Z 6III_1234567",
+        transport: "Wi-Fi",
+        lastSeenAt: seen,
+        into: []
+    )
+
+    let both = PTPIPSavedCameraRecords.upserting(
+        host: "192.168.1.1",
+        displayName: "Z 5_7654321",
+        transport: "Wi-Fi",
+        lastSeenAt: seen.addingTimeInterval(60),
+        into: records
+    )
+    #expect(both.map(\.displayName) == ["Z 6III_1234567", "Z 5_7654321"])
+    // Distinct SwiftUI identities even on the shared address.
+    #expect(Set(both.map(\.id)).count == 2)
+
+    // Forgetting the Z 5 by name leaves the Z 6III standing; the nameless form keeps its old
+    // remove-everything-at-this-host meaning for callers that predate the collision fix.
+    let afterForget = PTPIPSavedCameraRecords.removing(
+        "192.168.1.1", displayName: "Z 5_7654321", from: both)
+    #expect(afterForget.map(\.displayName) == ["Z 6III_1234567"])
+}
+
 @Test func savedCameraRecordsAppendNewRecordsAndRemoveInvalidDuplicates() {
     let seen = Date(timeIntervalSince1970: 1_800_000_000)
     let records = [
@@ -46,7 +79,7 @@ import Testing
         ),
         PTPIPSavedCameraRecord(
             host: " 192.168.1.42 ",
-            displayName: "Duplicate",
+            displayName: "Nikon ZR",
             transport: "USB-C",
             lastSeenAt: nil
         ),

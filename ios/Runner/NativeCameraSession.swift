@@ -1207,18 +1207,39 @@ final class NativeCameraSession: @unchecked Sendable {
             throw NativeCameraSessionError.operationRejected(.openSession, openResponse)
         }
 
+        // DeviceInfo FIRST, before pairing or the app-control switch, because both must be gated
+        // on what this body actually advertises. Sending gen-3 operations at a gen-1 body isn't a
+        // harmless rejection — a Z 5 polled with a pairing op it never implemented put a wireless
+        // error on its own screen while the app spun (#292). GetDeviceInfo itself is the one
+        // operation every generation answers from a fresh session. Best-effort: a failed fetch
+        // yields an unknown policy, which keeps today's modern-surface behaviour on every path.
+        // [verify-on-HW: Z 5 over camera AP; ZR unpaired first-connect still reaches the PIN]
+        onStage?("capability probe")
+        var gatePolicy = ZCameraOperationPolicy(operations: [])
+        if let probe = try? await transact(operationCode: .getDeviceInfo, dataPhase: .dataIn),
+            probe.operationResponse.responseCode == .ok,
+            let probedInfo = try? PTPDeviceInfo(data: probe.data)
+        {
+            gatePolicy = ZCameraOperationPolicy(deviceInfo: probedInfo)
+        }
+        establishmentSummary += "gateOps=\(gatePolicy.isKnown ? "known" : "unknown") "
+
         // USB has no pairing surface: GetPairingInfo/ConfirmPairing are absent from the camera's
         // USB OperationsSupported, so polling them only times the connect out — the cable itself is
-        // the trust boundary. [verify-on-HW: ZR over USB-C]
+        // the trust boundary. [verify-on-HW: ZR over USB-C] Gen-1 bodies have no pairing surface
+        // over the network either; joining their access point is the trust boundary there.
         let isUSB = transport.kind == .usb
-        if requestPairing, !isUSB {
+        if requestPairing, !isUSB, gatePolicy.supportsPairing {
             onStage?("pairing")
             try await completePairing(onPairingChallenge: onPairingChallenge)
         } else {
-            establishmentSummary += isUSB ? "pairing=usb " : "pairing=skipped "
+            establishmentSummary +=
+                isUSB
+                ? "pairing=usb "
+                : (gatePolicy.supportsPairing ? "pairing=skipped " : "pairing=unadvertised ")
         }
         onStage?("app-control switch")
-        var appModeResponse = try await enableCameraControl()
+        var appModeResponse = try await enableCameraControl(policy: gatePolicy)
         if isUSB, appModeResponse != .ok {
             // Over USB the ZR boots into PC-camera mode and denies the vendor app-control switch
             // that Wi-Fi sessions get for free. Remote mode is accepted and unlocks control, though
@@ -1362,25 +1383,45 @@ final class NativeCameraSession: @unchecked Sendable {
         throw NativeCameraSessionError.pairingChallengeUnavailable
     }
 
-    private func enableCameraControl() async throws -> PTPResponseCode {
-        let appMode = try await transact(operationCode: .changeApplicationMode, parameters: [1])
-        let appModeResponse = appMode.operationResponse.responseCode
-        establishmentSummary +=
-            "appMode=0x\(String(appMode.operationResponse.responseCode.rawValue, radix: 16)) "
-
-        do {
-            let rec = try await transact(
-                operationCode: .getDevicePropValueEx,
-                parameters: [PTPPropertyCode.movieRecProhibitionCondition.rawValue],
-                dataPhase: .dataIn
+    private func enableCameraControl(policy: ZCameraOperationPolicy) async throws
+        -> PTPResponseCode
+    {
+        let appModeResponse: PTPResponseCode
+        if policy.appModeViaOperation {
+            let appMode = try await transact(
+                operationCode: .changeApplicationMode, parameters: [1])
+            appModeResponse = appMode.operationResponse.responseCode
+        } else {
+            // Gen 1 enters app control by a WRITE of 1 to the ApplicationMode property — the
+            // ChangeApplicationMode operation does not exist there, and sending it is part of what
+            // broke the Z 5 connect (#292). UINT8, 1 = on. [verify-on-HW: Z 5 over camera AP]
+            let write = try await transact(
+                operationCode: .setDevicePropValue,
+                parameters: [PTPPropertyCode.applicationMode.rawValue],
+                dataPhase: .dataOut,
+                dataOut: Data([1])
             )
-            let value =
-                rec.data.count >= 4
-                ? ByteCoding.readUInt32LE(Array(rec.data), at: 0)
-                : UInt32.max
-            establishmentSummary += "recProhib=0x\(String(value, radix: 16)) "
-        } catch {
-            establishmentSummary += "recProhib=err "
+            appModeResponse = write.operationResponse.responseCode
+        }
+        establishmentSummary += "appMode=0x\(String(appModeResponse.rawValue, radix: 16)) "
+
+        // Diagnostics only — and only where the Ex property surface exists. On gen 1 the probe
+        // itself would be another unknown operation fired at the body.
+        if policy.supportsExtendedPropertyOps {
+            do {
+                let rec = try await transact(
+                    operationCode: .getDevicePropValueEx,
+                    parameters: [PTPPropertyCode.movieRecProhibitionCondition.rawValue],
+                    dataPhase: .dataIn
+                )
+                let value =
+                    rec.data.count >= 4
+                    ? ByteCoding.readUInt32LE(Array(rec.data), at: 0)
+                    : UInt32.max
+                establishmentSummary += "recProhib=0x\(String(value, radix: 16)) "
+            } catch {
+                establishmentSummary += "recProhib=err "
+            }
         }
         return appModeResponse
     }
