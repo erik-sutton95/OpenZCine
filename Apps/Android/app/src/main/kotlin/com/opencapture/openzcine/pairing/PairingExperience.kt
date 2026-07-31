@@ -74,6 +74,7 @@ import com.opencapture.openzcine.core.CameraConnectionPhase
 import com.opencapture.openzcine.core.CameraConnectionProgress
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.hasExternalUvcCamera
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.AndroidUsbPtpCameraSource
 import com.opencapture.openzcine.transport.CameraDiscovery
@@ -294,6 +295,7 @@ internal fun diagnosticPhaseForPairingPath(path: PairingPath): String =
         PairingPath.PHONE_HOTSPOT -> "path.phoneHotspot"
         PairingPath.WIFI_NETWORK -> "path.wifiNetwork"
         PairingPath.USB_C -> "path.usb"
+        PairingPath.HDMI_CAPTURE -> "path.hdmi"
     }
 
 /**
@@ -402,6 +404,7 @@ internal object PairingCopy {
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_option_phone_hotspot
             PairingPath.WIFI_NETWORK -> R.string.pairing_option_router
             PairingPath.USB_C -> R.string.pairing_option_usb_c
+            PairingPath.HDMI_CAPTURE -> R.string.pairing_option_hdmi
         }
 
     @StringRes
@@ -411,6 +414,7 @@ internal object PairingCopy {
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_path_phone_hotspot
             PairingPath.WIFI_NETWORK -> R.string.pairing_path_router
             PairingPath.USB_C -> R.string.pairing_path_usb_c
+            PairingPath.HDMI_CAPTURE -> R.string.pairing_path_hdmi
         }
 
     @StringRes
@@ -420,6 +424,7 @@ internal object PairingCopy {
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_badge_best_wireless
             PairingPath.WIFI_NETWORK -> R.string.pairing_badge_shared_network
             PairingPath.USB_C -> R.string.pairing_badge_most_stable
+            PairingPath.HDMI_CAPTURE -> R.string.pairing_badge_picture_only
         }
 
     fun pathPros(path: PairingPath): List<Int> =
@@ -432,6 +437,8 @@ internal object PairingCopy {
                 listOf(R.string.pairing_pro_router_range, R.string.pairing_pro_router_no_setup)
             PairingPath.USB_C ->
                 listOf(R.string.pairing_pro_usb_stable, R.string.pairing_pro_usb_no_radio)
+            PairingPath.HDMI_CAPTURE ->
+                listOf(R.string.pairing_pro_hdmi_quality, R.string.pairing_pro_usb_no_radio)
         }
 
     @StringRes
@@ -441,6 +448,7 @@ internal object PairingCopy {
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_con_battery_drain
             PairingPath.WIFI_NETWORK -> R.string.pairing_con_router_needed
             PairingPath.USB_C -> R.string.pairing_con_usb_tethered
+            PairingPath.HDMI_CAPTURE -> R.string.pairing_con_hdmi_no_control
         }
 
     // [VERIFY-ON-HW] Confirm the ZR's exact menu wording for each path on hardware.
@@ -471,6 +479,12 @@ internal object PairingCopy {
                     R.string.pairing_prepare_usb_2,
                     R.string.pairing_prepare_usb_3,
                 )
+            PairingPath.HDMI_CAPTURE ->
+                listOf(
+                    R.string.pairing_prepare_hdmi_1,
+                    R.string.pairing_prepare_hdmi_2,
+                    R.string.pairing_prepare_hdmi_3,
+                )
         }
 
     @StringRes
@@ -480,6 +494,8 @@ internal object PairingCopy {
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_network_hotspot
             PairingPath.WIFI_NETWORK -> R.string.pairing_network_router
             PairingPath.USB_C -> R.string.pairing_network_usb
+            // Unreachable: the HDMI sequence carries no NETWORK step (PairingFlowState).
+            PairingPath.HDMI_CAPTURE -> R.string.pairing_network_usb
         }
 
     /** Camera-side instruction card lines for the hotspot network step. */
@@ -603,6 +619,11 @@ public fun PairingExperience(
     script: PairingScript? = null,
     onPaired: (PairedCamera) -> Unit,
     onPairingProfilePrepared: (SavedCameraRecord) -> Unit = {},
+    /**
+     * Opens the monitor on the attached HDMI capture device — picture only,
+     * no PTP session and no saved camera.
+     */
+    onStartHdmiMonitor: () -> Unit,
     onOpenSettings: (() -> Unit)? = null,
     onShowSavedCameras: (() -> Unit)? = null,
     /** Explicit local report handoff when pairing cannot complete (no automatic upload). */
@@ -636,6 +657,7 @@ public fun PairingExperience(
     var cameraWifiScannerPresented by remember { mutableStateOf(false) }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
+    var hdmiCaptureReady by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
     val handedOff = remember { mutableStateOf(false) }
@@ -1132,30 +1154,45 @@ public fun PairingExperience(
     }
 
     // Discovery is deliberately transport-specific: hotspot discovery never
-    // touches USB, and USB enumeration never scans or joins a network.
+    // touches USB, USB enumeration never scans or joins a network, and HDMI
+    // only ever asks CameraX whether a capture device is enumerated.
     if (flow.step == PairingStep.DISCOVER) {
         LaunchedEffect(environment, flow.path) {
-            if (flow.path == PairingPath.USB_C) {
-                cameras = emptyList()
-                val source = environment.usbCameraSource
-                if (source == null) {
-                    usbCameras = emptyList()
-                } else {
-                    // Poll deviceList while waiting: Samsung/OEM devices don't
-                    // reliably deliver ACTION_USB_DEVICE_ATTACHED to a runtime
-                    // receiver, so a camera plugged in on this step would never
-                    // reach the flow otherwise.
-                    launch {
-                        while (isActive) {
-                            source.refresh()
-                            delay(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+            when (flow.path) {
+                PairingPath.USB_C -> {
+                    cameras = emptyList()
+                    val source = environment.usbCameraSource
+                    if (source == null) {
+                        usbCameras = emptyList()
+                    } else {
+                        // Poll deviceList while waiting: Samsung/OEM devices don't
+                        // reliably deliver ACTION_USB_DEVICE_ATTACHED to a runtime
+                        // receiver, so a camera plugged in on this step would never
+                        // reach the flow otherwise.
+                        launch {
+                            while (isActive) {
+                                source.refresh()
+                                delay(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+                            }
                         }
+                        source.cameras.collect { usbCameras = it }
                     }
-                    source.cameras.collect { usbCameras = it }
                 }
-            } else {
-                usbCameras = emptyList()
-                environment.hotspotCameras.collect { cameras = it }
+                PairingPath.HDMI_CAPTURE -> {
+                    cameras = emptyList()
+                    usbCameras = emptyList()
+                    // Same reasoning as the USB poll: attach delivery is not
+                    // reliable, so a cable plugged in on this step is found by
+                    // asking again.
+                    while (isActive) {
+                        hdmiCaptureReady = hasExternalUvcCamera(context)
+                        delay(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+                    }
+                }
+                else -> {
+                    usbCameras = emptyList()
+                    environment.hotspotCameras.collect { cameras = it }
+                }
             }
         }
     }
@@ -1252,6 +1289,8 @@ public fun PairingExperience(
                             onConnectMyCamera = ::connectMyCamera,
                             onConnectCamera = { connect(it.host) },
                             onConnectUsbCamera = ::connectUsb,
+                            hdmiCaptureReady = hdmiCaptureReady,
+                            onStartHdmiMonitor = onStartHdmiMonitor,
                             compact = compactStep,
                             tightChrome = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -1289,6 +1328,8 @@ public fun PairingExperience(
                             onConnectMyCamera = ::connectMyCamera,
                             onConnectCamera = { connect(it.host) },
                             onConnectUsbCamera = ::connectUsb,
+                            hdmiCaptureReady = hdmiCaptureReady,
+                            onStartHdmiMonitor = onStartHdmiMonitor,
                             compact = viewportWidth < 480.dp,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
@@ -1542,6 +1583,8 @@ private fun StepCard(
     onConnectMyCamera: () -> Unit,
     onConnectCamera: (DiscoveredCamera) -> Unit,
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
+    hdmiCaptureReady: Boolean,
+    onStartHdmiMonitor: () -> Unit,
     compact: Boolean,
     tightChrome: Boolean = false,
     modifier: Modifier = Modifier,
@@ -1592,6 +1635,8 @@ private fun StepCard(
                         usbCameras = usbCameras,
                         onConnectCamera = onConnectCamera,
                         onConnectUsbCamera = onConnectUsbCamera,
+                        hdmiCaptureReady = hdmiCaptureReady,
+                        onStartHdmiMonitor = onStartHdmiMonitor,
                     )
             }
         }
@@ -2067,6 +2112,8 @@ private fun NetworkBody(path: PairingPath) {
                     steps = listOf(stringResource(R.string.pairing_network_usb_phone_1)),
                 )
             }
+            // Unreachable: the HDMI sequence carries no NETWORK step (PairingFlowState).
+            PairingPath.HDMI_CAPTURE -> Unit
             PairingPath.WIFI_NETWORK -> {
                 // Nothing to join from here: both devices are already on someone else's network,
                 // so this step is a check rather than an action.
@@ -2138,9 +2185,15 @@ private fun DiscoverBody(
     usbCameras: List<UsbPtpCamera>,
     onConnectCamera: (DiscoveredCamera) -> Unit,
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
+    hdmiCaptureReady: Boolean,
+    onStartHdmiMonitor: () -> Unit,
 ) {
     if (path == PairingPath.USB_C) {
         UsbDiscoverBody(usbCameras, onConnectUsbCamera)
+        return
+    }
+    if (path == PairingPath.HDMI_CAPTURE) {
+        HdmiDiscoverBody(hdmiCaptureReady, onStartHdmiMonitor)
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2189,6 +2242,66 @@ private fun DiscoverBody(
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The HDMI capture path's final step: found/not-found for the capture device,
+ * then a single action that opens the monitor on its feed. Mirrors the USB
+ * body's shape — a ready tile with the accent action — so the two cable
+ * options end the same way.
+ */
+@Composable
+private fun HdmiDiscoverBody(
+    captureReady: Boolean,
+    onStartMonitoring: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!captureReady) {
+            EmptyDiscoveryCard(
+                glyph = StartupGlyphKind.CABLE,
+                title = stringResource(R.string.pairing_waiting_hdmi),
+                detail = stringResource(R.string.pairing_waiting_hdmi_detail),
+            )
+        } else {
+            Row(
+                Modifier.fillMaxWidth()
+                    .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
+                    .clickable { onStartMonitoring() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                StartupGlyph(
+                    StartupGlyphKind.CABLE,
+                    tint = StartupColors.accent,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.pairing_hdmi_device_title),
+                        color = StartupColors.ink,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        stringResource(R.string.pairing_hdmi_device_detail),
+                        color = StartupColors.muted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Text(
+                    stringResource(R.string.pairing_start_monitoring),
+                    color = StartupColors.darkText,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier =
+                        Modifier.clip(RoundedCornerShape(16.dp))
+                            .background(StartupColors.accent)
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
             }
         }
     }

@@ -198,6 +198,10 @@ class MainActivity : ComponentActivity() {
                 CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics) {
                 Box(Modifier.fillMaxSize()) {
                 var monitorSession by remember { mutableStateOf(debugSession) }
+                // The HDMI capture feed beside a capture-only session. Non-null
+                // exactly while the monitor is on the HDMI path; closed (CameraX
+                // unbind) whenever the monitor exits.
+                var uvcSource by remember { mutableStateOf<UvcFrameSource?>(null) }
                 // A monitor reached from a saved card retains that exact
                 // profile. Link settings may then leave the monitor without
                 // guessing a topology or constructing a second session.
@@ -385,6 +389,11 @@ class MainActivity : ComponentActivity() {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                 }
+                // Bind the HDMI capture device once its monitor session exists.
+                // CameraX pauses/resumes delivery with the activity lifecycle on
+                // its own; explicit close happens on monitor exit.
+                val currentUvcSource = uvcSource
+                LaunchedEffect(currentUvcSource) { currentUvcSource?.start(this@MainActivity) }
                 val active = monitorSession
                 val offlineBuckets = offlineMediaBuckets
                 if (active == null && offlineBuckets != null) {
@@ -479,6 +488,17 @@ class MainActivity : ComponentActivity() {
                                     script = pairingScript,
                                     onPaired = ::acceptPairedCamera,
                                     onPairingProfilePrepared = ::persistPairedCameraProfile,
+                                    onStartHdmiMonitor = {
+                                        // Picture only: no PTP session, no saved
+                                        // camera, and no stale profile steering
+                                        // link-health or reconnect heuristics.
+                                        activeSavedCamera = null
+                                        uvcSource = UvcFrameSource(applicationContext)
+                                        monitorSession =
+                                            CaptureOnlyCameraSession(
+                                                getString(R.string.pairing_hdmi_device_title)
+                                            )
+                                    },
                                     onOpenSettings = { standaloneSettingsPresented = true },
                                     onShowSavedCameras =
                                         if (savedCameras.isEmpty()) {
@@ -646,7 +666,16 @@ class MainActivity : ComponentActivity() {
                             // session leaves composition.
                             if (monitorSession === exitingSession) {
                                 monitorSession = null
-                                startupSurface = StartupSurface.SAVED_CAMERAS
+                                uvcSource?.close()
+                                uvcSource = null
+                                // An HDMI-only user may have no saved cameras at
+                                // all; an empty saved list is not a home.
+                                startupSurface =
+                                    if (savedCameras.isEmpty()) {
+                                        StartupSurface.PAIRING
+                                    } else {
+                                        StartupSurface.SAVED_CAMERAS
+                                    }
                                 requestedReconnectID = if (reconnect) reconnectID else null
                             }
                         }
@@ -668,7 +697,7 @@ class MainActivity : ComponentActivity() {
                         Box {
                             MonitorScreen(
                                 active,
-                                frameSource = demo?.second,
+                                frameSource = demo?.second ?: uvcSource,
                                 assist = assist,
                                 operatorSettings = operatorSettings,
                                 lutLibrary = lutLibrary,

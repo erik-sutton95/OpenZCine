@@ -600,7 +600,11 @@ fun LiveFeedView(
             pumpFramesWithSourceFrame(
                 frames = source.frames,
                 stats = stats,
-                decode = decoder::decode,
+                // An HDMI capture frame arrives already decoded; everything
+                // else is the camera's live-view JPEG.
+                decode = { frame ->
+                    (frame as? BitmapLiveFrame)?.bitmap ?: decoder.decode(frame.jpegData)
+                },
                 present = { sourceFrame, bitmap ->
                     val frameColorMode = decodedLiveFeedColorMode(bitmap)
                     if (presentationState != null) {

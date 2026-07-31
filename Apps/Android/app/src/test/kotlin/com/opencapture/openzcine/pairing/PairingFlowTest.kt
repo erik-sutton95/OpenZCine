@@ -158,7 +158,39 @@ class PairingFlowTest {
         for (path in PairingPath.entries) {
             assertTrue(PairingCard.of(path).options.contains(path))
         }
-        // HDMI capture is iOS-only for now, so Android's cable card carries a single option.
-        assertEquals(listOf(PairingPath.USB_C), PairingCard.CABLE_LINK.options)
+        // Both cable options live under one card, mirroring iOS's Cable Link.
+        assertEquals(
+            listOf(PairingPath.USB_C, PairingPath.HDMI_CAPTURE),
+            PairingCard.CABLE_LINK.options,
+        )
+    }
+
+    /**
+     * HDMI capture is a cable to a capture device, not a network: the wizard goes from preparing
+     * the cable straight to finding it, with no network step to mislead the operator into
+     * configuring Wi-Fi that plays no part.
+     */
+    @Test
+    fun `hdmi path skips the network step and ends at discovery`() {
+        var flow = PairingFlowState.initial(permissionGranted = false)
+        flow = flow.advance().choose(PairingPath.HDMI_CAPTURE)
+        assertEquals(PairingStep.PREPARE, flow.step)
+        assertEquals(4, flow.stepCount)
+        assertEquals(3, flow.displayStepNumber)
+
+        flow = flow.advance()
+        assertEquals(PairingStep.DISCOVER, flow.step)
+        assertTrue(flow.isFinalStep)
+        assertEquals(4, flow.displayStepNumber)
+
+        // And back: retreat from discovery lands on prepare, never a network step.
+        assertEquals(PairingStep.PREPARE, flow.retreat().step)
+    }
+
+    @Test
+    fun `network step is rejected on the hdmi path`() {
+        assertFailsWith<IllegalArgumentException> {
+            PairingFlowState(step = PairingStep.NETWORK, path = PairingPath.HDMI_CAPTURE)
+        }
     }
 }

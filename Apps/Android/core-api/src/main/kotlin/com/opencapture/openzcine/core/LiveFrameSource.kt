@@ -128,6 +128,11 @@ public data class LiveFrameTimecode(
  * Not a data class on purpose: frames carry a payload buffer, and
  * structural equality over frame bytes is never wanted.
  *
+ * Open so a non-PTP source (an HDMI capture device) can subclass with an
+ * already-decoded payload instead of paying a JPEG encode/decode round trip
+ * per frame; such a subclass may carry an empty [jpegData]. The bitmap type
+ * itself stays out of this module — core-api is pure JVM.
+ *
  * @property timestampNanos Monotonic capture timestamp of the frame.
  * @property jpegData JPEG-encoded frame payload as delivered by the camera.
  * @property isRecording Whether the camera reported card recording in this
@@ -142,7 +147,7 @@ public data class LiveFrameTimecode(
  * @property measuredFramesPerSecond Measured delivery cadence calculated from
  *   consecutive monotonic frame timestamps, or `null` before it is known.
  */
-public class LiveFrame(
+public open class LiveFrame(
     public val timestampNanos: Long,
     public val jpegData: ByteArray,
     public val isRecording: Boolean = false,

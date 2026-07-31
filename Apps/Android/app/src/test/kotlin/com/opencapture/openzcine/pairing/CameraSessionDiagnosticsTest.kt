@@ -50,5 +50,6 @@ class CameraSessionDiagnosticsTest {
             "path.phoneHotspot",
             diagnosticPhaseForPairingPath(PairingPath.PHONE_HOTSPOT),
         )
+        assertEquals("path.hdmi", diagnosticPhaseForPairingPath(PairingPath.HDMI_CAPTURE))
     }
 }

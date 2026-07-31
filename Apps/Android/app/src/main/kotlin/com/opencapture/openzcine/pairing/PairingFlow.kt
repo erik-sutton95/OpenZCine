@@ -25,6 +25,13 @@ public enum class PairingPath {
      */
     WIFI_NETWORK,
     USB_C,
+
+    /**
+     * The camera's HDMI output through a UVC capture cable — picture only, no control link.
+     * There is no network on this path at all: the wizard goes from preparing the cable
+     * straight to finding the capture device.
+     */
+    HDMI_CAPTURE,
     ;
 
     /**
@@ -41,20 +48,16 @@ public enum class PairingPath {
 /**
  * The choose step's cards. Each groups several paths, so the operator picks a kind of connection
  * first and the specific one second — two questions that are much easier apart than one flat list.
- *
- * Android's [CABLE_LINK] currently offers only USB-C: HDMI capture is iOS-only for now, because
- * Camera2/CameraX enumerates a USB capture device on very few Android phones.
  */
 public enum class PairingCard(public val options: List<PairingPath>) {
     WIRELESS(
         listOf(PairingPath.CAMERA_ACCESS_POINT, PairingPath.PHONE_HOTSPOT, PairingPath.WIFI_NETWORK)
     ),
-    CABLE_LINK(listOf(PairingPath.USB_C)),
+    CABLE_LINK(listOf(PairingPath.USB_C, PairingPath.HDMI_CAPTURE)),
     ;
 
     public companion object {
-        public fun of(path: PairingPath): PairingCard =
-            if (path == PairingPath.USB_C) CABLE_LINK else WIRELESS
+        public fun of(path: PairingPath): PairingCard = entries.first { path in it.options }
     }
 }
 
@@ -93,6 +96,9 @@ public data class PairingFlowState(
         require(!(path == PairingPath.CAMERA_ACCESS_POINT && step == PairingStep.DISCOVER)) {
             "Camera-AP pairing ends at NETWORK; DISCOVER belongs to hotspot or USB-C pairing"
         }
+        require(!(path == PairingPath.HDMI_CAPTURE && step == PairingStep.NETWORK)) {
+            "HDMI capture has no network step; the cable is the whole link"
+        }
     }
 
     private val sequence: List<PairingStep>
@@ -100,7 +106,10 @@ public data class PairingFlowState(
             if (!skipsPermissions) add(PairingStep.PERMISSIONS)
             add(PairingStep.CHOOSE_PATH)
             add(PairingStep.PREPARE)
-            add(PairingStep.NETWORK)
+            // HDMI capture has no network at all — the cable is the whole link.
+            if (path != PairingPath.HDMI_CAPTURE) {
+                add(PairingStep.NETWORK)
+            }
             // Camera-AP pairing ends at NETWORK — joining the camera's Wi-Fi is the last
             // operator action. Every other path finishes by finding the camera.
             if (path != PairingPath.CAMERA_ACCESS_POINT) {

@@ -90,7 +90,7 @@ suspend fun <T : Any> pumpFrames(
     pumpFramesWithSourceFrame(
         frames = frames,
         stats = stats,
-        decode = decode,
+        decode = { frame -> decode(frame.jpegData) },
         present = { _, decoded -> present(decoded) },
     )
 }
@@ -99,11 +99,15 @@ suspend fun <T : Any> pumpFrames(
  * Variant of [pumpFrames] that keeps the accepted source frame paired with
  * its decoded presentation. Live overlays use this to avoid applying a newer
  * focus or horizon packet to an older bitmap after conflation.
+ *
+ * [decode] receives the whole frame, not just its JPEG bytes, so a source
+ * whose frames already carry a decoded payload (HDMI capture) can skip the
+ * decoder entirely.
  */
 suspend fun <T : Any> pumpFramesWithSourceFrame(
     frames: Flow<LiveFrame>,
     stats: FramePacingStats,
-    decode: (ByteArray) -> T?,
+    decode: (LiveFrame) -> T?,
     present: (LiveFrame, T) -> Unit,
 ) {
     frames
@@ -111,7 +115,7 @@ suspend fun <T : Any> pumpFramesWithSourceFrame(
         .conflate()
         .collect { frame ->
             val start = System.nanoTime()
-            val decoded = decode(frame.jpegData) ?: return@collect
+            val decoded = decode(frame) ?: return@collect
             present(frame, decoded)
             stats.framePresented(decodeNanos = System.nanoTime() - start, nowNanos = System.nanoTime())
         }
