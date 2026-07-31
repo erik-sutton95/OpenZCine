@@ -11,7 +11,9 @@ struct MonitorRelayProtocolTests {
 
     private func hello() -> Data {
         try! JSONEncoder().encode(
-            MonitorRelayHello(version: 1, hostName: "A-cam iPhone", cameraName: "Nikon ZR"))
+            MonitorRelayHello(
+                version: MonitorRelayProtocol.version, hostName: "A-cam iPhone",
+                cameraName: "Nikon ZR"))
     }
 
     @Test("A framed message round-trips with its kind and payload intact")
@@ -100,7 +102,12 @@ struct MonitorRelayProtocolTests {
                 ]),
             levelRoll: -1.5, levelPitch: 0.25,
             sound: MonitorRelayFrameMetadata.Sound(
-                peakLeft: 12, peakRight: 10, currentLeft: 9, currentRight: 7))
+                peakLeft: 12, peakRight: 10, currentLeft: 9, currentRight: 7),
+            codec: MonitorRelayProtocol.FrameCodec.hevc,
+            isKeyframe: true,
+            // Parameter sets are opaque bytes and must survive exactly: one bit wrong and the
+            // viewer's decoder rejects every frame that follows.
+            parameterSets: [Data([0x40, 0x01, 0x0C]), Data([0x42, 0x01]), Data([0x44, 0x01])])
         // Deliberately not a valid JPEG: the payload must survive as opaque bytes.
         let image = Data((0..<4096).map { UInt8($0 % 251) })
 

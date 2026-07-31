@@ -77,7 +77,16 @@ final class MonitorRelayHost {
         /// Frames handed to the socket and not yet reported processed. The backpressure signal:
         /// a peer that stops draining stops being sent to, rather than being queued for.
         var inFlightFrames = 0
+        /// HEVC frames reference their predecessors, so a peer that joined or skipped under
+        /// backpressure cannot resume on a predicted frame — it would decode into smearing.
+        /// True until this peer has been sent a keyframe.
+        var needsKeyframe = true
     }
+
+    /// Fired when some peer is waiting on a keyframe the current stream position cannot give it.
+    /// The model routes this to the encoder; JPEG streams never fire it (every frame is a
+    /// keyframe there).
+    var onKeyframeNeeded: (@MainActor () -> Void)?
 
     /// The viewer currently allowed to drive the camera; nil means the host itself does.
     private(set) var controlHolder: ObjectIdentifier?
@@ -302,13 +311,26 @@ final class MonitorRelayHost {
                 metadata: frameMetadata, image: image)
         else { return }
         let framed = MonitorRelayFraming.encode(kind: .frame, payload: payload)
+        var keyframeWanted = false
         for (key, peer) in peers {
             // A monitor shows the newest frame or it is not a monitor. A peer that has not
             // drained is SKIPPED, never queued for: fire-and-forget sends buffer without bound,
             // so a link slower than the source accumulates minutes of latency that presents as
             // "no picture at all". The state and control messages stay unconditional — they are
             // tiny, and a late reading is better than none.
-            guard peer.inFlightFrames < Self.maxInFlightFramesPerPeer else { continue }
+            guard peer.inFlightFrames < Self.maxInFlightFramesPerPeer else {
+                // Skipping breaks this peer's reference chain; it resumes on the next keyframe.
+                peers[key]?.needsKeyframe = true
+                keyframeWanted = true
+                continue
+            }
+            // A joining or resuming peer waits for a frame it can actually decode. JPEG frames
+            // are all keyframes, so this never withholds anything on the fallback path.
+            if peer.needsKeyframe && !frameMetadata.isKeyframe {
+                keyframeWanted = true
+                continue
+            }
+            peers[key]?.needsKeyframe = false
             peers[key]?.inFlightFrames += 1
             peer.connection.send(
                 content: framed,
@@ -316,6 +338,7 @@ final class MonitorRelayHost {
                     Task { @MainActor in self?.peers[key]?.inFlightFrames -= 1 }
                 })
         }
+        if keyframeWanted { onKeyframeNeeded?() }
     }
 
     private func broadcast(kind: MonitorRelayProtocol.Kind, payload: Data) {

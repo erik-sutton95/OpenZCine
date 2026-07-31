@@ -137,6 +137,7 @@
 		USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBC00000000000000000001 /* PTPUSBContainer.swift */; };
 		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
 		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
+		RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVID00000000000000000001 /* MonitorRelayVideo.swift */; };
 		RLYP00000000000000000002 /* MonitorRelayProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLYP00000000000000000001 /* MonitorRelayProtocol.swift */; };
 		UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = UVCV00000000000000000001 /* UVCVideoSource.swift */; };
 		VSRC00000000000000000002 /* VideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = VSRC00000000000000000001 /* VideoSource.swift */; };
@@ -331,6 +332,7 @@
 		USBC00000000000000000001 /* PTPUSBContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPUSBContainer.swift; path = ../Sources/OpenZCineCore/PTPUSBContainer.swift; sourceTree = SOURCE_ROOT; };
 		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
 		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
+		RVID00000000000000000001 /* MonitorRelayVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayVideo.swift; sourceTree = "<group>"; };
 		RLYP00000000000000000001 /* MonitorRelayProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorRelayProtocol.swift; path = ../Sources/OpenZCineCore/MonitorRelayProtocol.swift; sourceTree = SOURCE_ROOT; };
 		UVCV00000000000000000001 /* UVCVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UVCVideoSource.swift; sourceTree = "<group>"; };
 		VSRC00000000000000000001 /* VideoSource.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = VideoSource.swift; path = ../Sources/OpenZCineCore/VideoSource.swift; sourceTree = SOURCE_ROOT; };
@@ -416,6 +418,7 @@
 				USBT00000000000000000001 /* USBCameraTransport.swift */,
 				UVCV00000000000000000001 /* UVCVideoSource.swift */,
 				RLNK00000000000000000001 /* MonitorRelayLink.swift */,
+				RVID00000000000000000001 /* MonitorRelayVideo.swift */,
 				C0DE00000000000000000025 /* LinkExperience.swift */,
 				C0DE00000000000000000027 /* StartupDesign.swift */,
 				C0DE00000000000000000051 /* ConnectionProgressSheet.swift */,
@@ -722,6 +725,7 @@
 				USBT00000000000000000002 /* USBCameraTransport.swift in Sources */,
 				UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */,
 				RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */,
+				RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */,
 				CTRN00000000000000000002 /* CameraTransport.swift in Sources */,
 				USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */,
 				C0DE00000000000000000024 /* LinkExperience.swift in Sources */,

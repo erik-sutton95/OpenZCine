@@ -29,7 +29,15 @@ public enum MonitorRelayProtocol {
     public static let serviceType = "_openzcine-mon._tcp"
 
     /// Wire version. A viewer refuses a host it cannot speak to rather than rendering nonsense.
-    public static let version = 1
+    /// Version 2: frames carry a codec discriminator — HEVC with in-band parameter sets, or JPEG.
+    public static let version = 2
+
+    /// Frame codec discriminators. Numeric on the wire, like the focus result: an added codec
+    /// must never shift the meaning of a value already in flight.
+    public enum FrameCodec {
+        public static let jpeg = 0
+        public static let hevc = 1
+    }
 
     /// Message tag, the first byte of every framed payload.
     public enum Kind: UInt8, Sendable {
@@ -186,7 +194,8 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
 
     public init(
         timecode: Timecode?, isRecording: Bool, focus: Focus?, levelRoll: Double?,
-        levelPitch: Double?, sound: Sound?
+        levelPitch: Double?, sound: Sound?, codec: Int = MonitorRelayProtocol.FrameCodec.jpeg,
+        isKeyframe: Bool = true, parameterSets: [Data]? = nil
     ) {
         self.timecode = timecode
         self.isRecording = isRecording
@@ -194,6 +203,9 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
         self.levelRoll = levelRoll
         self.levelPitch = levelPitch
         self.sound = sound
+        self.codec = codec
+        self.isKeyframe = isKeyframe
+        self.parameterSets = parameterSets
     }
 
     public let timecode: Timecode?
@@ -202,6 +214,22 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
     public let levelRoll: Double?
     public let levelPitch: Double?
     public let sound: Sound?
+    /// `MonitorRelayProtocol.FrameCodec`. JPEG decodes standalone; HEVC frames reference earlier
+    /// ones, which is where the keyframe machinery below comes from.
+    public let codec: Int
+    /// Whether this frame decodes without any predecessor. Always true for JPEG.
+    public let isKeyframe: Bool
+    /// HEVC parameter sets (VPS/SPS/PPS), present on keyframes so a joiner can build a decoder
+    /// from the stream alone — there is no side channel to fetch them from.
+    public let parameterSets: [Data]?
+
+    /// Returns a copy carrying the encoder's output description.
+    public func carryingVideo(codec: Int, isKeyframe: Bool, parameterSets: [Data]?) -> Self {
+        Self(
+            timecode: timecode, isRecording: isRecording, focus: focus, levelRoll: levelRoll,
+            levelPitch: levelPitch, sound: sound, codec: codec, isKeyframe: isKeyframe,
+            parameterSets: parameterSets)
+    }
 }
 
 /// A camera command issued by a viewer and executed by the host.

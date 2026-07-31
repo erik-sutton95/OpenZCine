@@ -876,6 +876,10 @@ final class NativeAppModel {
     /// Latest per-frame readings, so the HDMI path — where picture and header arrive on different
     /// loops — can still send the two together.
     @ObservationIgnored private var latestRelayFrameMetadata: MonitorRelayFrameMetadata?
+    /// Hardware HEVC for the outgoing stream; created with broadcasting, torn down with it.
+    @ObservationIgnored private var relayVideoEncoder: MonitorRelayVideoEncoder?
+    /// Hardware HEVC for an incoming stream; created with a viewer session.
+    @ObservationIgnored private var relayVideoDecoder: MonitorRelayVideoDecoder?
 
     var isRelayBroadcasting = false
     var relayPeerCount = 0
@@ -909,6 +913,9 @@ final class NativeAppModel {
                 self.relayControlHeldBy = host.controlHolderName
             }
             host.onCommand = { [weak self] command in self?.executeRelayCommand(command) }
+            let encoder = MonitorRelayVideoEncoder()
+            relayVideoEncoder = encoder
+            host.onKeyframeNeeded = { encoder.requestKeyframe() }
             host.start(
                 hostName: UIDevice.current.name,
                 cameraName: connectedIdentity?.displayName ?? cameraState.cameraName)
@@ -918,6 +925,8 @@ final class NativeAppModel {
         } else {
             relayHost?.stop()
             relayHost = nil
+            relayVideoEncoder?.invalidate()
+            relayVideoEncoder = nil
             relayPeerCount = 0
             isRelayBroadcasting = false
         }
@@ -1015,27 +1024,13 @@ final class NativeAppModel {
             })
     }
 
-    /// Serves one picture, rate-capped.
+    /// Serves one picture to the viewers, rate-capped BEFORE the encode: the encode is the
+    /// expensive part, and paying it for frames that are then dropped is cost without benefit.
     ///
-    /// `jpeg` is passed through exactly as the camera sent it wherever possible: re-encoding a
-    /// live-view frame to relay it would spend a generation of quality for nothing.
-    private func broadcastRelayFrame(jpeg: Data) {
-        guard let relayHost, isRelayBroadcasting, relayPeerCount > 0 else { return }
-        let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastRelayFrameAt >= Self.relayFrameInterval else { return }
-        lastRelayFrameAt = now
-        relayHost.broadcast(
-            frameMetadata: latestRelayFrameMetadata
-                ?? MonitorRelayFrameMetadata(
-                    timecode: nil, isRecording: isRecording, focus: nil, levelRoll: nil,
-                    levelPitch: nil, sound: nil),
-            image: jpeg)
-    }
-
-    /// Serves a picture the app holds as a bitmap rather than as camera JPEG — the capture path.
-    ///
-    /// The rate cap is applied BEFORE encoding, not after: the encode is the expensive part, and
-    /// paying for frames that are then dropped is the whole cost with none of the benefit.
+    /// Hardware HEVC by default — roughly a quarter of the JPEG bytes at equal quality, which on
+    /// a set router (where every relayed frame crosses the air four times) is the difference
+    /// between a viewer that tracks the host and one that slideshows. JPEG is the degrade when
+    /// the encoder is unavailable: a heavier picture, never no picture.
     private func broadcastRelayFrame(image: UIImage) {
         guard let relayHost, isRelayBroadcasting, relayPeerCount > 0 else { return }
         let now = CFAbsoluteTimeGetCurrent()
@@ -1046,10 +1041,37 @@ final class NativeAppModel {
             ?? MonitorRelayFrameMetadata(
                 timecode: nil, isRecording: isRecording, focus: nil, levelRoll: nil,
                 levelPitch: nil, sound: nil)
+        guard let cgImage = image.cgImage, let relayVideoEncoder else {
+            broadcastRelayFrameAsJPEG(image: image, metadata: metadata, host: relayHost)
+            return
+        }
+        relayVideoEncoder.encode(cgImage) { [weak self] encoded in
+            Task { @MainActor in
+                guard let self, let relayHost = self.relayHost, self.isRelayBroadcasting else {
+                    return
+                }
+                guard let encoded else {
+                    self.broadcastRelayFrameAsJPEG(
+                        image: image, metadata: metadata, host: relayHost)
+                    return
+                }
+                relayHost.broadcast(
+                    frameMetadata: metadata.carryingVideo(
+                        codec: MonitorRelayProtocol.FrameCodec.hevc,
+                        isKeyframe: encoded.isKeyframe,
+                        parameterSets: encoded.parameterSets),
+                    image: encoded.data)
+            }
+        }
+    }
+
+    private func broadcastRelayFrameAsJPEG(
+        image: UIImage, metadata: MonitorRelayFrameMetadata, host: MonitorRelayHost
+    ) {
         let handoff = UVCFrameHandoff(image: image)
         Task.detached(priority: .utility) {
             guard let jpeg = handoff.image.jpegData(compressionQuality: 0.6) else { return }
-            await MainActor.run { relayHost.broadcast(frameMetadata: metadata, image: jpeg) }
+            await MainActor.run { host.broadcast(frameMetadata: metadata, image: jpeg) }
         }
     }
 
@@ -1140,6 +1162,8 @@ final class NativeAppModel {
     func leaveRelay() {
         relayClient?.stop()
         relayClient = nil
+        relayVideoDecoder?.invalidate()
+        relayVideoDecoder = nil
         relayClientState = .idle
         relayHoldsControl = false
         relayControlHolderName = nil
@@ -1172,6 +1196,26 @@ final class NativeAppModel {
     }
 
     private func applyRelayFrame(metadata: MonitorRelayFrameMetadata, image: Data) {
+        applyRelayFrameReadings(metadata)
+        if metadata.codec == MonitorRelayProtocol.FrameCodec.hevc {
+            let decoder = relayVideoDecoder ?? MonitorRelayVideoDecoder()
+            relayVideoDecoder = decoder
+            decoder.decode(
+                image, isKeyframe: metadata.isKeyframe, parameterSets: metadata.parameterSets
+            ) { [weak self] decoded in
+                guard let decoded else { return }
+                Task { @MainActor in self?.presentRelayFrame(decoded) }
+            }
+            return
+        }
+        Task { [weak self] in
+            guard let self, let decoded = await self.frameDecoder.decode(image) else { return }
+            self.presentRelayFrame(decoded)
+        }
+    }
+
+    /// The readings ride with the frame whichever codec carried it.
+    private func applyRelayFrameReadings(_ metadata: MonitorRelayFrameMetadata) {
         if let timecode = metadata.timecode { liveTimecode = timecode }
         liveViewFocus = metadata.focus.map { focus in
             PTPLiveViewFocusInfo(
@@ -1195,9 +1239,13 @@ final class NativeAppModel {
                     peakLeft: sound.peakLeft, peakRight: sound.peakRight,
                     currentLeft: sound.currentLeft, currentRight: sound.currentRight))
         }
+    }
+
+    /// One decoded picture onto the viewer's monitor, whichever codec delivered it.
+    private func presentRelayFrame(_ decoded: UIImage) {
+        guard videoSource == .relay else { return }
         Task { [weak self] in
-            guard let self, let decoded = await self.frameDecoder.decode(image) else { return }
-            guard self.videoSource == .relay else { return }
+            guard let self else { return }
             guard let display = await self.displayReadyLiveFrame(from: decoded) else { return }
             guard self.videoSource == .relay else { return }
             if self.liveFrameImage !== display { self.liveFrameImage = display }
@@ -5284,10 +5332,12 @@ final class NativeAppModel {
                     measuredLiveViewFPS = frameRate.displayFPS
                     publishLiveFrameDisplay(image: image, focus: frame.focus)
                     applyLiveViewHeaderState(frame)
-                    // Pass the camera's own JPEG straight through — re-encoding it to relay it
-                    // would spend a generation of quality for nothing.
+                    // The relay re-encodes the CLEAN frame as HEVC. A pass-through of the
+                    // camera's JPEG was tried first — no generational loss — but at ~100 KB a
+                    // frame it is what capped viewers at 8–11 fps on a set router; the hardware
+                    // encode trades an invisible generation for a quarter of the bytes.
                     captureRelayFrameMetadata(frame)
-                    broadcastRelayFrame(jpeg: frame.jpeg)
+                    broadcastRelayFrame(image: cleanFrame)
                     // The CPU path returns a distinct display-baked image. Metal returns the clean
                     // frame because its full-size bake stays GPU-side; give the relay the active
                     // effects in that case so it grades only its small, link-paced thumbnail.
