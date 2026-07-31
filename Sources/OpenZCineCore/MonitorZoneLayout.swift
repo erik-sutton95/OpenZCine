@@ -371,10 +371,17 @@ public enum MonitorZoneLayout {
         let left = battery.x < rowLeading ? battery.x + battery.width : rowTrailing
         let right = battery.x < rowLeading ? rowLeading : battery.x
 
+        // Inset SYMMETRICALLY by whichever cluster reaches further in, rather than simply spanning
+        // the gap between them. The two are different widths — the lock plus inline batteries is
+        // wider than the settings/media pair — so spanning left-to-right put the deck's centre off
+        // the picture's centre, which is visible as a status bar that sits noticeably right of
+        // middle on an iPad. Centring is the property that matters here; the spare width is not.
+        let feed = legacy.feed
+        let inset = Swift.max(left - feed.x, feed.x + feed.width - right) + gap
         return MonitorModuleFrame(
-            x: left + gap,
+            x: feed.x + inset,
             y: legacy.topInfoDeck.y,
-            width: Swift.max(0, right - left - 2 * gap),
+            width: Swift.max(0, feed.width - 2 * inset),
             height: legacy.topInfoDeck.height
         )
     }

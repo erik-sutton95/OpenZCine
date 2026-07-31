@@ -507,6 +507,53 @@ import Testing
     }
 }
 
+/// A 4:3 iPad landscape viewport: the feed letterboxes to the full width, so there are no side
+/// lanes at all and BOTH chrome clusters sit inside the deck's own band — lock plus the inline
+/// batteries leading, settings plus media trailing.
+///
+/// This is the case that shipped broken and was found on hardware: the constrained branch took the
+/// bare side inset, so the batteries sat on the record-state pill and the media button clipped the
+/// FPS readout off the right-hand end. The 16:9 test above does not cover it — there `constrained`
+/// is false and a different code path clears the clusters.
+@Test func widthConstrainedLandscapeInfoDeckClearsBothCornersAndStaysCentered() {
+    for (width, height) in [
+        (1210.0, 834.0),  // iPad Pro 11"
+        (1376.0, 1032.0),  // iPad Pro 13"
+        (1133.0, 744.0),  // iPad mini
+    ] {
+        let safeArea = MonitorEdgeInsets(top: 24, leading: 0, bottom: 20, trailing: 0)
+        let layout = MonitorLiveViewModuleLayout.fit(
+            viewportWidth: width,
+            viewportHeight: height,
+            feedSafeArea: safeArea,
+            chromeInsets: MonitorChromeLayout.insets(feedSafeArea: safeArea),
+            bottomBarHeight: 54
+        )
+        // Precondition: this really is the width-constrained layout, feed spanning the full width.
+        #expect(
+            MonitorFeedLayout.isWidthConstrained(viewportWidth: width, viewportHeight: height))
+        #expect(abs(layout.feed.width - width) < 0.001)
+
+        let deck = layout.topInfoDeck
+        let lock = layout.lockButton
+        let battery = layout.batteryRail
+        let gap = MonitorLiveViewModuleLayout.topInfoDeckControlGap
+        let leadingCluster = max(lock.x + lock.width, battery.x + battery.width)
+
+        #expect(deck.width > 0)
+        // Clears the lock + inline battery cluster at the leading end...
+        #expect(leadingCluster + gap <= deck.x)
+        // ...and leaves the top-trailing settings + media pair its reserved width at the other.
+        let trailingReserved =
+            MonitorLiveViewModuleLayout.constrainedTopCornerReservedWidth + gap
+        #expect(deck.x + deck.width + trailingReserved <= layout.feed.x + layout.feed.width)
+        // Symmetric insets, so the deck still reads as centred on the picture.
+        let deckCenter = deck.x + deck.width / 2
+        let feedCenter = layout.feed.x + layout.feed.width / 2
+        #expect(abs(deckCenter - feedCenter) < 0.001)
+    }
+}
+
 /// The lock clearance is a symmetric feed inset, so a classic-notch deck stays centered over the
 /// feed while clearing the lock — the property the old compact-classic-notch special case had.
 @Test func classicNotchLandscapeInfoDeckClearsLockAndStaysCentered() {

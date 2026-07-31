@@ -411,6 +411,17 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             + 2 * bottomModuleSpacing
     }
 
+    /// Trailing chrome width reserved on width-constrained (4:3 iPad) landscape layouts for the
+    /// top-corner settings + media pair.
+    ///
+    /// The counterpart to `constrainedBottomCornerReservedWidth`, and it was the missing half:
+    /// with no side lanes, that pair sits inside the top deck's own band rather than beside it, so
+    /// a deck sized to the full feed width runs straight under it. On an iPad that clipped the FPS
+    /// readout behind the media button and pushed the whole deck off the feed's centre line.
+    public static var constrainedTopCornerReservedWidth: Double {
+        2 * MonitorSideRailControlLayout.auxiliaryButtonSize + 2 * bottomModuleSpacing
+    }
+
     /// Feed frame. This is the only module affected by feed safe-area cutout avoidance.
     public let feed: MonitorFeedFrame
 
@@ -575,10 +586,21 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             batteryRail.x + batteryRail.width
         )
         let minimumDeckInset = leadingChromeRight + topInfoDeckControlGap - feed.x
-        let deckInset =
-            constrained
-            ? topInfoDeckSideInset
-            : max(topInfoDeckSideInset, minimumDeckInset)
+        let deckInset: Double
+        if constrained {
+            // No side lanes exist here, so BOTH ends of the deck's band are occupied: lock plus
+            // the inline battery cluster lead, settings plus media trail. This used to take the
+            // bare side inset and run under both — the batteries sat on the record-state pill and
+            // the media button clipped the FPS readout. Inset past whichever end reaches furthest
+            // in, symmetrically, which is also what keeps the deck centred on the feed rather than
+            // pushed off it. `deckFrameClearingRail` stays a no-op here on purpose: it clips one
+            // end, and clipping is what breaks the centring.
+            let trailingChromeInset =
+                topInfoDeckSideInset + constrainedTopCornerReservedWidth + topInfoDeckControlGap
+            deckInset = max(topInfoDeckSideInset, minimumDeckInset, trailingChromeInset)
+        } else {
+            deckInset = max(topInfoDeckSideInset, minimumDeckInset)
+        }
         let deckLeft = feed.x + deckInset
         let deckRight = feed.x + feed.width - deckInset
 

@@ -499,12 +499,18 @@ private enum PadMiniViewport {
         battery.x == slots.lock.x + slots.lock.width + MonitorBatteryRailLayout.inlineLeadingGap)
     #expect(battery.x + battery.width <= slots.media.x)
 
-    // The info bar narrows to the free band between the corner clusters, one gap clear of each,
-    // so the centered pill can never run under the battery icons or the settings/media row.
+    // The info bar clears both corner clusters, so the centered pill can never run under the
+    // battery icons or the settings/media row. The insets are SYMMETRIC rather than simply
+    // spanning the gap: the two clusters are different widths, and spanning left-to-right put the
+    // bar's centre off the picture's centre — visible on an iPad as a status bar sitting
+    // noticeably right of middle. The wider cluster therefore sets both insets, which leaves the
+    // narrower end with more clearance than it strictly needs.
     let infoBar = map.infoBar.frame
-    #expect(infoBar.x == battery.x + battery.width + gap)
-    #expect(infoBar.x + infoBar.width == slots.media.x - gap)
+    #expect(infoBar.x >= battery.x + battery.width + gap)
+    #expect(infoBar.x + infoBar.width <= slots.media.x - gap)
     #expect(infoBar.midY == slots.lock.midY)
+    // The property the symmetry exists for: the bar reads as centred on the picture.
+    #expect(abs(infoBar.midX - (map.feed.x + map.feed.width / 2)) < 0.0001)
 
     // Shortened bottom bars end clear of the DISP + record corner cluster.
     let capture = try #require(map.captureStrip?.frame)
