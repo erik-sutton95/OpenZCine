@@ -10,6 +10,9 @@ public enum VideoSourceKind: String, CaseIterable, Codable, Equatable, Identifia
     case cameraLiveView
     /// An HDMI signal digitised by an attached USB Video Class capture device.
     case hdmiCapture
+    /// Another device's feed, relayed over the network. That device holds the camera; this one
+    /// watches. PTP-IP serves a single initiator, so this is the only way a second screen exists.
+    case relay
 
     public var id: String { rawValue }
 
@@ -17,6 +20,7 @@ public enum VideoSourceKind: String, CaseIterable, Codable, Equatable, Identifia
         switch self {
         case .cameraLiveView: "Camera"
         case .hdmiCapture: "HDMI"
+        case .relay: "Relay"
         }
     }
 
@@ -25,6 +29,7 @@ public enum VideoSourceKind: String, CaseIterable, Codable, Equatable, Identifia
         switch self {
         case .cameraLiveView: "Camera live view"
         case .hdmiCapture: "HDMI capture"
+        case .relay: "Relayed from another device"
         }
     }
 
@@ -46,14 +51,24 @@ public enum VideoSourceKind: String, CaseIterable, Codable, Equatable, Identifia
 /// is stated once rather than re-derived at each mount site. It answers what data *exists*; the
 /// operator's own chrome preferences still apply on top.
 public struct MonitorDataAvailability: Equatable, Sendable {
-    public init(source: VideoSourceKind, hasCameraControl: Bool) {
+    /// - Parameters:
+    ///   - receivesCameraMetadata: Whether the camera's readings are reaching this device at all.
+    ///     Deliberately separate from `hasCameraControl`, because a relay viewer has every reading
+    ///     — the host forwards them — and no ability to write. Collapsing the two would either
+    ///     blank a viewer's readouts or offer it controls the camera will never hear.
+    public init(
+        source: VideoSourceKind, hasCameraControl: Bool, receivesCameraMetadata: Bool
+    ) {
         self.source = source
         self.hasCameraControl = hasCameraControl
+        self.receivesCameraMetadata = receivesCameraMetadata
     }
 
     public let source: VideoSourceKind
     /// Whether a PTP session is live — the camera can be read and written.
     public let hasCameraControl: Bool
+    /// Whether the camera's readings are arriving, from our own session or a relay host's.
+    public let receivesCameraMetadata: Bool
 
     /// Exposure/focus tiles, their pickers, and the command-mode grid. Purely a control-link
     /// question: PTP properties keep arriving over Wi-Fi while the picture comes over HDMI.
@@ -67,21 +82,21 @@ public struct MonitorDataAvailability: Equatable, Sendable {
     public var mediaBrowser: Bool { hasCameraControl }
 
     /// The AF box overlay, and the body's focus confirmation behind it.
-    public var focusBoxes: Bool { hasCameraControl }
-    public var focusConfirmation: Bool { hasCameraControl }
+    public var focusBoxes: Bool { receivesCameraMetadata }
+    public var focusConfirmation: Bool { receivesCameraMetadata }
 
     /// The body's own detections — faces, eyes, subject tracking.
-    public var subjectDetectionBoxes: Bool { hasCameraControl }
+    public var subjectDetectionBoxes: Bool { receivesCameraMetadata }
 
     /// The camera's own audio meter.
-    public var audioMeters: Bool { hasCameraControl }
+    public var audioMeters: Bool { receivesCameraMetadata }
 
     /// Timecode struck by the body.
-    public var cameraTimecode: Bool { hasCameraControl }
+    public var cameraTimecode: Bool { receivesCameraMetadata }
 
     /// Whether the *body* is reporting its level angles. The horizon overlay stays up either way,
     /// because it already falls back to the phone's own CoreMotion attitude.
-    public var cameraLevel: Bool { hasCameraControl }
+    public var cameraLevel: Bool { receivesCameraMetadata }
 
     /// Whether the operator can pick a picture source at all: only worth offering once a control
     /// session exists to switch back to.

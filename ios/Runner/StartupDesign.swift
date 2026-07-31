@@ -345,6 +345,7 @@ struct StartupSavedCamerasView: View {
                         )
                         .environment(model)
                     }
+                    nearbyBroadcasts
                 }
                 .padding(.top, 16)
                 .padding(.bottom, 4)
@@ -359,6 +360,58 @@ struct StartupSavedCamerasView: View {
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(cardBackground)
+    }
+
+    /// Devices already holding a camera and sharing what they see.
+    ///
+    /// Listed beside the cameras rather than behind a separate flow, because to the operator it is
+    /// the same question — which picture do I want on this screen. The camera itself serves one
+    /// device, so joining a broadcast is what a second screen does instead of connecting.
+    @ViewBuilder private var nearbyBroadcasts: some View {
+        if !model.discoveredRelayHosts.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("NEARBY BROADCASTS")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .tracking(1.4)
+                    .foregroundStyle(StartupColors.muted)
+                    .padding(.top, 6)
+                ForEach(model.discoveredRelayHosts) { host in
+                    Button {
+                        model.joinRelay(host)
+                    } label: {
+                        HStack(spacing: 11) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(StartupColors.accent)
+                                .frame(width: 34, height: 34)
+                                .background(
+                                    StartupColors.accent.opacity(0.12),
+                                    in: RoundedRectangle(cornerRadius: 9))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(host.name)
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .foregroundStyle(StartupColors.ink)
+                                Text("Watch this device's feed")
+                                    .font(.system(size: 11, weight: .regular, design: .rounded))
+                                    .foregroundStyle(StartupColors.muted)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            StartupColors.tile.opacity(0.4),
+                            in: RoundedRectangle(cornerRadius: 14)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
+                    }
+                    .buttonStyle(.zcTapTarget)
+                    .disabled(isBusy)
+                }
+            }
+        }
     }
 
     private var cardBackground: some View {

@@ -808,6 +808,14 @@ final class NativeAppModel {
     }
 
     #if DEBUG
+        /// Screenshot/verification affordance: pushes the demo still through the REAL broadcast
+        /// path — rate cap, encode, framing, socket — so a two-simulator run exercises the same
+        /// code a camera session would, rather than a parallel test-only route.
+        func demoBroadcastRelayFrame() {
+            guard let image = liveFrameImage else { return }
+            broadcastRelayFrame(image: image)
+        }
+
         /// Screenshot affordance: forces the no-control path even inside a demo session. The
         /// simulator exposes no UVC device, so a capture-only monitor cannot be reached for real
         /// there — but its chrome is exactly what needs checking. Compiled out of Release.
@@ -817,7 +825,286 @@ final class NativeAppModel {
     /// What the monitor may truthfully display, given the picture source and the control link.
     /// One definition, shared with Android's policy and with the tests.
     var monitorAvailability: MonitorDataAvailability {
-        MonitorDataAvailability(source: videoSource, hasCameraControl: hasCameraControl)
+        MonitorDataAvailability(
+            source: videoSource, hasCameraControl: hasCameraControl,
+            // A relay viewer has every reading the host forwards and no ability to write.
+            receivesCameraMetadata: hasCameraControl || videoSource == .relay)
+    }
+
+    // MARK: Relay
+
+    /// Serves this device's picture and readings to other devices. Non-nil only while sharing.
+    @ObservationIgnored private var relayHost: MonitorRelayHost?
+    /// Receives another device's feed. Non-nil only in a viewer session.
+    @ObservationIgnored private var relayClient: MonitorRelayClient?
+    @ObservationIgnored private var relayBrowser: MonitorRelayBrowser?
+    /// Wall-clock of the last relayed picture, for the send-rate cap.
+    @ObservationIgnored private var lastRelayFrameAt: CFAbsoluteTime = 0
+    /// Latest per-frame readings, so the HDMI path — where picture and header arrive on different
+    /// loops — can still send the two together.
+    @ObservationIgnored private var latestRelayFrameMetadata: MonitorRelayFrameMetadata?
+
+    var isRelayBroadcasting = false
+    var relayPeerCount = 0
+    var discoveredRelayHosts: [MonitorRelayDiscovery] = []
+    var relayClientState: MonitorRelayClient.State = .idle
+
+    /// Viewers are served at most this often. The camera's own stream can run faster than a
+    /// watcher needs, and every extra frame is bandwidth taken from the one being looked at.
+    private static let relayFrameInterval: CFAbsoluteTime = 1.0 / 30.0
+
+    /// Starts or stops serving this device's feed to others.
+    func setRelayBroadcasting(_ broadcasting: Bool) {
+        guard broadcasting != isRelayBroadcasting else { return }
+        if broadcasting {
+            let host = MonitorRelayHost()
+            host.onPeerCountChanged = { [weak self] count in self?.relayPeerCount = count }
+            host.onFailure = { [weak self] message in
+                self?.connectionMessage = message
+                self?.isRelayBroadcasting = false
+            }
+            host.start(
+                hostName: UIDevice.current.name,
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName)
+            relayHost = host
+            isRelayBroadcasting = true
+            broadcastRelayState()
+        } else {
+            relayHost?.stop()
+            relayHost = nil
+            relayPeerCount = 0
+            isRelayBroadcasting = false
+        }
+    }
+
+    /// Publishes the slow-moving readouts. Cheap, so it runs on any change rather than a cadence.
+    private func broadcastRelayState() {
+        guard let relayHost, isRelayBroadcasting else { return }
+        relayHost.broadcast(
+            state: MonitorRelayState(
+                recordState: cameraState.recordState,
+                resolutionFrameRate: cameraState.resolutionFrameRate,
+                codec: cameraState.codec,
+                media: cameraState.media,
+                liveFPS: liveFPS,
+                cameraBatteryPercent: cameraState.cameraBatteryPercent,
+                cameraName: cameraState.cameraName,
+                lens: cameraState.lens,
+                temperature: cameraState.temperature,
+                values: cameraState.values.map {
+                    MonitorRelayState.Value(label: $0.label, value: $0.value)
+                },
+                mediaStatus: cameraState.mediaStatus,
+                isRecording: isRecording))
+    }
+
+    /// Wire encoding for the focus result. Numeric on purpose — a new enum case must not shift
+    /// the meaning of a value already on the wire.
+    private static func relayFocusResultCode(_ result: PTPLiveViewFocusInfo.FocusResult) -> Int {
+        switch result {
+        case .focused: 2
+        case .notFocused: 1
+        case .unknown: 0
+        }
+    }
+
+    private static func relayFocusResult(fromCode code: Int) -> PTPLiveViewFocusInfo.FocusResult {
+        switch code {
+        case 2: .focused
+        case 1: .notFocused
+        default: .unknown
+        }
+    }
+
+    /// Records the readings that belong to the frame just received, so they travel with it.
+    private func captureRelayFrameMetadata(_ frame: PTPLiveViewFrame) {
+        guard isRelayBroadcasting else { return }
+        latestRelayFrameMetadata = MonitorRelayFrameMetadata(
+            timecode: frame.timecode,
+            isRecording: frame.isRecording,
+            focus: frame.focus.map { focus in
+                MonitorRelayFrameMetadata.Focus(
+                    coordinateWidth: focus.coordinateWidth,
+                    coordinateHeight: focus.coordinateHeight,
+                    focusResult: Self.relayFocusResultCode(focus.focusResult),
+                    subjectDetectionActive: focus.subjectDetectionActive,
+                    trackingAFActive: focus.trackingAFActive,
+                    selectedBoxIndex: focus.selectedBoxIndex,
+                    boxes: focus.boxes.map {
+                        MonitorRelayFrameMetadata.Box(
+                            centerX: $0.centerX, centerY: $0.centerY, width: $0.width,
+                            height: $0.height)
+                    })
+            },
+            levelRoll: frame.level.map { PTPLevelAngles.signedDegrees($0.roll) },
+            levelPitch: frame.level.map { PTPLevelAngles.signedDegrees($0.pitch) },
+            sound: frame.sound.map {
+                MonitorRelayFrameMetadata.Sound(
+                    peakLeft: $0.peakLeft, peakRight: $0.peakRight,
+                    currentLeft: $0.currentLeft, currentRight: $0.currentRight)
+            })
+    }
+
+    /// Serves one picture, rate-capped.
+    ///
+    /// `jpeg` is passed through exactly as the camera sent it wherever possible: re-encoding a
+    /// live-view frame to relay it would spend a generation of quality for nothing.
+    private func broadcastRelayFrame(jpeg: Data) {
+        guard let relayHost, isRelayBroadcasting, relayPeerCount > 0 else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastRelayFrameAt >= Self.relayFrameInterval else { return }
+        lastRelayFrameAt = now
+        relayHost.broadcast(
+            frameMetadata: latestRelayFrameMetadata
+                ?? MonitorRelayFrameMetadata(
+                    timecode: nil, isRecording: isRecording, focus: nil, levelRoll: nil,
+                    levelPitch: nil, sound: nil),
+            image: jpeg)
+    }
+
+    /// Serves a picture the app holds as a bitmap rather than as camera JPEG — the capture path.
+    ///
+    /// The rate cap is applied BEFORE encoding, not after: the encode is the expensive part, and
+    /// paying for frames that are then dropped is the whole cost with none of the benefit.
+    private func broadcastRelayFrame(image: UIImage) {
+        guard let relayHost, isRelayBroadcasting, relayPeerCount > 0 else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastRelayFrameAt >= Self.relayFrameInterval else { return }
+        lastRelayFrameAt = now
+        let metadata =
+            latestRelayFrameMetadata
+            ?? MonitorRelayFrameMetadata(
+                timecode: nil, isRecording: isRecording, focus: nil, levelRoll: nil,
+                levelPitch: nil, sound: nil)
+        let handoff = UVCFrameHandoff(image: image)
+        Task.detached(priority: .utility) {
+            guard let jpeg = handoff.image.jpegData(compressionQuality: 0.6) else { return }
+            await MainActor.run { relayHost.broadcast(frameMetadata: metadata, image: jpeg) }
+        }
+    }
+
+    // MARK: Relay viewer
+
+    func startRelayBrowsing() {
+        guard relayBrowser == nil else { return }
+        let browser = MonitorRelayBrowser()
+        browser.onResults = { [weak self] results in self?.discoveredRelayHosts = results }
+        browser.start()
+        relayBrowser = browser
+    }
+
+    func stopRelayBrowsing() {
+        relayBrowser?.stop()
+        relayBrowser = nil
+        discoveredRelayHosts = []
+    }
+
+    /// Joins a broadcasting device. The viewer has no camera session of its own — by design, since
+    /// the camera would refuse a second one anyway.
+    func joinRelay(_ discovery: MonitorRelayDiscovery) {
+        stopDiscoveryLoop()
+        disconnectCameraSession(resetConnection: false)
+        cameraState = .blank
+        resetCameraPropertyState()
+        resetLinkHealthMeasurements()
+        discoveredCameras = []
+        connectedIdentity = nil
+        liveFrameImage = nil
+        videoSource = .relay
+        isMonitorPresented = true
+        connection = .connected
+        connectionMessage = "Joining \(discovery.name)…"
+        if !displayOrder.contains(displayMode) { displayMode = displayOrder.first ?? .live }
+
+        let client = MonitorRelayClient()
+        client.onStateChanged = { [weak self] state in
+            guard let self else { return }
+            self.relayClientState = state
+            switch state {
+            case .connected(let hostName, let cameraName):
+                self.connectionMessage =
+                    cameraName.map { "Watching \(hostName) — \($0)." }
+                    ?? "Watching \(hostName)."
+            case .failed(let reason):
+                self.connectionMessage = reason
+            default:
+                break
+            }
+        }
+        client.onRelayState = { [weak self] state in self?.applyRelayState(state) }
+        client.onFrame = { [weak self] metadata, image in
+            self?.applyRelayFrame(metadata: metadata, image: image)
+        }
+        relayClient = client
+        client.connect(to: discovery.endpoint)
+    }
+
+    func leaveRelay() {
+        relayClient?.stop()
+        relayClient = nil
+        relayClientState = .idle
+        videoSource = .cameraLiveView
+        liveFrameImage = nil
+        isMonitorPresented = false
+        connection = .disconnected
+        applyStartupDestination()
+    }
+
+    private func applyRelayState(_ state: MonitorRelayState) {
+        cameraState = CameraDisplayState(
+            recordState: state.recordState,
+            timecode: liveTimecode,
+            resolutionFrameRate: state.resolutionFrameRate,
+            codec: state.codec,
+            media: state.media,
+            liveFPS: state.liveFPS,
+            cameraBatteryPercent: state.cameraBatteryPercent,
+            phoneBatteryPercent: currentPhoneBatteryPercent,
+            cameraName: state.cameraName,
+            lens: state.lens,
+            temperature: state.temperature,
+            values: state.values.map {
+                CameraValue(label: $0.label, value: $0.value, isSettable: false)
+            },
+            mediaStatus: state.mediaStatus)
+        if isRecording != state.isRecording { isRecording = state.isRecording }
+        liveFPS = state.liveFPS
+    }
+
+    private func applyRelayFrame(metadata: MonitorRelayFrameMetadata, image: Data) {
+        if let timecode = metadata.timecode { liveTimecode = timecode }
+        liveViewFocus = metadata.focus.map { focus in
+            PTPLiveViewFocusInfo(
+                coordinateWidth: focus.coordinateWidth,
+                coordinateHeight: focus.coordinateHeight,
+                focusResult: Self.relayFocusResult(fromCode: focus.focusResult),
+                subjectDetectionActive: focus.subjectDetectionActive,
+                trackingAFActive: focus.trackingAFActive,
+                selectedBoxIndex: focus.selectedBoxIndex,
+                boxes: focus.boxes.map {
+                    PTPLiveViewAFBox(
+                        centerX: $0.centerX, centerY: $0.centerY, width: $0.width,
+                        height: $0.height)
+                })
+        }
+        if let roll = metadata.levelRoll { cameraLevelRoll = roll }
+        if let pitch = metadata.levelPitch { cameraLevelPitch = pitch }
+        if let sound = metadata.sound {
+            liveAudioLevels = AudioMeterLevels(
+                cameraIndicator: PTPLiveViewSoundIndicator(
+                    peakLeft: sound.peakLeft, peakRight: sound.peakRight,
+                    currentLeft: sound.currentLeft, currentRight: sound.currentRight))
+        }
+        Task { [weak self] in
+            guard let self, let decoded = await self.frameDecoder.decode(image) else { return }
+            guard self.videoSource == .relay else { return }
+            guard let display = await self.displayReadyLiveFrame(from: decoded) else { return }
+            guard self.videoSource == .relay else { return }
+            if self.liveFrameImage !== display { self.liveFrameImage = display }
+            self.lastGoodFrameAt = Date()
+            // The viewer's assists meter the clean frame exactly as the host's do.
+            self.sampleScopesIfDue(clean: decoded) { [weak self] in self?.videoSource == .relay }
+        }
     }
 
     var cameraState = CameraDisplayState.preview
@@ -2470,6 +2757,13 @@ final class NativeAppModel {
     }
 
     func disconnect() {
+        // A viewer has no camera session to tear down — it has a socket to a device that does.
+        if videoSource == .relay {
+            leaveRelay()
+            startDiscoveryLoop(resetResults: false)
+            return
+        }
+        setRelayBroadcasting(false)
         disconnectCameraSession(resetConnection: true)
         startDiscoveryLoop(resetResults: false)
     }
@@ -2956,6 +3250,7 @@ final class NativeAppModel {
 
     private func startDiscoveryLoop(resetResults: Bool) {
         guard discoveryLoopTask == nil, !isConnected, !isDemoSession else { return }
+        startRelayBrowsing()
         if resetResults {
             discoveredCameras = []
             selectedDiscoveredCameraID = nil
@@ -2973,6 +3268,9 @@ final class NativeAppModel {
         discoveryLoopGeneration += 1
         discoveryLoopTask?.cancel()
         discoveryLoopTask = nil
+        // Broadcasts are listed beside cameras on the same screen, so they are found and forgotten
+        // on the same schedule.
+        stopRelayBrowsing()
     }
 
     private func runDiscoveryLoop(guid: Data, generation: Int) async {
@@ -4113,6 +4411,10 @@ final class NativeAppModel {
         videoSource = kind
         logConnection("picture source → \(kind.rawValue)")
         switch kind {
+        case .relay:
+            // Not reachable through the picker: joining a broadcast is a whole session change, so
+            // `joinRelay` owns that transition rather than this switch.
+            break
         case .hdmiCapture:
             startHDMICapture()
         case .cameraLiveView:
@@ -4215,6 +4517,7 @@ final class NativeAppModel {
             applying: display === image ? liveImageEffects : nil,
             timecode: liveTimecode,
             isRecording: isRecording)
+        broadcastRelayFrame(image: image)
         if !isMonitorPresented { isMonitorPresented = true }
         if isStreamRecovering { isStreamRecovering = false }
     }
@@ -4286,6 +4589,7 @@ final class NativeAppModel {
                     self.liveViewFocus = frame.focus
                     self.applyLiveViewHeaderState(frame)
                     self.applyLiveViewHeaderTimecode(frame.timecode)
+                    self.captureRelayFrameMetadata(frame)
                 }
                 await self.runLiveViewControlSafePoint(
                     session: session, frameCounter: frameCounter)
@@ -4878,6 +5182,10 @@ final class NativeAppModel {
                     measuredLiveViewFPS = frameRate.displayFPS
                     publishLiveFrameDisplay(image: image, focus: frame.focus)
                     applyLiveViewHeaderState(frame)
+                    // Pass the camera's own JPEG straight through — re-encoding it to relay it
+                    // would spend a generation of quality for nothing.
+                    captureRelayFrameMetadata(frame)
+                    broadcastRelayFrame(jpeg: frame.jpeg)
                     // The CPU path returns a distinct display-baked image. Metal returns the clean
                     // frame because its full-size bake stays GPU-side; give the relay the active
                     // effects in that case so it grades only its small, link-paced thumbnail.
@@ -6267,6 +6575,7 @@ final class NativeAppModel {
             next = next.updating(resolutionFrameRate: labeled)
         }
         cameraState = next
+        broadcastRelayState()
     }
 
     func cycleDisplayMode() {

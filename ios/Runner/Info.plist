@@ -50,6 +50,7 @@
 	<true/>
 	<key>NSBonjourServices</key>
 	<array>
+		<string>_openzcine-mon._tcp</string>
 		<string>_ptp._tcp</string>
 		<string>_http._tcp</string>
 		<!-- Self-published beacon used only by the startup Local Network permission probe. -->

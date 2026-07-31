@@ -48,6 +48,15 @@ public enum ByteCoding {
         (UInt16(bytes[offset]) << 8) | UInt16(bytes[offset + 1])
     }
 
+    public static func uint32BE(_ value: UInt32) -> [UInt8] {
+        [
+            UInt8((value >> 24) & 0x0000_00FF),
+            UInt8((value >> 16) & 0x0000_00FF),
+            UInt8((value >> 8) & 0x0000_00FF),
+            UInt8(value & 0x0000_00FF),
+        ]
+    }
+
     public static func readUInt32LE(_ bytes: [UInt8], at offset: Int) -> UInt32 {
         UInt32(bytes[offset])
             | (UInt32(bytes[offset + 1]) << 8)

@@ -136,6 +136,8 @@
 		TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000091 /* ConnectionLifecycleTests.swift */; };
 		USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBC00000000000000000001 /* PTPUSBContainer.swift */; };
 		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
+		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
+		RLYP00000000000000000002 /* MonitorRelayProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLYP00000000000000000001 /* MonitorRelayProtocol.swift */; };
 		UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = UVCV00000000000000000001 /* UVCVideoSource.swift */; };
 		VSRC00000000000000000002 /* VideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = VSRC00000000000000000001 /* VideoSource.swift */; };
 		WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */; };
@@ -328,6 +330,8 @@
 		TEST00000000000000000091 /* ConnectionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLifecycleTests.swift; sourceTree = "<group>"; };
 		USBC00000000000000000001 /* PTPUSBContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPUSBContainer.swift; path = ../Sources/OpenZCineCore/PTPUSBContainer.swift; sourceTree = SOURCE_ROOT; };
 		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
+		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
+		RLYP00000000000000000001 /* MonitorRelayProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorRelayProtocol.swift; path = ../Sources/OpenZCineCore/MonitorRelayProtocol.swift; sourceTree = SOURCE_ROOT; };
 		UVCV00000000000000000001 /* UVCVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UVCVideoSource.swift; sourceTree = "<group>"; };
 		VSRC00000000000000000001 /* VideoSource.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = VideoSource.swift; path = ../Sources/OpenZCineCore/VideoSource.swift; sourceTree = SOURCE_ROOT; };
 		WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WhiteBalanceKelvinPolicy.swift; path = ../Sources/OpenZCineCore/WhiteBalanceKelvinPolicy.swift; sourceTree = SOURCE_ROOT; };
@@ -411,6 +415,7 @@
 				PTPT00000000000000000001 /* PTPIPTransport.swift */,
 				USBT00000000000000000001 /* USBCameraTransport.swift */,
 				UVCV00000000000000000001 /* UVCVideoSource.swift */,
+				RLNK00000000000000000001 /* MonitorRelayLink.swift */,
 				C0DE00000000000000000025 /* LinkExperience.swift */,
 				C0DE00000000000000000027 /* StartupDesign.swift */,
 				C0DE00000000000000000051 /* ConnectionProgressSheet.swift */,
@@ -522,6 +527,7 @@
 				B0757000000000000000FE11 /* ConformPreview.swift */,
 				B0757000000000000000FE21 /* Magnification.swift */,
 				VSRC00000000000000000001 /* VideoSource.swift */,
+				RLYP00000000000000000001 /* MonitorRelayProtocol.swift */,
 				D329D509E000B93B59AE9A11 /* ScopeSampler.swift */,
 				D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */,
 				CF7929C792624D92E4643373 /* FocusAssist.swift */,
@@ -715,6 +721,7 @@
 				PTPT00000000000000000002 /* PTPIPTransport.swift in Sources */,
 				USBT00000000000000000002 /* USBCameraTransport.swift in Sources */,
 				UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */,
+				RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */,
 				CTRN00000000000000000002 /* CameraTransport.swift in Sources */,
 				USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */,
 				C0DE00000000000000000024 /* LinkExperience.swift in Sources */,
@@ -790,6 +797,7 @@
 				B0757000000000000000FE12 /* ConformPreview.swift in Sources */,
 				B0757000000000000000FE22 /* Magnification.swift in Sources */,
 				VSRC00000000000000000002 /* VideoSource.swift in Sources */,
+				RLYP00000000000000000002 /* MonitorRelayProtocol.swift in Sources */,
 				3B2081943B1D2A36C4DA228C /* ScopeSampler.swift in Sources */,
 				3B2081943B1D2A36C4DA228D /* AudioLevelMeter.swift in Sources */,
 				B61762BD19CC1640C62FBF9E /* FocusAssist.swift in Sources */,

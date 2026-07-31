@@ -4085,6 +4085,29 @@ struct OperatorSettingsPanel: View {
                 }
             }
             SettingsInlineRow(
+                title: "Share This Feed",
+                help:
+                    "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device, so it covers a set router, a phone hotspot, the camera's own access point and a cable link alike."
+            ) {
+                SettingsSegmented(
+                    options: ["Off", "On"],
+                    selected: model.isRelayBroadcasting ? "On" : "Off"
+                ) { value in
+                    model.setRelayBroadcasting(value == "On")
+                }
+            }
+            if model.isRelayBroadcasting {
+                SettingsInlineRow(
+                    title: "Watching",
+                    help:
+                        "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera."
+                ) {
+                    SettingsValueText(
+                        value: model.relayPeerCount == 1
+                            ? "1 device" : "\(model.relayPeerCount) devices")
+                }
+            }
+            SettingsInlineRow(
                 title: "Stream Preset",
                 help:
                     "Combines Nikon live-view stream size and compression grade into three operator-facing choices."

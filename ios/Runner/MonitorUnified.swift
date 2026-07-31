@@ -1897,7 +1897,9 @@ struct MonitorShell: View {
                     .opacity(model.interfaceLocked ? 0.4 : 1)
                     .frame(width: capture.frame.width, height: capture.frame.height)
                     .offset(x: capture.frame.x, y: capture.frame.y)
-            } else if let grid = map.controlsGrid, grid.frame.height > 0 {
+            } else if let grid = map.controlsGrid, grid.frame.height > 0,
+                model.chromeSectionMounts(.cameraValues)
+            {
                 // Command (DISP 3) reserves a hero-timecode band off the top of the tile region
                 // and shifts the tiles down by it; fit-mode live tiles carry no band. The timecode
                 // isn't lock-dimmed (live status, like the top bar); only the tiles dim.

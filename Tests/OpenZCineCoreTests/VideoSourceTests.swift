@@ -14,7 +14,10 @@ struct VideoSourceTests {
     func headerCarriage() {
         #expect(VideoSourceKind.cameraLiveView.carriesCameraFrameHeader)
         #expect(!VideoSourceKind.hdmiCapture.carriesCameraFrameHeader)
-        #expect(VideoSourceKind.allCases.count == 2)
+        // A relayed picture carries no header either — the host sends those readings separately,
+        // which is why metadata availability is tracked apart from the picture source.
+        #expect(!VideoSourceKind.relay.carriesCameraFrameHeader)
+        #expect(VideoSourceKind.allCases.count == 3)
     }
 
     /// The hybrid case, and the reason the feature exists: the picture moves to HDMI and the
@@ -22,7 +25,8 @@ struct VideoSourceTests {
     /// the frame header.
     @Test("HDMI keeps every control that PTP properties feed")
     func hybridKeepsControl() {
-        let hybrid = MonitorDataAvailability(source: .hdmiCapture, hasCameraControl: true)
+        let hybrid = MonitorDataAvailability(
+            source: .hdmiCapture, hasCameraControl: true, receivesCameraMetadata: true)
         #expect(hybrid.cameraControls)
         #expect(hybrid.recordControl)
         #expect(hybrid.mediaBrowser)
@@ -39,7 +43,8 @@ struct VideoSourceTests {
     @Test("A control session keeps every header-fed reading, on either picture source")
     func headerFollowsTheControlLinkNotThePicture() {
         for source in VideoSourceKind.allCases {
-            let available = MonitorDataAvailability(source: source, hasCameraControl: true)
+            let available = MonitorDataAvailability(
+                source: source, hasCameraControl: true, receivesCameraMetadata: true)
             #expect(available.focusBoxes)
             #expect(available.focusConfirmation)
             #expect(available.subjectDetectionBoxes)
@@ -53,7 +58,8 @@ struct VideoSourceTests {
     /// there is no PTP session to pull it from.
     @Test("With no session there is no header to pull, and nothing claims otherwise")
     func captureOnlyMonitorHasNoHeader() {
-        let monitorOnly = MonitorDataAvailability(source: .hdmiCapture, hasCameraControl: false)
+        let monitorOnly = MonitorDataAvailability(
+            source: .hdmiCapture, hasCameraControl: false, receivesCameraMetadata: false)
         #expect(!monitorOnly.focusBoxes)
         #expect(!monitorOnly.focusConfirmation)
         #expect(!monitorOnly.subjectDetectionBoxes)
@@ -66,7 +72,8 @@ struct VideoSourceTests {
     /// listening. Nothing here may be true, because there is no camera to make it true.
     @Test("A capture source with no session claims nothing about a camera")
     func monitorOnly() {
-        let monitorOnly = MonitorDataAvailability(source: .hdmiCapture, hasCameraControl: false)
+        let monitorOnly = MonitorDataAvailability(
+            source: .hdmiCapture, hasCameraControl: false, receivesCameraMetadata: false)
         #expect(!monitorOnly.cameraControls)
         #expect(!monitorOnly.recordControl)
         #expect(!monitorOnly.mediaBrowser)
@@ -83,7 +90,8 @@ struct VideoSourceTests {
     @Test("No control session means no control, on either source")
     func controlAlwaysFollowsTheSession() {
         for source in VideoSourceKind.allCases {
-            let availability = MonitorDataAvailability(source: source, hasCameraControl: false)
+            let availability = MonitorDataAvailability(
+                source: source, hasCameraControl: false, receivesCameraMetadata: false)
             #expect(!availability.cameraControls)
             #expect(!availability.recordControl)
             #expect(!availability.focusBoxes)
@@ -97,14 +105,16 @@ struct VideoSourceTests {
     /// the writes queue forever.
     @Test("A source that stands the frame loop down must pump control itself")
     func controlPumpIsRequiredOffTheCameraStream() {
-        let hybrid = MonitorDataAvailability(source: .hdmiCapture, hasCameraControl: true)
+        let hybrid = MonitorDataAvailability(
+            source: .hdmiCapture, hasCameraControl: true, receivesCameraMetadata: true)
         #expect(hybrid.cameraControls)
         #expect(!hybrid.runsCameraFrameLoop)
         #expect(hybrid.requiresControlPump)
 
         // On the camera's own stream the loop is the pump, so a second one would double every
         // write and poll.
-        let live = MonitorDataAvailability(source: .cameraLiveView, hasCameraControl: true)
+        let live = MonitorDataAvailability(
+            source: .cameraLiveView, hasCameraControl: true, receivesCameraMetadata: true)
         #expect(live.runsCameraFrameLoop)
         #expect(!live.requiresControlPump)
     }
@@ -114,7 +124,8 @@ struct VideoSourceTests {
     @Test("No control session means no frame loop and no pump")
     func noPumpWithoutASession() {
         for source in VideoSourceKind.allCases {
-            let availability = MonitorDataAvailability(source: source, hasCameraControl: false)
+            let availability = MonitorDataAvailability(
+                source: source, hasCameraControl: false, receivesCameraMetadata: false)
             #expect(!availability.runsCameraFrameLoop)
             #expect(!availability.requiresControlPump)
         }
@@ -123,6 +134,30 @@ struct VideoSourceTests {
     /// The blank state exists because `applyingCameraProperties` never falls back to a
     /// placeholder — it keeps whatever was already there. Starting from `preview` in a
     /// control-less session therefore renders a camera that isn't attached.
+    /// A relay viewer is the case that forced `receivesCameraMetadata` to exist separately: the
+    /// host forwards every reading it has, so the viewer's readouts, AF box, meters and horizon
+    /// are all real — while it holds no session and must never offer to write to the camera.
+    /// Collapsing the two would either blank a working monitor or offer it dead controls.
+    @Test("A relay viewer shows every reading and offers no control")
+    func relayViewer() {
+        let viewer = MonitorDataAvailability(
+            source: .relay, hasCameraControl: false, receivesCameraMetadata: true)
+        #expect(viewer.focusBoxes)
+        #expect(viewer.focusConfirmation)
+        #expect(viewer.subjectDetectionBoxes)
+        #expect(viewer.audioMeters)
+        #expect(viewer.cameraTimecode)
+        #expect(viewer.cameraLevel)
+
+        #expect(!viewer.cameraControls)
+        #expect(!viewer.recordControl)
+        #expect(!viewer.mediaBrowser)
+        #expect(!viewer.offersSourceSwitch)
+        // No session of its own, so nothing for a control pump to service.
+        #expect(!viewer.runsCameraFrameLoop)
+        #expect(!viewer.requiresControlPump)
+    }
+
     @Test("The blank display state states nothing it cannot know")
     func blankDisplayState() {
         let blank = CameraDisplayState.blank

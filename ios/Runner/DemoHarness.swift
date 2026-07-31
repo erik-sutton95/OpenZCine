@@ -296,6 +296,18 @@ enum DemoHarness {
                         model.captureStill()
                     }
                 }
+                if env["ZC_DEMO_RELAY_HOST"] == "1" {
+                    // Verification affordance: broadcast the demo still through the real relay
+                    // path so a second simulator can join and prove the whole chain. Demo-only, so
+                    // the ticker deliberately runs for the app's lifetime.
+                    model.setRelayBroadcasting(true)
+                    Task { @MainActor in
+                        while !Task.isCancelled {
+                            model.demoBroadcastRelayFrame()
+                            try? await Task.sleep(for: .milliseconds(33))
+                        }
+                    }
+                }
                 if let raw = env["ZC_DEMO_HDMI_SOURCE"] {
                     // Stages the HDMI picture source. The simulator has no UVC device to attach,
                     // so the mock feed stands in for the captured picture and only the resulting
@@ -655,6 +667,20 @@ enum DemoHarness {
                 // AUTOSTART this is applied earlier (before scope seeding) — see above; this branch
                 // covers the non-autostart launch path.
                 model.preferences.portraitFeedAspect = aspect
+            }
+            if env["ZC_DEMO_RELAY_JOIN"] == "1" {
+                // Verification affordance: browse for a broadcasting device and join the first one
+                // that appears, so the viewer half needs no taps to reach.
+                Task { @MainActor in
+                    model.startRelayBrowsing()
+                    for _ in 0..<120 {
+                        if let host = model.discoveredRelayHosts.first {
+                            model.joinRelay(host)
+                            return
+                        }
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                }
             }
             if let raw = env["ZC_DEMO_WIZARD_TRANSPORT"],
                 let method = NativeAppModel.FirstPairTransportMethod(rawValue: raw)
