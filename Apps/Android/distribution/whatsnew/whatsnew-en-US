@@ -2,4 +2,4 @@
 - Fixed: aperture, ISO and shutter changes on the camera reach the app promptly.
 - Fixed: HEIF photos missing from the media browser; a second body keeps its settings.
 - Fixed: cameras on 10.x networks are found now; they were silently skipped.
-- New: connecting is two choices - Wireless (camera AP, phone hotspot, shared Router) and Cable Link. Plus per-DISP display settings and a magnifier.
+- New: connect in two choices - Wireless (camera AP, hotspot, Router) or Cable Link, now with HDMI capture-cable monitoring. Plus per-DISP settings, magnifier.
