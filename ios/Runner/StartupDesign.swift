@@ -1254,6 +1254,12 @@ enum StartupWizardContent {
                 "Connect the USB‑C cable between the camera and your iPhone.",
                 "Leave the camera switched on — no network profile is needed.",
             ]
+        case .wiFiNetwork:
+            return [
+                "Join this device to the set's network in iOS Settings, if it isn't already.",
+                "On the camera: Network menu → Connect to computer → Network settings.",
+                "Create Profile → Search for Wi‑Fi network → join that same network.",
+            ]
         case .hdmiCapture:
             return [
                 "Connect the capture device to this iPad, and the camera's HDMI output to it.",
@@ -1332,6 +1338,29 @@ enum StartupWizardContent {
                         ]
                 ),
             ]
+        case .wiFiNetwork:
+            // The app joins nothing here — both devices are already on someone else's network —
+            // so this step is a check, not an action.
+            return [
+                StartupWizardDeviceSection(
+                    id: "router-camera",
+                    device: .camera,
+                    steps: [
+                        "Confirm the camera joined the network",
+                        "IP address → Obtain automatically",
+                    ]
+                ),
+                StartupWizardDeviceSection(
+                    id: "router-iphone",
+                    device: .iPhone,
+                    steps: tight
+                        ? ["Be on the same network, then find your camera"]
+                        : [
+                            "Check this device is on that same network",
+                            "Then tap Continue to find the camera",
+                        ]
+                ),
+            ]
         case .hdmiCapture:
             // Unreachable: `FirstPairWizardStep.sequence` omits the network step for HDMI, which
             // reaches the camera through a cable and has no network to set up.
@@ -1355,6 +1384,10 @@ enum StartupWizardContent {
             return tight
                 ? "Plug in the cable, allow camera access, then find your camera."
                 : "Connect the cable, confirm the camera's prompt, and allow camera access on this iPhone when asked."
+        case .wiFiNetwork:
+            return tight
+                ? "Put both on the same network, then find the camera."
+                : "Nothing to join from here — get the camera onto the same network this device is on, and it will appear in the next step."
         case .hdmiCapture:
             return ""  // Unreachable — HDMI has no network step.
         }
@@ -1805,8 +1838,8 @@ struct StartupFirstPairWizardView: View {
     private var transportCards: some View {
         // `cardCases`, not `allCases`: HDMI capture is a nested option inside the Cable Link card
         // rather than a fourth column — see `FirstPairTransportMethod.cardCases`.
-        let cards = ForEach(NativeAppModel.FirstPairTransportMethod.cardCases) { method in
-            StartupWizardTransportCard(method: method) { chosen in
+        let cards = ForEach(NativeAppModel.FirstPairCard.allCases) { card in
+            StartupWizardTransportCard(card: card) { chosen in
                 model.firstPairTransportMethod = chosen
                 AppDiagnostics.shared.record(chosen.diagnosticEvent)
                 model.advanceFirstPairWizard()
@@ -1927,46 +1960,31 @@ struct StartupCardBackground: View {
 /// One transport option in the first-run picker: name, stream-mode badge, tradeoff tagline, and a
 /// battery / stream / wireless readout. Neutral — no option is crowned as the recommended one.
 struct StartupWizardTransportCard: View {
-    let method: NativeAppModel.FirstPairTransportMethod
+    let card: NativeAppModel.FirstPairCard
     /// The chosen path — this card's own, or one of its nested options.
     let onSelect: (NativeAppModel.FirstPairTransportMethod) -> Void
 
     /// Whether the nested choice is open. Cards without nested options never set it.
     @State private var showsOptions = false
 
-    private var options: [NativeAppModel.FirstPairTransportMethod] { method.nestedOptions }
+    private var options: [NativeAppModel.FirstPairTransportMethod] { card.options }
 
     var body: some View {
-        // A leaf card is one big Button, as it has always been — the whole tile is the target.
-        // A card with nested options cannot be, because a Button may not contain Buttons, so it
-        // splits into a tappable header plus its option pills.
-        if options.isEmpty {
+        // A Button may NOT contain Buttons: SwiftUI hands the gesture to the outer one and the
+        // nested options never fire — they render perfectly and do nothing when tapped. So only
+        // the header is a button, and the options are its siblings on the same surface.
+        cardSurface {
             Button {
-                onSelect(method)
+                withAnimation(.spring(duration: 0.26)) { showsOptions.toggle() }
             } label: {
-                cardSurface {
-                    header
-                    tradeoffs.padding(.top, 10)
-                }
+                header
             }
             .buttonStyle(.zcTapTarget)
-        } else {
-            // A Button may NOT contain Buttons: SwiftUI hands the gesture to the outer one and the
-            // nested options never fire — they render perfectly and do nothing when tapped. So only
-            // the header is a button here, and the options are its siblings on the same surface.
-            cardSurface {
-                Button {
-                    withAnimation(.spring(duration: 0.26)) { showsOptions.toggle() }
-                } label: {
-                    header
-                }
-                .buttonStyle(.zcTapTarget)
 
-                if showsOptions {
-                    optionPills.padding(.top, 10)
-                } else {
-                    tradeoffs.padding(.top, 10)
-                }
+            if showsOptions {
+                optionPills.padding(.top, 10)
+            } else {
+                tradeoffs.padding(.top, 10)
             }
         }
     }
@@ -2003,7 +2021,7 @@ struct StartupWizardTransportCard: View {
                     in: RoundedRectangle(cornerRadius: 9)
                 )
                 .padding(.bottom, 10)
-            Text(method.cardTitle)
+            Text(card.title)
                 .font(.system(size: 15, weight: .bold, design: .rounded))
                 .foregroundStyle(StartupColors.ink)
                 .lineLimit(2)
@@ -2070,13 +2088,15 @@ struct StartupWizardTransportCard: View {
 
     private func optionCaption(_ option: NativeAppModel.FirstPairTransportMethod) -> String {
         switch option {
+        case .cameraAccessPoint: "Simplest, nothing to set up"
+        case .phoneHotspot: "Best wireless quality"
+        case .wiFiNetwork: "A set router or house Wi‑Fi"
+        case .usbC: "Full camera control"
         case .hdmiCapture:
             UVCVideoSource.isDocumentedHardware
                 ? "Picture only, full quality"
                 : (UVCVideoSource.isSupportedHardware
                     ? "Picture only — unsupported here" : "Needs an iPad")
-        default:
-            "Full camera control"
         }
     }
 
@@ -2100,40 +2120,33 @@ struct StartupWizardTransportCard: View {
     /// (the literal `personalhotspot` chain glyph reads as a hyperlink out of Settings context),
     /// and the same cable connector the discovery card uses for USB.
     private var iconName: String {
-        switch method {
-        case .cameraAccessPoint: "antenna.radiowaves.left.and.right"
-        case .phoneHotspot: "iphone.radiowaves.left.and.right"
-        case .usbC, .hdmiCapture: "cable.connector"
+        switch card {
+        case .wireless: "antenna.radiowaves.left.and.right"
+        case .cableLink: "cable.connector"
         }
     }
 
     /// One-word "why pick this" — the differentiator, not a stream-preset label.
     private var headline: String {
-        switch method {
-        case .cameraAccessPoint: "Simplest"
-        case .phoneHotspot: "Best wireless"
-        // Card-level, so the two cable paths share it: whichever end of the cable does the work,
-        // a wire is the steady one.
-        case .usbC, .hdmiCapture: "Most stable"
+        switch card {
+        case .wireless: "Most freedom"
+        case .cableLink: "Most stable"
         }
     }
 
     private var pros: [String] {
-        switch method {
-        case .cameraAccessPoint:
-            ["Lightest battery use", "No phone setup needed"]
-        case .phoneHotspot:
-            ["Best wireless quality", "Stable at high settings"]
-        case .usbC, .hdmiCapture:
+        switch card {
+        case .wireless:
+            ["Move freely around the set", "No cable to the camera"]
+        case .cableLink:
             ["Most stable, lowest latency", "No Wi‑Fi radio draining battery"]
         }
     }
 
     private var con: String {
-        switch method {
-        case .cameraAccessPoint: "Softer link, lower quality"
-        case .phoneHotspot: "Heavier battery drain"
-        case .usbC, .hdmiCapture: "Less freedom to move"
+        switch card {
+        case .wireless: "Heavier battery use"
+        case .cableLink: "Less freedom to move"
         }
     }
 }

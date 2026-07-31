@@ -402,26 +402,21 @@ final class NativeAppModel {
         /// The picture over an HDMI capture device on that same port. Video only: a capture device
         /// digitises a signal, it does not speak to the camera.
         case hdmiCapture
+        /// Both devices already on someone else's network — a set router, a travel router, house
+        /// Wi-Fi. The app joins nothing and hosts nothing here; it only watches discovery.
+        case wiFiNetwork
 
         var id: String { rawValue }
-
-        /// The three cards the choose step offers.
-        ///
-        /// `hdmiCapture` is deliberately not one of them: it is the same cable and the same port
-        /// as `usbC`, so the two share the Cable Link card as a nested choice. A fourth top-level
-        /// card would also not fit — the landscape row is a fixed `HStack` with no wrap, and the
-        /// intro column beside it is sized for exactly three.
-        static var cardCases: [FirstPairTransportMethod] {
-            [.cameraAccessPoint, .phoneHotspot, .usbC]
-        }
 
         /// Whether this path reaches the camera through the device's data port.
         var isCableLink: Bool { self == .usbC || self == .hdmiCapture }
 
-        /// The nested choices this card offers, empty when it is a leaf.
-        var nestedOptions: [FirstPairTransportMethod] {
-            self == .usbC ? [.usbC, .hdmiCapture] : []
-        }
+        /// Whether the app itself joins the camera's own access point on this path.
+        ///
+        /// The single discriminator for every camera-AP mechanism — the Wi-Fi join and the
+        /// credential scanner. Written as one question rather than a list of exclusions, because
+        /// the list is what went wrong before: each new path had to remember to opt out.
+        var joinsCameraAccessPoint: Bool { self == .cameraAccessPoint }
 
         var title: String {
             switch self {
@@ -429,18 +424,21 @@ final class NativeAppModel {
             case .phoneHotspot: "Phone's Hotspot"
             case .usbC: "USB-C"
             case .hdmiCapture: "HDMI capture"
+            case .wiFiNetwork: "Router"
             }
         }
 
-        /// Title of the *card* this path appears on — the two cable paths share one.
-        var cardTitle: String { isCableLink ? "Cable Link" : title }
+        /// Title of the card this path appears on.
+        var cardTitle: String { FirstPairCard.card(for: self).title }
 
         /// Short label for the nested option pills inside the Cable Link card.
         var optionTitle: String {
             switch self {
             case .usbC: DeviceUSBConnector.current == .lightning ? "Lightning" : "USB-C"
             case .hdmiCapture: "HDMI"
-            default: title
+            case .cameraAccessPoint: "Camera AP"
+            case .phoneHotspot: "Phone Hotspot"
+            case .wiFiNetwork: "Router"
             }
         }
 
@@ -451,6 +449,7 @@ final class NativeAppModel {
             case .phoneHotspot: .connectionPathPhoneHotspot
             case .usbC: .connectionPathUsb
             case .hdmiCapture: .connectionPathHDMICapture
+            case .wiFiNetwork: .connectionPathWiFiNetwork
             }
         }
 
@@ -466,6 +465,8 @@ final class NativeAppModel {
                     : "Plug the camera into this iPhone with a USB-C cable."
             case .hdmiCapture:
                 "Feed the camera's HDMI output into a USB capture device — full-quality picture, no camera control."
+            case .wiFiNetwork:
+                "Both devices already on the same network — a set router, or the house Wi-Fi."
             }
         }
 
@@ -475,7 +476,37 @@ final class NativeAppModel {
             case .phoneHotspot: "personalhotspot"
             case .usbC: "cable.connector"
             case .hdmiCapture: "display"
+            case .wiFiNetwork: "wifi.router"
             }
+        }
+    }
+
+    /// The choose step's cards. Both group several paths, so the operator picks a kind of
+    /// connection first and the specific one second — two questions that are much easier apart
+    /// than one flat list of five.
+    enum FirstPairCard: String, CaseIterable, Sendable, Identifiable {
+        case wireless
+        case cableLink
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .wireless: "Wireless"
+            case .cableLink: "Cable Link"
+            }
+        }
+
+        /// The paths this card offers, in the order shown.
+        var options: [FirstPairTransportMethod] {
+            switch self {
+            case .wireless: [.cameraAccessPoint, .phoneHotspot, .wiFiNetwork]
+            case .cableLink: [.usbC, .hdmiCapture]
+            }
+        }
+
+        static func card(for method: FirstPairTransportMethod) -> FirstPairCard {
+            method.isCableLink ? .cableLink : .wireless
         }
     }
 
@@ -1620,12 +1651,11 @@ final class NativeAppModel {
     /// True when the operator can manually trigger a camera Wi‑Fi join from the link screen.
     var showsManualJoinCameraWiFiAction: Bool {
         if discoveryTransportFilter == .usbC { return false }
-        // Neither cable path has a phone-side camera-Wi-Fi join to offer.
-        if shouldShowFirstPairWizard, firstPairTransportMethod.isCableLink { return false }
-        // The hotspot path has no phone-side camera-Wi-Fi join: the camera joins the iPhone's
-        // Personal Hotspot, so there is no camera SSID to scan or join — the scanner and join
-        // button are camera-AP mechanisms only and would dead-end the operator here.
-        if shouldShowFirstPairWizard, firstPairTransportMethod == .phoneHotspot { return false }
+        // The scanner and the join button are camera-AP mechanisms. Every other path — hotspot,
+        // router, either cable — has no camera SSID to scan or join and would dead-end here.
+        if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint {
+            return false
+        }
         return !CameraWiFiJoinPolicy.isOnCameraAccessPoint(
             localAddresses: NativeNetworkInterfaceSnapshot.localIPv4Addresses(),
             connectedSSID: connectedWiFiSSID
@@ -1804,7 +1834,7 @@ final class NativeAppModel {
         guard !isConnectionProgressPresented else { return false }
         guard !isMonitorPresented else { return false }
         guard discoveryTransportFilter != .usbC else { return false }
-        if shouldShowFirstPairWizard, firstPairTransportMethod.isCableLink {
+        if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint {
             return false
         }
         return true

@@ -69,10 +69,15 @@ public enum CameraDiscovery {
         return false
     }
 
-    /// Returns whether the address should be included in default subnet scans.
+    /// Returns whether the address should be included in subnet scans.
+    ///
+    /// Every private range counts, 10/8 included. It used to be excluded, which meant a camera on
+    /// a set router handing out 10.x addresses was never scanned for and simply never appeared —
+    /// no error, nothing to act on. The exclusion also bought little: a scan is always bounded to
+    /// the /24 the device is itself on, so 10/8 is no larger a sweep than 192.168/16 is. The
+    /// honest rule is to look on the network you are actually connected to.
     public static func isDefaultScanIPv4(_ address: String) -> Bool {
-        guard isPrivateIPv4(address), let octets = ipv4Octets(address) else { return false }
-        return octets[0] != 10
+        isPrivateIPv4(address)
     }
 
     /// Returns whether the interface should be used for subnet scanning.
@@ -158,7 +163,7 @@ public enum CameraDiscovery {
     /// of network cameras — a plugged-in camera is the most deliberate signal an operator can give.
     public static func dedupeAndSort(
         _ cameras: [DiscoveredCamera],
-        includeTenDotSubnets: Bool = false
+        includeTenDotSubnets: Bool = true
     ) -> [DiscoveredCamera] {
         var seen = Set<String>()
         var usbCameras: [DiscoveredCamera] = []

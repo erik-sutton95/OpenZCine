@@ -1,27 +1,27 @@
 New and changed
 
-- Display settings are rebuilt around the three DISP modes, with separate video and photo layouts. DISP 1 and DISP 2 have an "Edit view" that opens the monitor itself: tap the eye on any element to show or hide it.
-- DISP 2 offers the same elements with different defaults: picture, side rail, focus box and batteries, everything else off. The recording tally and camera warnings always stay.
-- The focus dial works in video as well as photo - off by default, in the FOCUS popup. Live view gains a magnifier: switch it on in the view-assist tools, pick 2x, 3x or 4x, and a key punches in on the focus point and back out.
-- One device can share what it sees. Turn on Share This Feed in Settings > Link; other devices list it under Nearby Broadcasts and watch, each with its own scopes, LUTs and peaking. The camera only ever talks to one device, so this is how a second screen works at all - and it needs no set network, devices find each other directly. On iPad, the picture can also come from the camera's HDMI output through a USB capture device - full quality, none of the live-view compression - while exposure, focus, record and media keep working over the camera link. Pick Cable Link when connecting, or switch source in Settings > Link. H.265 8-bit and 10-bit are separate choices: the codec popup shows one H.265 row with 8-bit and 10-bit either side. Stream Preset and Quality Bias both read Fast, Balanced, Quality - Quality Bias had two positions before. New installs start on Quality.
-- Playback gains a clean-view button that hides every control, with one small button in the corner to bring them back. High-frame-rate clips can be watched at their edit speed - pick a rate and it shows what you get, e.g. 60 to 24 fps at 40%. De-squeeze now works in photo mode too. The star rating no longer takes a permanent band of picture: tap the star handle to show the stars, tap again to hide.
-- Media filters match the tab you are on: Photos offers JPEG, HEIF and NEF, an L/M/S size row, and Today / 7 days / 30 days.
+- Display settings are rebuilt around the three DISP modes, with separate video and photo layouts. DISP 1 and DISP 2 have an "Edit view": tap the eye on any element to show or hide it.
+- DISP 2 offers the same elements with different defaults: picture, side rail, focus box and batteries, everything else off.
+- The focus dial works in video as well as photo - off by default, in the FOCUS popup. Live view gains a magnifier: switch it on in the view-assist tools, pick 2x, 3x or 4x, and a key punches in on the focus point.
+- Connecting is two choices instead of five: Wireless (camera access point, phone hotspot, or a Router you both join) and Cable Link. The router is new - get the camera onto that network and it appears, nothing to set up on the phone. Cameras on 10.x networks are found now; they were silently skipped. One device can also share what it sees. Turn on Share This Feed in Settings > Link; others list it under Nearby Broadcasts and watch, each with its own scopes and LUTs, and can ask to take camera control. Needs no network - devices find each other directly. On iPad the picture can also come from the camera's HDMI output through a USB capture device - full quality, none of the live-view compression - while exposure, focus, record and media keep working over the camera link. Pick Cable Link when connecting, or switch source in Settings > Link. H.265 8-bit and 10-bit are separate choices: the codec popup shows one H.265 row with 8-bit and 10-bit either side. Stream Preset and Quality Bias both read Fast, Balanced, Quality - Quality Bias had two positions before. New installs start on Quality.
+- Playback gains a clean-view button that hides every control. High-frame-rate clips can be watched at their edit speed - pick a rate and it shows what you get, e.g. 60 to 24 fps at 40%. De-squeeze works in photo mode too. The star rating no longer takes a permanent band of picture: tap the star handle to show it, tap again to hide.
+- Media filters match the tab: Photos offers JPEG, HEIF and NEF, an L/M/S size row, and date ranges.
 
 Fixes
 
-- Changes you make on the camera reach the app quickly again. Turning the aperture ring, ISO or shutter used to take up to twenty seconds to show - or in video, never.
+- Changes you make on the camera reach the app quickly again. The aperture ring, ISO or shutter used to take twenty seconds to show - or in video, never.
 - Photos shot as HEIF now appear in the media browser at all. The app did not recognise the file type Nikon writes, so they were silently missing.
 - Connecting a second camera no longer changes its settings. Moving between bodies could flip shutter angle back to shutter speed; connecting is now read-only.
 - Pickers show what your camera supports, in the order it uses. Bodies without U1-U3 are no longer offered them.
-- Unplugging the cable or power-cycling the camera used to wedge the app until you force-quit it. Both now recover on their own, or offer Retry connection.
+- Unplugging the cable or power-cycling the camera used to wedge the app. Both now recover on their own, or offer Retry connection.
 - The first connection attempt no longer needs cancelling and retrying.
 - Command view keeps the timecode running. It used to freeze at whatever the clock read when you switched.
 - The focus dial no longer stalls and takes tap-to-focus down with it, and the media filter popup fits on smaller phones.
 
 What to test
 
-- Turn on Share This Feed on a connected device, then open the app on a second one: it should appear under Nearby Broadcasts and play the same picture, with its own scopes and LUTs.
+- Turn on Share This Feed on a connected device, then open the app on a second one: it should appear under Nearby Broadcasts and play the same picture. Ask for control from it and grant that on the first.
 - Switch the magnifier on, set it to 3x, and punch in while pulling focus by hand. Check the picture goes back exactly where it was when you punch out. On iPad, plug in an HDMI capture device and try Cable Link > HDMI, then Settings > Link > Picture Source to switch source mid-session.
-- On the Photos tab, open Filter: you should see JPEG/HEIF/NEF and L/M/S, not MOV and 6K.
+- Try Wireless > Router: put camera and phone on the same network and confirm it appears.
 - Turn the aperture ring while watching IRIS, in video and in photo. It should track you as you turn, close to real time.
 - Connect one body, disconnect, then connect a differently configured one: nothing on the second camera should change. Then pull the cable mid-shot - it should hold the last frame.

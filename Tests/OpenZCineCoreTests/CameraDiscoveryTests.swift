@@ -7,7 +7,10 @@ import Testing
     #expect(CameraDiscovery.isPrivateIPv4("172.20.10.42"))
     #expect(CameraDiscovery.isPrivateIPv4("192.168.1.42"))
 
-    #expect(!CameraDiscovery.isDefaultScanIPv4("10.0.0.42"))
+    // 10/8 is scanned like any other private range: a set router handing out 10.x used to
+    // leave the camera undiscoverable with nothing to explain it.
+    #expect(CameraDiscovery.isDefaultScanIPv4("10.0.0.42"))
+    #expect(!CameraDiscovery.isDefaultScanIPv4("8.8.8.8"))
     #expect(CameraDiscovery.isDefaultScanIPv4("172.20.10.42"))
     #expect(CameraDiscovery.isDefaultScanIPv4("192.168.1.42"))
     #expect(!CameraDiscovery.isPrivateIPv4("169.254.1.2"))
@@ -55,7 +58,9 @@ import Testing
     #expect(CameraDiscovery.isSupportedScanInterface(name: "en1", address: "192.168.7.42"))
     #expect(CameraDiscovery.isSupportedScanInterface(name: "bridge100", address: "172.20.10.42"))
 
-    #expect(!CameraDiscovery.isSupportedScanInterface(name: "en0", address: "10.0.0.42"))
+    // A set router on 10/8 is a network the operator deliberately joined, so it is scanned.
+    #expect(CameraDiscovery.isSupportedScanInterface(name: "en0", address: "10.0.0.42"))
+    #expect(!CameraDiscovery.isSupportedScanInterface(name: "en0", address: "8.8.8.8"))
 }
 
 @Test func discoveryDedupeSortsAndFiltersBonjourResults() throws {

@@ -1,5 +1,5 @@
 - Fixed: a USB-C error or unplug could crash the app; the Wi-Fi scanner survives bad frames.
 - Fixed: aperture, ISO and shutter changes on the camera reach the app promptly.
 - Fixed: HEIF photos missing from the media browser; a second body keeps its settings.
-- New: per-DISP display settings, an Edit view that hides any monitor element, split layouts.
-- New: live-view magnifier (2x/3x/4x) at the focus point, clean-view playback, conform preview, photo de-squeeze, tap-to-show star rating.
+- Fixed: cameras on 10.x networks are found now; they were silently skipped.
+- New: connecting is two choices - Wireless (camera AP, phone hotspot, shared Router) and Cable Link. Plus per-DISP display settings and a magnifier.

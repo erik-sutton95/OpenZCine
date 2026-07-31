@@ -119,22 +119,53 @@ struct FirstPairWizardStepTests {
                 transport: transport, skipsPermissions: false) == .permissions)
     }
 
-    /// The wizard offers three cards; the two cable paths share the third one.
-    @Test("HDMI capture is a nested option, not a fourth card")
-    func cableLinkCardGrouping() {
+    /// The wizard offers two cards, each grouping several paths — the operator picks a kind of
+    /// connection first and the specific one second. Five flat choices is the version this
+    /// replaced.
+    @Test("Every path belongs to exactly one card")
+    func cardGrouping() {
+        #expect(NativeAppModel.FirstPairCard.allCases == [.wireless, .cableLink])
         #expect(
-            NativeAppModel.FirstPairTransportMethod.cardCases == [
-                .cameraAccessPoint, .phoneHotspot, .usbC,
+            NativeAppModel.FirstPairCard.wireless.options == [
+                .cameraAccessPoint, .phoneHotspot, .wiFiNetwork,
             ])
+        #expect(NativeAppModel.FirstPairCard.cableLink.options == [.usbC, .hdmiCapture])
+        // Every path is reachable, and from one card only.
+        let grouped = NativeAppModel.FirstPairCard.allCases.flatMap(\.options)
+        #expect(Set(grouped) == Set(NativeAppModel.FirstPairTransportMethod.allCases))
+        #expect(grouped.count == NativeAppModel.FirstPairTransportMethod.allCases.count)
+        for method in NativeAppModel.FirstPairTransportMethod.allCases {
+            #expect(NativeAppModel.FirstPairCard.card(for: method).options.contains(method))
+        }
+    }
+
+    /// The camera-AP mechanisms — the Wi-Fi join and the credential scanner — belong to exactly
+    /// one path. Every other path has no camera SSID to scan or join, and offering it one
+    /// dead-ends the operator. This is one question rather than a list of exclusions because the
+    /// list is what went wrong: each new path had to remember to opt out.
+    @Test("Only the camera access point joins the camera's own network")
+    func cameraAccessPointIsTheOnlyJoiner() {
+        for method in NativeAppModel.FirstPairTransportMethod.allCases {
+            #expect(method.joinsCameraAccessPoint == (method == .cameraAccessPoint))
+        }
+    }
+
+    /// The router path is the hotspot path's shape: the app joins and hosts nothing, so it walks
+    /// the same five steps and ends by finding a camera someone else's network is carrying.
+    @Test("The router path walks the same steps as the hotspot path")
+    func routerPathSteps() {
+        let steps = NativeAppModel.FirstPairWizardStep.sequence(
+            transport: .wiFiNetwork, skipsPermissions: false)
         #expect(
-            NativeAppModel.FirstPairTransportMethod.usbC.nestedOptions == [.usbC, .hdmiCapture])
-        #expect(NativeAppModel.FirstPairTransportMethod.cameraAccessPoint.nestedOptions.isEmpty)
-        #expect(NativeAppModel.FirstPairTransportMethod.phoneHotspot.nestedOptions.isEmpty)
-        #expect(NativeAppModel.FirstPairTransportMethod.usbC.cardTitle == "Cable Link")
-        #expect(NativeAppModel.FirstPairTransportMethod.hdmiCapture.cardTitle == "Cable Link")
-        #expect(NativeAppModel.FirstPairTransportMethod.hdmiCapture.isCableLink)
-        #expect(NativeAppModel.FirstPairTransportMethod.usbC.isCableLink)
-        #expect(!NativeAppModel.FirstPairTransportMethod.phoneHotspot.isCableLink)
+            steps == [
+                .permissions, .chooseTransport, .prepareCamera, .connectNetwork, .discoverAndPair,
+            ]
+        )
+        #expect(
+            NativeAppModel.FirstPairWizardStep.stepCount(
+                transport: .wiFiNetwork, skipsPermissions: false) == 5)
+        #expect(
+            NativeAppModel.FirstPairWizardStep.discoverAndPair.isFinalStep(for: .wiFiNetwork))
     }
 
     @MainActor

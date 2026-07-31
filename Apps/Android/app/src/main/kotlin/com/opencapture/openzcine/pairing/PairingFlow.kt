@@ -17,7 +17,45 @@ package com.opencapture.openzcine.pairing
 public enum class PairingPath {
     CAMERA_ACCESS_POINT,
     PHONE_HOTSPOT,
+
+    /**
+     * Both devices already on someone else's network — a set router, a travel router, house
+     * Wi-Fi. Shaped exactly like [PHONE_HOTSPOT]: the app joins nothing and hosts nothing, it
+     * only watches discovery. It is excluded from the camera-AP mechanisms for the same reason.
+     */
+    WIFI_NETWORK,
     USB_C,
+    ;
+
+    /**
+     * Whether the app itself joins the camera's own access point on this path.
+     *
+     * The single discriminator for every camera-AP mechanism. One question rather than a list of
+     * exclusions, because the list is what went wrong before: each new path had to remember to
+     * opt out, and the ones that forgot cost real bugs.
+     */
+    public val joinsCameraAccessPoint: Boolean
+        get() = this == CAMERA_ACCESS_POINT
+}
+
+/**
+ * The choose step's cards. Each groups several paths, so the operator picks a kind of connection
+ * first and the specific one second — two questions that are much easier apart than one flat list.
+ *
+ * Android's [CABLE_LINK] currently offers only USB-C: HDMI capture is iOS-only for now, because
+ * Camera2/CameraX enumerates a USB capture device on very few Android phones.
+ */
+public enum class PairingCard(public val options: List<PairingPath>) {
+    WIRELESS(
+        listOf(PairingPath.CAMERA_ACCESS_POINT, PairingPath.PHONE_HOTSPOT, PairingPath.WIFI_NETWORK)
+    ),
+    CABLE_LINK(listOf(PairingPath.USB_C)),
+    ;
+
+    public companion object {
+        public fun of(path: PairingPath): PairingCard =
+            if (path == PairingPath.USB_C) CABLE_LINK else WIRELESS
+    }
 }
 
 /**
@@ -63,7 +101,9 @@ public data class PairingFlowState(
             add(PairingStep.CHOOSE_PATH)
             add(PairingStep.PREPARE)
             add(PairingStep.NETWORK)
-            if (path == PairingPath.PHONE_HOTSPOT || path == PairingPath.USB_C) {
+            // Camera-AP pairing ends at NETWORK — joining the camera's Wi-Fi is the last
+            // operator action. Every other path finishes by finding the camera.
+            if (path != PairingPath.CAMERA_ACCESS_POINT) {
                 add(PairingStep.DISCOVER)
             }
         }

@@ -44,6 +44,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -291,6 +292,7 @@ internal fun diagnosticPhaseForPairingPath(path: PairingPath): String =
     when (path) {
         PairingPath.CAMERA_ACCESS_POINT -> "path.cameraAp"
         PairingPath.PHONE_HOTSPOT -> "path.phoneHotspot"
+        PairingPath.WIFI_NETWORK -> "path.wifiNetwork"
         PairingPath.USB_C -> "path.usb"
     }
 
@@ -364,10 +366,50 @@ internal object PairingCopy {
         }
 
     @StringRes
+    fun cardTitle(card: PairingCard): Int =
+        when (card) {
+            PairingCard.WIRELESS -> R.string.pairing_card_wireless
+            PairingCard.CABLE_LINK -> R.string.pairing_card_cable_link
+        }
+
+    @StringRes
+    fun cardBadge(card: PairingCard): Int =
+        when (card) {
+            PairingCard.WIRELESS -> R.string.pairing_badge_most_freedom
+            PairingCard.CABLE_LINK -> R.string.pairing_badge_most_stable
+        }
+
+    fun cardPros(card: PairingCard): List<Int> =
+        when (card) {
+            PairingCard.WIRELESS ->
+                listOf(R.string.pairing_pro_wireless_move, R.string.pairing_pro_wireless_no_cable)
+            PairingCard.CABLE_LINK ->
+                listOf(R.string.pairing_pro_usb_stable, R.string.pairing_pro_usb_no_radio)
+        }
+
+    @StringRes
+    fun cardCon(card: PairingCard): Int =
+        when (card) {
+            PairingCard.WIRELESS -> R.string.pairing_con_wireless_battery
+            PairingCard.CABLE_LINK -> R.string.pairing_con_usb_tethered
+        }
+
+    /** Short caption on a nested option pill — the real trade, now the card copy is generic. */
+    @StringRes
+    fun optionCaption(path: PairingPath): Int =
+        when (path) {
+            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_option_camera_ap
+            PairingPath.PHONE_HOTSPOT -> R.string.pairing_option_phone_hotspot
+            PairingPath.WIFI_NETWORK -> R.string.pairing_option_router
+            PairingPath.USB_C -> R.string.pairing_option_usb_c
+        }
+
+    @StringRes
     fun pathTitle(path: PairingPath): Int =
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_path_camera_ap
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_path_phone_hotspot
+            PairingPath.WIFI_NETWORK -> R.string.pairing_path_router
             PairingPath.USB_C -> R.string.pairing_path_usb_c
         }
 
@@ -376,6 +418,7 @@ internal object PairingCopy {
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_badge_simplest
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_badge_best_wireless
+            PairingPath.WIFI_NETWORK -> R.string.pairing_badge_shared_network
             PairingPath.USB_C -> R.string.pairing_badge_most_stable
         }
 
@@ -385,6 +428,8 @@ internal object PairingCopy {
                 listOf(R.string.pairing_pro_light_battery, R.string.pairing_pro_no_phone_setup)
             PairingPath.PHONE_HOTSPOT ->
                 listOf(R.string.pairing_pro_wireless_quality, R.string.pairing_pro_stable_high_settings)
+            PairingPath.WIFI_NETWORK ->
+                listOf(R.string.pairing_pro_router_range, R.string.pairing_pro_router_no_setup)
             PairingPath.USB_C ->
                 listOf(R.string.pairing_pro_usb_stable, R.string.pairing_pro_usb_no_radio)
         }
@@ -394,6 +439,7 @@ internal object PairingCopy {
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_con_softer_link
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_con_battery_drain
+            PairingPath.WIFI_NETWORK -> R.string.pairing_con_router_needed
             PairingPath.USB_C -> R.string.pairing_con_usb_tethered
         }
 
@@ -413,6 +459,12 @@ internal object PairingCopy {
                     R.string.pairing_prepare_hotspot_3,
                     R.string.pairing_prepare_hotspot_4,
                 )
+            PairingPath.WIFI_NETWORK ->
+                listOf(
+                    R.string.pairing_prepare_router_1,
+                    R.string.pairing_prepare_router_2,
+                    R.string.pairing_prepare_router_3,
+                )
             PairingPath.USB_C ->
                 listOf(
                     R.string.pairing_prepare_usb_1,
@@ -426,6 +478,7 @@ internal object PairingCopy {
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_network_ap
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_network_hotspot
+            PairingPath.WIFI_NETWORK -> R.string.pairing_network_router
             PairingPath.USB_C -> R.string.pairing_network_usb
         }
 
@@ -1755,13 +1808,14 @@ private fun ChoosePathBody(
     onChoose: (PairingPath) -> Unit,
     compact: Boolean,
 ) {
-    // iOS `transportCards`: portrait stacks the full cards inside the step
-    // body's scroll; landscape puts the same three cards side by side with
-    // wrapping copy — there is no condensed variant.
+    // iOS `transportCards`: portrait stacks the cards inside the step body's
+    // scroll; landscape puts them side by side with wrapping copy. Cards group
+    // several paths, so the operator picks a kind of connection first and the
+    // specific one second.
     if (compact) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            for (path in PairingPath.entries) {
-                PathChoiceCard(path, onChoose, Modifier.fillMaxWidth())
+            for (card in PairingCard.entries) {
+                PathChoiceCard(card, onChoose, Modifier.fillMaxWidth())
             }
         }
     } else {
@@ -1769,9 +1823,9 @@ private fun ChoosePathBody(
             Modifier.height(IntrinsicSize.Max),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            for (path in PairingPath.entries) {
+            for (card in PairingCard.entries) {
                 PathChoiceCard(
-                    path,
+                    card,
                     onChoose,
                     Modifier.weight(1f).fillMaxHeight(),
                     tight = true,
@@ -1788,15 +1842,20 @@ private fun ChoosePathBody(
  */
 @Composable
 private fun PathChoiceCard(
-    path: PairingPath,
+    card: PairingCard,
     onChoose: (PairingPath) -> Unit,
     modifier: Modifier,
     tight: Boolean = false,
 ) {
+    // A card with one option is a leaf — revealing a single choice would be a step for nothing.
+    val single = card.options.singleOrNull()
+    var showsOptions by rememberSaveable(card) { mutableStateOf(false) }
     Column(
         modifier
             .startupTile()
-            .clickable { onChoose(path) }
+            .clickable {
+                if (single != null) onChoose(single) else showsOptions = !showsOptions
+            }
             .padding(horizontal = 14.dp, vertical = if (tight) 8.dp else 14.dp)
     ) {
         Box(
@@ -1807,10 +1866,9 @@ private fun PathChoiceCard(
         ) {
             StartupGlyph(
                 kind =
-                    when (path) {
-                        PairingPath.CAMERA_ACCESS_POINT -> StartupGlyphKind.ANTENNA
-                        PairingPath.PHONE_HOTSPOT -> StartupGlyphKind.PHONE_WAVES
-                        PairingPath.USB_C -> StartupGlyphKind.CABLE
+                    when (card) {
+                        PairingCard.WIRELESS -> StartupGlyphKind.ANTENNA
+                        PairingCard.CABLE_LINK -> StartupGlyphKind.CABLE
                     },
                 tint = StartupColors.accent,
                 modifier = Modifier.size(if (tight) 15.dp else 19.dp),
@@ -1821,7 +1879,7 @@ private fun PathChoiceCard(
             // One auto-shrinking line in the landscape band (iOS shrinks via
             // minimumScaleFactor; a wrapped title is what overflows here).
             BasicText(
-                stringResource(PairingCopy.pathTitle(path)),
+                stringResource(PairingCopy.cardTitle(card)),
                 style =
                     TextStyle(
                         color = StartupColors.ink,
@@ -1832,7 +1890,7 @@ private fun PathChoiceCard(
             )
         } else {
             Text(
-                stringResource(PairingCopy.pathTitle(path)),
+                stringResource(PairingCopy.cardTitle(card)),
                 color = StartupColors.ink,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
@@ -1842,7 +1900,7 @@ private fun PathChoiceCard(
         }
         Spacer(Modifier.height(if (tight) 4.dp else 8.dp))
         Text(
-            stringResource(PairingCopy.pathBadge(path)),
+            stringResource(PairingCopy.cardBadge(card)),
             color = StartupColors.accent,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1852,16 +1910,42 @@ private fun PathChoiceCard(
                     .padding(horizontal = 9.dp, vertical = if (tight) 2.dp else 4.dp),
         )
         Spacer(Modifier.height(if (tight) 4.dp else 10.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(if (tight) 2.dp else 6.dp)) {
-            for (pro in PairingCopy.pathPros(path)) {
-                TradeoffRow("+", StartupColors.ready, stringResource(pro), tight = tight)
+        if (showsOptions && single == null) {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                for (option in card.options) {
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(StartupColors.accent.copy(alpha = 0.1f))
+                            .clickable { onChoose(option) }
+                            .padding(horizontal = 9.dp, vertical = 7.dp)
+                    ) {
+                        Text(
+                            stringResource(PairingCopy.pathTitle(option)),
+                            color = StartupColors.ink,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            stringResource(PairingCopy.optionCaption(option)),
+                            color = StartupColors.muted,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
             }
-            TradeoffRow(
-                "−",
-                StartupColors.dim,
-                stringResource(PairingCopy.pathCon(path)),
-                tight = tight,
-            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(if (tight) 2.dp else 6.dp)) {
+                for (pro in PairingCopy.cardPros(card)) {
+                    TradeoffRow("+", StartupColors.ready, stringResource(pro), tight = tight)
+                }
+                TradeoffRow(
+                    "−",
+                    StartupColors.dim,
+                    stringResource(PairingCopy.cardCon(card)),
+                    tight = tight,
+                )
+            }
         }
     }
 }
@@ -1981,6 +2065,20 @@ private fun NetworkBody(path: PairingPath) {
                     glyph = StartupGlyphKind.PHONE,
                     label = stringResource(R.string.pairing_on_phone),
                     steps = listOf(stringResource(R.string.pairing_network_usb_phone_1)),
+                )
+            }
+            PairingPath.WIFI_NETWORK -> {
+                // Nothing to join from here: both devices are already on someone else's network,
+                // so this step is a check rather than an action.
+                DeviceInstructionCard(
+                    glyph = StartupGlyphKind.APERTURE,
+                    label = stringResource(R.string.pairing_on_camera),
+                    steps = listOf(stringResource(R.string.pairing_network_router_camera_1)),
+                )
+                DeviceInstructionCard(
+                    glyph = StartupGlyphKind.PHONE,
+                    label = stringResource(R.string.pairing_on_phone),
+                    steps = listOf(stringResource(R.string.pairing_network_router_phone_1)),
                 )
             }
         }

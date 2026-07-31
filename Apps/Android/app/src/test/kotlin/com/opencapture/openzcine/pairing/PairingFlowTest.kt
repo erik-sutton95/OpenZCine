@@ -121,4 +121,44 @@ class PairingFlowTest {
             PairingFlowState(step = PairingStep.PERMISSIONS, skipsPermissions = true)
         }
     }
+
+    /**
+     * The router path is the hotspot path's shape: the app joins and hosts nothing, so it walks
+     * the same five steps and ends by finding a camera someone else's network is carrying.
+     */
+    @Test
+    fun `router path walks the same steps as the hotspot path`() {
+        var flow = PairingFlowState(path = PairingPath.WIFI_NETWORK)
+        assertEquals(5, flow.stepCount)
+        flow = flow.advance().advance().advance()
+        assertEquals(PairingStep.NETWORK, flow.step)
+        flow = flow.advance()
+        assertEquals(PairingStep.DISCOVER, flow.step)
+        assertTrue(flow.isFinalStep)
+    }
+
+    /**
+     * The camera-AP mechanisms — the Wi-Fi join and the credential scanner — belong to exactly one
+     * path. One question rather than a list of exclusions, because the list is what went wrong:
+     * each new path had to remember to opt out, and the ones that forgot cost real bugs.
+     */
+    @Test
+    fun `only the camera access point joins the camera's own network`() {
+        for (path in PairingPath.entries) {
+            assertEquals(path == PairingPath.CAMERA_ACCESS_POINT, path.joinsCameraAccessPoint)
+        }
+    }
+
+    /** Every path is reachable from exactly one card. */
+    @Test
+    fun `cards group every path exactly once`() {
+        val grouped = PairingCard.entries.flatMap { it.options }
+        assertEquals(PairingPath.entries.toSet(), grouped.toSet())
+        assertEquals(PairingPath.entries.size, grouped.size)
+        for (path in PairingPath.entries) {
+            assertTrue(PairingCard.of(path).options.contains(path))
+        }
+        // HDMI capture is iOS-only for now, so Android's cable card carries a single option.
+        assertEquals(listOf(PairingPath.USB_C), PairingCard.CABLE_LINK.options)
+    }
 }
