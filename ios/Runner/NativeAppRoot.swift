@@ -2252,6 +2252,10 @@ final class NativeAppModel {
         )
         firstPairWizardSkipsPermissions = skipPermissions
         firstPairWizardStep = skipPermissions ? .chooseTransport : .permissions
+        // A device that only ever watches never pairs, so the wizard is the ONLY screen it sees —
+        // and broadcasts must be findable from it, or a watcher is walled into a connection setup
+        // it has no camera for. Browsing is idempotent and joining tears it down.
+        startRelayBrowsing()
     }
 
     /// Skips informational wizard steps and opens camera discovery.

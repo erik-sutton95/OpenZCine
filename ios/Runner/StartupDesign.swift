@@ -1847,16 +1847,67 @@ struct StartupFirstPairWizardView: View {
             .frame(maxWidth: .infinity)
         }
         if style.useTransportSplitLayout {
-            HStack(alignment: .top, spacing: 12) { cards }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) { cards }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                wizardNearbyBroadcasts
+            }
         } else {
             // Scrolls: with the portrait intro header above the card, three stacked cards can
             // exceed the remaining height on phones — the last card must never clip dead.
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) { cards }
+                VStack(spacing: 12) {
+                    cards
+                    wizardNearbyBroadcasts
+                }
             }
             .fadeOverflowBottom()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    /// Broadcasting devices, reachable from inside the wizard.
+    ///
+    /// A watcher-only device never pairs a camera, so the wizard is the only screen it ever
+    /// sees — without this, the broadcast list on the saved-cameras home is unreachable for
+    /// exactly the person it exists for. Joining is a whole different session, so it is a row
+    /// here rather than a fourth card.
+    @ViewBuilder private var wizardNearbyBroadcasts: some View {
+        if !model.discoveredRelayHosts.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("OR WATCH ANOTHER DEVICE")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .tracking(1.4)
+                    .foregroundStyle(StartupColors.muted)
+                ForEach(model.discoveredRelayHosts) { host in
+                    Button {
+                        model.joinRelay(host)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(StartupColors.accent)
+                            Text(host.name)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(StartupColors.ink)
+                            Spacer(minLength: 0)
+                            Text("Watch")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(StartupColors.accent)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            StartupColors.tile.opacity(0.4),
+                            in: RoundedRectangle(cornerRadius: 12)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
+                    }
+                    .buttonStyle(.zcTapTarget)
+                }
+            }
         }
     }
 
@@ -1970,22 +2021,22 @@ struct StartupWizardTransportCard: View {
     private var options: [NativeAppModel.FirstPairTransportMethod] { card.options }
 
     var body: some View {
-        // A Button may NOT contain Buttons: SwiftUI hands the gesture to the outer one and the
-        // nested options never fire — they render perfectly and do nothing when tapped. So only
-        // the header is a button, and the options are its siblings on the same surface.
+        // The whole surface toggles the options; the option pills stay Buttons and win their own
+        // hits. This is deliberately a tap gesture rather than a Button: a Button may not contain
+        // Buttons (the pills would render and never fire), and the earlier header-only Button left
+        // everything below it dead — on an iPad the cards are tall, so most of the card did not
+        // respond at all.
         cardSurface {
-            Button {
-                withAnimation(.spring(duration: 0.26)) { showsOptions.toggle() }
-            } label: {
-                header
-            }
-            .buttonStyle(.zcTapTarget)
-
+            header
             if showsOptions {
                 optionPills.padding(.top, 10)
             } else {
                 tradeoffs.padding(.top, 10)
             }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(duration: 0.26)) { showsOptions.toggle() }
         }
     }
 
@@ -2038,7 +2089,6 @@ struct StartupWizardTransportCard: View {
                 .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
     }
 
     private var tradeoffs: some View {
