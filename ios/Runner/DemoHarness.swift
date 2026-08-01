@@ -725,6 +725,18 @@ enum DemoHarness {
                 // row, otherwise unreachable headless (it needs that tap).
                 model.showSavedCameras()
             }
+            if let raw = env["ZC_DEMO_HOTSPOT_CARD"] {
+                // Stages the hotspot-recovery strip on the camera list ("active" / "needed") —
+                // the real prompt derives from saved records plus live hotspot state, so
+                // neither state is reachable headless.
+                let camera = PTPIPSavedCameraRecord(
+                    host: "172.20.10.2", displayName: "ZR_6002199", transport: "Wi-Fi",
+                    lastSeenAt: nil)
+                model.demoRecoveryPromptOverride =
+                    raw == "needed"
+                    ? .enableIPhoneHotspot(camera) : .waitForIPhoneHotspotCamera(camera)
+                model.showSavedCameras()
+            }
             if let raw = env["ZC_DEMO_JOIN_POPUP"] {
                 // Demo/screenshot affordance: stage the scanned-credentials join popup over the
                 // startup screen — the scanner itself needs a physical camera screen to point at.

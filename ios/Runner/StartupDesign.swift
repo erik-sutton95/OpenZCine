@@ -323,7 +323,10 @@ struct StartupSavedCamerasView: View {
                 .foregroundStyle(StartupColors.ink)
                 .padding(.top, 6)
 
-            ScrollView {
+            // Indicators off: the system scroll bar draws INSIDE the padded content and ran
+            // straight over the card borders; the wizard's scroller already hides it and leans
+            // on fadeOverflowBottom to signal overflow.
+            ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     if let hotspotPrompt {
                         StartupHotspotRecoveryCard(
@@ -471,38 +474,31 @@ struct StartupHotspotRecoveryCard: View {
     let camera: PTPIPSavedCameraRecord
     let bridgeIsActive: Bool
 
+    // Row-scale on purpose: the camera's own row directly below already carries the
+    // "Waiting for hotspot" state, so this strip only says what that row cannot — the one
+    // thing to keep enabled (active) or the path to enable it (needed). The old three-pill
+    // status band restated both and tripled the height.
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: "personalhotspot")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(StartupColors.accent)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(StartupColors.ink)
-                    Text(camera.displayTitle)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(StartupColors.muted)
-                        .lineLimit(1)
-                }
+                Text(title)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(StartupColors.ink)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
             }
-
             Text(detail)
-                .font(.system(size: 12, weight: .regular, design: .rounded))
+                .font(.system(size: 11.5, weight: .regular, design: .rounded))
                 .foregroundStyle(StartupColors.muted)
-                .lineSpacing(4)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 8) {
-                ForEach(steps, id: \.self) { step in
-                    StartupStepPill(text: step)
-                }
-            }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             StartupColors.surface.opacity(0.74),
             in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
@@ -520,34 +516,11 @@ struct StartupHotspotRecoveryCard: View {
     private var detail: String {
         if bridgeIsActive {
             return
-                "Your iPhone hotspot is ready. Keep Connect to PC on in the camera menu — we'll connect as soon as the camera joins."
+                "Keep Connect to PC on — \(camera.displayTitle) connects the moment it joins."
         }
         return
-            "Open Settings → Personal Hotspot, turn on Allow Others to Join, then return here while the camera connects."
-    }
-
-    private var steps: [String] {
-        if bridgeIsActive {
-            return ["Hotspot on", "Connect to PC", "Waiting"]
-        }
-        return ["Settings", "Hotspot", "Allow others"]
-    }
-}
-
-struct StartupStepPill: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-            .foregroundStyle(StartupColors.ink)
-            .lineLimit(1)
-            .minimumScaleFactor(0.78)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(StartupColors.control.opacity(0.78), in: Capsule())
-            .overlay(Capsule().stroke(StartupColors.border.opacity(0.10), lineWidth: 1))
+            "Settings → Personal Hotspot → Allow Others to Join, then return here — "
+            + "\(camera.displayTitle) is waiting."
     }
 }
 

@@ -856,6 +856,11 @@ final class NativeAppModel {
         /// simulator exposes no UVC device, so a capture-only monitor cannot be reached for real
         /// there — but its chrome is exactly what needs checking. Compiled out of Release.
         var demoSuppressesCameraControl = false
+
+        /// Screenshot affordance: stages the startup hotspot-recovery strip (active/needed) —
+        /// the real prompt derives from saved records plus live hotspot state, so neither state
+        /// is reachable headless. Compiled out of Release.
+        var demoRecoveryPromptOverride: CameraStartupRecoveryPrompt?
     #endif
 
     /// What the monitor may truthfully display, given the picture source and the control link.
@@ -1777,7 +1782,10 @@ final class NativeAppModel {
     }
 
     var startupRecoveryPrompt: CameraStartupRecoveryPrompt {
-        CameraStartupPolicy.recoveryPrompt(
+        #if DEBUG
+            if let demoRecoveryPromptOverride { return demoRecoveryPromptOverride }
+        #endif
+        return CameraStartupPolicy.recoveryPrompt(
             savedCameras: savedCameras,
             discoveredCameras: discoveredCameras,
             connectedHost: connectedIdentity?.host,
