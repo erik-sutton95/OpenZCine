@@ -11219,12 +11219,24 @@ extension NativeAppModel {
     /// stream first; `index.json` metadata (favorites, handles, Frame.io/export flags) is preserved.
     func clearMediaCache() {
         cancelClipStream()
+        // An in-flight enumeration would repopulate the freshly cleared index from its own
+        // older snapshot; the generation bump makes its late writes fall on the floor.
+        mediaFetchTask?.cancel()
+        mediaFetchGeneration += 1
+        mediaFetchCompletedTab = nil
         mediaDownloadProgress.removeAll()
 
-        let bucket =
-            mediaBrowserSource == .camera ? mediaBucketID : MediaClipStore.localBucketID
-        mediaClipStore.clearCache(cameraID: bucket)
+        let clearingCameraBucket = mediaBrowserSource == .camera
+        let bucket = clearingCameraBucket ? mediaBucketID : MediaClipStore.localBucketID
+        // A camera bucket's index is CACHE — the camera re-enumerates the truth. Preserving it
+        // is what kept a formatted card's ghosts alive through every clear (#296). The local
+        // library keeps its index: there is no camera to rebuild it from.
+        mediaClipStore.clearCache(cameraID: bucket, preservingIndex: !clearingCameraBucket)
         refreshMediaClips()
+        // Connected and looking at the camera → rebuild authoritatively right away.
+        if clearingCameraBucket, cameraSession != nil {
+            scheduleFetchClipsFromCamera()
+        }
     }
 
     func isClipDownloaded(_ clip: MediaClip) -> Bool {
@@ -11233,9 +11245,12 @@ extension NativeAppModel {
                 cameraID: clip.cameraID, filename: clip.filename)
         else { return false }
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        guard clip.sizeBytes > 0 else { return true }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let onDisk = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+        // Unknown expected size still requires a non-empty file: a zero-byte stub counted as
+        // "downloaded" was enough to keep a formatted card's record alive forever (#296's
+        // removal pass preserves rows with a local copy).
+        guard clip.sizeBytes > 0 else { return onDisk > 0 }
         return onDisk >= clip.sizeBytes
     }
 

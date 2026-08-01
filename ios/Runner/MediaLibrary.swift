@@ -584,12 +584,17 @@ struct MediaClipStore {
         removeEntry(cameraID: cameraID, filename: filename)
     }
 
-    /// Removes cached clip bytes (video files and thumbnails) for one bucket while preserving
-    /// `index.json` metadata so favorites, camera handles, and delivery flags survive for re-fetch.
+    /// Removes cached clip bytes (video files and thumbnails) for one bucket.
+    ///
+    /// `preservingIndex` keeps `index.json` (favorites, handles, delivery flags) for buckets
+    /// whose index IS the source of truth — the local library has no camera to re-enumerate.
+    /// CAMERA buckets must clear the index too (#296): preserved handles of a formatted card
+    /// are exactly the thumbnail-less, unopenable ghost rows that survived every cache clear —
+    /// the camera re-enumerates the truth on the next connected pass.
     ///
     /// - Returns: Bytes removed from disk (partial caches count at their written size).
     @discardableResult
-    func clearCache(cameraID: String) -> UInt64 {
+    func clearCache(cameraID: String, preservingIndex: Bool = true) -> UInt64 {
         let dir = directory(for: cameraID)
         let fm = FileManager.default
         var removedBytes: UInt64 = 0
@@ -609,8 +614,12 @@ struct MediaClipStore {
             try? fm.removeItem(at: url)
         }
 
+        if !preservingIndex {
+            try? fm.removeItem(at: indexURL(cameraID: cameraID))
+        }
+
         mediaLibraryLogger.info(
-            "cleared media cache for \(cameraID, privacy: .private(mask: .hash)) (\(removedBytes, privacy: .public) bytes removed)"
+            "cleared media cache for \(cameraID, privacy: .private(mask: .hash)) (\(removedBytes, privacy: .public) bytes removed, index \(preservingIndex ? "kept" : "cleared", privacy: .public))"
         )
         return removedBytes
     }

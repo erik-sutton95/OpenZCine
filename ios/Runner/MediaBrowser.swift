@@ -733,6 +733,9 @@ struct MediaBrowserView: View {
                     Spacer(minLength: 8)
 
                     HStack(alignment: .center, spacing: 8) {
+                        if model.mediaBrowserSource == .camera {
+                            refreshButton
+                        }
                         filterButton
                         sortButton
                     }
@@ -921,6 +924,30 @@ struct MediaBrowserView: View {
         ) {
             model.cycleMediaSortOrder()
         }
+    }
+
+    /// Authoritative re-enumeration on demand (#296): the camera's inventory is the truth, and
+    /// after a card format the operator wants a way to say "ask it again" without reconnecting.
+    /// The pass it schedules already reconciles removals and cannot duplicate (delta-keyed).
+    private var refreshButton: some View {
+        Button {
+            model.scheduleFetchClipsFromCamera()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("REFRESH")
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(LiveDesign.muted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
+            .opacity(model.mediaFetchInProgress ? 0.5 : 1)
+        }
+        .buttonStyle(.zcTapTarget)
+        .disabled(model.mediaFetchInProgress)
+        .accessibilityLabel("Refresh camera media")
     }
 
     private var filterButton: some View {
