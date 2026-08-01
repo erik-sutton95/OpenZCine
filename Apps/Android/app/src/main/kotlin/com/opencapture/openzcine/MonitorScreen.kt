@@ -3120,6 +3120,38 @@ internal fun MonitorScreen(
             onRetry = { sessionRecoveryRetryTicket += 1 },
             onBackToOperatorMenu = onBackToOperatorMenu,
         )
+        // Registered HERE, not inside the options popup: launching the document picker pauses
+        // the activity and the transient popup dismisses with it, so a launcher remembered in
+        // the popup composition is disposed exactly when its result arrives — every picked
+        // cube was silently dropped (#295). The monitor composition survives the round trip.
+        val lutImportLauncher =
+            androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+            ) { uri ->
+                val library = lutLibrary
+                if (uri != null && library != null) {
+                    recordScope.launch {
+                        when (val result = library.importFromDocument(uri)) {
+                            is com.opencapture.openzcine.lut.CustomLutImportResult.Imported -> {
+                                // iOS importCustomLUT: select + enable the LUT immediately —
+                                // the graded feed is the confirmation the operator sees.
+                                if (library.prepare(result.entry.selection)) {
+                                    assist.selectStoredLut(result.entry.selection)
+                                    if (!assist.isOn(AssistTool.LUT)) assist.toggle(AssistTool.LUT)
+                                }
+                                Toast.makeText(
+                                    appContext,
+                                    "${result.entry.displayName} imported.",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            is com.opencapture.openzcine.lut.CustomLutImportResult.Rejected ->
+                                Toast.makeText(appContext, result.message, Toast.LENGTH_SHORT)
+                                    .show()
+                        }
+                    }
+                }
+            }
         activeAssistOptions?.let { request ->
             val recenterPanel =
                 request.tool.monitorAnalysisPanelID()?.takeIf { analysisPanelLayout != null }?.let { id ->
@@ -3138,6 +3170,13 @@ internal fun MonitorScreen(
                     lutLibrary = lutLibrary,
                     onRecenterPanel = recenterPanel,
                     onOpenRedDownload = { redDownloadPresented = true },
+                    onRequestLutImport =
+                        lutLibrary?.let {
+                            {
+                                lutImportLauncher.launch(
+                                    arrayOf("*/*", "application/octet-stream"))
+                            }
+                        },
                     onDismiss = { activeAssistOptions = null },
                 )
             }

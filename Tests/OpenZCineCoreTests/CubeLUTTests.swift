@@ -119,3 +119,23 @@ private func zeroCubeText(size: Int) -> String {
     }
     return lines.joined(separator: "\n")
 }
+
+/// Most Windows LUT tools author CRLF cubes. After the "\n" split every line keeps a trailing
+/// "\r", and neither `Int("2\r")` nor `Float("0\r")` parses — so a perfectly valid file was
+/// rejected as having no LUT_3D_SIZE at all (#295). The parser must treat "\r" as line junk.
+@Test func parsesACRLFAuthoredCube() throws {
+    let text =
+        "# a comment\r\n"
+        + "TITLE \"demo\"\r\n"
+        + "LUT_3D_SIZE 2\r\n"
+        + "DOMAIN_MIN 0.0 0.0 0.0\r\n"
+        + "DOMAIN_MAX 1.0 1.0 1.0\r\n"
+        + "0 0 0\r\n1 0 0\r\n0 1 0\r\n1 1 0\r\n"
+        + "0 0 1\r\n1 0 1\r\n0 1 1\r\n1 1 1\r\n"
+
+    let lut = try CubeLUT.parse(text)
+
+    #expect(lut.size == 2)
+    #expect(lut.rgb.count == 2 * 2 * 2 * 3)
+    #expect(Array(lut.rgb.suffix(3)) == [1, 1, 1])
+}

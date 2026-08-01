@@ -60,8 +60,12 @@ extension CubeLUT {
         var size: Int?
         var values: [Float] = []
 
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+        // Split on `isNewline`, NOT on "\n": Swift strings treat "\r\n" as ONE grapheme, so a
+        // CRLF-authored cube (most Windows LUT tools) never matched a "\n" separator at all —
+        // the whole file read as a single comment line and was rejected as having no
+        // LUT_3D_SIZE (#295). `isNewline` covers LF, CRLF and bare-CR alike.
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty || line.hasPrefix("#") { continue }
 
             if line.hasPrefix("LUT_3D_SIZE") {

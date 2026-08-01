@@ -230,6 +230,7 @@ internal fun LiveAssistOptionsOverlay(
     lutLibrary: AndroidLutLibrary?,
     onRecenterPanel: (() -> Unit)? = null,
     onOpenRedDownload: () -> Unit = {},
+    onRequestLutImport: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val isOn: (AssistTool) -> Boolean = { candidate ->
@@ -268,6 +269,7 @@ internal fun LiveAssistOptionsOverlay(
         settings = settings,
         cameraInput = cameraInput,
         lutLibrary = lutLibrary,
+        onRequestLutImport = onRequestLutImport,
         onDismiss = onDismiss,
     )
 }
@@ -280,6 +282,7 @@ private fun AssistOptionsOverlay(
     settings: OperatorSettings,
     cameraInput: ExposureAssistCameraInput,
     lutLibrary: AndroidLutLibrary?,
+    onRequestLutImport: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -375,6 +378,7 @@ private fun AssistOptionsOverlay(
                     settings = settings,
                     cameraInput = cameraInput,
                     lutLibrary = lutLibrary,
+                    onRequestLutImport = onRequestLutImport,
                 )
             }
         }
@@ -388,9 +392,10 @@ private fun PlaybackAssistOptionsContent(
     settings: OperatorSettings,
     cameraInput: ExposureAssistCameraInput,
     lutLibrary: AndroidLutLibrary?,
+    onRequestLutImport: (() -> Unit)? = null,
 ) {
     when (tool) {
-        AssistTool.LUT -> LutOptions(actions, lutLibrary, settings)
+        AssistTool.LUT -> LutOptions(actions, lutLibrary, settings, onRequestLutImport)
         AssistTool.FALSE -> FalseColorOptions(actions, settings)
         AssistTool.PEAK -> PeakingOptions(settings)
         AssistTool.ZEBRA -> ZebraOptions(settings, cameraInput)
@@ -443,6 +448,7 @@ private fun LutOptions(
     actions: AssistOptionsActions,
     lutLibrary: AndroidLutLibrary?,
     settings: OperatorSettings,
+    onRequestLutImport: (() -> Unit)?,
 ) {
     val storedEntries = lutLibrary?.entries?.collectAsState()?.value.orEmpty()
     val scope = rememberCoroutineScope()
@@ -628,7 +634,7 @@ private fun LutOptions(
                     onDeleteRequest = { pendingDelete = it },
                 )
             }
-            LutImportButton(lutLibrary, scope, actions) { feedback = it }
+            LutImportButton(onRequestLutImport)
         }
     }
     // 50/50 Log-vs-LUT comparison. The orientation row only appears while it is on; the stored
@@ -721,35 +727,14 @@ private fun shortRedPresetName(fileName: String): String {
 /** iOS "Import .cube" capsule: opens the document picker straight from the popup. */
 @Composable
 private fun LutImportButton(
-    lutLibrary: AndroidLutLibrary?,
-    scope: kotlinx.coroutines.CoroutineScope,
-    actions: AssistOptionsActions,
-    onFeedback: (String) -> Unit,
+    onRequestImport: (() -> Unit)?,
 ) {
-    val launcher =
-        androidx.activity.compose.rememberLauncherForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-        ) { uri ->
-            val library = lutLibrary ?: return@rememberLauncherForActivityResult
-            if (uri != null) {
-                scope.launch {
-                    when (val result = library.importFromDocument(uri)) {
-                        is com.opencapture.openzcine.lut.CustomLutImportResult.Imported -> {
-                            // iOS importCustomLUT: select + enable LUT immediately.
-                            if (library.prepare(result.entry.selection)) {
-                                actions.selectStoredLut(result.entry.selection)
-                                actions.setVisible(AssistTool.LUT, true)
-                            }
-                            onFeedback("${result.entry.displayName} imported.")
-                        }
-                        is com.opencapture.openzcine.lut.CustomLutImportResult.Rejected ->
-                            onFeedback(result.message)
-                    }
-                }
-            }
-        }
-    CapsuleActionButton("Import .cube", enabled = lutLibrary != null) {
-        launcher.launch(arrayOf("*/*", "application/octet-stream"))
+    // The document picker pauses the activity and this transient popup dismisses with it — a
+    // result launcher remembered HERE is disposed exactly when its result arrives, which
+    // silently dropped every picked cube (#295). The monitor owns the launcher and the import;
+    // this button only asks for the picker.
+    CapsuleActionButton("Import .cube", enabled = onRequestImport != null) {
+        onRequestImport?.invoke()
     }
 }
 
