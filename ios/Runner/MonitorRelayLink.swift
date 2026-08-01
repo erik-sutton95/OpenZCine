@@ -29,13 +29,21 @@ final class MonitorRelayStreamReader {
 
 /// Shared connection parameters.
 ///
-/// `includePeerToPeer` is the whole reason one implementation covers every camera transport: with
-/// it, the same Bonjour service resolves over a shared network *and* over Apple's peer-to-peer
-/// radio. That is what lets viewers reach a host which is itself occupying its Wi-Fi association
-/// on the camera's own access point — the case that otherwise has no path at all.
-private func relayParameters() -> NWParameters {
+/// `includePeerToPeer` lets the same Bonjour service resolve over a shared network *and* over
+/// Apple's peer-to-peer radio — what lets viewers reach a host which is itself occupying its
+/// Wi-Fi association on the camera's own access point, the case with no infrastructure path at
+/// all. It is NOT free: an active AWDL advertisement time-slices the same radio the
+/// infrastructure stream rides (measured elsewhere at 30–100 ms locks about once a second), so
+/// the host only includes it when the camera actually occupies its Wi-Fi — see
+/// `MonitorRelayHost.start(hostName:cameraName:includePeerToPeer:)`.
+private func relayParameters(includePeerToPeer: Bool = true) -> NWParameters {
     let parameters = NWParameters.tcp
-    parameters.includePeerToPeer = true
+    parameters.includePeerToPeer = includePeerToPeer
+    // The relay is the picture someone is pulling focus against: interactive-video class puts
+    // our own transmit queue — the broadcaster's uplink, the hop that carries every viewer's
+    // flow — into the Wi-Fi video access category. Past the router it helps exactly where DSCP
+    // survives, which costs nothing to attempt.
+    parameters.serviceClass = .interactiveVideo
     // A monitor feed is a stream of small, latency-sensitive writes. Nagle would coalesce them
     // into fewer, later packets, which is exactly the wrong trade for a picture someone is
     // pulling focus against.
@@ -107,12 +115,17 @@ final class MonitorRelayHost {
     private var hostName = ""
     private var cameraName: String?
 
-    func start(hostName: String, cameraName: String?) {
+    /// `includePeerToPeer` should be true only when the camera occupies this device's Wi-Fi
+    /// (camera-AP session) — that is the case peer-to-peer exists for. Everywhere else the AWDL
+    /// advertisement would time-slice the very radio the camera stream and every viewer flow
+    /// ride, for a path no viewer needs.
+    func start(hostName: String, cameraName: String?, includePeerToPeer: Bool) {
         stop()
         self.hostName = hostName
         self.cameraName = cameraName
         do {
-            let listener = try NWListener(using: relayParameters())
+            let listener = try NWListener(
+                using: relayParameters(includePeerToPeer: includePeerToPeer))
             listener.service = NWListener.Service(
                 name: hostName, type: MonitorRelayProtocol.serviceType)
             listener.newConnectionHandler = { [weak self] connection in
@@ -450,15 +463,9 @@ final class MonitorRelayClient {
         // all along. Racing an infrastructure-only candidate against a peer-to-peer-enabled one
         // and adopting whichever is READY first makes the same-network case instant while keeping
         // the no-network case working; the loser is cancelled.
-        let infrastructureOnly = NWParameters.tcp
-        if let tcp = infrastructureOnly.defaultProtocolStack.transportProtocol
-            as? NWProtocolTCP.Options
-        {
-            tcp.noDelay = true
-        }
         let candidates = [
-            NWConnection(to: endpoint, using: infrastructureOnly),
-            NWConnection(to: endpoint, using: relayParameters()),
+            NWConnection(to: endpoint, using: relayParameters(includePeerToPeer: false)),
+            NWConnection(to: endpoint, using: relayParameters(includePeerToPeer: true)),
         ]
         racingConnections = candidates
         for candidate in candidates {

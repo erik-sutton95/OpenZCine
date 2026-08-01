@@ -883,6 +883,8 @@ final class NativeAppModel {
     @ObservationIgnored private var latestRelayFrameMetadata: MonitorRelayFrameMetadata?
     /// Hardware HEVC for the outgoing stream; created with broadcasting, torn down with it.
     @ObservationIgnored private var relayVideoEncoder: MonitorRelayVideoEncoder?
+    /// Steps the outgoing bitrate against viewer backpressure; reset with each broadcast.
+    @ObservationIgnored private var relayBitrateAdaptation = RelayBitrateAdaptation()
     /// Hardware HEVC for an incoming stream; created with a viewer session.
     @ObservationIgnored private var relayVideoDecoder: MonitorRelayVideoDecoder?
 
@@ -929,10 +931,16 @@ final class NativeAppModel {
             host.onCommand = { [weak self] command in self?.executeRelayCommand(command) }
             let encoder = MonitorRelayVideoEncoder()
             relayVideoEncoder = encoder
+            relayBitrateAdaptation = RelayBitrateAdaptation(now: CFAbsoluteTimeGetCurrent())
             host.onKeyframeNeeded = { encoder.requestKeyframe() }
             host.start(
                 hostName: UIDevice.current.name,
-                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName)
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
+                // Peer-to-peer advertising time-slices the radio the camera stream rides; it is
+                // only worth that cost when the camera occupies this device's Wi-Fi (AP session)
+                // — the one case where viewers have no infrastructure path. Unknown topology
+                // keeps it on: reachability beats smoothness when we cannot tell.
+                includePeerToPeer: cameraAccessPointEvidence ?? true)
             relayHost = host
             isRelayBroadcasting = true
             broadcastRelayState()
@@ -1047,13 +1055,21 @@ final class NativeAppModel {
     /// the encoder is unavailable: a heavier picture, never no picture.
     private func broadcastRelayFrame(image: UIImage) {
         guard let relayHost, isRelayBroadcasting, relayPeerCount > 0 else { return }
-        // Nobody can take a frame → skip the ENCODE, not just the send: the hardware block does
-        // no work for a frame no one receives, and with nothing encoded the encoder's reference
-        // chain stays where every viewer's is, so resuming needs no keyframe.
-        guard relayHost.hasPeerReadyForFrame else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastRelayFrameAt >= Self.relayFrameInterval else { return }
         lastRelayFrameAt = now
+        // Saturation — no viewer able to take this frame — is both the skip signal and the
+        // bitrate-adaptation signal: sustained saturation steps the encoder down so the stream
+        // fits the slowest link that is supposed to keep up; long clean running climbs back.
+        let saturated = !relayHost.hasPeerReadyForFrame
+        if let retargeted = relayBitrateAdaptation.recordTick(saturated: saturated, now: now) {
+            logConnection("relay bitrate → \(retargeted / 1_000_000) Mb/s")
+            relayVideoEncoder?.setAverageBitrate(retargeted)
+        }
+        // Nobody can take a frame → skip the ENCODE, not just the send: the hardware block does
+        // no work for a frame no one receives, and with nothing encoded the encoder's reference
+        // chain stays where every viewer's is, so resuming needs no keyframe.
+        guard !saturated else { return }
         let metadata =
             latestRelayFrameMetadata
             ?? MonitorRelayFrameMetadata(

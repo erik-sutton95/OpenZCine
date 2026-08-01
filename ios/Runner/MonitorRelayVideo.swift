@@ -35,16 +35,22 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         let parameterSets: [Data]?
     }
 
-    /// Chosen against the link this exists for: ~6 Mbit/s at live-view sizes is visually
-    /// transparent and roughly a quarter of the JPEG stream it replaces.
-    private static let averageBitsPerSecond = 6_000_000
+    /// Starting rate — ~6 Mbit/s at live-view sizes is visually transparent and roughly a
+    /// quarter of the JPEG stream it replaces. Adapted live against viewer backpressure
+    /// (`RelayBitrateAdaptation`); mid-session `AverageBitRate` updates are the same mechanism
+    /// production WebRTC uses on this encoder.
+    private static let initialBitsPerSecond = 6_000_000
+    /// A bitrate sag must degrade to dropped frames, never to mush an operator would misread
+    /// as a focus problem: QP is capped so the encoder refuses to smear past this.
+    private static let maxAllowedFrameQP = 45
     /// An upper bound on how long a resuming or joining peer waits for a decodable frame.
     private static let maxKeyframeInterval = 50
-    /// Minimum spacing between FORCED keyframes. A keyframe is several times the bytes of a
-    /// predicted frame; a permanently-slow viewer re-requesting one on every skip would turn the
-    /// whole stream keyframe-heavy and degrade every other viewer with it. A join or resume
-    /// waits at most this long — the request stays latched, never dropped.
-    private static let minSecondsBetweenForcedKeyframes: CFAbsoluteTime = 0.5
+    /// Minimum spacing between FORCED keyframes. A keyframe is 3–8× the bytes of a predicted
+    /// frame; a permanently-slow viewer re-requesting one on every skip would turn the whole
+    /// stream keyframe-heavy and degrade every other viewer with it. One second matches
+    /// deployed WebRTC-server practice for coalescing keyframe requests; a join or resume waits
+    /// at most this long — the request stays latched, never dropped.
+    private static let minSecondsBetweenForcedKeyframes: CFAbsoluteTime = 1.0
 
     private let queue = DispatchQueue(
         label: "com.opencapture.openzcine.relay-encode", qos: .userInitiated)
@@ -54,6 +60,31 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
     private var frameIndex: Int64 = 0
     private var forceKeyframe = true
     private var lastForcedKeyframeAt: CFAbsoluteTime = 0
+    /// Current target rate; survives session rebuilds (size changes) and adaptation steps.
+    private var targetBitsPerSecond = MonitorRelayVideoEncoder.initialBitsPerSecond
+
+    /// Retargets the stream's bitrate on the LIVE session — the adaptation path. When the
+    /// dynamic set is refused, the session is invalidated instead: the next frame rebuilds at
+    /// the stored target, which always works (a size change already proves that path).
+    func setAverageBitrate(_ bitsPerSecond: Int) {
+        queue.async {
+            self.targetBitsPerSecond = bitsPerSecond
+            guard let session = self.session else { return }
+            let rateStatus = VTSessionSetProperty(
+                session, key: kVTCompressionPropertyKey_AverageBitRate,
+                value: bitsPerSecond as CFNumber)
+            // Byte-per-second window beside the average: lets the rate controller absorb a
+            // keyframe without a multi-second overshoot at the new target.
+            VTSessionSetProperty(
+                session, key: kVTCompressionPropertyKey_DataRateLimits,
+                value: [Double(bitsPerSecond) / 8 * 1.5, 1.0] as CFArray)
+            if rateStatus != noErr {
+                videoLogger.info("relay bitrate retarget via rebuild (\(rateStatus))")
+                VTCompressionSessionInvalidate(session)
+                self.session = nil
+            }
+        }
+    }
     /// Encoded output captured by the in-flight frame's handler.
     private var captured: EncodedFrame?
 
@@ -165,9 +196,22 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         // one consumer that always takes latency as the loss.
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        // Speed over polish — the A-series encoder block has headroom to spare at this size, and
+        // a monitor frame late is worth less than a monitor frame plainer.
+        VTSessionSetProperty(
+            created, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+            value: kCFBooleanTrue)
+        // A bitrate sag degrades to dropped frames, never to mush an operator would misread as
+        // a focus problem.
+        VTSessionSetProperty(
+            created, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
+            value: Self.maxAllowedFrameQP as CFNumber)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_AverageBitRate,
-            value: Self.averageBitsPerSecond as CFNumber)
+            value: targetBitsPerSecond as CFNumber)
+        VTSessionSetProperty(
+            created, key: kVTCompressionPropertyKey_DataRateLimits,
+            value: [Double(targetBitsPerSecond) / 8 * 1.5, 1.0] as CFArray)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
             value: Self.maxKeyframeInterval as CFNumber)
