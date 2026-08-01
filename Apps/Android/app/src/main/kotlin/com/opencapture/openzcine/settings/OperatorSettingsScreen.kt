@@ -11,8 +11,6 @@ import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.annotation.StringRes
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -45,11 +43,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -120,7 +116,6 @@ import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.labelResource
 import com.opencapture.openzcine.FeedLut
-import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
@@ -131,13 +126,6 @@ import com.opencapture.openzcine.diagnostics.BugReportSubmitter
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
-import com.opencapture.openzcine.lut.AndroidLutLibrary
-import com.opencapture.openzcine.lut.CustomLutImportResult
-import com.opencapture.openzcine.lut.RedLutDownloadGate
-import com.opencapture.openzcine.lut.StoredLutCategory
-import com.opencapture.openzcine.lut.StoredLutEntry
-import com.opencapture.openzcine.lut.StoredLutFailure
-import com.opencapture.openzcine.lut.reconciledLutSelectionAfterDeletion
 import com.opencapture.openzcine.rememberAndroidThermalTier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -192,7 +180,6 @@ internal fun OperatorSettingsScreen(
     settings: OperatorSettings,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
-    lutLibrary: AndroidLutLibrary? = null,
     linkHealth: AndroidLinkHealthMonitor? = null,
     liveViewSource: SwiftCoreLiveFrameSource? = null,
     activeTransportLabel: String? = null,
@@ -309,7 +296,6 @@ internal fun OperatorSettingsScreen(
                         assistState,
                         mediaCacheStore,
                         frameioController,
-                        lutLibrary,
                         cameraInput,
                         linkHealth,
                         liveViewSource,
@@ -342,7 +328,6 @@ internal fun OperatorSettingsScreen(
                             assistState,
                             mediaCacheStore,
                             frameioController,
-                            lutLibrary,
                             cameraInput,
                             linkHealth,
                             liveViewSource,
@@ -581,7 +566,6 @@ private fun SettingsContentPane(
     assistState: AssistState,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController?,
-    lutLibrary: AndroidLutLibrary?,
     cameraInput: ExposureAssistCameraInput,
     linkHealth: AndroidLinkHealthMonitor?,
     liveViewSource: SwiftCoreLiveFrameSource?,
@@ -684,7 +668,6 @@ private fun SettingsContentPane(
                                 AssistRows(
                                     settings,
                                     assistState,
-                                    lutLibrary,
                                     cameraInput,
                                     onSettingToggle,
                                     onAssistToggle,
@@ -860,14 +843,11 @@ private fun LinkRows(
 private fun AssistRows(
     settings: OperatorSettings,
     assistState: AssistState,
-    lutLibrary: AndroidLutLibrary?,
     cameraInput: ExposureAssistCameraInput,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
 ) {
-    @Suppress("UNUSED_PARAMETER")
-    val unusedLutLibrary = lutLibrary
     @Suppress("UNUSED_PARAMETER")
     val unusedSettingToggle = onSettingToggle
     val imageEffectsAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
@@ -1472,249 +1452,6 @@ private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) 
         stacked = true,
     ) {
         onChange(guides.copy(middle = !guides.middle))
-    }
-}
-
-/**
- * Custom LUT manager. `OpenDocument` yields one operator-selected URI only; its bytes are validated
- * by Swift before the app-private copy is made and the URI never enters preferences or metadata.
- */
-@Composable
-private fun StoredLutLibraryRows(
-    library: AndroidLutLibrary,
-    assistState: AssistState,
-    onInteraction: () -> Unit,
-) {
-    val resources = LocalResources.current
-    val entries by library.entries.collectAsState()
-    val failures by library.failures.collectAsState()
-    val scope = rememberCoroutineScope()
-    var feedback by remember { mutableStateOf<String?>(null) }
-    var pendingDeletion by remember { mutableStateOf<StoredLutEntry?>(null) }
-    val importLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) {
-                scope.launch {
-                    when (val result = library.importFromDocument(uri)) {
-                        is CustomLutImportResult.Imported -> {
-                            assistState.selectStoredLut(result.entry.selection)
-                            if (!assistState.isOn(AssistTool.LUT)) assistState.toggle(AssistTool.LUT)
-                            feedback =
-                                resources.getString(R.string.lut_added, result.entry.displayName)
-                            onInteraction()
-                        }
-                        is CustomLutImportResult.Rejected -> feedback = result.message
-                    }
-                }
-            }
-        }
-    val customEntries = entries.filter { it.selection.category == StoredLutCategory.CUSTOM }
-    val redEntries = entries.filter { it.selection.category == StoredLutCategory.RED }
-
-    SettingsGroupCard(
-        title = stringResource(R.string.lut_custom_library),
-        caption = stringResource(R.string.lut_custom_caption),
-    ) {
-        if (customEntries.isEmpty()) {
-            Text(
-                stringResource(R.string.lut_custom_empty),
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.muted,
-            )
-        } else {
-            customEntries.forEachIndexed { index, entry ->
-                StoredLutEntryRow(
-                    entry = entry,
-                    selected = assistState.selectedLut == FeedLutSelection.Stored(entry.selection),
-                    failure = failures[entry.selection],
-                    showTopDivider = index != 0,
-                    onSelect = {
-                        scope.launch {
-                            if (library.prepare(entry.selection)) {
-                                assistState.selectStoredLut(entry.selection)
-                                if (!assistState.isOn(AssistTool.LUT)) assistState.toggle(AssistTool.LUT)
-                                feedback = resources.getString(R.string.lut_selected, entry.displayName)
-                                onInteraction()
-                            } else {
-                                feedback = failures[entry.selection]?.operatorMessage
-                                    ?: resources.getString(R.string.lut_prepare_failed)
-                            }
-                        }
-                    },
-                    onRemove = { pendingDeletion = entry },
-                )
-            }
-        }
-        SettingsInlineRow(
-            title = stringResource(R.string.lut_import),
-            showTopDivider = customEntries.isNotEmpty(),
-        ) {
-            SettingsLinkAction(stringResource(R.string.action_choose)) {
-                importLauncher.launch(arrayOf("*/*"))
-            }
-        }
-        feedback?.let { message ->
-            Text(
-                message,
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.accent,
-            )
-        }
-    }
-
-    if (redEntries.isNotEmpty()) {
-        SettingsGroupCard(
-            title = stringResource(R.string.lut_stored_red),
-            caption = stringResource(R.string.lut_stored_red_caption),
-        ) {
-            redEntries.forEachIndexed { index, entry ->
-                StoredLutEntryRow(
-                    entry = entry,
-                    selected = assistState.selectedLut == FeedLutSelection.Stored(entry.selection),
-                    failure = failures[entry.selection],
-                    showTopDivider = index != 0,
-                    onSelect = {
-                        scope.launch {
-                            if (library.prepare(entry.selection)) {
-                                assistState.selectStoredLut(entry.selection)
-                                if (!assistState.isOn(AssistTool.LUT)) assistState.toggle(AssistTool.LUT)
-                                onInteraction()
-                            }
-                        }
-                    },
-                    onRemove = { pendingDeletion = entry },
-                )
-            }
-        }
-    }
-
-    pendingDeletion?.let { entry ->
-        AlertDialog(
-            onDismissRequest = { pendingDeletion = null },
-            title = { Text(stringResource(R.string.lut_remove_title, entry.displayName)) },
-            text = {
-                Text(
-                    stringResource(R.string.lut_remove_message),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingDeletion = null
-                        scope.launch {
-                            if (library.delete(entry.selection)) {
-                                val selectionBeforeDeletion = assistState.selectedLut
-                                if (selectionBeforeDeletion == FeedLutSelection.Stored(entry.selection)) {
-                                    val replacement = library.firstPreparedReplacement(entry.selection)
-                                    when (
-                                        val reconciled =
-                                            reconciledLutSelectionAfterDeletion(
-                                                selectionBeforeDeletion,
-                                                entry.selection,
-                                                replacement,
-                                            )
-                                    ) {
-                                        is FeedLutSelection.BuiltIn -> assistState.selectLut(reconciled.value)
-                                        is FeedLutSelection.Stored -> assistState.selectStoredLut(reconciled.value)
-                                    }
-                                }
-                                feedback = resources.getString(R.string.lut_removed, entry.displayName)
-                                onInteraction()
-                            } else {
-                                feedback = resources.getString(R.string.lut_remove_failed)
-                            }
-                        }
-                    },
-                ) { Text(stringResource(R.string.action_remove)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeletion = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-}
-
-/** One accessible custom/RED selection row with a distinct destructive action. */
-@Composable
-private fun StoredLutEntryRow(
-    entry: StoredLutEntry,
-    selected: Boolean,
-    failure: StoredLutFailure?,
-    showTopDivider: Boolean,
-    onSelect: () -> Unit,
-    onRemove: () -> Unit,
-) {
-    SettingsInlineRow(title = entry.displayName, showTopDivider = showTopDivider) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AssistChoice(label = stringResource(R.string.action_use), selected = selected, onClick = onSelect)
-            SettingsLinkAction(stringResource(R.string.action_remove), onClick = onRemove)
-        }
-    }
-    failure?.let {
-        Text(
-            it.operatorMessage,
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.accent,
-        )
-    }
-}
-
-/** Fail-closed Android RED delivery status; no network request or fixture exists in this build. */
-@Composable
-private fun RedLutWorkflowRows() {
-    val context = LocalContext.current
-    val gate = remember(context) { RedLutDownloadGate(context.applicationContext) }
-    var readiness by remember { mutableStateOf(gate.readiness()) }
-    SettingsGroupCard(
-        title = stringResource(R.string.lut_red_ipp2),
-        caption = stringResource(R.string.lut_red_caption),
-    ) {
-        SettingsInlineRow(title = stringResource(R.string.lut_terms_acknowledgement), showTopDivider = false) {
-            SettingsValueText(stringResource(R.string.status_not_configured))
-        }
-        SettingsInlineRow(title = stringResource(R.string.lut_delivery)) {
-            SettingsValueText(
-                stringResource(
-                    if (readiness.canEnterWorkflow) R.string.status_ready else R.string.status_blocked,
-                ),
-            )
-        }
-        SettingsInlineRow(title = stringResource(R.string.lut_network_guard)) {
-            SettingsValueText(
-                when (readiness.network) {
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.AVAILABLE -> stringResource(R.string.network_internet_ready)
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT -> stringResource(R.string.network_camera_ap)
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.NO_INTERNET -> stringResource(R.string.status_offline)
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.SWIFT_CORE_UNAVAILABLE -> stringResource(R.string.status_core_unavailable)
-                },
-            )
-        }
-        SettingsInlineRow(title = stringResource(R.string.lut_refresh_status)) {
-            SettingsLinkAction(stringResource(R.string.action_refresh)) { readiness = gate.readiness() }
-        }
-        Text(
-            readiness.network.operatorMessage,
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
-        readiness.configurationMessage?.let { message ->
-            Text(
-                message,
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.accent,
-            )
-        }
-        Text(
-            "[VERIFY-ON-HW] Validate RED authorization, terms acknowledgement, authenticated download, " +
-                "camera-AP blocking, and import on a real Android device before enabling delivery.",
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
     }
 }
 

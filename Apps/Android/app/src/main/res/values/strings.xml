@@ -766,20 +766,9 @@
     <string name="zebra_unit_native">0–255</string>
 
     <!-- LUT library settings. -->
-    <string name="lut_added">%1$s added to the private library.</string>
-    <string name="lut_selected">%1$s selected.</string>
-    <string name="lut_prepare_failed">This LUT could not be prepared.</string>
-    <string name="lut_custom_library">Custom LUT Library</string>
-    <string name="lut_custom_caption">Choose one .cube document. Swift validates it before a bounded app-private copy; OpenZCine never keeps the document URI or scans storage.</string>
-    <string name="lut_custom_empty">No custom LUTs yet. Import a .cube to add a monitor look.</string>
-    <string name="lut_import">Import .cube</string>
     <string name="action_choose">Choose</string>
     <string name="lut_stored_red">Stored RED LUTs</string>
     <string name="lut_stored_red_caption">Only LUTs added by an authorized RED workflow appear here; none are bundled.</string>
-    <string name="lut_remove_title">Remove %1$s?</string>
-    <string name="lut_remove_message">Only OpenZCine\'s app-private copy will be removed. The document you selected from storage is untouched.</string>
-    <string name="lut_removed">%1$s removed.</string>
-    <string name="lut_remove_failed">OpenZCine could not remove that private LUT copy.</string>
     <string name="action_use">USE</string>
     <string name="lut_red_ipp2">RED IPP2 LUTs</string>
     <string name="lut_red_caption">RED assets are never bundled. Download remains unavailable until RED authorizes an Android endpoint and terms workflow.</string>
@@ -788,12 +777,6 @@
     <string name="lut_delivery">Delivery</string>
     <string name="status_blocked">Blocked</string>
     <string name="lut_network_guard">Network guard</string>
-    <string name="network_internet_ready">Internet ready</string>
-    <string name="network_camera_ap">Camera AP</string>
-    <string name="status_offline">Offline</string>
-    <string name="status_core_unavailable">Core unavailable</string>
-    <string name="lut_refresh_status">Refresh status</string>
-    <string name="action_refresh">Refresh</string>
     <string name="framing_family_film">Film</string>
     <string name="framing_family_social">Social</string>
     <string name="framing_ratio_276">2.76:1</string>

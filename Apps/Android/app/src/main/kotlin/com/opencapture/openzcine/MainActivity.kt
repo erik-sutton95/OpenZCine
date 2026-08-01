@@ -542,7 +542,6 @@ class MainActivity : ComponentActivity() {
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
-                                lutLibrary = lutLibrary,
                                 // iOS's startup Settings lands on Link; a debug
                                 // intent can still force a specific tab.
                                 initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.LINK,
@@ -748,7 +747,6 @@ class MainActivity : ComponentActivity() {
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
-                                        lutLibrary = lutLibrary,
                                         linkHealth = monitorLinkHealth,
                                         liveViewSource =
                                             (active as? SwiftCoreCameraSession)
