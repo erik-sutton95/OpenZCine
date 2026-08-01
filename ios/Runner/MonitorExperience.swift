@@ -49,6 +49,14 @@ struct MonitorExperience: View {
             .overlay {
                 InstantReviewOverlay()
             }
+            // A watcher asking to drive the camera prompts HERE, on the live view — the Share
+            // This Feed panel answers requests too, but a panel is closed almost always, and a
+            // request only visible there is one nobody sees until the viewer gives up.
+            .overlay(alignment: .top) {
+                RelayControlRequestOverlay()
+                    .animation(
+                        .easeOut(duration: 0.2), value: model.relayPendingControlRequest)
+            }
             // Haptics: tap on panel open/close, tick on DISP cycle / assist toggle, firm thump on
             // record start/stop. (Value wheels add their own per-detent feedback.)
             .sensoryFeedback(.selection, trigger: model.activePanel)
@@ -829,6 +837,63 @@ struct InstantReviewOverlay: View {
             width: size.width,
             height: size.height
         )
+    }
+}
+
+/// The broadcaster's control-request prompt, floated over the live view.
+///
+/// Kept to one line plus two answers: the operator is mid-shot, so the prompt must be
+/// answerable without reading a paragraph — and it must never cover the middle of the frame.
+private struct RelayControlRequestOverlay: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        if model.isRelayBroadcasting, let requester = model.relayPendingControlRequest {
+            HStack(spacing: 12) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(LiveDesign.accent)
+                Text("\(requester) asks to control the camera")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LiveDesign.text)
+                    .lineLimit(1)
+                Button {
+                    model.declineRelayControl()
+                } label: {
+                    Text("Decline")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(LiveDesign.muted)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().stroke(LiveDesign.hairlineStrong, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    model.grantRelayControl()
+                } label: {
+                    Text("Grant")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(LiveDesign.background)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(LiveDesign.accent))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(LiveDesign.glassOpaque)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(LiveDesign.hairline, lineWidth: 1)
+            )
+            // Below the top-bar chip row in both orientations; never near frame centre.
+            .padding(.top, 64)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
     }
 }
 
