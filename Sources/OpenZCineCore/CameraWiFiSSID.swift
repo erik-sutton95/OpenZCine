@@ -217,17 +217,26 @@ public enum CameraWiFiJoinPolicy {
             )
         else { return nil }
 
+        // Once ANY record proves this operator runs off the access-point path, only records with
+        // POSITIVE AP evidence may still volunteer a proactive join. A legacy no-evidence record
+        // is often the same physical body saved back in its AP days — resolving its stored SSID
+        // is exactly the "join NIKON_…" prompt the router operator keeps dismissing. AP use
+        // re-earns `true` evidence on the next AP connect, so this self-corrects.
+        let provenOffAccessPoint = savedCameras.contains {
+            $0.pairedViaCameraAccessPoint == false
+        }
         for camera in savedCameras
         where !camera.isUSBTransport && camera.pairedViaCameraAccessPoint != false {
+            if provenOffAccessPoint, camera.pairedViaCameraAccessPoint != true { continue }
             if let ssid = CameraWiFiSSID.resolve(for: camera) {
                 return .specificSSID(ssid)
             }
         }
 
-        // An operator whose every saved camera is known to live OFF the access-point path gets
-        // no brand-prefix prompt either — for them it is pure noise. Only a camera-less install
+        // An operator whose saved cameras are known to live OFF the access-point path gets no
+        // brand-prefix prompt either — for them it is pure noise. Only a camera-less install
         // keeps the broad match (first-pair discovery).
-        if savedCameras.contains(where: { $0.pairedViaCameraAccessPoint == false }) {
+        if provenOffAccessPoint {
             return nil
         }
         return .ssidPrefix(CameraWiFiSSID.nikonAccessPointBrandPrefix)

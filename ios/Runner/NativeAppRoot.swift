@@ -1998,6 +1998,11 @@ final class NativeAppModel {
         guard !isEstablishingConnection else { return false }
         guard !isConnectionProgressPresented else { return false }
         guard !isMonitorPresented else { return false }
+        // The post-confirm gap: pairing succeeded on the body and the camera is rebooting its
+        // network before the reconnect finds it again. A proactive AP join firing here offered
+        // "join NIKON_…" seconds after a ROUTER pairing confirm (from set) — the reconnect
+        // machinery owns this window, not the launch-join path.
+        guard pendingPairingSaveCandidate == nil else { return false }
         guard discoveryTransportFilter != .usbC else { return false }
         if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint {
             return false

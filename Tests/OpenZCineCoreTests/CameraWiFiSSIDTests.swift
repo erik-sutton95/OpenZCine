@@ -410,3 +410,29 @@ import Testing
     #expect(records.count == 1)
     #expect(records.first?.pairedViaCameraAccessPoint == false)
 }
+
+/// The field shape behind the persistent "join NIKON_…" prompt on the router path: the SAME
+/// physical body often exists twice — the router record with `false` evidence beside a legacy
+/// record from its AP days with none. Once anything proves off-AP use, a no-evidence record may
+/// not volunteer its stored SSID; only positive AP evidence still may.
+@Test func proactiveJoinTargetIgnoresLegacyRecordsOnceOffAPUseIsProven() {
+    let routerCamera = PTPIPSavedCameraRecord(
+        host: "10.99.0.20",
+        displayName: "ZR_6001234",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        pairedViaCameraAccessPoint: false
+    )
+    let legacyTwin = PTPIPSavedCameraRecord(
+        host: "192.168.1.1",
+        displayName: "Nikon ZR legacy",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        presentation: PTPIPSavedCameraPresentation(wifiSSID: "NIKON_ZR_02199")
+    )
+    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
+        localAddresses: ["10.99.0.7"],
+        savedCameras: [routerCamera, legacyTwin]
+    )
+    #expect(target == nil)
+}
