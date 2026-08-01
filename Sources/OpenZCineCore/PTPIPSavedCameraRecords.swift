@@ -35,7 +35,8 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         transport: String,
         lastSeenAt: Date?,
         presentation: PTPIPSavedCameraPresentation? = nil,
-        pairedViaCameraAccessPoint: Bool? = nil
+        pairedViaCameraAccessPoint: Bool? = nil,
+        serialNumber: String? = nil
     ) {
         self.host = host
         self.displayName = displayName
@@ -43,6 +44,7 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         self.lastSeenAt = lastSeenAt
         self.presentation = presentation
         self.pairedViaCameraAccessPoint = pairedViaCameraAccessPoint
+        self.serialNumber = serialNumber
     }
 
     public var host: String  // IP address, hostname, or `usb:<device-id>` key
@@ -56,6 +58,11 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
     /// THIS record? `false` is positive evidence it is not (router/hotspot use); `nil` is a
     /// legacy record with no evidence, which keeps the historical prompt behavior.
     public var pairedViaCameraAccessPoint: Bool?
+    /// The body serial stamped at connect. Identifies the CAMERA across its path records
+    /// (hotspot, router and cable are separate records with separate hosts); presentation
+    /// groups on it so one body reads as one row with many paths. `nil` predates the stamp —
+    /// such a record stays a singleton row and self-heals into its group on the next connect.
+    public var serialNumber: String?
 
     /// User-facing title, preferring a custom name when one exists.
     public var displayTitle: String {
@@ -105,6 +112,7 @@ public enum PTPIPSavedCameraRecords {
         transport rawTransport: String,
         lastSeenAt: Date?,
         pairedViaCameraAccessPoint: Bool? = nil,
+        serialNumber: String? = nil,
         into records: [PTPIPSavedCameraRecord]
     ) -> [PTPIPSavedCameraRecord] {
         guard let host = PTPIPPairedHosts.normalizedHost(rawHost) else {
@@ -115,7 +123,8 @@ public enum PTPIPSavedCameraRecords {
             displayName: normalizedDisplayName(rawDisplayName, host: host),
             transport: normalizedTransport(rawTransport),
             lastSeenAt: lastSeenAt,
-            pairedViaCameraAccessPoint: pairedViaCameraAccessPoint
+            pairedViaCameraAccessPoint: pairedViaCameraAccessPoint,
+            serialNumber: normalizedOptionalTag(serialNumber)
         )
         return canonicalized(records + [updated])
     }
@@ -207,7 +216,8 @@ public enum PTPIPSavedCameraRecords {
             transport: normalizedTransport(record.transport),
             lastSeenAt: record.lastSeenAt,
             presentation: normalizedPresentation(record.presentation),
-            pairedViaCameraAccessPoint: record.pairedViaCameraAccessPoint
+            pairedViaCameraAccessPoint: record.pairedViaCameraAccessPoint,
+            serialNumber: record.serialNumber
         )
     }
 
@@ -222,7 +232,41 @@ public enum PTPIPSavedCameraRecords {
         if lhs.host == rhs.host {
             return namesCompatible(lhs.displayName, rhs.displayName)
         }
+        // Two stamped serials that differ are two bodies regardless of the name (#293's
+        // lineage). Equal names alone must not merge across hosts either: the same body saved
+        // over hotspot, router and cable is three records ON PURPOSE — path grouping presents
+        // them as one row. The cross-host merge exists to absorb a DHCP move within one network
+        // shape, so it additionally requires the same path kind.
+        if let lhsSerial = lhs.serialNumber, let rhsSerial = rhs.serialNumber,
+            !lhsSerial.isEmpty, !rhsSerial.isEmpty, lhsSerial != rhsSerial
+        {
+            return false
+        }
+        guard pathKindsCompatible(lhs, rhs) else { return false }
         return cameraNamesMatch(savedName: lhs.displayName, discoveredName: rhs.displayName)
+    }
+
+    /// Whether two records reach the camera the same WAY — USB, phone hotspot, or Wi-Fi with
+    /// non-contradicting access-point evidence. Only same-kind records may merge across hosts;
+    /// unknown Wi-Fi evidence merges with either kind (legacy records heal instead of
+    /// duplicating).
+    private static func pathKindsCompatible(
+        _ lhs: PTPIPSavedCameraRecord, _ rhs: PTPIPSavedCameraRecord
+    ) -> Bool {
+        if lhs.isUSBTransport != rhs.isUSBTransport { return false }
+        if lhs.isUSBTransport { return true }
+        let lhsHotspot = CameraStartupPolicy.usesIPhoneHotspot(
+            host: lhs.host, transport: lhs.transport)
+        let rhsHotspot = CameraStartupPolicy.usesIPhoneHotspot(
+            host: rhs.host, transport: rhs.transport)
+        if lhsHotspot != rhsHotspot { return false }
+        if lhsHotspot { return true }
+        if let lhsAP = lhs.pairedViaCameraAccessPoint, let rhsAP = rhs.pairedViaCameraAccessPoint,
+            lhsAP != rhsAP
+        {
+            return false
+        }
+        return true
     }
 
     /// Whether two display names could describe one body. Uses the same normalization as
@@ -258,6 +302,9 @@ public enum PTPIPSavedCameraRecords {
         // connection recorded — a reconnect upsert usually knows nothing about the topology.
         if merged.pairedViaCameraAccessPoint == nil {
             merged.pairedViaCameraAccessPoint = fallback.pairedViaCameraAccessPoint
+        }
+        if merged.serialNumber == nil {
+            merged.serialNumber = fallback.serialNumber
         }
         if merged.presentation == nil {
             merged.presentation = fallback.presentation

@@ -334,19 +334,34 @@ struct StartupSavedCamerasView: View {
                             bridgeIsActive: hotspotPrompt.bridgeIsActive
                         )
                     }
-                    ForEach(model.savedCameras) { camera in
-                        let availability = SavedCameraAvailabilityPolicy.resolve(
-                            camera: camera,
-                            discoveredCameras: model.discoveredCameras,
-                            connectedHost: model.connectedIdentity?.host
-                        )
-                        StartupCameraListRow(
-                            camera: camera,
-                            availability: availability,
-                            isBusy: isBusy,
-                            isRecoveryTarget: hotspotPrompt?.camera.host == camera.host
-                        )
-                        .environment(model)
+                    // One ROW per body: records stay one-per-path on disk, and the serial
+                    // stamped at connect groups them here (see SavedCameraPathGroups).
+                    let pathGroups = SavedCameraPathGroups.group(model.savedCameras)
+                    ForEach(pathGroups.indices, id: \.self) { index in
+                        let group = pathGroups[index]
+                        let availabilityFor = { (record: PTPIPSavedCameraRecord) in
+                            SavedCameraAvailabilityPolicy.resolve(
+                                camera: record,
+                                discoveredCameras: model.discoveredCameras,
+                                connectedHost: model.connectedIdentity?.host
+                            )
+                        }
+                        if let active = SavedCameraPathGroups.activePath(
+                            in: group, availability: availabilityFor)
+                        {
+                            StartupCameraListRow(
+                                camera: active,
+                                availability: availabilityFor(active),
+                                isBusy: isBusy,
+                                // The hotspot-recovery state belongs to the hotspot PATH, not
+                                // the body: only when that path is the active one does the row
+                                // wear it — the strip above explains it either way.
+                                isRecoveryTarget: hotspotPrompt?.camera.host == active.host,
+                                paths: group,
+                                availabilityFor: availabilityFor
+                            )
+                            .environment(model)
+                        }
                     }
                     if model.savedCameras.isEmpty {
                         Text("No cameras saved yet — Pair new camera walks you through it.")
@@ -645,6 +660,13 @@ struct StartupCameraListRow: View {
     let availability: SavedCameraAvailability
     let isBusy: Bool
     var isRecoveryTarget: Bool = false
+    /// Every saved path of this body (the active one included), most recently seen first.
+    /// One record = one path; with a single path the row reads exactly as it always has.
+    var paths: [PTPIPSavedCameraRecord] = []
+    /// Availability resolver for sibling paths — the list owns discovery state.
+    var availabilityFor: ((PTPIPSavedCameraRecord) -> SavedCameraAvailability)? = nil
+
+    private var allPaths: [PTPIPSavedCameraRecord] { paths.isEmpty ? [camera] : paths }
 
     var body: some View {
         // Ticks once a second so the card-scan state (pill %, dimmed Preparing… button, subtitle)
@@ -667,6 +689,18 @@ struct StartupCameraListRow: View {
                     .foregroundStyle(StartupColors.muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
+                if allPaths.count > 1 {
+                    // One body, several ways in: a chip per saved path, availability dot on
+                    // each. The row's title, pill and Connect follow the ACTIVE path; a chip
+                    // tap connects over that specific path instead.
+                    HStack(spacing: 6) {
+                        ForEach(allPaths) { path in
+                            pathChip(path)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 2)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -680,10 +714,14 @@ struct StartupCameraListRow: View {
         .alert("Remove camera?", isPresented: $isDeleteConfirmationPresented) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
-                model.forgetPairing(host: camera.host)
+                // Remove means the CAMERA — every saved path goes with it. Per-path removal
+                // lives in the menu's Forget a Path.
+                for path in allPaths {
+                    model.forgetPairing(host: path.host)
+                }
             }
         } message: {
-            Text("Remove \(camera.displayTitle) from saved cameras on this iPhone.")
+            Text(removalMessage)
         }
         .alert("Rename camera", isPresented: $isRenamePresented) {
             TextField("Name", text: $renameText)
@@ -701,6 +739,21 @@ struct StartupCameraListRow: View {
         } label: {
             Label("Rename", systemImage: "pencil")
         }
+        if allPaths.count > 1 {
+            Menu {
+                ForEach(allPaths) { path in
+                    Button(role: .destructive) {
+                        model.forgetPairing(host: path.host)
+                    } label: {
+                        Label(
+                            "Forget \(SavedCameraPathGroups.pathLabel(for: path)) path",
+                            systemImage: "minus.circle")
+                    }
+                }
+            } label: {
+                Label("Forget a Path", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+        }
         Button(role: .destructive) {
             isDeleteConfirmationPresented = true
         } label: {
@@ -710,20 +763,67 @@ struct StartupCameraListRow: View {
 
     private func commitRename() {
         let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        model.updateSavedCameraPresentation(
-            camera: camera,
-            customName: trimmed.isEmpty ? nil : trimmed,
-            borderColor: camera.presentation?.borderColor,
-            icon: camera.presentation?.icon
-        )
+        // The name belongs to the CAMERA, so it lands on every saved path — otherwise a body
+        // renamed on the hotspot path would answer to its bare name when cabled.
+        for path in allPaths {
+            model.updateSavedCameraPresentation(
+                camera: path,
+                customName: trimmed.isEmpty ? nil : trimmed,
+                borderColor: path.presentation?.borderColor,
+                icon: path.presentation?.icon
+            )
+        }
     }
 
     private func connect() {
+        connect(camera, availability: availability)
+    }
+
+    private func connect(
+        _ record: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
+    ) {
         switch availability {
         case .available(let discoveredCamera):
             model.connectToCamera(discoveredCamera)
         case .connected, .offline:
-            model.connectSavedCamera(camera)
+            model.connectSavedCamera(record)
+        }
+    }
+
+    private func pathChip(_ path: PTPIPSavedCameraRecord) -> some View {
+        let pathAvailability = availabilityFor?(path) ?? .offline
+        let isActive = path.id == camera.id
+        return Button {
+            connect(path, availability: pathAvailability)
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(chipDotColor(for: pathAvailability))
+                    .frame(width: 6, height: 6)
+                Text(SavedCameraPathGroups.pathLabel(for: path))
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isActive ? StartupColors.ink : StartupColors.muted)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(StartupColors.control.opacity(isActive ? 0.8 : 0.45), in: Capsule())
+            .overlay(
+                Capsule().stroke(
+                    isActive
+                        ? StartupColors.accent.opacity(0.45)
+                        : StartupColors.border.opacity(0.12),
+                    lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
+    }
+
+    private func chipDotColor(for availability: SavedCameraAvailability) -> Color {
+        switch availability {
+        case .connected, .available: return StartupColors.ready
+        case .offline: return StartupColors.dim
         }
     }
 
@@ -799,6 +899,13 @@ struct StartupCameraListRow: View {
 
     private var buttonLabel: String { isRecoveryTarget ? "Reconnect" : "Connect" }
 
+    private var removalMessage: String {
+        allPaths.count > 1
+            ? "Remove \(camera.displayTitle) and its \(allPaths.count) saved paths "
+                + "from this iPhone."
+            : "Remove \(camera.displayTitle) from saved cameras on this iPhone."
+    }
+
     private var statusText: String {
         if isRecoveryTarget { return "Waiting for hotspot" }
         switch availability {
@@ -833,8 +940,14 @@ struct StartupCameraListRow: View {
     private var title: String {
         let base = ConnectionProgressCopy.resolveDisplayName(
             rawName: camera.displayName, savedCamera: nil)
+        // Any path's custom name titles the group — a rename made while on the hotspot path
+        // must not vanish when the cable path is the active one.
         let custom =
-            camera.presentation?.customName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            allPaths.lazy
+            .compactMap {
+                $0.presentation?.customName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .first { !$0.isEmpty } ?? ""
         return custom.isEmpty ? base : "\(base) · \(custom)"
     }
 
@@ -1562,11 +1675,18 @@ struct StartupFirstPairWizardView: View {
         GeometryReader { geo in
             if geo.size.width >= 640 {
                 HStack(alignment: .top, spacing: 16) {
-                    introCard
-                        // Narrower intro column → wider step card, so content (esp. the 3 transport
-                        // cards) wraps less and doesn't crowd the bottom edge.
-                        .frame(width: max(236, geo.size.width * 0.28))
-                        .frame(maxHeight: .infinity)
+                    // Scrolls on short screens: the intro's fixed content (title, progress,
+                    // footer, buttons) outgrows small devices and clipped the buttons off the
+                    // bottom. Viewport-min-height keeps taller screens pixel-identical.
+                    ScrollView(showsIndicators: false) {
+                        introCard
+                            .frame(minHeight: geo.size.height)
+                    }
+                    .fadeOverflowBottom()
+                    // Narrower intro column → wider step card, so content (esp. the 3 transport
+                    // cards) wraps less and doesn't crowd the bottom edge.
+                    .frame(width: max(236, geo.size.width * 0.28))
+                    .frame(maxHeight: .infinity)
                     stepCard
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -1848,10 +1968,20 @@ struct StartupFirstPairWizardView: View {
             .frame(maxWidth: .infinity)
         }
         if style.useTransportSplitLayout {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 12) { cards }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                wizardCameraListLink
+            // Expandable cards outgrow the fixed landscape budget the moment a nested choice
+            // opens, which pushed the list link off-screen. The step scrolls instead — with the
+            // viewport as its minimum height, so the closed state keeps today's full-height
+            // card layout pixel for pixel.
+            GeometryReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top, spacing: 12) { cards }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        wizardCameraListLink
+                    }
+                    .frame(minHeight: proxy.size.height)
+                }
+                .fadeOverflowBottom()
             }
         } else {
             // Scrolls: with the portrait intro header above the card, three stacked cards can
@@ -2009,7 +2139,15 @@ struct StartupWizardTransportCard: View {
     let onSelect: (NativeAppModel.FirstPairTransportMethod) -> Void
 
     /// Whether the nested choice is open. Cards without nested options never set it.
-    @State private var showsOptions = false
+    /// The debug seed exists because expansion is a tap — unreachable headless — and the
+    /// expanded step's overflow behavior is exactly what screenshots must check.
+    @State private var showsOptions: Bool = {
+        #if DEBUG
+            return ProcessInfo.processInfo.environment["ZC_DEMO_WIZARD_EXPANDED"] == "1"
+        #else
+            return false
+        #endif
+    }()
 
     private var options: [NativeAppModel.FirstPairTransportMethod] { card.options }
 

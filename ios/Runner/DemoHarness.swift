@@ -725,6 +725,25 @@ enum DemoHarness {
                 // row, otherwise unreachable headless (it needs that tap).
                 model.showSavedCameras()
             }
+            if env["ZC_DEMO_SAVED_PATHS"] == "1" {
+                // Stages the multi-path camera list: the SAME body saved via hotspot, router
+                // and cable (one serial, three records) beside a second single-path body.
+                // Seeds the real store — simulator-only residue, cleared by uninstall.
+                let store = NativeCameraConnectionStore.shared
+                store.upsertSavedCamera(
+                    host: "172.20.10.2", displayName: "ZR_6002199", transport: "Wi-Fi",
+                    onCameraAccessPoint: false, serialNumber: "6002199")
+                store.upsertSavedCamera(
+                    host: "10.99.0.20", displayName: "ZR_6002199", transport: "Wi-Fi",
+                    onCameraAccessPoint: false, serialNumber: "6002199")
+                store.upsertSavedCamera(
+                    host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C",
+                    serialNumber: "6002199")
+                store.upsertSavedCamera(
+                    host: "192.168.1.1", displayName: "Z6_7005555", transport: "Wi-Fi",
+                    onCameraAccessPoint: true, serialNumber: "7005555")
+                model.showSavedCameras()
+            }
             if let raw = env["ZC_DEMO_HOTSPOT_CARD"] {
                 // Stages the hotspot-recovery strip on the camera list ("active" / "needed") —
                 // the real prompt derives from saved records plus live hotspot state, so

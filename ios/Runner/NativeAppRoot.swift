@@ -2740,7 +2740,8 @@ final class NativeAppModel {
                         savePairedCamera(
                             host: initialSession.identity.host,
                             displayName: initialSession.identity.displayName,
-                            transport: transport
+                            transport: transport,
+                            serialNumber: initialSession.identity.serialNumber
                         )
                         // Pairing done → immediate auto-reconnect off the saved profile. Most
                         // wedge-prone moment: without a graceful CloseSession the camera still
@@ -2779,7 +2780,8 @@ final class NativeAppModel {
                     host: session.identity.host,
                     displayName: session.identity.displayName,
                     transport: transport,
-                    onCameraAccessPoint: cameraAccessPointEvidence
+                    onCameraAccessPoint: cameraAccessPointEvidence,
+                    serialNumber: session.identity.serialNumber
                 )
                 refreshSavedCameras()
                 markFirstPairWizardCompleted()
@@ -3931,7 +3933,9 @@ final class NativeAppModel {
         return CameraWiFiSSID.isNikonZAccessPoint(ssid)
     }
 
-    private func savePairedCamera(host: String, displayName: String, transport: String) {
+    private func savePairedCamera(
+        host: String, displayName: String, transport: String, serialNumber: String? = nil
+    ) {
         // Pairing knows the topology better than any later reconnect: the wizard's chosen path is
         // the operator's own declaration, used when the network offers no evidence of its own.
         let onCameraAccessPoint =
@@ -3942,7 +3946,8 @@ final class NativeAppModel {
             host: host,
             displayName: displayName,
             transport: transport,
-            onCameraAccessPoint: onCameraAccessPoint
+            onCameraAccessPoint: onCameraAccessPoint,
+            serialNumber: serialNumber
         )
         refreshSavedCameras()
         markFirstPairWizardCompleted()

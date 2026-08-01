@@ -143,6 +143,7 @@
 		VSRC00000000000000000002 /* VideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = VSRC00000000000000000001 /* VideoSource.swift */; };
 		LVPP00000000000000000002 /* LiveViewPollPacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVPP00000000000000000001 /* LiveViewPollPacing.swift */; };
 		RBAD00000000000000000002 /* RelayBitrateAdaptation.swift in Sources */ = {isa = PBXBuildFile; fileRef = RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */; };
+		SCPG00000000000000000002 /* SavedCameraPathGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCPG00000000000000000001 /* SavedCameraPathGroups.swift */; };
 		WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */; };
 		WTCH00000000000000000002 /* MonitorStateValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000001 /* MonitorStateValues.swift */; };
 		WTCH00000000000000000004 /* WatchRelayProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000003 /* WatchRelayProtocol.swift */; };
@@ -340,6 +341,7 @@
 		VSRC00000000000000000001 /* VideoSource.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = VideoSource.swift; path = ../Sources/OpenZCineCore/VideoSource.swift; sourceTree = SOURCE_ROOT; };
 		LVPP00000000000000000001 /* LiveViewPollPacing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveViewPollPacing.swift; path = ../Sources/OpenZCineCore/LiveViewPollPacing.swift; sourceTree = SOURCE_ROOT; };
 		RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RelayBitrateAdaptation.swift; path = ../Sources/OpenZCineCore/RelayBitrateAdaptation.swift; sourceTree = SOURCE_ROOT; };
+		SCPG00000000000000000001 /* SavedCameraPathGroups.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SavedCameraPathGroups.swift; path = ../Sources/OpenZCineCore/SavedCameraPathGroups.swift; sourceTree = SOURCE_ROOT; };
 		WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WhiteBalanceKelvinPolicy.swift; path = ../Sources/OpenZCineCore/WhiteBalanceKelvinPolicy.swift; sourceTree = SOURCE_ROOT; };
 		WTCH00000000000000000001 /* MonitorStateValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorStateValues.swift; path = ../Sources/OpenZCineCore/MonitorStateValues.swift; sourceTree = SOURCE_ROOT; };
 		WTCH00000000000000000003 /* WatchRelayProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchRelayProtocol.swift; path = ../Sources/OpenZCineCore/WatchRelayProtocol.swift; sourceTree = SOURCE_ROOT; };
@@ -536,6 +538,7 @@
 				VSRC00000000000000000001 /* VideoSource.swift */,
 				LVPP00000000000000000001 /* LiveViewPollPacing.swift */,
 				RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */,
+				SCPG00000000000000000001 /* SavedCameraPathGroups.swift */,
 				RLYP00000000000000000001 /* MonitorRelayProtocol.swift */,
 				D329D509E000B93B59AE9A11 /* ScopeSampler.swift */,
 				D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */,
@@ -809,6 +812,7 @@
 				VSRC00000000000000000002 /* VideoSource.swift in Sources */,
 				LVPP00000000000000000002 /* LiveViewPollPacing.swift in Sources */,
 				RBAD00000000000000000002 /* RelayBitrateAdaptation.swift in Sources */,
+				SCPG00000000000000000002 /* SavedCameraPathGroups.swift in Sources */,
 				RLYP00000000000000000002 /* MonitorRelayProtocol.swift in Sources */,
 				3B2081943B1D2A36C4DA228C /* ScopeSampler.swift in Sources */,
 				3B2081943B1D2A36C4DA228D /* AudioLevelMeter.swift in Sources */,

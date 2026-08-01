@@ -97,7 +97,10 @@ import Testing
     #expect(updated.map(\.displayName) == ["Nikon ZR", "Studio ZR"])
 }
 
-@Test func savedCameraRecordsUpsertSameCameraNameUpdatesHostAndTransport() {
+@Test func savedCameraRecordsUpsertSameCameraNewPathKindAddsASecondPath() {
+    // Historically the camera-AP upsert REPLACED the hotspot record ("the camera moved").
+    // Hotspot and camera AP are different PATH KINDS the operator deliberately switches
+    // between, so both survive now — path grouping presents them as one row.
     let oldSeen = Date(timeIntervalSince1970: 1_700_000_000)
     let newSeen = Date(timeIntervalSince1970: 1_800_000_000)
     let records = [
@@ -122,20 +125,13 @@ import Testing
         into: records
     )
 
+    #expect(updated.count == 2)
+    #expect(updated.contains { $0.host == "172.20.10.8" })
+    #expect(updated.contains { $0.host == "192.168.1.1" })
+    // The hotspot path keeps its own presentation; the row-level title falls back across the
+    // group, and renames apply to every path.
     #expect(
-        updated == [
-            PTPIPSavedCameraRecord(
-                host: "192.168.1.1",
-                displayName: "ZR_6001234",
-                transport: "Camera AP",
-                lastSeenAt: newSeen,
-                presentation: PTPIPSavedCameraPresentation(
-                    customName: "A Cam",
-                    borderColor: "blue",
-                    icon: "a"
-                )
-            )
-        ])
+        updated.first { $0.host == "172.20.10.8" }?.presentation?.customName == "A Cam")
 }
 
 @Test func savedCameraRecordsUpdatePresentationNormalizesUserMetadata() {
@@ -197,7 +193,10 @@ import Testing
     )
 }
 
-@Test func savedCameraRecordsCanonicalizedCollapsesExistingSameCameraNameDuplicates() {
+@Test func savedCameraRecordsCanonicalizedKeepsSameCameraDistinctPathKinds() {
+    // Pre-multi-path this collapsed to the newest record. A hotspot record and a camera-AP
+    // record for one body are two PATHS now; only a same-kind DHCP move still merges (see
+    // canonicalizedStillAbsorbsADHCPMoveWithinOneKind).
     let oldSeen = Date(timeIntervalSince1970: 1_700_000_000)
     let newSeen = Date(timeIntervalSince1970: 1_800_000_000)
     let records = [
@@ -217,15 +216,9 @@ import Testing
 
     let canonical = PTPIPSavedCameraRecords.canonicalized(records)
 
-    #expect(
-        canonical == [
-            PTPIPSavedCameraRecord(
-                host: "192.168.1.1",
-                displayName: "ZR_6001234",
-                transport: "Camera AP",
-                lastSeenAt: newSeen
-            )
-        ])
+    #expect(canonical.count == 2)
+    #expect(canonical.contains { $0.host == "172.20.10.8" })
+    #expect(canonical.contains { $0.host == "192.168.1.1" })
 }
 
 @Test func savedCameraRecordsDoNotCollapseGenericModelNamesAcrossHosts() {

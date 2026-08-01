@@ -156,7 +156,8 @@ final class NativeCameraConnectionStore {
 
     func upsertSavedCamera(
         host: String, displayName: String, transport: String,
-        onCameraAccessPoint: Bool? = nil
+        onCameraAccessPoint: Bool? = nil,
+        serialNumber: String? = nil
     ) {
         var records = PTPIPSavedCameraRecords.upserting(
             host: host,
@@ -164,6 +165,7 @@ final class NativeCameraConnectionStore {
             transport: transport,
             lastSeenAt: Date(),
             pairedViaCameraAccessPoint: onCameraAccessPoint,
+            serialNumber: serialNumber,
             into: savedCameras()
         )
         if let ssid = CameraWiFiSSID.deriveSSID(fromCameraName: displayName),
