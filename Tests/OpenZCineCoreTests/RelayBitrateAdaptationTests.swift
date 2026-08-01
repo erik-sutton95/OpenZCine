@@ -62,6 +62,27 @@ import Testing
     #expect(recovered == 10_000_000)
 }
 
+/// The QP cap steps WITH the rate: strict at full budget, relaxed on the low rungs — a cap the
+/// rate controller cannot honor on grainy log content would turn a step-down into a no-op right
+/// when shrinking the stream is the whole point.
+@Test func frameQPCapRelaxesAsTheRateStepsDown() {
+    var adaptation = RelayBitrateAdaptation(now: 0)
+    #expect(adaptation.maxFrameQP == 36)
+    var now = 0.0
+    for tick in 0..<60 {
+        now = Double(tick) / 10
+        _ = adaptation.recordTick(saturated: true, now: now)
+    }
+    #expect(adaptation.bitsPerSecond == 7_000_000)
+    #expect(adaptation.maxFrameQP == 39)
+    for tick in 0..<600 {
+        now += Double(tick) / 10
+        _ = adaptation.recordTick(saturated: true, now: now)
+    }
+    #expect(adaptation.bitsPerSecond == 3_000_000)
+    #expect(adaptation.maxFrameQP == 45)
+}
+
 @Test func bitrateNeverLeavesTheLadder() {
     var adaptation = RelayBitrateAdaptation(now: 0)
     var now = 0.0

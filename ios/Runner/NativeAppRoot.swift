@@ -921,6 +921,12 @@ final class NativeAppModel {
     /// watcher needs, and every extra frame is bandwidth taken from the one being looked at.
     private static let relayFrameInterval: CFAbsoluteTime = 1.0 / 30.0
 
+    /// Below this, the broadcaster's camera feed counts as starving for the bitrate ladder.
+    /// Comfortably under every healthy live-view cadence (24/25/30) so recording starts, AF
+    /// bursts, and a 24p body never trip it, and comfortably above a radio genuinely being
+    /// suffocated by the relay's own uplink. The level is [verify-on-HW].
+    private static let relayCameraStarveFPS: Double = 15
+
     /// Starts or stops serving this device's feed to others.
     func setRelayBroadcasting(_ broadcasting: Bool) {
         guard broadcasting != isRelayBroadcasting else { return }
@@ -1066,18 +1072,31 @@ final class NativeAppModel {
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastRelayFrameAt >= Self.relayFrameInterval else { return }
         lastRelayFrameAt = now
-        // Saturation — no viewer able to take this frame — is both the skip signal and the
-        // bitrate-adaptation signal: sustained saturation steps the encoder down so the stream
-        // fits the slowest link that is supposed to keep up; long clean running climbs back.
-        let saturated = !relayHost.hasPeerReadyForFrame
+        // Two congestion observations feed the bitrate ladder. Viewer backpressure (no peer
+        // able to take this frame) is the direct one — but TCP send completions fire when the
+        // KERNEL accepts the bytes, so on an infrastructure path a drowning router can look
+        // clear from here. The honest tell is the other direction: the camera downlink and the
+        // relay uplink share one radio, so an oversized stream starves the broadcaster's own
+        // feed first — watchers at full quality while the operator's monitor crawls is the
+        // priority order exactly inverted. A starving camera feed therefore steps the stream
+        // down even while every viewer link reports clear.
+        let peersFull = !relayHost.hasPeerReadyForFrame
+        let cameraFeedStarved =
+            videoSource == .cameraLiveView && measuredLiveViewFPS > 0
+            && measuredLiveViewFPS < Self.relayCameraStarveFPS
+        let saturated = peersFull || cameraFeedStarved
         if let retargeted = relayBitrateAdaptation.recordTick(saturated: saturated, now: now) {
-            logConnection("relay bitrate → \(retargeted / 1_000_000) Mb/s")
-            relayVideoEncoder?.setAverageBitrate(retargeted)
+            logConnection(
+                "relay bitrate → \(retargeted / 1_000_000) Mb/s"
+                    + (cameraFeedStarved ? " (camera feed starving)" : ""))
+            relayVideoEncoder?.setTarget(
+                bitsPerSecond: retargeted, maxFrameQP: relayBitrateAdaptation.maxFrameQP)
         }
         // Nobody can take a frame → skip the ENCODE, not just the send: the hardware block does
         // no work for a frame no one receives, and with nothing encoded the encoder's reference
-        // chain stays where every viewer's is, so resuming needs no keyframe.
-        guard !saturated else { return }
+        // chain stays where every viewer's is, so resuming needs no keyframe. A starving camera
+        // feed must NOT skip — the few frames still arriving are exactly the ones worth sending.
+        guard !peersFull else { return }
         let metadata =
             latestRelayFrameMetadata
             ?? MonitorRelayFrameMetadata(
@@ -1230,13 +1249,18 @@ final class NativeAppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
                 guard let self, !Task.isCancelled, self.videoSource == .relay else { return }
+                // Rejoin through the CURRENT browse result, never the captured one: a Bonjour
+                // endpoint pins the interface it was discovered on, and a broadcaster that came
+                // back (new port, new interface) leaves the captured endpoint resolving to the
+                // dead registration — a rejoin loop that redials the void forever.
+                let fresh = self.discoveredRelayHosts.first(where: { $0.id == target.id })
                 switch self.relayClientState {
                 case .failed, .idle:
                     // `.idle` is a failure's aftermath here, not "never joined": the client's
                     // stop() lands there right after reporting the failure, and leaving the
                     // relay cancels this watchdog before it could ever observe it.
-                    if self.discoveredRelayHosts.contains(where: { $0.id == target.id }) {
-                        self.joinRelay(target)
+                    if let fresh {
+                        self.joinRelay(fresh)
                         return
                     }
                 case .connected:
@@ -1244,7 +1268,7 @@ final class NativeAppModel {
                         self.relayFailureReason =
                             "The stream stalled — reconnecting. Make sure OpenZCine is open "
                             + "on the broadcasting device."
-                        self.joinRelay(target)
+                        self.joinRelay(fresh ?? target)
                         return
                     }
                 default:

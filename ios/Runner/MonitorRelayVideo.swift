@@ -42,10 +42,6 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
     /// (`RelayBitrateAdaptation`); mid-session `AverageBitRate` updates are the same mechanism
     /// production WebRTC uses on this encoder.
     private static let initialBitsPerSecond = RelayBitrateAdaptation.ladder[0]
-    /// A bitrate sag must degrade to dropped frames, never to mush an operator would misread
-    /// as a focus problem. 36 is where log content stays gradeable; the earlier 45 permitted
-    /// exactly the blotching reported from set.
-    private static let maxAllowedFrameQP = 36
     /// An upper bound on how long a resuming or joining peer waits for a decodable frame.
     private static let maxKeyframeInterval = 50
     /// Minimum spacing between FORCED keyframes. A keyframe is 3–8× the bytes of a predicted
@@ -63,15 +59,22 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
     private var frameIndex: Int64 = 0
     private var forceKeyframe = true
     private var lastForcedKeyframeAt: CFAbsoluteTime = 0
-    /// Current target rate; survives session rebuilds (size changes) and adaptation steps.
+    /// Current targets; survive session rebuilds (size changes) and adaptation steps.
     private var targetBitsPerSecond = MonitorRelayVideoEncoder.initialBitsPerSecond
+    /// Worst permitted frame QP, stepped WITH the bitrate: strict at full budget (a sag must
+    /// degrade to dropped frames, never to mush an operator would misread as a focus problem),
+    /// relaxed on the low rungs where a cap the rate controller cannot honor would keep the
+    /// stream oversized right when shrinking it is the whole point.
+    private var targetMaxFrameQP = RelayBitrateAdaptation.maxFrameQPLadder[0]
 
-    /// Retargets the stream's bitrate on the LIVE session — the adaptation path. When the
-    /// dynamic set is refused, the session is invalidated instead: the next frame rebuilds at
-    /// the stored target, which always works (a size change already proves that path).
-    func setAverageBitrate(_ bitsPerSecond: Int) {
+    /// Retargets the stream on the LIVE session — the adaptation path. When the dynamic rate
+    /// set is refused, the session is invalidated instead: the next frame rebuilds at the
+    /// stored targets, which always works (a size change already proves that path). The QP set
+    /// is best-effort — an encoder that refuses it keeps the previous cap until a rebuild.
+    func setTarget(bitsPerSecond: Int, maxFrameQP: Int) {
         queue.async {
             self.targetBitsPerSecond = bitsPerSecond
+            self.targetMaxFrameQP = maxFrameQP
             guard let session = self.session else { return }
             let rateStatus = VTSessionSetProperty(
                 session, key: kVTCompressionPropertyKey_AverageBitRate,
@@ -82,6 +85,9 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
             VTSessionSetProperty(
                 session, key: kVTCompressionPropertyKey_DataRateLimits,
                 value: [Double(bitsPerSecond) / 8 * 2.0, 1.0] as CFArray)
+            VTSessionSetProperty(
+                session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
+                value: maxFrameQP as CFNumber)
             if rateStatus != noErr {
                 videoLogger.info("relay bitrate retarget via rebuild (\(rateStatus))")
                 VTCompressionSessionInvalidate(session)
@@ -205,7 +211,7 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         // decisions for headroom this encoder never needed at live-view sizes — reverted.)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
-            value: Self.maxAllowedFrameQP as CFNumber)
+            value: targetMaxFrameQP as CFNumber)
         // Explicit BT.709 tags, written into the stream: without them every decoder guesses
         // the matrix/transfer, and a 601-vs-709 guess is exactly the colour skew watchers see
         // once a LUT amplifies it.

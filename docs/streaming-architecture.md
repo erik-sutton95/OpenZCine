@@ -39,20 +39,28 @@ Camera ── PTP/IP or USB ──> Broadcaster ── TCP (length-prefixed) ─
 3. **Never pay for what nobody receives.** All viewers saturated → the encode itself is
    skipped. Because nothing was encoded, the encoder's reference chain stays exactly where
    every viewer's is — resuming needs no keyframe.
-4. **Bitrate follows the slowest viewer that should keep up.** SUSTAINED saturation steps down
-   a 10 → 7 → 4.5 → 3 Mb/s ladder; recovery climbs one rung after 30 clean seconds
+4. **Bitrate follows the congestion the radio actually shows.** SUSTAINED saturation steps
+   down a 10 → 7 → 4.5 → 3 Mb/s ladder; recovery climbs one rung after 30 clean seconds
    (`RelayBitrateAdaptation`, pure and tested). Only consecutive saturated ticks count — a
    two-frame in-flight cap at stream rate makes isolated "full" ticks normal pacing, and
-   counting them once walked multi-watcher sessions to the floor and held them there. The
+   counting them once walked multi-watcher sessions to the floor and held them there. TWO
+   observations feed the signal: viewer backpressure (laggy on infrastructure — TCP send
+   completions fire when the kernel buffers the bytes, so a drowning router can look clear
+   from the send side) and the broadcaster's OWN camera feed starving. Camera downlink and
+   relay uplink share one radio; an oversized stream suffocates the operator's monitor first,
+   and watchers at full quality while the operator crawls is the priority order inverted. The
    ladder is sized for the CONTENT: the relay carries log footage every watcher
    contrast-stretches through a LUT, so quantization noise invisible in the flat image becomes
    blotching on their screens. Degradation is prompt, recovery deliberate — oscillation reads
    worse on a monitor than a steady, slightly softer picture.
-5. **Quality floor, not quality mush.** `MaxAllowedFrameQP = 36`: a bitrate sag drops frames
-   rather than smearing the picture into something an operator would misread as a focus
-   problem — 36 is where log content stays gradeable. The stream also carries explicit BT.709
-   colour tags; without them each decoder guesses the matrix, and a 601-vs-709 guess is a
-   visible colour skew once a LUT amplifies it.
+5. **Quality floor, not quality mush — but the floor steps with the rate.** `MaxAllowedFrameQP`
+   runs 36/39/42/45 down the ladder: strict at full budget (a sag degrades to dropped frames,
+   never to smear an operator would misread as a focus problem), relaxed on the low rungs —
+   log grain under a strict cap can cost more bits than the low targets allow, and a cap the
+   rate controller cannot honor turns a step-down into a no-op exactly when shrinking the
+   stream is the point. The stream also carries explicit BT.709 colour tags; without them each
+   decoder guesses the matrix, and a 601-vs-709 guess is a visible colour skew once a LUT
+   amplifies it.
 6. **A viewer session explains itself and heals itself.** Failures surface their reason on the
    empty feed (never a bare FAIL chip over a frozen frame); a watchdog rejoins as soon as the
    broadcast is visible again and tears through connected-but-stalled links.
