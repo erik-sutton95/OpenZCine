@@ -1751,13 +1751,6 @@ struct StartupFirstPairWizardView: View {
                 totalSteps: wizardStepCount,
                 compact: true
             )
-            Text(introFooterText)
-                .font(.system(size: 11, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.dim)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 12)
-
             // Escape hatch when pairing an additional camera over an existing library — otherwise
             // the wizard (now the sole pairing surface) would be a dead end for returning operators.
             if !model.savedCameras.isEmpty {
@@ -1849,20 +1842,11 @@ struct StartupFirstPairWizardView: View {
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
-            // The same per-step helper line the landscape intro column shows.
-            Text(introFooterText)
-                .font(.system(size: 11, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.dim)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 6)
             shareDiagnosticsButton
                 .padding(.top, 8)
         }
     }
 
-    /// Left-column helper line, kept relevant to the current step (the transport-tradeoff
-    /// blurb only makes sense while choosing a transport).
     /// The step heading, overridden where a path makes the generic wording wrong: HDMI capture
     /// finds nothing and pairs with nothing, so "Find and pair" would misdescribe the whole step.
     private var stepTitle: String {
@@ -1870,25 +1854,6 @@ struct StartupFirstPairWizardView: View {
             return "Connect the capture device"
         }
         return step.title
-    }
-
-    private var introFooterText: String {
-        switch step {
-        case .permissions:
-            return "Only what pairing needs — change anytime in iOS Settings."
-        case .chooseTransport:
-            return "Each trades battery, quality, and convenience — pick what fits the shoot."
-        case .prepareCamera:
-            return
-                "Menu names match the Nikon ZR; they may vary by model and firmware version."
-        case .connectNetwork:
-            return "Get both devices onto the same network — we'll find the camera automatically."
-        case .discoverAndPair:
-            // Nothing is found or paired on the HDMI path — it reads a signal off a cable.
-            return model.firstPairTransportMethod == .hdmiCapture
-                ? "The capture device appears here as soon as it's plugged in."
-                : "Keep the camera powered on and nearby while we find it."
-        }
     }
 
     // MARK: - Right column: current step
