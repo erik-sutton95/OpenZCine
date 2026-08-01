@@ -40,6 +40,11 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
     private static let averageBitsPerSecond = 6_000_000
     /// An upper bound on how long a resuming or joining peer waits for a decodable frame.
     private static let maxKeyframeInterval = 50
+    /// Minimum spacing between FORCED keyframes. A keyframe is several times the bytes of a
+    /// predicted frame; a permanently-slow viewer re-requesting one on every skip would turn the
+    /// whole stream keyframe-heavy and degrade every other viewer with it. A join or resume
+    /// waits at most this long — the request stays latched, never dropped.
+    private static let minSecondsBetweenForcedKeyframes: CFAbsoluteTime = 0.5
 
     private let queue = DispatchQueue(
         label: "com.opencapture.openzcine.relay-encode", qos: .userInitiated)
@@ -48,6 +53,7 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
     private var sessionHeight = 0
     private var frameIndex: Int64 = 0
     private var forceKeyframe = true
+    private var lastForcedKeyframeAt: CFAbsoluteTime = 0
     /// Encoded output captured by the in-flight frame's handler.
     private var captured: EncodedFrame?
 
@@ -100,11 +106,19 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         }
         CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
 
+        // Honor a latched keyframe request only past the storm limit; the latch survives an
+        // deferred honor, so a joiner is never dropped — only spaced.
+        let now = CFAbsoluteTimeGetCurrent()
+        let honorsKeyframe =
+            forceKeyframe && now - lastForcedKeyframeAt >= Self.minSecondsBetweenForcedKeyframes
         let properties: CFDictionary? =
-            forceKeyframe
+            honorsKeyframe
             ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue as Any] as CFDictionary
             : nil
-        forceKeyframe = false
+        if honorsKeyframe {
+            forceKeyframe = false
+            lastForcedKeyframeAt = now
+        }
         captured = nil
         let timestamp = CMTime(value: frameIndex, timescale: 600)
         frameIndex += 24  // Nominal cadence only; RealTime encoding does not pace on it.

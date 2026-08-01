@@ -304,6 +304,14 @@ final class MonitorRelayHost {
     /// Two = one on the wire and one behind it; more is latency the viewer can never win back.
     private static let maxInFlightFramesPerPeer = 2
 
+    /// Whether at least one viewer could accept a frame right now. Checked BEFORE the encode:
+    /// when every peer is saturated, encoding would burn the hardware block on a frame nobody
+    /// receives — and because nothing is encoded, the encoder's reference chain stays exactly
+    /// where every viewer's is, so resuming needs no keyframe.
+    var hasPeerReadyForFrame: Bool {
+        peers.values.contains { $0.inFlightFrames < Self.maxInFlightFramesPerPeer }
+    }
+
     func broadcast(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
         guard !peers.isEmpty else { return }
         guard

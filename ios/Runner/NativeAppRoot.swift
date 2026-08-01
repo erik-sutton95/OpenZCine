@@ -1047,6 +1047,10 @@ final class NativeAppModel {
     /// the encoder is unavailable: a heavier picture, never no picture.
     private func broadcastRelayFrame(image: UIImage) {
         guard let relayHost, isRelayBroadcasting, relayPeerCount > 0 else { return }
+        // Nobody can take a frame → skip the ENCODE, not just the send: the hardware block does
+        // no work for a frame no one receives, and with nothing encoded the encoder's reference
+        // chain stays where every viewer's is, so resuming needs no keyframe.
+        guard relayHost.hasPeerReadyForFrame else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastRelayFrameAt >= Self.relayFrameInterval else { return }
         lastRelayFrameAt = now
@@ -5632,7 +5636,15 @@ final class NativeAppModel {
         // (#268). The chrome test lives in each consumer, which already applies it:
         // `handleBodyFiredCapture` is a no-op outside photography. Single-flight so the poll can't
         // stack behind the transaction gate and jitter the feed.
-        if frameCounter.isMultiple(of: 4), deviceEventPollTask == nil {
+        // Both cadences below scale with what one poll actually costs on THIS link: each poll is
+        // a PTP round trip the next frame fetch queues behind, and on a router path a fixed
+        // stride turned into a visible periodic hitch (see `LiveViewPollPacing`).
+        let framePeriodMilliseconds = 1000 / max(1, Double(cameraPropertySnapshot.fps ?? 30))
+        let measuredRoundTrip = session.readLastCommandRoundTripMilliseconds()
+        let eventPollStride = LiveViewPollPacing.eventPollStride(
+            roundTripMilliseconds: measuredRoundTrip,
+            framePeriodMilliseconds: framePeriodMilliseconds)
+        if frameCounter.isMultiple(of: eventPollStride), deviceEventPollTask == nil {
             deviceEventPollTask = Task { [weak self] in
                 defer { self?.deviceEventPollTask = nil }
                 guard let self, self.cameraSession === session else { return }
@@ -5645,9 +5657,16 @@ final class NativeAppModel {
         // A pending camera-announced change jumps the background cadence — the operator's own hand
         // on the body should not wait out a poll interval sized for idle round-robin. The stride
         // and its bound live on the queue itself, next to the batch limit they balance against.
-        guard
-            pollEveryCall || frameCounter.isMultiple(of: cameraAnnouncedPropertyChanges.pollStride)
-        else { return }
+        // Only the IDLE round-robin spreads out on a slow link; announced changes keep their fast
+        // cadence — one bounded read is worth a frame slot even there.
+        let propertyPollStride =
+            cameraAnnouncedPropertyChanges.isEmpty
+            ? CameraAnnouncedPropertyQueue.idlePollStride
+                * LiveViewPollPacing.idlePollStrideMultiplier(
+                    roundTripMilliseconds: measuredRoundTrip,
+                    framePeriodMilliseconds: framePeriodMilliseconds)
+            : cameraAnnouncedPropertyChanges.pollStride
+        guard pollEveryCall || frameCounter.isMultiple(of: propertyPollStride) else { return }
         if isRecording {
             let now = Date()
             guard
