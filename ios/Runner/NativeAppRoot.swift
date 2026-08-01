@@ -913,6 +913,9 @@ final class NativeAppModel {
     /// Self-heals a viewer session: rejoins on failure once the broadcast is visible again, and
     /// tears through a connected-but-stalled link (the suspended-broadcaster shape).
     @ObservationIgnored private var relayWatchdogTask: Task<Void, Never>?
+    /// Re-sends the held frame to watchers while the camera session recovers, so their stall
+    /// watchdogs keep the picture instead of tear-and-rejoin looping through the outage.
+    @ObservationIgnored private var relayRecoveryHeartbeatTask: Task<Void, Never>?
 
     /// Viewers are served at most this often. The camera's own stream can run faster than a
     /// watcher needs, and every extra frame is bandwidth taken from the one being looked at.
@@ -2568,6 +2571,13 @@ final class NativeAppModel {
     /// Feeds the saved record's `pairedViaCameraAccessPoint` evidence on connect success.
     @ObservationIgnored private var sessionJoinedCameraAccessPoint = false
 
+    /// How the LIVE session actually reached the camera, latched at establishment success and
+    /// held across every recovery attempt (the per-attempt flag above resets each try; this
+    /// does not). Recovery consults it instead of the saved records: the dropped session
+    /// already PROVED its topology, and records on a device that cannot read SSIDs may carry
+    /// no evidence at all.
+    @ObservationIgnored private var establishedSessionUsedCameraAP = false
+
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
         preservingMonitorSurface: Bool = false
@@ -2776,6 +2786,9 @@ final class NativeAppModel {
                 startKeepAlive(session: session)
                 startEventDraining(session: session)
                 startLinkHealthMonitoring()
+                // Latched for the session's lifetime — recovery reads THIS, not the records.
+                establishedSessionUsedCameraAP =
+                    sessionJoinedCameraAccessPoint || cameraAccessPointEvidence == true
                 store.upsertSavedCamera(
                     host: session.identity.host,
                     displayName: session.identity.displayName,
@@ -3981,6 +3994,15 @@ final class NativeAppModel {
         // The operator picked a path that never puts this device on the camera's own access point,
         // so joining one is wrong however tempting a saved SSID makes it look.
         if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint { return }
+        // RECOVERY of a live monitor session: the dropped session already proved its topology.
+        // A router / hotspot / cable session must never answer a drop by reconfiguring Wi-Fi
+        // toward the camera's AP — applying that configuration is itself what kicks this phone
+        // off the router the camera is about to come back on, and takes every relay watcher
+        // down with it. This is deliberately latched session state, not record evidence:
+        // records on a device that cannot read SSIDs may never carry evidence at all.
+        if isStreamRecovering || sessionRecovery != .idle {
+            guard establishedSessionUsedCameraAP else { return }
+        }
         guard
             let joinTarget = CameraWiFiJoinPolicy.joinTargetIfNeeded(
                 transportKind: transportKind,
@@ -4379,6 +4401,21 @@ final class NativeAppModel {
             guard let self, self.sessionRecoveryGeneration == generation else { return }
             self.sessionRecoveryTask = nil
         }
+        // Keep the watchers alive on the held frame: with no fresh camera frames, every
+        // viewer's stall watchdog would tear down and rejoin in a loop for the whole outage.
+        // A 2 s re-send of the frozen frame stays inside their 8 s stall threshold, so they
+        // keep the picture the broadcaster is holding — same as the broadcaster's own monitor.
+        relayRecoveryHeartbeatTask?.cancel()
+        relayRecoveryHeartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, !Task.isCancelled else { return }
+                guard self.sessionRecovery != .idle else { return }
+                if self.isRelayBroadcasting, let held = self.liveFrameImage {
+                    self.broadcastRelayFrame(image: held)
+                }
+            }
+        }
     }
 
     /// The bounded loop itself. Every pass delegates teardown-then-rebuild to `connectToCamera`, so
@@ -4440,6 +4477,8 @@ final class NativeAppModel {
         sessionRecoveryGeneration += 1
         sessionRecoveryTask?.cancel()
         sessionRecoveryTask = nil
+        relayRecoveryHeartbeatTask?.cancel()
+        relayRecoveryHeartbeatTask = nil
         sessionRecovery = .idle
     }
 

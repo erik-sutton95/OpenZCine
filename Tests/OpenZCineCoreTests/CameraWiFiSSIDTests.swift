@@ -190,8 +190,29 @@ import Testing
     #expect(target == CameraWiFiJoinPolicy.JoinTarget(ssid: "NIKON_ZR_01234"))
 }
 
-@Test func proactiveJoinTargetUsesSavedCameraSSIDWhenOffSubnet() {
-    let saved = PTPIPSavedCameraRecord(
+@Test func proactiveJoinTargetRequiresPositiveAPEvidence() {
+    // Spontaneous joins are opt-in by evidence: a record that has actually joined the
+    // camera's AP (stamped true) volunteers; one with no evidence — every record on a device
+    // that cannot read SSIDs — must not reconfigure Wi-Fi on its own.
+    let stamped = PTPIPSavedCameraRecord(
+        host: "192.168.1.1",
+        displayName: "ZR_6001234",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        pairedViaCameraAccessPoint: true
+    )
+    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
+        localAddresses: ["10.0.0.12"],
+        savedCameras: [stamped]
+    )
+    #expect(target == .specificSSID("NIKON_ZR_01234"))
+}
+
+/// The field shape behind the recurring alert: every record predates the evidence field and
+/// the device never reads SSIDs, so nothing can ever earn `false` either. No evidence, no
+/// spontaneous prompt — the operator-initiated connect path is unaffected.
+@Test func proactiveJoinTargetStaysQuietForAllLegacyRecords() {
+    let legacy = PTPIPSavedCameraRecord(
         host: "192.168.1.1",
         displayName: "ZR_6001234",
         transport: "Wi-Fi",
@@ -199,9 +220,9 @@ import Testing
     )
     let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
         localAddresses: ["10.0.0.12"],
-        savedCameras: [saved]
+        savedCameras: [legacy]
     )
-    #expect(target == .specificSSID("NIKON_ZR_01234"))
+    #expect(target == nil)
 }
 
 @Test func proactiveJoinTargetSkipsWhenOnCameraSSID() {
