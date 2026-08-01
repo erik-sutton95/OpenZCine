@@ -5421,6 +5421,9 @@ final class NativeAppModel {
             connection = .connected
             var pausedForCommand = false
             var liveViewSuspended = false
+            // Non-nil while a repeating-frame stall is being HELD as body-busy (#297) instead
+            // of restarted; cleared when fresh payloads resume or the hold escalates.
+            var bodyBusyHoldStart: Date?
             // Whether the stream is currently configured for Command's header-only pulls, so the
             // size change is applied exactly once per DISP transition instead of every frame.
             var headerOnly = false
@@ -5551,7 +5554,9 @@ final class NativeAppModel {
                     }
                     applyLiveViewHeaderTimecode(frame.timecode)
                     let fpsLabel = frameRate.formatted
-                    if fpsLabel != liveFPS { liveFPS = fpsLabel }
+                    // The BUSY chip owns the readout while a body-busy hold runs — the slow
+                    // hold pulls would otherwise flash a meaningless sub-1 fps figure.
+                    if bodyBusyHoldStart == nil, fpsLabel != liveFPS { liveFPS = fpsLabel }
                     await runLiveViewControlSafePoint(
                         session: session,
                         frameCounter: frameCounter
@@ -5566,10 +5571,37 @@ final class NativeAppModel {
                 watchdog.check(at: Date())
                 lastGoodFrameAt = watchdog.lastGoodFrameAt
                 if watchdog.status == .stalled {
+                    // A replaying body whose command channel still answers is BUSY — its menu,
+                    // playback, image review — not dead. Restarting live view here is what
+                    // slammed the operator's body menu shut every few seconds (#297), because
+                    // StartLiveView forces the body back to its shooting screen. Hold with slow
+                    // pulls instead: leaving the menu resumes the still-active stream by
+                    // itself, and the payload change ends the hold. The bounded window keeps
+                    // the genuinely wedged body of #283 self-healing, just on a patient clock.
+                    if watchdog.isRepeatingLastFrame,
+                        (try? await session.pollStillReleaseReadiness()) != nil
+                    {
+                        let holdStart = bodyBusyHoldStart ?? Date()
+                        bodyBusyHoldStart = holdStart
+                        if Date().timeIntervalSince(holdStart)
+                            < BodyBusyHoldPolicy.maxHoldSeconds
+                        {
+                            if liveFPS != "BUSY" {
+                                liveFPS = "BUSY"
+                                connectionMessage =
+                                    "The camera is busy on the body — the feed resumes automatically."
+                            }
+                            try? await Task.sleep(
+                                for: .seconds(BodyBusyHoldPolicy.holdPullIntervalSeconds))
+                            continue
+                        }
+                    }
+                    bodyBusyHoldStart = nil
                     return .stalled(
                         reason: watchdog.isRepeatingLastFrame
                             ? "same frame replayed" : "no good frame")
                 }
+                bodyBusyHoldStart = nil
             }
             return .taskCancelled
         } catch {
