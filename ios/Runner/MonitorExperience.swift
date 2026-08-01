@@ -841,10 +841,34 @@ private struct LiveFeedWaitingOverlay: View {
             VStack(spacing: 10) {
                 Image(systemName: "viewfinder")
                     .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(LiveDesign.text.opacity(0.28))
                 Text("WAITING FOR LIVE VIEW")
                     .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(LiveDesign.text.opacity(0.28))
+                // A viewer session says WHY the picture is missing, where the operator is
+                // looking — the FPS chip can only say FAIL. The watchdog is already retrying;
+                // the button is for the human who wants it now.
+                if model.videoSource == .relay, let reason = model.relayFailureReason {
+                    Text(reason)
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(LiveDesign.text.opacity(0.55))
+                        .frame(maxWidth: 400)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        model.retryRelayJoin()
+                    } label: {
+                        Text("Try again")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(LiveDesign.text.opacity(0.8))
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                }
             }
-            .foregroundStyle(LiveDesign.text.opacity(0.28))
         }
     }
 }

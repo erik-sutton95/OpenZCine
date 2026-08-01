@@ -897,6 +897,15 @@ final class NativeAppModel {
     var relayControlHeldBy: String?
     var discoveredRelayHosts: [MonitorRelayDiscovery] = []
     var relayClientState: MonitorRelayClient.State = .idle
+    /// Why the viewer link is down, shown on the empty feed where the operator is actually
+    /// looking. The FPS chip can only say "FAIL"; this carries the reason — a version mismatch,
+    /// an unreachable route, a suspended broadcaster — and clears when frames flow again.
+    var relayFailureReason: String?
+    /// The broadcast this viewer joined, kept so retry — manual and automatic — knows its target.
+    @ObservationIgnored private var relayJoinTarget: MonitorRelayDiscovery?
+    /// Self-heals a viewer session: rejoins on failure once the broadcast is visible again, and
+    /// tears through a connected-but-stalled link (the suspended-broadcaster shape).
+    @ObservationIgnored private var relayWatchdogTask: Task<Void, Never>?
 
     /// Viewers are served at most this often. The camera's own stream can run faster than a
     /// watcher needs, and every extra frame is bandwidth taken from the one being looked at.
@@ -1099,7 +1108,18 @@ final class NativeAppModel {
     /// Joins a broadcasting device. The viewer has no camera session of its own — by design, since
     /// the camera would refuse a second one anyway.
     func joinRelay(_ discovery: MonitorRelayDiscovery) {
+        // A second join must not leave the first client running: its callbacks keep writing the
+        // shared viewer state, so a stale 15 s timeout would stamp FAIL over a healthy new stream.
+        relayClient?.stop()
+        relayClient = nil
+        relayVideoDecoder?.invalidate()
+        relayVideoDecoder = nil
+        relayJoinTarget = discovery
+        relayFailureReason = nil
         stopDiscoveryLoop()
+        // …which also stopped relay browsing (camera list semantics). A viewer session needs it
+        // back: the watchdog can only rejoin a broadcast it can still see.
+        startRelayBrowsing()
         disconnectCameraSession(resetConnection: false)
         cameraState = .blank
         resetCameraPropertyState()
@@ -1128,13 +1148,19 @@ final class NativeAppModel {
             case .waiting(let reason):
                 self.liveFPS = "LINK"
                 self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
+                self.relayFailureReason = reason
             case .connected(let hostName, let cameraName):
                 self.connectionMessage =
                     cameraName.map { "Watching \(hostName) — \($0)." }
                     ?? "Watching \(hostName)."
+                self.relayFailureReason = nil
             case .failed(let reason):
                 self.liveFPS = "FAIL"
                 self.connectionMessage = reason
+                self.relayFailureReason = reason
+                // A frozen frame that still looks live is the one failure mode a set monitor
+                // must never have — blank it so the reason overlay says what actually happened.
+                self.liveFrameImage = nil
             case .idle:
                 break
             }
@@ -1154,8 +1180,50 @@ final class NativeAppModel {
         relayHoldsControl = false
         relayControlHolderName = nil
         relayClient = client
+        lastGoodFrameAt = Date()
         client.connect(to: discovery.endpoint)
         client.introduce(deviceName: UIDevice.current.name)
+        startRelayWatchdog(for: discovery)
+    }
+
+    /// The empty-feed overlay's Try Again — a human-paced version of the watchdog.
+    func retryRelayJoin() {
+        guard let target = relayJoinTarget else { return }
+        joinRelay(target)
+    }
+
+    /// One loop covers both dead shapes of a viewer session: a failed link (rejoin as soon as the
+    /// broadcast is visible in Bonjour again — the broadcaster reopening its app is exactly the
+    /// case that heals here) and a connected-but-stalled one, which is what a suspended
+    /// broadcaster looks like from the outside. Cancelled by leaving; replaced by rejoining.
+    private func startRelayWatchdog(for target: MonitorRelayDiscovery) {
+        relayWatchdogTask?.cancel()
+        relayWatchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, !Task.isCancelled, self.videoSource == .relay else { return }
+                switch self.relayClientState {
+                case .failed, .idle:
+                    // `.idle` is a failure's aftermath here, not "never joined": the client's
+                    // stop() lands there right after reporting the failure, and leaving the
+                    // relay cancels this watchdog before it could ever observe it.
+                    if self.discoveredRelayHosts.contains(where: { $0.id == target.id }) {
+                        self.joinRelay(target)
+                        return
+                    }
+                case .connected:
+                    if Date().timeIntervalSince(self.lastGoodFrameAt ?? .distantPast) > 8 {
+                        self.relayFailureReason =
+                            "The stream stalled — reconnecting. Make sure OpenZCine is open "
+                            + "on the broadcasting device."
+                        self.joinRelay(target)
+                        return
+                    }
+                default:
+                    break
+                }
+            }
+        }
     }
 
     func requestRelayControl() { relayClient?.requestControl() }
@@ -1165,6 +1233,10 @@ final class NativeAppModel {
     }
 
     func leaveRelay() {
+        relayWatchdogTask?.cancel()
+        relayWatchdogTask = nil
+        relayJoinTarget = nil
+        relayFailureReason = nil
         relayClient?.stop()
         relayClient = nil
         relayVideoDecoder?.invalidate()
@@ -1249,12 +1321,20 @@ final class NativeAppModel {
     /// One decoded picture onto the viewer's monitor, whichever codec delivered it.
     private func presentRelayFrame(_ decoded: UIImage) {
         guard videoSource == .relay else { return }
+        // A frame or two is always still in the decode pipeline when the link dies; presenting
+        // one would repopulate the feed the failure path just blanked, leaving a frozen picture
+        // over a FAIL chip.
+        switch relayClientState {
+        case .failed, .idle: return
+        default: break
+        }
         Task { [weak self] in
             guard let self else { return }
             guard let display = await self.displayReadyLiveFrame(from: decoded) else { return }
             guard self.videoSource == .relay else { return }
             if self.liveFrameImage !== display { self.liveFrameImage = display }
             self.lastGoodFrameAt = Date()
+            if self.relayFailureReason != nil { self.relayFailureReason = nil }
             // The viewer's assists meter the clean frame exactly as the host's do.
             self.sampleScopesIfDue(clean: decoded) { [weak self] in self?.videoSource == .relay }
         }

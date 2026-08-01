@@ -479,7 +479,9 @@ final class MonitorRelayClient {
             guard !Task.isCancelled, let self, self.connection == nil else { return }
             let reason = self.lastWaitingReason.map { " (\($0))" } ?? ""
             self.update(
-                .failed("Couldn't reach the broadcasting device\(reason). Try joining again."))
+                .failed(
+                    "Couldn't reach the broadcasting device\(reason). "
+                        + "Make sure OpenZCine is open on it."))
             self.stop()
         }
     }
