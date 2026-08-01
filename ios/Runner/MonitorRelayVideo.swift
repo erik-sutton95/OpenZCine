@@ -35,14 +35,17 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         let parameterSets: [Data]?
     }
 
-    /// Starting rate — ~6 Mbit/s at live-view sizes is visually transparent and roughly a
-    /// quarter of the JPEG stream it replaces. Adapted live against viewer backpressure
+    /// Starting rate. The relay carries LOG footage that every watcher contrast-stretches
+    /// through a LUT, so quantization noise the flat image hides becomes blotching on their
+    /// screens — the budget is sized for the content, not the pixel count, and still runs
+    /// well under the JPEG stream it replaced. Adapted live against viewer backpressure
     /// (`RelayBitrateAdaptation`); mid-session `AverageBitRate` updates are the same mechanism
     /// production WebRTC uses on this encoder.
-    private static let initialBitsPerSecond = 6_000_000
+    private static let initialBitsPerSecond = RelayBitrateAdaptation.ladder[0]
     /// A bitrate sag must degrade to dropped frames, never to mush an operator would misread
-    /// as a focus problem: QP is capped so the encoder refuses to smear past this.
-    private static let maxAllowedFrameQP = 45
+    /// as a focus problem. 36 is where log content stays gradeable; the earlier 45 permitted
+    /// exactly the blotching reported from set.
+    private static let maxAllowedFrameQP = 36
     /// An upper bound on how long a resuming or joining peer waits for a decodable frame.
     private static let maxKeyframeInterval = 50
     /// Minimum spacing between FORCED keyframes. A keyframe is 3–8× the bytes of a predicted
@@ -73,11 +76,12 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
             let rateStatus = VTSessionSetProperty(
                 session, key: kVTCompressionPropertyKey_AverageBitRate,
                 value: bitsPerSecond as CFNumber)
-            // Byte-per-second window beside the average: lets the rate controller absorb a
-            // keyframe without a multi-second overshoot at the new target.
+            // Byte-per-second window beside the average. 2x, not tighter: a hard 1-second
+            // window sized close to the average crushes the frames right after every keyframe
+            // — a periodic blotch pulse watchers can see.
             VTSessionSetProperty(
                 session, key: kVTCompressionPropertyKey_DataRateLimits,
-                value: [Double(bitsPerSecond) / 8 * 1.5, 1.0] as CFArray)
+                value: [Double(bitsPerSecond) / 8 * 2.0, 1.0] as CFArray)
             if rateStatus != noErr {
                 videoLogger.info("relay bitrate retarget via rebuild (\(rateStatus))")
                 VTCompressionSessionInvalidate(session)
@@ -196,22 +200,30 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         // one consumer that always takes latency as the loss.
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        // Speed over polish — the A-series encoder block has headroom to spare at this size, and
-        // a monitor frame late is worth less than a monitor frame plainer.
-        VTSessionSetProperty(
-            created, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
-            value: kCFBooleanTrue)
         // A bitrate sag degrades to dropped frames, never to mush an operator would misread as
-        // a focus problem.
+        // a focus problem. (The speed-over-quality hint tried here traded visibly worse mode
+        // decisions for headroom this encoder never needed at live-view sizes — reverted.)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
             value: Self.maxAllowedFrameQP as CFNumber)
+        // Explicit BT.709 tags, written into the stream: without them every decoder guesses
+        // the matrix/transfer, and a 601-vs-709 guess is exactly the colour skew watchers see
+        // once a LUT amplifies it.
+        VTSessionSetProperty(
+            created, key: kVTCompressionPropertyKey_ColorPrimaries,
+            value: kCMFormatDescriptionColorPrimaries_ITU_R_709_2)
+        VTSessionSetProperty(
+            created, key: kVTCompressionPropertyKey_TransferFunction,
+            value: kCMFormatDescriptionTransferFunction_ITU_R_709_2)
+        VTSessionSetProperty(
+            created, key: kVTCompressionPropertyKey_YCbCrMatrix,
+            value: kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_AverageBitRate,
             value: targetBitsPerSecond as CFNumber)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_DataRateLimits,
-            value: [Double(targetBitsPerSecond) / 8 * 1.5, 1.0] as CFArray)
+            value: [Double(targetBitsPerSecond) / 8 * 2.0, 1.0] as CFArray)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
             value: Self.maxKeyframeInterval as CFNumber)

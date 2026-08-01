@@ -39,13 +39,20 @@ Camera ── PTP/IP or USB ──> Broadcaster ── TCP (length-prefixed) ─
 3. **Never pay for what nobody receives.** All viewers saturated → the encode itself is
    skipped. Because nothing was encoded, the encoder's reference chain stays exactly where
    every viewer's is — resuming needs no keyframe.
-4. **Bitrate follows the slowest viewer that should keep up.** Sustained saturation steps down
-   a 6 → 4 → 2.5 Mb/s ladder; recovery climbs one rung after 30 clean seconds
-   (`RelayBitrateAdaptation`, pure and tested). Degradation is prompt, recovery deliberate —
-   oscillation reads worse on a monitor than a steady, slightly softer picture.
-5. **Quality floor, not quality mush.** `MaxAllowedFrameQP = 45`: a bitrate sag drops frames
+4. **Bitrate follows the slowest viewer that should keep up.** SUSTAINED saturation steps down
+   a 10 → 7 → 4.5 → 3 Mb/s ladder; recovery climbs one rung after 30 clean seconds
+   (`RelayBitrateAdaptation`, pure and tested). Only consecutive saturated ticks count — a
+   two-frame in-flight cap at stream rate makes isolated "full" ticks normal pacing, and
+   counting them once walked multi-watcher sessions to the floor and held them there. The
+   ladder is sized for the CONTENT: the relay carries log footage every watcher
+   contrast-stretches through a LUT, so quantization noise invisible in the flat image becomes
+   blotching on their screens. Degradation is prompt, recovery deliberate — oscillation reads
+   worse on a monitor than a steady, slightly softer picture.
+5. **Quality floor, not quality mush.** `MaxAllowedFrameQP = 36`: a bitrate sag drops frames
    rather than smearing the picture into something an operator would misread as a focus
-   problem.
+   problem — 36 is where log content stays gradeable. The stream also carries explicit BT.709
+   colour tags; without them each decoder guesses the matrix, and a 601-vs-709 guess is a
+   visible colour skew once a LUT amplifies it.
 6. **A viewer session explains itself and heals itself.** Failures surface their reason on the
    empty feed (never a bare FAIL chip over a frozen frame); a watchdog rejoins as soon as the
    broadcast is visible again and tears through connected-but-stalled links.
@@ -64,7 +71,7 @@ Camera ── PTP/IP or USB ──> Broadcaster ── TCP (length-prefixed) ─
 
 Broadcaster cost per additional viewer: one TCP socket, ≤2 in-flight frame buffers, and the
 send syscalls — the encode is shared. The bounded resource is the broadcaster's Wi-Fi
-**airtime**: at 6 Mb/s HEVC, N viewers cost ~6N Mb/s of uplink (every relayed frame crosses
+**airtime**: at 10 Mb/s HEVC, N viewers cost ~10N Mb/s of uplink (every relayed frame crosses
 the air once per viewer on infrastructure). On a healthy 5 GHz channel that supports a handful
 of viewers; when it doesn't, saturation trips the bitrate ladder and the stream fits itself to
 the channel. The protocol never fans out at the transport level (no multicast — consumer

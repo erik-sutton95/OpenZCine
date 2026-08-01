@@ -9,9 +9,11 @@ import Foundation
 /// degradation — a set network that just choked once will choke again, and oscillating bitrate
 /// reads worse on a monitor than a steady, slightly softer picture.
 public struct RelayBitrateAdaptation: Equatable, Sendable {
-    /// Bits per second, best first. ~6 Mb/s is visually transparent at live-view sizes; the
-    /// floor keeps a usable picture on a genuinely bad channel rather than none.
-    public static let ladder = [6_000_000, 4_000_000, 2_500_000]
+    /// Bits per second, best first. The relay carries LOG footage that every watcher grades
+    /// through a LUT — quantization noise invisible in the flat image gets contrast-stretched
+    /// into blotching, so the ladder is deliberately generous for the content, not the pixel
+    /// count. The floor keeps a usable picture on a genuinely bad channel rather than none.
+    public static let ladder = [10_000_000, 7_000_000, 4_500_000, 3_000_000]
 
     /// Fraction of saturated ticks in a window that forces a step DOWN.
     public static let stepDownSaturation = 0.3
@@ -29,6 +31,7 @@ public struct RelayBitrateAdaptation: Equatable, Sendable {
     private var windowStartedAt: TimeInterval
     private var ticksInWindow = 0
     private var saturatedTicksInWindow = 0
+    private var previousTickSaturated = false
     private var cleanSince: TimeInterval
 
     public init(now: TimeInterval = 0) {
@@ -37,9 +40,16 @@ public struct RelayBitrateAdaptation: Equatable, Sendable {
     }
 
     /// Records one broadcast tick. Returns the new bitrate when the rung changed, else nil.
+    ///
+    /// A single saturated tick is PACING, not congestion: with a two-frame in-flight cap at
+    /// stream rate, every viewer is momentarily "full" all the time. Only consecutive
+    /// saturated ticks — the stream outrunning the drain for real — count toward stepping
+    /// down; counting the blips is what walked multi-watcher sessions to the floor and kept
+    /// them there.
     public mutating func recordTick(saturated: Bool, now: TimeInterval) -> Int? {
         ticksInWindow += 1
-        if saturated { saturatedTicksInWindow += 1 }
+        if saturated && previousTickSaturated { saturatedTicksInWindow += 1 }
+        previousTickSaturated = saturated
         guard now - windowStartedAt >= Self.windowSeconds, ticksInWindow > 0 else { return nil }
 
         let saturation = Double(saturatedTicksInWindow) / Double(ticksInWindow)
