@@ -2054,6 +2054,9 @@ final class NativeAppModel {
                 )
             }
         }
+        // Reaching here means an access-point configuration actually applied — the strongest
+        // evidence this session's camera is an AP camera, independent of SSID readability.
+        sessionJoinedCameraAccessPoint = true
         await mirrorCameraWiFiPasswordToConnectedSSID(credentials.password)
     }
 
@@ -2528,10 +2531,15 @@ final class NativeAppModel {
     /// Init attempts can't stack (see the guard inside).
     @ObservationIgnored private var isEstablishingConnection = false
 
+    /// Whether THIS connection attempt applied a camera access-point Wi-Fi configuration.
+    /// Feeds the saved record's `pairedViaCameraAccessPoint` evidence on connect success.
+    @ObservationIgnored private var sessionJoinedCameraAccessPoint = false
+
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
         preservingMonitorSurface: Bool = false
     ) {
+        sessionJoinedCameraAccessPoint = false
         if let discoveredCamera {
             cameraHost = discoveredCamera.ip
         }
@@ -2737,7 +2745,8 @@ final class NativeAppModel {
                 store.upsertSavedCamera(
                     host: session.identity.host,
                     displayName: session.identity.displayName,
-                    transport: transport
+                    transport: transport,
+                    onCameraAccessPoint: cameraAccessPointEvidence
                 )
                 refreshSavedCameras()
                 markFirstPairWizardCompleted()
@@ -3878,11 +3887,29 @@ final class NativeAppModel {
         )
     }
 
+    /// Access-point evidence for the record being saved: a configuration applied this attempt is
+    /// direct proof; a readable SSID answers either way; nothing readable is no evidence (nil),
+    /// which preserves whatever an earlier connection recorded.
+    private var cameraAccessPointEvidence: Bool? {
+        if sessionJoinedCameraAccessPoint { return true }
+        guard let ssid = connectedWiFiSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !ssid.isEmpty
+        else { return nil }
+        return CameraWiFiSSID.isNikonZAccessPoint(ssid)
+    }
+
     private func savePairedCamera(host: String, displayName: String, transport: String) {
+        // Pairing knows the topology better than any later reconnect: the wizard's chosen path is
+        // the operator's own declaration, used when the network offers no evidence of its own.
+        let onCameraAccessPoint =
+            cameraAccessPointEvidence
+            ?? (shouldShowFirstPairWizard
+                ? firstPairTransportMethod.joinsCameraAccessPoint : nil)
         NativeCameraConnectionStore.shared.upsertSavedCamera(
             host: host,
             displayName: displayName,
-            transport: transport
+            transport: transport,
+            onCameraAccessPoint: onCameraAccessPoint
         )
         refreshSavedCameras()
         markFirstPairWizardCompleted()

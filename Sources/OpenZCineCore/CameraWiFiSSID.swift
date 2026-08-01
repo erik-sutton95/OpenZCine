@@ -172,6 +172,11 @@ public enum CameraWiFiJoinPolicy {
         {
             return nil
         }
+        // A record with positive evidence it reaches the app WITHOUT the camera's access point —
+        // a router or hotspot camera — must never turn a dropped connection into a "join
+        // NIKON_…" prompt: the camera being momentarily invisible on the shared network is not
+        // fixed by leaving that network. nil is a legacy record with no evidence either way.
+        if savedCamera?.pairedViaCameraAccessPoint == false { return nil }
         // A DISCOVERED camera is by definition reachable on the network this device is already on
         // — discovery is what found it there. Joining its access point would leave that network to
         // reach a camera we can already see.
@@ -212,12 +217,19 @@ public enum CameraWiFiJoinPolicy {
             )
         else { return nil }
 
-        for camera in savedCameras where !camera.isUSBTransport {
+        for camera in savedCameras
+        where !camera.isUSBTransport && camera.pairedViaCameraAccessPoint != false {
             if let ssid = CameraWiFiSSID.resolve(for: camera) {
                 return .specificSSID(ssid)
             }
         }
 
+        // An operator whose every saved camera is known to live OFF the access-point path gets
+        // no brand-prefix prompt either — for them it is pure noise. Only a camera-less install
+        // keeps the broad match (first-pair discovery).
+        if savedCameras.contains(where: { $0.pairedViaCameraAccessPoint == false }) {
+            return nil
+        }
         return .ssidPrefix(CameraWiFiSSID.nikonAccessPointBrandPrefix)
     }
 

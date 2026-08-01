@@ -34,13 +34,15 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         displayName: String,
         transport: String,
         lastSeenAt: Date?,
-        presentation: PTPIPSavedCameraPresentation? = nil
+        presentation: PTPIPSavedCameraPresentation? = nil,
+        pairedViaCameraAccessPoint: Bool? = nil
     ) {
         self.host = host
         self.displayName = displayName
         self.transport = transport
         self.lastSeenAt = lastSeenAt
         self.presentation = presentation
+        self.pairedViaCameraAccessPoint = pairedViaCameraAccessPoint
     }
 
     public var host: String  // IP address, hostname, or `usb:<device-id>` key
@@ -48,6 +50,12 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
     public var transport: String  // e.g. "Wi-Fi", "USB-C"
     public var lastSeenAt: Date?
     public var presentation: PTPIPSavedCameraPresentation?
+    /// Whether this camera reaches the app over its own access point. The transport string
+    /// collapses camera-AP, phone hotspot and router into one "Wi-Fi", so it cannot answer the
+    /// one question a dropped connection asks: is joining the camera's network ever the fix for
+    /// THIS record? `false` is positive evidence it is not (router/hotspot use); `nil` is a
+    /// legacy record with no evidence, which keeps the historical prompt behavior.
+    public var pairedViaCameraAccessPoint: Bool?
 
     /// User-facing title, preferring a custom name when one exists.
     public var displayTitle: String {
@@ -96,6 +104,7 @@ public enum PTPIPSavedCameraRecords {
         displayName rawDisplayName: String,
         transport rawTransport: String,
         lastSeenAt: Date?,
+        pairedViaCameraAccessPoint: Bool? = nil,
         into records: [PTPIPSavedCameraRecord]
     ) -> [PTPIPSavedCameraRecord] {
         guard let host = PTPIPPairedHosts.normalizedHost(rawHost) else {
@@ -105,7 +114,8 @@ public enum PTPIPSavedCameraRecords {
             host: host,
             displayName: normalizedDisplayName(rawDisplayName, host: host),
             transport: normalizedTransport(rawTransport),
-            lastSeenAt: lastSeenAt
+            lastSeenAt: lastSeenAt,
+            pairedViaCameraAccessPoint: pairedViaCameraAccessPoint
         )
         return canonicalized(records + [updated])
     }
@@ -196,7 +206,8 @@ public enum PTPIPSavedCameraRecords {
             displayName: normalizedDisplayName(record.displayName, host: host),
             transport: normalizedTransport(record.transport),
             lastSeenAt: record.lastSeenAt,
-            presentation: normalizedPresentation(record.presentation)
+            presentation: normalizedPresentation(record.presentation),
+            pairedViaCameraAccessPoint: record.pairedViaCameraAccessPoint
         )
     }
 
@@ -243,6 +254,11 @@ public enum PTPIPSavedCameraRecords {
             (preferred, fallback) = (candidate, existing)
         }
         var merged = preferred
+        // An update that carries no access-point evidence must never erase evidence a previous
+        // connection recorded — a reconnect upsert usually knows nothing about the topology.
+        if merged.pairedViaCameraAccessPoint == nil {
+            merged.pairedViaCameraAccessPoint = fallback.pairedViaCameraAccessPoint
+        }
         if merged.presentation == nil {
             merged.presentation = fallback.presentation
         } else if let fallbackPresentation = fallback.presentation,
