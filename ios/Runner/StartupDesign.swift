@@ -345,6 +345,12 @@ struct StartupSavedCamerasView: View {
                         )
                         .environment(model)
                     }
+                    if model.savedCameras.isEmpty {
+                        Text("No cameras saved yet — Pair new camera walks you through it.")
+                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                            .foregroundStyle(StartupColors.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     nearbyBroadcasts
                 }
                 .padding(.top, 16)
@@ -368,13 +374,35 @@ struct StartupSavedCamerasView: View {
     /// the same question — which picture do I want on this screen. The camera itself serves one
     /// device, so joining a broadcast is what a second screen does instead of connecting.
     @ViewBuilder private var nearbyBroadcasts: some View {
-        if !model.discoveredRelayHosts.isEmpty {
+        // A device with saved cameras only sees this section once a broadcast exists; a device
+        // with none is here BECAUSE of broadcasts, so the section stays mounted with an honest
+        // placeholder — browsing runs the whole time this screen is up.
+        if !model.discoveredRelayHosts.isEmpty || model.savedCameras.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("NEARBY BROADCASTS")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .tracking(1.4)
                     .foregroundStyle(StartupColors.muted)
                     .padding(.top, 6)
+                if model.discoveredRelayHosts.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(StartupColors.muted)
+                        Text(
+                            "None yet — start Share This Feed on the device holding the camera."
+                        )
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(StartupColors.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        StartupColors.tile.opacity(0.25),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+                }
                 ForEach(model.discoveredRelayHosts) { host in
                     Button {
                         model.joinRelay(host)
@@ -1850,7 +1878,7 @@ struct StartupFirstPairWizardView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) { cards }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                wizardNearbyBroadcasts
+                wizardCameraListLink
             }
         } else {
             // Scrolls: with the portrait intro header above the card, three stacked cards can
@@ -1858,7 +1886,7 @@ struct StartupFirstPairWizardView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     cards
-                    wizardNearbyBroadcasts
+                    wizardCameraListLink
                 }
             }
             .fadeOverflowBottom()
@@ -1866,49 +1894,41 @@ struct StartupFirstPairWizardView: View {
         }
     }
 
-    /// Broadcasting devices, reachable from inside the wizard.
+    /// The way out of the wizard for a device that will not pair a camera.
     ///
-    /// A watcher-only device never pairs a camera, so the wizard is the only screen it ever
-    /// sees — without this, the broadcast list on the saved-cameras home is unreachable for
-    /// exactly the person it exists for. Joining is a whole different session, so it is a row
-    /// here rather than a fourth card.
-    @ViewBuilder private var wizardNearbyBroadcasts: some View {
-        if !model.discoveredRelayHosts.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("OR WATCH ANOTHER DEVICE")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .tracking(1.4)
+    /// A watcher-only device never pairs, so the wizard is the only screen it would ever see —
+    /// this row hands it the camera-list home, where nearby broadcasts are listed and joined.
+    /// The list screen owns that choice; the wizard only points at it.
+    private var wizardCameraListLink: some View {
+        Button {
+            model.showSavedCameras()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(StartupColors.accent)
+                Text("Watching another device?")
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
                     .foregroundStyle(StartupColors.muted)
-                ForEach(model.discoveredRelayHosts) { host in
-                    Button {
-                        model.joinRelay(host)
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(StartupColors.accent)
-                            Text(host.name)
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundStyle(StartupColors.ink)
-                            Spacer(minLength: 0)
-                            Text("Watch")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(StartupColors.accent)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(
-                            StartupColors.tile.opacity(0.4),
-                            in: RoundedRectangle(cornerRadius: 12)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
-                    }
-                    .buttonStyle(.zcTapTarget)
-                }
+                Text("Open the camera list")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(StartupColors.accent)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(StartupColors.muted)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                StartupColors.tile.opacity(0.4),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
         }
+        .buttonStyle(.zcTapTarget)
     }
 
     private var stepNav: some View {

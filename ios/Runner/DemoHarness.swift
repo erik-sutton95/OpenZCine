@@ -719,6 +719,12 @@ enum DemoHarness {
                 model.isPairingNewCamera = true
                 model.firstPairWizardStep = step
             }
+            if env["ZC_DEMO_CAMERA_LIST"] == "1" {
+                // Demo/screenshot affordance: land on the camera-list home even with zero saved
+                // cameras — the watcher's destination behind the wizard's "Open the camera list"
+                // row, otherwise unreachable headless (it needs that tap).
+                model.showSavedCameras()
+            }
             if let raw = env["ZC_DEMO_JOIN_POPUP"] {
                 // Demo/screenshot affordance: stage the scanned-credentials join popup over the
                 // startup screen — the scanner itself needs a physical camera screen to point at.

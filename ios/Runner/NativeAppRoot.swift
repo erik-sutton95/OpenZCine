@@ -612,6 +612,11 @@ final class NativeAppModel {
     /// explicitly starts pairing a new camera. The wizard is the sole pairing surface.
     var isPairingNewCamera = false
 
+    /// The operator chose the camera list over the wizard while owning zero saved cameras.
+    /// A watcher-only device joins broadcasts from the list and may never pair anything, so
+    /// once it has been there, an empty camera list must not bounce it back into the wizard.
+    var showsCameraListWithoutSavedCameras = false
+
     /// Which discovery backend the connect screen's Wi-Fi / USB-C segment shows. Seeded from the
     /// wizard's step-1 transport choice; switchable at any time on the discovery step.
     enum DiscoveryTransportFilter: String, CaseIterable, Sendable, Identifiable {
@@ -1840,9 +1845,10 @@ final class NativeAppModel {
     /// True while the first-pair wizard should own the screen: whenever the operator is explicitly
     /// pairing a new camera, or there are no saved cameras yet (first run, or all cameras removed).
     /// The wizard is the sole pairing surface, so this also covers what the old standalone discovery
-    /// page used to handle.
+    /// page used to handle. A watcher-only device escapes the empty-cameras rule once it chooses
+    /// the camera list — nearby broadcasts are joined from there, and it may never pair anything.
     var shouldShowFirstPairWizard: Bool {
-        isPairingNewCamera || savedCameras.isEmpty
+        isPairingNewCamera || (savedCameras.isEmpty && !showsCameraListWithoutSavedCameras)
     }
 
     /// Plain-language version of `connectionMessage` for startup screens.
@@ -2348,6 +2354,9 @@ final class NativeAppModel {
     /// Returns to the saved-camera home, clearing any explicit pairing override.
     func showSavedCameras() {
         isPairingNewCamera = false
+        // Zero saved cameras is a legitimate place to live once the operator has chosen the
+        // list — the wizard's "open the camera list" row is exactly that choice.
+        showsCameraListWithoutSavedCameras = true
         refreshSavedCameras()
         applyStartupDestination()
         startDiscoveryLoop(resetResults: false)
