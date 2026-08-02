@@ -912,6 +912,16 @@ final class NativeAppModel {
     /// Host side: a viewer waiting on an answer, and who currently holds the camera.
     var relayPendingControlRequest: String?
     var relayControlHeldBy: String?
+    /// An armed add-setup watch: the operator tapped "Connect When Plugged In" / "Find On
+    /// This Network" / "Wait For Camera" in the add-setup sheet, so the first discovery that
+    /// matches the asked-for path IS the operator's tap, given in advance. One-shot,
+    /// in-memory — it either fulfills into a connect (which saves the setup with its declared
+    /// path, like any connect) or is replaced by the next armed watch.
+    struct PendingSetupIntent: Equatable {
+        let anchor: PTPIPSavedCameraRecord
+        let kind: CameraPath.Kind
+    }
+    var pendingSetupIntent: PendingSetupIntent?
     /// True while a relayed command is being executed on this device's session, so the
     /// surrendered-control guards let the watcher's own commands through the shared entry
     /// points they route over.
@@ -2901,11 +2911,36 @@ final class NativeAppModel {
             )
             do {
                 let guid = store.guid()
-                let attempt = try await establishStartupSession(
-                    host: host,
-                    guid: guid,
-                    strategy: strategy
-                )
+                let attempt: (session: NativeCameraSession, requestedPairing: Bool)
+                do {
+                    attempt = try await establishStartupSession(
+                        host: host,
+                        guid: guid,
+                        strategy: strategy
+                    )
+                } catch let error
+                    where strategy == .savedProfile && !preservingMonitorSurface
+                    && NativeCameraSession.isRetryableEstablishFailure(
+                        error, requestPairing: false)
+                {
+                    // A first attempt over a fresh camera-AP join regularly dies in the
+                    // app-control switch while the body is still finishing its own bring-up —
+                    // and the manual Try again then connects almost instantly. Run that retry
+                    // for the operator, once, after a short settle. Pairing flows keep manual
+                    // behavior (a retry must never loop a PIN prompt).
+                    guard connectionGeneration == generation else { return }
+                    logConnection(
+                        "first establish failed, auto-retrying host=\(host) "
+                            + error.localizedDescription)
+                    connectionMessage = "The camera answered slowly — trying again…"
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard connectionGeneration == generation else { return }
+                    attempt = try await establishStartupSession(
+                        host: host,
+                        guid: guid,
+                        strategy: strategy
+                    )
+                }
                 let initialSession = attempt.session
                 let requestedPairing = attempt.requestedPairing
                 // Torn down while establishing (operator disconnect, new attempt): close the fresh
@@ -4096,6 +4131,28 @@ final class NativeAppModel {
                 // let the first Init time out — each discovery pass retries (connectToCamera
                 // single-flights). Disarming here would strand the operator on one flaky Init.
                 connectionMessage = "Your camera is back online. Reconnecting…"
+                connectToCamera(match)
+                return
+            }
+        }
+
+        // An armed add-setup watch fulfills here: the sheet's tap was the operator's consent,
+        // given in advance, for exactly this discovery. (Distinct from the implicit
+        // auto-reconnect-on-plug that was removed by request below — this one only ever runs
+        // after an explicit arm, once.)
+        if let intent = pendingSetupIntent, !isConnected, !isEstablishingConnection {
+            let match = cameras.first { discovered in
+                let sourceFits =
+                    intent.kind == .usbC
+                    ? discovered.source == .usb
+                    : discovered.source != .usb
+                return sourceFits
+                    && CameraStartupPolicy.savedCamera(
+                        forDiscovered: discovered, in: [intent.anchor]) != nil
+            }
+            if let match {
+                pendingSetupIntent = nil
+                connectionMessage = "\(intent.anchor.displayTitle) found. Connecting…"
                 connectToCamera(match)
                 return
             }
