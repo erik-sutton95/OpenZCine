@@ -328,12 +328,6 @@ struct StartupSavedCamerasView: View {
             // on fadeOverflowBottom to signal overflow.
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
-                    if let hotspotPrompt {
-                        StartupHotspotRecoveryCard(
-                            camera: hotspotPrompt.camera,
-                            bridgeIsActive: hotspotPrompt.bridgeIsActive
-                        )
-                    }
                     // One ROW per body: records stay one-per-path on disk, and the serial
                     // stamped at connect groups them here (see SavedCameraPathGroups).
                     let pathGroups = SavedCameraPathGroups.group(model.savedCameras)
@@ -483,60 +477,6 @@ struct StartupSavedCamerasView: View {
         case .waitForIPhoneHotspotCamera(let camera):
             return (camera, true)
         }
-    }
-}
-
-struct StartupHotspotRecoveryCard: View {
-    let camera: PTPIPSavedCameraRecord
-    let bridgeIsActive: Bool
-
-    // Row-scale on purpose: the camera's own row directly below already carries the
-    // "Waiting for hotspot" state, so this strip only says what that row cannot — the one
-    // thing to keep enabled (active) or the path to enable it (needed). The old three-pill
-    // status band restated both and tripled the height.
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "personalhotspot")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
-                Text(title)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            Text(detail)
-                .font(.system(size: 11.5, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            StartupColors.surface.opacity(0.74),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                .stroke(StartupColors.accent.opacity(0.35), lineWidth: 1)
-        )
-    }
-
-    private var title: String {
-        bridgeIsActive ? "iPhone Hotspot active" : "iPhone Hotspot needed"
-    }
-
-    private var detail: String {
-        if bridgeIsActive {
-            return
-                "Keep Connect to PC on — \(camera.displayTitle) connects the moment it joins."
-        }
-        return
-            "Settings → Personal Hotspot → Allow Others to Join, then return here — "
-            + "\(camera.displayTitle) is waiting."
     }
 }
 
