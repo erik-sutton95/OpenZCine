@@ -365,6 +365,10 @@ class MainActivity : ComponentActivity() {
                     }
                 var standaloneSettingsPresented by
                     rememberSaveable { mutableStateOf(debugInitialSettingsTab != null) }
+                // iOS showsCameraListWithoutSavedCameras: once a watcher-only device
+                // asks for the camera list, an empty saved list stops forcing the
+                // wizard — that's where nearby broadcasts live.
+                var watcherListRequested by rememberSaveable { mutableStateOf(false) }
                 // Branded launch splash (iOS `LaunchSplashTiming`: fully
                 // visible 2250ms, then a 350ms ease-out fade). Debug demo and
                 // scripted launches skip it so screenshots stay deterministic.
@@ -527,7 +531,7 @@ class MainActivity : ComponentActivity() {
                         enabled =
                             !standaloneSettingsPresented &&
                                 startupSurface == StartupSurface.PAIRING &&
-                                savedCameras.isNotEmpty(),
+                                (savedCameras.isNotEmpty() || watcherListRequested),
                     ) {
                         startupSurface = StartupSurface.SAVED_CAMERAS
                     }
@@ -564,7 +568,7 @@ class MainActivity : ComponentActivity() {
                                     onRecordsChanged = { updated ->
                                         savedCameras = updated
                                         savedCameraStore.replace(updated)
-                                        if (updated.isEmpty()) {
+                                        if (updated.isEmpty() && !watcherListRequested) {
                                             startupSurface = StartupSurface.PAIRING
                                         }
                                     },
@@ -614,6 +618,10 @@ class MainActivity : ComponentActivity() {
                                         } else {
                                             { startupSurface = StartupSurface.SAVED_CAMERAS }
                                         },
+                                    onOpenWatcherList = {
+                                        watcherListRequested = true
+                                        startupSurface = StartupSurface.SAVED_CAMERAS
+                                    },
                                     onShareDiagnostics = {
                                         if (!systemSettingsActions.shareDiagnostics()) {
                                             Toast.makeText(
@@ -780,7 +788,7 @@ class MainActivity : ComponentActivity() {
                                 // An HDMI-only user may have no saved cameras at
                                 // all; an empty saved list is not a home.
                                 startupSurface =
-                                    if (savedCameras.isEmpty()) {
+                                    if (savedCameras.isEmpty() && !watcherListRequested) {
                                         StartupSurface.PAIRING
                                     } else {
                                         StartupSurface.SAVED_CAMERAS

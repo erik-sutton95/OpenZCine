@@ -237,6 +237,8 @@
     <string name="saved_nearby_broadcasts">Nearby broadcasts</string>
     <string name="saved_nearby_broadcasts_empty">Broadcasts from other devices appear here.</string>
     <string name="relay_watch">Watch</string>
+    <string name="pairing_watcher_question">Watching another device?</string>
+    <string name="pairing_watcher_action">Open the camera list</string>
     <string name="relay_ask_for_control">ASK FOR CONTROL</string>
     <string name="relay_give_back_control">GIVE BACK CONTROL</string>
     <string name="relay_record_toggle">REC</string>

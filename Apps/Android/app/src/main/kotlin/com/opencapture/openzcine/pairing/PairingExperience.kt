@@ -626,6 +626,12 @@ public fun PairingExperience(
     onStartHdmiMonitor: () -> Unit,
     onOpenSettings: (() -> Unit)? = null,
     onShowSavedCameras: (() -> Unit)? = null,
+    /**
+     * The way out of the wizard for a device that will not pair a camera — the watcher-only
+     * entry. Opens the camera-list home, where nearby broadcasts are listed and joined; the
+     * list screen owns that choice, the wizard only points at it (the iOS row's rule).
+     */
+    onOpenWatcherList: (() -> Unit)? = null,
     /** Explicit local report handoff when pairing cannot complete (no automatic upload). */
     onShareDiagnostics: (() -> Unit)? = null,
     /**
@@ -1296,6 +1302,7 @@ public fun PairingExperience(
                             onConnectUsbCamera = ::connectUsb,
                             hdmiCaptureReady = hdmiCaptureReady,
                             onStartHdmiMonitor = onStartHdmiMonitor,
+                            onOpenWatcherList = onOpenWatcherList,
                             compact = compactStep,
                             tightChrome = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -1335,6 +1342,7 @@ public fun PairingExperience(
                             onConnectUsbCamera = ::connectUsb,
                             hdmiCaptureReady = hdmiCaptureReady,
                             onStartHdmiMonitor = onStartHdmiMonitor,
+                            onOpenWatcherList = onOpenWatcherList,
                             compact = viewportWidth < 480.dp,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
@@ -1465,6 +1473,38 @@ private fun PortraitIntroHeader(
     }
 }
 
+/**
+ * "Watching another device? Open the camera list" — the iOS wizard row, verbatim: a
+ * watcher-only device never pairs, so the wizard is the only screen it would ever see.
+ */
+@Composable
+private fun PairingWatcherListLink(onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(StartupColors.tile.copy(alpha = 0.4f))
+            .border(1.dp, StartupColors.border.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            stringResource(R.string.pairing_watcher_question),
+            color = StartupColors.muted,
+            fontSize = 13.sp,
+        )
+        Text(
+            stringResource(R.string.pairing_watcher_action),
+            color = StartupColors.accent,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.weight(1f))
+        Text("›", color = StartupColors.muted, fontSize = 15.sp)
+    }
+}
+
 @Composable
 private fun IntroCard(
     flow: PairingFlowState,
@@ -1590,6 +1630,7 @@ private fun StepCard(
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
     hdmiCaptureReady: Boolean,
     onStartHdmiMonitor: () -> Unit,
+    onOpenWatcherList: (() -> Unit)?,
     compact: Boolean,
     tightChrome: Boolean = false,
     modifier: Modifier = Modifier,
@@ -1629,7 +1670,11 @@ private fun StepCard(
                         onRequestCamera = onRequestCameraPermission,
                     )
                 PairingStep.CHOOSE_PATH ->
-                    ChoosePathBody(onChoose = onChoose, compact = compact)
+                    ChoosePathBody(
+                        onChoose = onChoose,
+                        compact = compact,
+                        onOpenWatcherList = onOpenWatcherList,
+                    )
                 PairingStep.PREPARE ->
                     NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
                 PairingStep.NETWORK -> NetworkBody(path = flow.path)
@@ -1857,31 +1902,33 @@ private fun PermissionStatusPill(
 private fun ChoosePathBody(
     onChoose: (PairingPath) -> Unit,
     compact: Boolean,
+    onOpenWatcherList: (() -> Unit)?,
 ) {
     // iOS `transportCards`: portrait stacks the cards inside the step body's
     // scroll; landscape puts them side by side with wrapping copy. Cards group
     // several paths, so the operator picks a kind of connection first and the
     // specific one second.
-    if (compact) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (compact) {
             for (card in PairingCard.entries) {
                 PathChoiceCard(card, onChoose, Modifier.fillMaxWidth())
             }
-        }
-    } else {
-        Row(
-            Modifier.height(IntrinsicSize.Max),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            for (card in PairingCard.entries) {
-                PathChoiceCard(
-                    card,
-                    onChoose,
-                    Modifier.weight(1f).fillMaxHeight(),
-                    tight = true,
-                )
+        } else {
+            Row(
+                Modifier.height(IntrinsicSize.Max),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                for (card in PairingCard.entries) {
+                    PathChoiceCard(
+                        card,
+                        onChoose,
+                        Modifier.weight(1f).fillMaxHeight(),
+                        tight = true,
+                    )
+                }
             }
         }
+        onOpenWatcherList?.let { PairingWatcherListLink(onClick = it) }
     }
 }
 
