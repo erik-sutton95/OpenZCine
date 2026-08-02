@@ -2919,7 +2919,10 @@ final class NativeAppModel {
             connection = .scanning
             connectionPhase = .handshaking
             isDemoSession = false
-            liveFrameImage = nil
+            // A recovery reconnect PROMISES the held frame stays up — blanking it here was
+            // the "black flicker for a few frames" on every fast heal. Only a fresh,
+            // operator-initiated connect starts from an empty monitor.
+            if !preservingMonitorSurface { liveFrameImage = nil }
             acceptedPairingForCurrentAttempt = false
             establishmentDiagnostic.withLock { $0 = "" }
             connectionMessage = startupConnectionMessage(for: strategy, host: host)

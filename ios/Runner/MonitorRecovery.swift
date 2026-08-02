@@ -12,10 +12,36 @@ import SwiftUI
 /// biased and this app is a ~400pt-tall landscape monitor.
 struct MonitorRecoveryOverlay: View {
     @Environment(NativeAppModel.self) private var model
+    /// The first automatic retry fires immediately and usually heals a blip within a second
+    /// or two — flashing the full card + dimmed backdrop for that was the "retry prompt for
+    /// like a sec". The card waits out a short grace on attempt 1; a second attempt or the
+    /// give-up state is a real outage and shows at once.
+    @State private var graceElapsed = false
+
+    private static let firstAttemptCardGrace: Duration = .seconds(2.5)
+
+    private func showsCard(_ state: SessionRecoveryState) -> Bool {
+        guard state.isRecovering else { return false }
+        if model.isDemoSession { return true }
+        if case .retrying(let attempt, _) = state, attempt <= 1 { return graceElapsed }
+        return true
+    }
 
     var body: some View {
         let state = model.sessionRecovery
-        if state.isRecovering {
+        Group {
+            recoveryBody(state)
+        }
+        .task(id: state.isRecovering) {
+            graceElapsed = false
+            guard state.isRecovering else { return }
+            try? await Task.sleep(for: Self.firstAttemptCardGrace)
+            graceElapsed = true
+        }
+    }
+
+    @ViewBuilder private func recoveryBody(_ state: SessionRecoveryState) -> some View {
+        if showsCard(state) {
             ZStack {
                 // Reads as "this image is frozen" at a glance. Non-interactive so the chrome
                 // underneath stays reachable — the operator may still want Settings or Media.
