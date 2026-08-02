@@ -611,10 +611,26 @@ internal class CameraApAvailabilityTracker<NetworkToken : Any> {
     internal fun hasEstablishedNetwork(): Boolean = hasEstablishedNetwork
 }
 
-/** True for Nikon Z camera soft-AP SSIDs (`NIKON_ZR_…` and close OCR cousins). */
+/**
+ * True for Nikon Z camera soft-AP SSIDs. TRANSCRIBED from the shared core's
+ * `CameraWiFiSSID.isNikonZAccessPoint` — same brand prefix, Z marker, digit, length and charset
+ * rules — and pinned to the same fixture cases in `CameraApSsidHelpersTest`, so the two cannot
+ * quietly disagree about what counts as a camera network. (The previous prefix-only check was
+ * laxer than the core's; the audit flagged the divergence.)
+ */
 internal fun looksLikeNikonAccessPointSsid(ssid: String): Boolean {
-    val upper = ssid.trim().uppercase()
-    return upper.startsWith("NIKON_ZR_") || upper.startsWith("NIKON_Z")
+    val trimmed = ssid.trim()
+    val byteCount = trimmed.toByteArray(Charsets.UTF_8).size
+    if (byteCount < 8 || byteCount > 32) return false
+    val upper = trimmed.uppercase()
+    if (!upper.startsWith("NIKON")) return false
+    val suffix = upper.removePrefix("NIKON")
+    if (!suffix.contains('Z')) return false
+    if (suffix.none(Char::isDigit)) return false
+    return suffix.all { character ->
+        character.code <= 0x7F &&
+            (character.isLetterOrDigit() || character == '_' || character == '-')
+    }
 }
 
 /**

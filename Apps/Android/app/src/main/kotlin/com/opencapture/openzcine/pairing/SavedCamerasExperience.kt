@@ -206,6 +206,7 @@ public fun SavedCamerasExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
             -> environment.createSavedProfileSession(resolvedHost(record))
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
@@ -225,6 +226,7 @@ public fun SavedCamerasExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
             -> environment.createSession(resolvedHost(record))
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
@@ -459,11 +461,7 @@ public fun SavedCamerasExperience(
                         val useFirstTimePairing =
                             isCameraAp &&
                                 attempt == maxAttempts &&
-                                lastFailureDetail?.let { detail ->
-                                    val lower = detail.lowercase()
-                                    lower.contains("rejectedinitiator") ||
-                                        (lower.contains("rejected") && lower.contains("handshake"))
-                                } == true
+                                indicatesCameraForgotThisPhone(lastFailureDetail)
                         val attemptSession =
                             session
                                 ?: if (useFirstTimePairing) {

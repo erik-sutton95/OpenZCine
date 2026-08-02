@@ -6,6 +6,25 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 class SavedCameraRecordsTest {
+    /**
+     * The operator's Router choice must survive persistence — the wizard used to collapse it
+     * into PHONE_HOTSPOT at save time, silently reclassifying every router camera (the Android
+     * twin of iOS's old "Wi-Fi" transport-string collapse).
+     */
+    @Test
+    fun `infrastructure transport survives persistence round trips`() {
+        assertEquals(
+            SavedCameraTransport.INFRASTRUCTURE,
+            SavedCameraTransport.fromPersistedValue("infrastructure"),
+        )
+        assertEquals("Router", SavedCameraTransport.INFRASTRUCTURE.displayName)
+        // Unknown or legacy blobs keep their historical hotspot landing.
+        assertEquals(
+            SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.fromPersistedValue("something-old"),
+        )
+    }
+
     @Test
     fun `canonicalization normalizes profile fields and keeps meaningful metadata`() {
         val records =

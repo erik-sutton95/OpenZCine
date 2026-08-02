@@ -24,10 +24,22 @@ public enum class SavedCameraTransport(
     /** The camera connects to the phone's Wi-Fi hotspot. */
     PHONE_HOTSPOT("phone-hotspot", "Phone hotspot"),
 
+    /**
+     * Both devices on somebody's network — a set router, house Wi-Fi. Like
+     * [PHONE_HOTSPOT] the app joins and hosts nothing; the case exists so the
+     * operator's Router choice survives persistence instead of collapsing into
+     * "hotspot" (the Android twin of iOS's old "Wi-Fi" string collapse).
+     */
+    INFRASTRUCTURE("infrastructure", "Router"),
+
     /** A physically attached and permissioned USB PTP camera. */
     USB_C("usb-c", "USB-C");
 
     internal companion object {
+        // Unknown/legacy values land on PHONE_HOTSPOT: behaviorally identical for
+        // reconnect (passive discovery), and every record saved before
+        // INFRASTRUCTURE existed carries the collapsed value anyway. New saves
+        // persist the operator's actual choice.
         fun fromPersistedValue(value: String?): SavedCameraTransport =
             entries.firstOrNull { it.persistedValue == value } ?: PHONE_HOTSPOT
     }

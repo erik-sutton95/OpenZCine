@@ -673,7 +673,9 @@ public fun PairingExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT ->
                 CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST
-            SavedCameraTransport.PHONE_HOTSPOT ->
+            SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
+            ->
                 cameras.firstOrNull { camera ->
                     camera.host == record.host ||
                         SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
@@ -692,6 +694,7 @@ public fun PairingExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
             -> environment.createSession(reconnectHost(record))
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
@@ -962,11 +965,13 @@ public fun PairingExperience(
     }
 
     fun connect(host: String) {
+        // The wizard's declared path reaches persistence intact. Router used to collapse into
+        // PHONE_HOTSPOT here — one line that silently reclassified every router camera.
         val transport =
-            if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
-                SavedCameraTransport.CAMERA_ACCESS_POINT
-            } else {
-                SavedCameraTransport.PHONE_HOTSPOT
+            when (flow.path) {
+                PairingPath.CAMERA_ACCESS_POINT -> SavedCameraTransport.CAMERA_ACCESS_POINT
+                PairingPath.WIFI_NETWORK -> SavedCameraTransport.INFRASTRUCTURE
+                else -> SavedCameraTransport.PHONE_HOTSPOT
             }
         val discoveredName = cameras.firstOrNull { it.host == host }?.name
         if (discoveredName != null) connectingName = discoveredName
