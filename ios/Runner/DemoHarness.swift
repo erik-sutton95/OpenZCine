@@ -256,6 +256,15 @@ enum DemoHarness {
                     // command) for headless mode-state captures.
                     model.displayMode = mode
                 }
+                if let raw = env["ZC_DEMO_RELAY_END_AFTER"], let seconds = Int(raw) {
+                    // Verification affordance: a deliberate operator disconnect on a timer, so
+                    // the broadcast-ended path (watchers kicked to the camera list) can be
+                    // proven from a second simulator without tapping this one.
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
+                        model.disconnect()
+                    }
+                }
                 if let holder = env["ZC_DEMO_RELAY_HOLDER"], !holder.isEmpty {
                     // Demo/screenshot affordance: stage the surrendered-control broadcast state
                     // (a watcher holds the token) so the dimmed strip + REVOKE pill are

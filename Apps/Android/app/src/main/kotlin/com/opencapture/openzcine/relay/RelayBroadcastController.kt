@@ -68,7 +68,7 @@ class RelayBroadcastController(
         cameraName: String?,
         servedCameraHost: String?,
     ): Boolean {
-        stop()
+        stop(notifyReason = "The broadcast ended.")
         this.session = session
         this.frames = frames
         this.cameraName = cameraName
@@ -218,14 +218,14 @@ class RelayBroadcastController(
         scope.launch { host?.reclaimControl() }
     }
 
-    fun stop() {
+    fun stop(notifyReason: String? = null) {
         framePump?.cancel()
         statePump?.cancel()
         advertiser?.unregister()
         advertiser = null
         val stopping = host
         host = null
-        scope.launch { stopping?.stop() }
+        scope.launch { stopping?.stop(notifyingViewers = notifyReason) }
         session = null
         frames = null
         mutableUi.value = RelayBroadcastUiState()

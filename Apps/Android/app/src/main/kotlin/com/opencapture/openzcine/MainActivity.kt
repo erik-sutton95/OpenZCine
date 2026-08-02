@@ -444,6 +444,13 @@ class MainActivity : ComponentActivity() {
                 val watching = watchController
                 if (active == null && watching != null) {
                     val watchUi by watching.ui.collectAsState()
+                    LaunchedEffect(watchUi.endedByBroadcaster) {
+                        if (watchUi.endedByBroadcaster) {
+                            val leaving = watching
+                            watchController = null
+                            connectionScope.launch { leaving.stop() }
+                        }
+                    }
                     val watchAssist =
                         remember(watching) {
                             AssistState.restore(
@@ -584,6 +591,9 @@ class MainActivity : ComponentActivity() {
                                     },
                                     nearbyBroadcasts = nearbyBroadcasts,
                                     onWatchBroadcast = { broadcast ->
+                                        relayBroadcastController.stop(
+                                            notifyReason = "The broadcast ended.")
+                                        relayBroadcastEnabled = false
                                         watchController =
                                             com.opencapture.openzcine.relay
                                                 .RelayWatchController(
@@ -780,7 +790,8 @@ class MainActivity : ComponentActivity() {
                             // runs disconnect + releaseCameraAp when the
                             // session leaves composition.
                             if (monitorSession === exitingSession) {
-                                relayBroadcastController.stop()
+                                relayBroadcastController.stop(
+                                    notifyReason = "The broadcast ended.")
                                 relayBroadcastEnabled = false
                                 monitorSession = null
                                 uvcSource?.close()
@@ -968,7 +979,8 @@ class MainActivity : ComponentActivity() {
                                                         )
                                                 }
                                             } else {
-                                                relayBroadcastController.stop()
+                                                relayBroadcastController.stop(
+                                                    notifyReason = "The broadcast ended.")
                                                 relayBroadcastEnabled = false
                                             }
                                         },

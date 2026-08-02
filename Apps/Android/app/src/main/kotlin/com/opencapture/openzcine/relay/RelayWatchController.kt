@@ -26,6 +26,11 @@ data class RelayWatchUiState(
     val passcodeWasWrong: Boolean = false,
     val failureReason: String? = null,
     val state: MonitorRelayWire.State? = null,
+    /**
+     * The broadcaster ended the session deliberately (a denial while watching, no passcode
+     * asked) — the shell leaves to the camera list instead of arming the rejoin watchdog.
+     */
+    val endedByBroadcaster: Boolean = false,
 ) {
     enum class Phase {
         CONNECTING,
@@ -109,16 +114,29 @@ class RelayWatchController(
                                 )
                         }
                         is MonitorRelayClient.Event.JoinDenied -> {
-                            mutableUi.value =
-                                mutableUi.value.copy(
-                                    phase = RelayWatchUiState.Phase.DENIED,
-                                    needsPasscode = event.denied.passcodeRequired,
-                                    passcodeWasWrong = passcode != null,
-                                    failureReason = event.denied.reason,
-                                )
+                            val watching =
+                                mutableUi.value.phase == RelayWatchUiState.Phase.WATCHING
+                            if (watching && !event.denied.passcodeRequired) {
+                                // The operator ended the broadcast — not a refused join.
+                                rejoinJob?.cancel()
+                                mutableUi.value =
+                                    mutableUi.value.copy(
+                                        endedByBroadcaster = true,
+                                        failureReason = event.denied.reason,
+                                    )
+                            } else {
+                                mutableUi.value =
+                                    mutableUi.value.copy(
+                                        phase = RelayWatchUiState.Phase.DENIED,
+                                        needsPasscode = event.denied.passcodeRequired,
+                                        passcodeWasWrong = passcode != null,
+                                        failureReason = event.denied.reason,
+                                    )
+                            }
                         }
                         is MonitorRelayClient.Event.Closed -> {
                             val current = mutableUi.value
+                            if (current.endedByBroadcaster) return@collect
                             // A refused join already explains itself; a drop mid-watch arms
                             // the rejoin watchdog, which stands down while a passcode entry
                             // is on screen (auto-rejoining would unmount the field).

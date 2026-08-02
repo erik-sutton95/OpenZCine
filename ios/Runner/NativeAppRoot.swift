@@ -958,6 +958,9 @@ final class NativeAppModel {
     /// Starts or stops serving this device's feed to others.
     func setRelayBroadcasting(_ broadcasting: Bool) {
         guard broadcasting != isRelayBroadcasting else { return }
+        // A watcher never advertises: rebroadcasting a relay-received session is how an
+        // ex-broadcaster's watchers end up listed as phantom "nearby broadcasts".
+        if broadcasting, videoSource == .relay { return }
         if broadcasting {
             let host = MonitorRelayHost(profile: preferences.relayEncoderProfile)
             host.watcherPasscode = preferences.relayWatcherPasscode
@@ -1004,7 +1007,7 @@ final class NativeAppModel {
             isRelayBroadcasting = true
             broadcastRelayState()
         } else {
-            relayHost?.stop()
+            relayHost?.stop(notifyingViewers: "The broadcast ended.")
             relayHost = nil
             relayVideoEncoder?.invalidate()
             relayVideoEncoder = nil
@@ -1211,6 +1214,9 @@ final class NativeAppModel {
         relayClient = nil
         relayVideoDecoder?.invalidate()
         relayVideoDecoder = nil
+        // Becoming a watcher ends this device's own broadcast (viewers get the ended notice) —
+        // it must never advertise a feed it is itself relaying from someone else.
+        setRelayBroadcasting(false)
         relayJoinTarget = discovery
         relayFailureReason = nil
         stopDiscoveryLoop()
@@ -1278,6 +1284,13 @@ final class NativeAppModel {
         }
         client.onJoinDenied = { [weak self] denial in
             guard let self else { return }
+            // Denied while WATCHING is the broadcaster ending the session deliberately —
+            // exit to the camera list. Only a pre-join refusal is a join failure.
+            if case .connected = self.relayClientState, !denial.passcodeRequired {
+                self.leaveRelay()
+                self.connectionMessage = denial.reason
+                return
+            }
             self.relayJoinNeedsPasscode = denial.passcodeRequired
             // A second denial after a code was sent means the CODE was wrong — say that,
             // not the generic ask.

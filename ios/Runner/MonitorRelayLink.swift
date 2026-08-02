@@ -233,9 +233,29 @@ final class MonitorRelayHost {
     }
 
     func stop() {
+        stop(notifyingViewers: nil)
+    }
+
+    /// Ends the broadcast. With a reason, every connected viewer is told the broadcast ended
+    /// (the same `joinDenied` frame a refused join gets) BEFORE its socket closes — a watcher
+    /// must distinguish "the operator ended this" (leave to the camera list) from a dead
+    /// network (keep the held frame and retry). The socket is cancelled once the send lands,
+    /// the same flush the passcode refusal uses.
+    func stop(notifyingViewers reason: String?) {
         listener?.cancel()
         listener = nil
-        for peer in peers.values { peer.connection.cancel() }
+        if let reason {
+            let denial = encode(
+                MonitorRelayJoinDenied(reason: reason, passcodeRequired: false))
+            for peer in peers.values {
+                let connection = peer.connection
+                connection.send(
+                    content: MonitorRelayFraming.encode(kind: .joinDenied, payload: denial),
+                    completion: .contentProcessed { _ in connection.cancel() })
+            }
+        } else {
+            for peer in peers.values { peer.connection.cancel() }
+        }
         peers.removeAll()
         controlHolder = nil
         controlHolderName = nil

@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -289,10 +290,34 @@ class MonitorRelayHost(
         notifyControl()
     }
 
-    suspend fun stop() {
+    suspend fun stop() = stop(notifyingViewers = null)
+
+    /**
+     * Ends the broadcast. With a reason, every viewer is told the broadcast ended (the same
+     * JOIN_DENIED frame a refused join gets, passcodeRequired=false) before its socket closes,
+     * so a watcher can leave to the camera list instead of retry-looping on a dead socket.
+     * The notice rides the ordered control lane and the writers get a short bounded window
+     * to flush it — a courtesy race the watcher's dead-socket path still backstops.
+     */
+    suspend fun stop(notifyingViewers: String?) {
         acceptJob?.cancel()
         withContext(Dispatchers.IO) { runCatching { serverSocket?.close() } }
         val all = mutex.withLock { peers.values.toList() }
+        if (notifyingViewers != null) {
+            val notice =
+                MonitorRelayWire.encodeFrame(
+                    MonitorRelayWire.Kind.JOIN_DENIED,
+                    MonitorRelayWire.JoinDenied(
+                            reason = notifyingViewers,
+                            passcodeRequired = false,
+                        )
+                        .toJson()
+                        .toString()
+                        .toByteArray(Charsets.UTF_8),
+                )
+            all.forEach { peer -> peer.control.trySend(notice) }
+            if (all.isNotEmpty()) delay(150)
+        }
         all.forEach { drop(it) }
         mutex.withLock {
             controlHolderID = null
