@@ -2157,6 +2157,20 @@ final class NativeAppModel {
         return CameraWiFiPasswordSubmission(ssid: ssid, password: "")
     }
 
+    /// SSIDs whose join offer the operator explicitly cancelled this session. Cancel means no:
+    /// re-offering the same alert minutes later — from a reconnect, a launch join, a retry —
+    /// is how "very persistent" prompts happen, and no record heuristic can override a human
+    /// who just said no. Session-scoped on purpose; a fresh launch is a fresh question.
+    @ObservationIgnored private var declinedJoinSSIDs: Set<String> = []
+
+    /// Whether the operator has declined joining `ssid` this session.
+    private func joinWasDeclined(ssid: String?, prefix: String?) -> Bool {
+        if let ssid, declinedJoinSSIDs.contains(ssid) { return true }
+        // A prefix target would re-surface the very SSID that was refused.
+        if let prefix, declinedJoinSSIDs.contains(where: { $0.hasPrefix(prefix) }) { return true }
+        return false
+    }
+
     private func joinCameraNetwork(
         target: CameraWiFiJoinPolicy.ProactiveJoinTarget,
         credentials: CameraWiFiPasswordSubmission,
@@ -2188,6 +2202,14 @@ final class NativeAppModel {
         // evidence this session's camera is an AP camera, independent of SSID readability.
         sessionJoinedCameraAccessPoint = true
         await mirrorCameraWiFiPasswordToConnectedSSID(credentials.password)
+    }
+
+    /// Latches a human "no" so nothing re-offers the same network this session.
+    private func recordDeclinedJoinIfUserSaidNo(_ error: any Error, ssid: String?) {
+        guard case WiFiJoinCoordinator.JoinError.userDenied = error, let ssid, !ssid.isEmpty
+        else { return }
+        declinedJoinSSIDs.insert(ssid)
+        logConnection("join declined by operator — offers for \(ssid) muted this session")
     }
 
     private func surfaceCameraWiFiJoinFailure(_ message: String) {
@@ -4153,13 +4175,21 @@ final class NativeAppModel {
         } else {
             return
         }
+        guard !joinWasDeclined(ssid: joinTarget.ssid, prefix: joinTarget.ssidPrefix) else {
+            return
+        }
         // hotspotConfigurationOnly keeps the native join alert over our sheet; the ASK
         // picker rarely discovers Nikon soft-APs and would replace the popup visuals.
-        try await joinCameraNetwork(
-            target: proactiveTarget,
-            credentials: credentials,
-            joinStrategy: .hotspotConfigurationOnly
-        )
+        do {
+            try await joinCameraNetwork(
+                target: proactiveTarget,
+                credentials: credentials,
+                joinStrategy: .hotspotConfigurationOnly
+            )
+        } catch {
+            recordDeclinedJoinIfUserSaidNo(error, ssid: joinTarget.ssid)
+            throw error
+        }
     }
 
     private func transitionToSavedCameraNetworkCheck(message: String) {
@@ -4418,6 +4448,16 @@ final class NativeAppModel {
     private func isSavedProfileUnavailable(_ error: Error) -> Bool {
         guard let sessionError = error as? NativeCameraSessionError else { return false }
         if case .savedProfileRequired = sessionError {
+            return true
+        }
+        // A hangup DURING a pairing-skipped establishment is the same fact stated rudely: a
+        // body given a NEW network profile has never met this initiator on it, and some bodies
+        // close the socket right after the app-control switch instead of refusing politely
+        // (field signature: "gateOps=known pairing=skipped appMode=0xffff" → connection
+        // closed). The recovery is identical — one fresh pairing attempt. A hangup with a
+        // genuinely dead network fails that attempt too and surfaces normally, so the
+        // fallback costs a mistaken rig nothing but one retry.
+        if case .connectionClosed = sessionError {
             return true
         }
         return isRejectedInitiator(error)
