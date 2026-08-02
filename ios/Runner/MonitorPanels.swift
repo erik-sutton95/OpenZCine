@@ -3925,6 +3925,12 @@ struct OperatorSettingsPanel: View {
                     .minimumScaleFactor(0.75)
             }
             Spacer()
+            // Disconnect lives beside the link-health tile: session-level actions belong with
+            // the session's status, not inside a settings tab (and a watcher leaves the same
+            // way — model.disconnect() routes a relay viewer through leaveRelay).
+            if isConnected {
+                SettingsActionPill(title: "Disconnect") { model.disconnect() }
+            }
             SettingsLiveTile()
                 .environment(model)
         }
@@ -4318,15 +4324,6 @@ struct OperatorSettingsPanel: View {
                     LiveViewCaptureControl()
                 }
             #endif
-            SettingsInlineRow(
-                title: "Connection Action",
-                help:
-                    "Move into a Wi-Fi session when cable-light operation matters, or disconnect when Wi-Fi is already active."
-            ) {
-                SettingsActionPill(title: isConnected ? "Disconnect" : "Connect over Wi-Fi") {
-                    if isConnected { model.disconnect() }
-                }
-            }
             SettingsInlineRow(
                 title: "Health Threshold",
                 help:

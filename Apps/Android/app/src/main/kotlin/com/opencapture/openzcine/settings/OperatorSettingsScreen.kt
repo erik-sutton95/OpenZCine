@@ -293,7 +293,7 @@ internal fun OperatorSettingsScreen(
                 // The floating PanelCloseButton overlays this row's leading corner
                 // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
                 // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
-                SettingsHeader(session, linkHealth, compact)
+                SettingsHeader(session, linkHealth, compact, onDisconnect = onDisconnect)
                 if (compact) {
                     SettingsTabStrip(selectedTab, showSharing = relaySharing != null, onSelect = { selectedTab = it })
                     SettingsContentPane(
@@ -376,13 +376,29 @@ private fun SettingsHeader(
     session: CameraSession?,
     linkHealth: AndroidLinkHealthMonitor?,
     compact: Boolean,
+    onDisconnect: (() -> Unit)? = null,
 ) {
+    // Disconnect rides beside the link tile (iOS `settingsTop`): a session-level action
+    // belongs with the session's status, not inside the Link tab.
+    val state by (session?.state
+        ?: remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) })
+        .collectAsState()
+    val disconnect = onDisconnect.takeIf { state is CameraSessionState.Connected }
     if (compact) {
         Column(
             Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            SettingsTitle(Modifier.padding(start = 45.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(start = 45.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SettingsTitle()
+                Spacer(Modifier.weight(1f))
+                disconnect?.let {
+                    SettingsActionPill(stringResource(R.string.action_disconnect)) { it() }
+                }
+            }
             SettingsLiveTile(session, linkHealth, Modifier.fillMaxWidth(), expanded = true)
         }
     } else {
@@ -392,6 +408,10 @@ private fun SettingsHeader(
         ) {
             SettingsTitle()
             Spacer(Modifier.weight(1f))
+            disconnect?.let {
+                SettingsActionPill(stringResource(R.string.action_disconnect)) { it() }
+                Spacer(Modifier.width(10.dp))
+            }
             SettingsLiveTile(session, linkHealth, expanded = false)
         }
     }
@@ -892,13 +912,6 @@ private fun LinkRows(
                     activeTransportLabel ?: "Wi-Fi",
                 )
         }
-    val connectionTitle =
-        if (linked && onDisconnect != null) {
-            stringResource(R.string.action_disconnect)
-        } else {
-            stringResource(R.string.settings_connect_over_wifi)
-        }
-
     SettingsDashScale(
         title = stringResource(R.string.settings_link_health),
         caption = healthCaption,
@@ -942,16 +955,6 @@ private fun LinkRows(
                         onInteraction()
                     }
                 }
-            }
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_connection_action)) {
-            SettingsActionPill(connectionTitle) {
-                if (linked) {
-                    onDisconnect?.invoke()
-                } else {
-                    onReconnect?.invoke()
-                }
-                onInteraction()
             }
         }
         SettingsInlineRow(title = stringResource(R.string.settings_health_threshold)) {
