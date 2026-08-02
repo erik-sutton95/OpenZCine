@@ -253,6 +253,43 @@ public object SavedCameraRecords {
     }
 }
 
+/**
+ * Groups per-setup records of the SAME physical body for presentation — the Android twin of the
+ * shared core's `SavedCameraPathGroups`. iOS keys on the body serial; Android records carry no
+ * serial, so identity is the ASSIGNED camera name (`cameraNamesMatch`): a generic or placeholder
+ * name carries no identity and stays a singleton row, exactly like an iOS record that predates
+ * the serial stamp. Grouping is presentation-only — records stay one-per-setup on disk.
+ */
+public object SavedCameraGroups {
+    /** Same-camera groups, members most-recently-seen first; group order follows first sight. */
+    public fun group(records: List<SavedCameraRecord>): List<List<SavedCameraRecord>> {
+        val groups = mutableListOf<MutableList<SavedCameraRecord>>()
+        for (record in records) {
+            val existing =
+                groups.firstOrNull { group ->
+                    SavedCameraRecords.cameraNamesMatch(group[0].cameraName, record.cameraName)
+                }
+            if (existing == null) {
+                groups += mutableListOf(record)
+            } else {
+                existing += record
+            }
+        }
+        return groups.map { group ->
+            group.sortedByDescending { it.lastSeenAtEpochMillis ?: Long.MIN_VALUE }
+        }
+    }
+
+    /**
+     * The setup whose record drives the group's row: a discovered/attached one beats an offline
+     * one; ties go to the most recently seen (the group's own order).
+     */
+    public fun activeRecord(
+        group: List<SavedCameraRecord>,
+        isDiscovered: (SavedCameraRecord) -> Boolean,
+    ): SavedCameraRecord = group.firstOrNull(isDiscovered) ?: group.first()
+}
+
 /** Reads and writes saved camera profiles. */
 public interface SavedCameraStore {
     /** Returns the canonical saved-profile list. */
