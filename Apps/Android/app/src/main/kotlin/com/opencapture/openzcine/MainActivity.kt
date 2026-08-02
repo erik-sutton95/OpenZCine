@@ -855,7 +855,37 @@ class MainActivity : ComponentActivity() {
                                 },
                                 recoveryStateOverride = DemoHarness.sessionRecoveryOverride(intent),
                                 onDriveDiagnostic = diagnostics::record,
+                                controlsSurrendered =
+                                    relayBroadcastUi.controlHolderName != null,
                             )
+                            relayBroadcastUi.controlHolderName?.let { holder ->
+                                Row(
+                                    Modifier.align(Alignment.BottomCenter)
+                                        .padding(bottom = 64.dp)
+                                        .clip(RoundedCornerShape(22.dp))
+                                        .background(
+                                            androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f)
+                                        )
+                                        .clickable { relayBroadcastController.reclaimControl() }
+                                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        stringResource(R.string.sharing_revoke_control),
+                                        color = androidx.compose.ui.graphics.Color(0xFFE0A73A),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.8.sp,
+                                    )
+                                    Text(
+                                        holder,
+                                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f),
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
                             relayBroadcastUi.pendingControlRequestName?.let { asking ->
                                 Row(
                                     Modifier.align(Alignment.TopCenter)

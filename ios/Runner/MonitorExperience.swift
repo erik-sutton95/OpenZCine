@@ -1049,6 +1049,38 @@ struct WatcherControlKey: View {
     }
 }
 
+/// The broadcaster's side of the token, where the watcher's pill sits on their glass: while a
+/// watcher holds control this device's camera keys stand down, and this is the way back. The
+/// reclaim needs no cooperation from the holder — this device owns the session.
+struct BroadcasterControlKey: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        Button {
+            model.reclaimRelayControl()
+        } label: {
+            HStack(spacing: 8) {
+                Text("REVOKE CONTROL")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .kerning(0.8)
+                    .foregroundStyle(LiveDesign.accent)
+                if let holder = model.relayControlHeldBy {
+                    Text(holder)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(LiveDesign.text.opacity(0.7))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(.black.opacity(0.55), in: Capsule())
+            .overlay(Capsule().strokeBorder(LiveDesign.accent, lineWidth: 1))
+        }
+        .buttonStyle(.zcTapTarget)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+    }
+}
+
 /// The broadcast asked for a passcode: four digits, joined on completion. Lives on the empty
 /// feed where the refusal reason is already showing.
 private struct RelayJoinPasscodeEntry: View {

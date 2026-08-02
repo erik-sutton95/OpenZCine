@@ -256,6 +256,13 @@ enum DemoHarness {
                     // command) for headless mode-state captures.
                     model.displayMode = mode
                 }
+                if let holder = env["ZC_DEMO_RELAY_HOLDER"], !holder.isEmpty {
+                    // Demo/screenshot affordance: stage the surrendered-control broadcast state
+                    // (a watcher holds the token) so the dimmed strip + REVOKE pill are
+                    // capturable without a second device.
+                    model.isRelayBroadcasting = true
+                    model.relayControlHeldBy = holder
+                }
                 if env["ZC_DEMO_RECORDING"] == "1" {
                     // Demo/screenshot affordance: stage the recording state (REC chip, tally
                     // border, stop-square record button) without tapping the record control.

@@ -912,6 +912,16 @@ final class NativeAppModel {
     /// Host side: a viewer waiting on an answer, and who currently holds the camera.
     var relayPendingControlRequest: String?
     var relayControlHeldBy: String?
+    /// True while a relayed command is being executed on this device's session, so the
+    /// surrendered-control guards let the watcher's own commands through the shared entry
+    /// points they route over.
+    @ObservationIgnored private var applyingRelayCommand = false
+    /// True while a watcher holds this broadcast's control token: the operator handed the
+    /// camera over, so the local camera controls stand down until control is revoked or
+    /// given back. Never true on a watcher (watchers don't broadcast their relay session).
+    var relayControlSurrendered: Bool {
+        isRelayBroadcasting && relayControlHeldBy != nil && !applyingRelayCommand
+    }
     var discoveredRelayHosts: [MonitorRelayDiscovery] = []
     var relayClientState: MonitorRelayClient.State = .idle
     /// The broadcast refused this device for want of a passcode; the waiting overlay asks.
@@ -1015,6 +1025,8 @@ final class NativeAppModel {
     /// relayed record or focus point is subject to every guard, queue and safe point a local one
     /// is — including the confirmation setting and the interface lock.
     private func executeRelayCommand(_ command: MonitorRelayCommand) {
+        applyingRelayCommand = true
+        defer { applyingRelayCommand = false }
         switch command {
         case .toggleRecording:
             toggleRecording()
@@ -7762,6 +7774,7 @@ final class NativeAppModel {
                     coordinateHeight: coordinateHeight))
             return
         }
+        guard !relayControlSurrendered else { return }
         cancelManualFocusDrive()
         guard !isDemoSession else {
             let boxWidth = max(40, coordinateWidth / 7)
@@ -7787,6 +7800,7 @@ final class NativeAppModel {
     }
 
     func toggleRecording() {
+        guard !relayControlSurrendered else { return }
         if preferences.recordConfirmationEnabled {
             if !isDemoSession {
                 guard cameraSession != nil, isMonitorPresented else {
@@ -8744,6 +8758,7 @@ final class NativeAppModel {
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
     /// While a bulb/time exposure is holding the shutter open, a second tap ends it.
     func captureStill() {
+        guard !relayControlSurrendered else { return }
         if isDemoSession {
             guard !isStillCapturing else { return }
             isStillCapturing = true
@@ -10346,6 +10361,7 @@ final class NativeAppModel {
                 command: .pickerValue(picker: picker.rawValue, value: value))
             return
         }
+        guard !relayControlSurrendered else { return }
         guard !isDemoSession else {
             applyLocalPickerValue(value, for: picker)
             return

@@ -36,6 +36,10 @@ struct CommandMonitor: View {
                 let trailing = viewportWidth - (layout.topInfoDeck.x + layout.topInfoDeck.width)
 
                 content
+                    // Same stand-down as the capture strip: a watcher holds control, the
+                    // dashboard's writes wait until it's revoked or returned.
+                    .opacity(model.relayControlSurrendered ? 0.4 : 1)
+                    .allowsHitTesting(!model.relayControlSurrendered)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(
                         EdgeInsets(

@@ -263,6 +263,7 @@
     <string name="sharing_control_requested">Control Requested</string>
     <string name="sharing_control_held_by">Held By</string>
     <string name="sharing_take_back">Take Back</string>
+    <string name="sharing_revoke_control">REVOKE CONTROL</string>
     <string name="sharing_grant">Grant</string>
     <string name="sharing_decline">Decline</string>
     <string name="sharing_asks_to_control">%1$s asks to control the camera</string>

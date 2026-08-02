@@ -371,11 +371,17 @@ struct MonitorCaptureStrip: View {
     @State private var naturalRowWidth: CGFloat = 0
 
     var body: some View {
-        if fitsWidth {
-            landscapeBody
-        } else {
-            portraitBody
+        Group {
+            if fitsWidth {
+                landscapeBody
+            } else {
+                portraitBody
+            }
         }
+        // A watcher holds the control token: the tiles read on, grayed, and taps stand down
+        // until control is revoked (the pill over the feed) or given back.
+        .opacity(model.relayControlSurrendered ? 0.4 : 1)
+        .allowsHitTesting(!model.relayControlSurrendered)
     }
 
     /// The stills tiles own the whole band (assist lives on the left rail), so they run
@@ -1066,6 +1072,8 @@ struct MonitorSystemCluster: View {
             )
             .accessibilityIdentifier("monitor.system.shutter")
             .liveViewGuideAnchor(.record)
+            .opacity(model.relayControlSurrendered ? 0.4 : 1)
+            .allowsHitTesting(!model.relayControlSurrendered)
         } else {
             Button {
                 model.toggleRecording()
@@ -1073,6 +1081,8 @@ struct MonitorSystemCluster: View {
                 RecordButton(isRecording: model.cameraState.recordState == .recording)
             }
             .buttonStyle(.zcTapTarget)
+            .opacity(model.relayControlSurrendered ? 0.4 : 1)
+            .allowsHitTesting(!model.relayControlSurrendered)
             .accessibilityLabel(
                 model.cameraState.recordState == .recording ? "Stop recording" : "Start recording"
             )
@@ -1666,6 +1676,15 @@ struct MonitorShell: View {
                 WatcherControlKey()
                     .environment(model)
                     .position(x: CGFloat(deck.midX), y: keyY)
+            } else if model.relayControlSurrendered, !model.interfaceLocked,
+                model.chromeEditorMode == nil
+            {
+                let keyY =
+                    map.assistStrip.map { CGFloat($0.frame.y) - 28 }
+                    ?? CGFloat(context.viewportHeight) - 60
+                BroadcasterControlKey()
+                    .environment(model)
+                    .position(x: CGFloat(deck.midX), y: keyY)
             }
         }
     }
@@ -1881,7 +1900,8 @@ struct MonitorShell: View {
                 .environment(model)
                 .liveViewGuideAnchor(.cameraControls)
                 .padding(.horizontal, 12)
-                .opacity(model.interfaceLocked ? 0.4 : 1)
+                .opacity(model.interfaceLocked || model.relayControlSurrendered ? 0.4 : 1)
+                .allowsHitTesting(!model.relayControlSurrendered)
                 .frame(width: grid.frame.width, height: grid.frame.height - tcBand)
                 .offset(x: grid.frame.x, y: grid.frame.y + tcBand)
             }
@@ -1949,6 +1969,19 @@ struct MonitorShell: View {
                     map.assistStrip?.frame.y
                     ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
                 WatcherControlKey()
+                    .environment(model)
+                    .frame(width: feed.width, height: keyHeight)
+                    .offset(x: feed.x, y: laneTop - keyHeight - 8)
+            } else if model.displayMode != .command, model.relayControlSurrendered,
+                !model.interfaceLocked,
+                model.chromeEditorMode == nil
+            {
+                let keyHeight: CGFloat = 40
+                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let laneTop =
+                    map.assistStrip?.frame.y
+                    ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
+                BroadcasterControlKey()
                     .environment(model)
                     .frame(width: feed.width, height: keyHeight)
                     .offset(x: feed.x, y: laneTop - keyHeight - 8)

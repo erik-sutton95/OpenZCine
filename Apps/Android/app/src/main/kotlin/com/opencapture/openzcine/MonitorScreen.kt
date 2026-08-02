@@ -319,6 +319,11 @@ internal fun MonitorScreen(
     recoveryStateOverride: MonitorRecoveryState? = null,
     /** Closed diagnostics breadcrumbs for the MF drive failure surfaces. */
     onDriveDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
+    /**
+     * A relay watcher holds this broadcast's control token — local camera controls stand
+     * down (grayed, non-writing) until the operator revokes or the watcher gives it back.
+     */
+    controlsSurrendered: Boolean = false,
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -741,7 +746,8 @@ internal fun MonitorScreen(
         sessionState is CameraSessionState.Connected &&
             !locked &&
             !liveViewGuideVisible &&
-            !mediaOwnsCommandChannel
+            !mediaOwnsCommandChannel &&
+            !controlsSurrendered
     LaunchedEffect(sessionState, activeMonitorPickerKind, activeMonitorPicker) {
         if (sessionState !is CameraSessionState.Connected ||
             (activeMonitorPickerKind != null && activeMonitorPicker == null)
