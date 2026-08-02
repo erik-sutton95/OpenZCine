@@ -655,6 +655,7 @@ struct StartupCameraListRow: View {
     @Environment(NativeAppModel.self) private var model
     @State private var isDeleteConfirmationPresented = false
     @State private var isRenamePresented = false
+    @State private var isAddSetupPresented = false
     @State private var renameText = ""
     let camera: PTPIPSavedCameraRecord
     let availability: SavedCameraAvailability
@@ -689,18 +690,21 @@ struct StartupCameraListRow: View {
                     .foregroundStyle(StartupColors.muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                if allPaths.count > 1 {
-                    // One body, several ways in: a chip per saved path, availability dot on
-                    // each. The row's title, pill and Connect follow the ACTIVE path; a chip
-                    // tap connects over that specific path instead.
+                // One body, several ways in: a chip per saved setup, availability dot on each.
+                // The row's title, pill and Connect follow the ACTIVE setup; a chip tap
+                // connects over that specific one, and "+" adds a setup this camera doesn't
+                // have yet. Always visible — a single chip names the one saved path at a
+                // glance, and the add chip is how the second one gets made. Scrolls sideways
+                // rather than truncating: four chips don't fit a portrait phone row.
+                ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(allPaths) { path in
                             pathChip(path)
                         }
-                        Spacer(minLength: 0)
+                        addSetupChip
                     }
-                    .padding(.top, 2)
                 }
+                .padding(.top, 2)
             }
         }
         .padding(.horizontal, 16)
@@ -818,6 +822,58 @@ struct StartupCameraListRow: View {
         }
         .buttonStyle(.plain)
         .disabled(isBusy)
+        // ponytail: no manual "default setup" star — the row's Connect already prefers
+        // connected > discovered > most recent, which picks the reachable setup better than a
+        // static flag would. Add the flag only if operators ask for a pinned choice.
+        .contextMenu {
+            if allPaths.count > 1 {
+                Button(role: .destructive) {
+                    model.forgetPairing(host: path.host)
+                } label: {
+                    Label(
+                        "Forget \(SavedCameraPathGroups.pathLabel(for: path)) Setup",
+                        systemImage: "minus.circle")
+                }
+            }
+        }
+    }
+
+    /// The kinds this camera could still be set up for. HDMI capture is a video source, not a
+    /// saved camera setup, so it is not offered here.
+    private var missingSetupKinds: [CameraPath.Kind] {
+        let saved = Set(allPaths.compactMap(\.pathKind))
+        return [.usbC, .cameraAccessPoint, .infrastructure, .phoneHotspot]
+            .filter { !saved.contains($0) }
+    }
+
+    @ViewBuilder private var addSetupChip: some View {
+        if !missingSetupKinds.isEmpty {
+            Button {
+                isAddSetupPresented = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Add setup")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(StartupColors.muted)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(StartupColors.control.opacity(0.25), in: Capsule())
+                .overlay(
+                    Capsule().stroke(
+                        StartupColors.border.opacity(0.2),
+                        style: StrokeStyle(lineWidth: 1, dash: [3, 2.5]))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+            .sheet(isPresented: $isAddSetupPresented) {
+                StartupAddSetupSheet(camera: camera, missingKinds: missingSetupKinds)
+                    .environment(model)
+            }
+        }
     }
 
     private func chipDotColor(for availability: SavedCameraAvailability) -> Color {
@@ -979,6 +1035,125 @@ struct StartupCameraListRow: View {
         if seconds < 86_400 { return "last connected today" }
         if seconds < 172_800 { return "last connected yesterday" }
         return "last connected \(Int(seconds / 86_400))d ago"
+    }
+}
+
+/// "+ Add setup" on a saved camera: a mini-wizard scoped to THIS camera, offering only the
+/// path kinds it doesn't have yet. Nothing here re-runs first pair — records write themselves
+/// at the next connect, stamped with the declared path; this sheet only prepares the way
+/// (joins the camera's Wi-Fi for AP, instructs for the rest).
+struct StartupAddSetupSheet: View {
+    @Environment(NativeAppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let camera: PTPIPSavedCameraRecord
+    let missingKinds: [CameraPath.Kind]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add a setup · \(camera.displayTitle)")
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(StartupColors.ink)
+            Text(
+                "One camera, several ways to reach it. Pick how this rig runs; the setup "
+                    + "saves itself the first time you connect that way."
+            )
+            .font(.system(size: 13, weight: .regular, design: .rounded))
+            .foregroundStyle(StartupColors.muted)
+            ScrollView {
+                VStack(spacing: 10) {
+                    ForEach(missingKinds, id: \.self) { kind in
+                        setupRow(kind)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(StartupColors.background)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder private func setupRow(_ kind: CameraPath.Kind) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon(for: kind))
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(StartupColors.accent)
+                .frame(width: 30, height: 30)
+                .background(StartupColors.control.opacity(0.5), in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title(for: kind))
+                    .font(.system(size: 14.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(StartupColors.ink)
+                Text(guidance(for: kind))
+                    .font(.system(size: 12.5, weight: .regular, design: .rounded))
+                    .foregroundStyle(StartupColors.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if kind == .cameraAccessPoint {
+                    Button {
+                        dismiss()
+                        model.beginAddCameraAPSetup(for: camera)
+                    } label: {
+                        Text("Join Camera Wi-Fi")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(StartupColors.ink)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(StartupColors.accent.opacity(0.35), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(StartupColors.tile.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func icon(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint: return "personalhotspot"
+        case .infrastructure: return "wifi.router"
+        case .phoneHotspot: return "iphone.radiowaves.left.and.right"
+        case .usbC: return "cable.connector"
+        case .hdmiCapture: return "tv"
+        }
+    }
+
+    private func title(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint: return "Camera access point"
+        case .infrastructure: return "Router / shared network"
+        case .phoneHotspot: return "This device's hotspot"
+        case .usbC: return "USB-C cable"
+        case .hdmiCapture: return "HDMI capture"
+        }
+    }
+
+    private func guidance(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint:
+            return
+                "This device joins the camera's own Wi-Fi — best in the field with no other "
+                + "gear. You'll be asked for the camera's network key the first time only."
+        case .infrastructure:
+            return
+                "Put the camera and this device on the same network (a set router, house "
+                + "Wi-Fi). Turn on Connect to PC on the camera with a profile for that "
+                + "network; it appears in the camera list and saves on connect."
+        case .phoneHotspot:
+            return
+                "Turn on this device's Personal Hotspot and point a camera network profile "
+                + "at it. The camera joins YOU — once it does, it appears in the list."
+        case .usbC:
+            return
+                "Plug the camera straight into this device. It connects and saves itself — "
+                + "nothing to configure."
+        case .hdmiCapture:
+            return "Use the connect screen's Cable Link → HDMI capture for a picture-only feed."
+        }
     }
 }
 

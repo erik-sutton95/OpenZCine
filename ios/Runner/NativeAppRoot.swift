@@ -2005,6 +2005,19 @@ final class NativeAppModel {
         stageCameraWiFiCredentials(ssid: ssid, key: key, cameFromScan: false)
     }
 
+    /// "+ Add setup → Camera AP" on a saved camera: stages the camera's own network in the join
+    /// popup. With a stored key the popup opens straight on Connect; otherwise it asks for the
+    /// key once, in-popup, exactly like a first pair. The record itself is written by the
+    /// connect that follows — establishment stamps the AP path from the join it applied.
+    func beginAddCameraAPSetup(for camera: PTPIPSavedCameraRecord) {
+        guard
+            let ssid = CameraWiFiSSID.resolve(for: camera)
+                ?? CameraWiFiSSID.deriveSSID(fromCameraName: camera.displayName)
+        else { return }
+        let stored = CameraWiFiCredentialStore.password(forSSID: ssid, prefix: nil) ?? ""
+        stageCameraWiFiCredentials(ssid: ssid, key: stored, cameFromScan: false)
+    }
+
     private func stageCameraWiFiCredentials(ssid: String, key: String, cameFromScan: Bool) {
         isCameraWiFiScannerPresented = false
         pendingCameraWiFiJoinTarget = .specificSSID(ssid)
