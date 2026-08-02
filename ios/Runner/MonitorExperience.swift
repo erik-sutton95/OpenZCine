@@ -479,19 +479,6 @@ struct LiveFeedModule: View {
         .overlay {
             FeedAlignedAssists(clean: model.displayMode == .clean)
         }
-        // Watcher control pill, mounted ON the feed view so it is topmost over the feed's own
-        // gestures in every orientation — the chrome-layer seats rendered fine but the feed's
-        // hit surface ate their taps. Outside the zoom transform (this overlay attaches above
-        // the scaled content), so it never magnifies.
-        .overlay(alignment: .bottom) {
-            if model.videoSource == .relay, !model.interfaceLocked,
-                model.chromeEditorMode == nil,
-                model.relayHoldsControl || model.relayAllowsControlRequests
-            {
-                WatcherControlKey()
-                    .padding(.bottom, 14)
-            }
-        }
     }
 
     /// Tap moves the focus point. The DISP swipe lives on the zoom pan recognizer now (see
@@ -1031,8 +1018,10 @@ private struct LiveFeedWaitingOverlay: View {
 
 /// The watcher's ask/give-back, on the glass where the watching happens — control is exercised
 /// mid-take, not inside a settings sheet. One pill reflecting the token, so the control and its
-/// state cannot disagree.
-private struct WatcherControlKey: View {
+/// state cannot disagree. Mounted from the zone-aware chrome overlay (MonitorUnified), which
+/// knows the assist toolbar's band — a feed-anchored bottom-center mount sat INSIDE that band
+/// in landscape, half-under the toolbar.
+struct WatcherControlKey: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {

@@ -1652,6 +1652,21 @@ struct MonitorShell: View {
                     )
                     .transition(.opacity)
             }
+
+            // Watcher control key: centred above the bottom band, CLEAR of the assist
+            // toolbar's lane — the old feed-anchored bottom-center mount landed inside that
+            // band, half-under the toolbar's tools.
+            if model.videoSource == .relay, !model.interfaceLocked,
+                model.chromeEditorMode == nil,
+                model.relayHoldsControl || model.relayAllowsControlRequests
+            {
+                let keyY =
+                    map.assistStrip.map { CGFloat($0.frame.y) - 28 }
+                    ?? CGFloat(context.viewportHeight) - 60
+                WatcherControlKey()
+                    .environment(model)
+                    .position(x: CGFloat(deck.midX), y: keyY)
+            }
         }
     }
 
@@ -1916,6 +1931,27 @@ struct MonitorShell: View {
                         ? railTop
                         : feed.y + feed.height - 44 - bottomClearance
                 )
+            }
+
+            // Watcher control key: center-bottom over the feed, CLEAR of the assist lane. In fit
+            // the horizontal toolbar owns a band across the feed bottom — the key sits above it
+            // (a feed-anchored mount used to land inside that band, half-under the toolbar). In
+            // fill it clears the capture strip like the rail's collapsed pill does. Same overlay
+            // layer as the rail and recenter keys, so taps land the same way theirs do.
+            if model.displayMode != .command, model.videoSource == .relay,
+                !model.interfaceLocked,
+                model.chromeEditorMode == nil,
+                model.relayHoldsControl || model.relayAllowsControlRequests
+            {
+                let keyHeight: CGFloat = 40
+                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let laneTop =
+                    map.assistStrip?.frame.y
+                    ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
+                WatcherControlKey()
+                    .environment(model)
+                    .frame(width: feed.width, height: keyHeight)
+                    .offset(x: feed.x, y: laneTop - keyHeight - 8)
             }
 
             // Recenter-focus affordance, bottom-right of the feed — the portrait counterpart of
