@@ -1,6 +1,22 @@
 # Transport architecture: from inferred topology to declared setups
 
-Status: DESIGN FOR REVIEW — nothing below is implemented except Stage 0.
+Status: IMPLEMENTED 2026-08-02 (Stages 0–5; per-stage commits 2b12197 → 6a68aa0 → ab3b92a →
+b7d16b3). The core enum shipped as **`CameraPath`** — `CameraTransport` was already taken by the
+session-layer wire-transport protocol. Deviations from the plan, deliberate:
+- The iOS "connector" isolation landed as typed dispatch at the seams plus the already-isolated
+  machinery modules (`WiFiJoinCoordinator` = the AP connector's join engine,
+  `USBCameraDeviceBrowser` = the USB attach lifecycle, `NativeCameraDiscovery` = discovery),
+  rather than five new delegate objects — the unrepresentability comes from the kind-gated
+  policy (`joinTargetIfNeeded` requires a declared AP setup), not from file boundaries.
+- No manual default-setup star: the row's Connect prefers connected > discovered > most recent,
+  which picks the reachable setup better than a static flag. Add one only if operators ask.
+- Android's grouped multi-setup chips row waits for a connected device (UI ships only
+  deploy+screenshot-verified); the typed layer (INFRASTRUCTURE, collapse fix, matcher parity,
+  centralized re-pair classifier) is in.
+- Legacy Android records persisted as "phone-hotspot" before the collapse fix stay hotspot —
+  behaviorally identical on Android (both are passive discovery), and indistinguishable after
+  the fact. New saves persist the operator's actual choice.
+
 Owner intent (2026-08-02): "It should be modular and each transport path should be isolated
 logic-wise. Rock solid on iOS and Android. One camera used across multiple settings should be
 seamless."
@@ -149,14 +165,14 @@ The list keeps its shape — one ROW per camera — and the paths become first-c
 
 ## Migration stages (each shippable, each hardware-checkpointed)
 
-| Stage | Content | Risk |
+| Stage | Content | Status |
 |---|---|---|
-| 0 ✅ | Stopgaps shipped 2026-08-02: declined-join session mute; hangup→re-pair fallback | low |
-| 1 | Core `CameraTransport`/`CameraSetup` + one-time record migration (pure, heavily tested); list renders from setups; old connect paths still run underneath | low |
-| 2 | Extract `CameraAPConnector` + `InfrastructureConnector`; orchestrator dispatches; join machinery moves INSIDE the AP connector; delete the exclusion-chain gates | medium |
-| 3 | Recovery/reconnect per connector; delete the session latch; hotspot + USB connectors | medium |
-| 4 | Saved-cameras UX: chip-connect, add-setup mini-wizard, per-setup availability/management | low |
-| 5 | Android: shared `CameraSetup` in core via facade; connector split on their side | medium |
+| 0 ✅ | Stopgaps shipped 2026-08-02: declined-join session mute; hangup→re-pair fallback | shipped (81e0db5) |
+| 1 ✅ | Core `CameraPath` + records-as-setups keyed by (camera, kind) + one-time migration with the poison SPLIT; save sites stamp the declared path | shipped (2b12197) |
+| 2 ✅ | Join policy kind-gated (only a declared AP setup can produce a join target); `proactiveJoinTarget` deleted; exclusion chains deleted; labels/hints/subtitles read the path | shipped (6a68aa0) |
+| 3 ✅ | `activeSessionPath` locked at establishment; the a0864f1 latch is now DERIVED from it; recovery, join gate and AWDL dispatch on the declared session path | shipped (6a68aa0) |
+| 4 ✅ | Saved-cameras UX: always-visible setup chips (scrolling), chip-connect, "+ Add setup" per-camera mini-wizard, chip long-press Forget; verified on-sim | shipped (ab3b92a) |
+| 5 ✅ | Android: `INFRASTRUCTURE` case + Router collapse fix + SSID matcher transcribed from the core (fixture-pinned) + centralized re-pair classifier; Compose chips row deferred to a device session | shipped (b7d16b3) |
 
 Verification per stage: full core suite + new per-connector contract tests (each connector gets
 "can never" tests — e.g. `InfrastructureConnector` has a compile-time-absent join surface,
