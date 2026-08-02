@@ -270,6 +270,8 @@ struct LiveFeedModule: View {
     @GestureState private var pinchFactor: CGFloat = 1
     /// In-flight pan translation.
     @GestureState private var panDelta: CGSize = .zero
+    /// Whether the CURRENT pinch has taken its anchor; reset when the fingers lift.
+    @State private var pinchIsAnchored = false
 
     private static let maximumZoom: CGFloat = 8
 
@@ -295,13 +297,20 @@ struct LiveFeedModule: View {
                 state = value.magnification
             }
             .onChanged { value in
-                // The anchor latches on the pinch that STARTS the zoom; while zoomed, panning is
-                // how the view moves, so re-anchoring mid-zoom would make the picture jump.
-                if !isZoomed {
-                    zoomAnchor = value.startAnchor
-                }
+                // EVERY pinch pivots about its own start position — zooming after a pan from
+                // the first pinch's stale anchor reads as the picture lunging sideways. Moving
+                // the pivot must not move the picture, so the offset absorbs the
+                // anchor-dependent term of the transform (A·(1−s) in the render map); from an
+                // unzoomed state the term is zero and this is a plain re-anchor.
+                guard !pinchIsAnchored else { return }
+                pinchIsAnchored = true
+                let next = value.startAnchor
+                zoomOffset.width += (zoomAnchor.x - next.x) * size.width * (1 - zoomScale)
+                zoomOffset.height += (zoomAnchor.y - next.y) * size.height * (1 - zoomScale)
+                zoomAnchor = next
             }
             .onEnded { value in
+                pinchIsAnchored = false
                 let next = min(max(zoomScale * value.magnification, 1), Self.maximumZoom)
                 if next < 1.05 {
                     withAnimation(.spring(duration: 0.25)) {
@@ -314,18 +323,28 @@ struct LiveFeedModule: View {
                     zoomOffset = clampedOffset(zoomOffset, size: size, scale: next)
                 }
             }
+        // ONE drag recognizer serves both roles — pan while zoomed, the DISP swipe when not.
+        // Two drags on the same surface (a 1pt pan beside the old 28pt swipe) arbitrate
+        // unpredictably: the earlier-recognizing pan starved the swipe even while inert.
         let pan = DragGesture(minimumDistance: 1)
             .updating($panDelta) { value, state, _ in
                 guard isZoomed else { return }
                 state = value.translation
             }
             .onEnded { value in
-                guard isZoomed else { return }
-                zoomOffset = clampedOffset(
-                    CGSize(
-                        width: zoomOffset.width + value.translation.width,
-                        height: zoomOffset.height + value.translation.height),
-                    size: size, scale: zoomScale)
+                if isZoomed {
+                    zoomOffset = clampedOffset(
+                        CGSize(
+                            width: zoomOffset.width + value.translation.width,
+                            height: zoomOffset.height + value.translation.height),
+                        size: size, scale: zoomScale)
+                } else {
+                    // Down → clean (DISP 2); up → live (DISP 1). Same thresholds the dedicated
+                    // swipe used, so the feel is unchanged.
+                    let dy = value.translation.height
+                    guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
+                    model.setDisplayMode(dy > 0 ? .clean : .live)
+                }
             }
         return pinch.simultaneously(with: pan)
     }
@@ -462,24 +481,11 @@ struct LiveFeedModule: View {
         }
     }
 
-    /// Composed feed gesture: a vertical swipe switches output mode, else a tap moves the focus
-    /// point; `exclusively` keeps one alive per touch. (The app-lock long-press is a *separate*
-    /// simultaneous gesture — see the feed-image modifiers — so it fires mid-hold instead of being
-    /// held back behind this swipe's exclusivity.)
+    /// Tap moves the focus point. The DISP swipe lives on the zoom pan recognizer now (see
+    /// `zoomGestures`), so this is taps only; drags never read as taps — movement past the
+    /// system slop fails tap recognition on its own.
     private func feedGesture(width: CGFloat, height: CGFloat) -> some Gesture {
-        let size = CGSize(width: width, height: height)
-        return
-            DragGesture(minimumDistance: 28)
-            .onEnded { value in
-                // While zoomed, a drag is a PAN — mode-switching on it would fling the operator
-                // out of the layout mid-inspection.
-                guard !isZoomed else { return }
-                let dy = value.translation.height
-                guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
-                // Down → clean (DISP 2); up → live (DISP 1).
-                model.setDisplayMode(dy > 0 ? .clean : .live)
-            }
-            .exclusively(before: focusTapGestures(size: size))
+        focusTapGestures(size: CGSize(width: width, height: height))
     }
 
     private func focusTapGestures(size: CGSize) -> some Gesture {

@@ -911,7 +911,11 @@ final class NativeAppModel {
     var discoveredRelayHosts: [MonitorRelayDiscovery] = []
     var relayClientState: MonitorRelayClient.State = .idle
     /// The broadcast refused this device for want of a passcode; the waiting overlay asks.
+    /// While true, the rejoin watchdog stands down — an auto-rejoin without the code is
+    /// guaranteed-denied churn that unmounts the entry field mid-typing.
     var relayJoinNeedsPasscode = false
+    /// Whether the current join carried a passcode, so a repeat denial can say "wrong code".
+    @ObservationIgnored private var relayPasscodeWasAttempted = false
     /// Whether the broadcaster entertains control requests, from the state payload.
     var relayAllowsControlRequests = true
     /// Why the viewer link is down, shown on the empty feed where the operator is actually
@@ -1250,13 +1254,17 @@ final class NativeAppModel {
         client.onJoinDenied = { [weak self] denial in
             guard let self else { return }
             self.relayJoinNeedsPasscode = denial.passcodeRequired
-            self.relayFailureReason = denial.reason
+            // A second denial after a code was sent means the CODE was wrong — say that,
+            // not the generic ask.
+            self.relayFailureReason =
+                denial.passcodeRequired && self.relayPasscodeWasAttempted
+                ? "That passcode wasn't accepted — check it with the broadcasting device."
+                : denial.reason
             self.liveFPS = "FAIL"
             self.liveFrameImage = nil
         }
         relayHoldsControl = false
         relayControlHolderName = nil
-        relayJoinNeedsPasscode = false
         relayClient = client
         lastGoodFrameAt = Date()
         client.connect(to: discovery.endpoint)
@@ -1264,6 +1272,7 @@ final class NativeAppModel {
         #if DEBUG
             joinPasscode = joinPasscode ?? demoRelayJoinPasscode
         #endif
+        relayPasscodeWasAttempted = joinPasscode?.isEmpty == false
         client.introduce(deviceName: UIDevice.current.name, passcode: joinPasscode)
         startRelayWatchdog(for: discovery)
     }
@@ -1305,6 +1314,9 @@ final class NativeAppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
                 guard let self, !Task.isCancelled, self.videoSource == .relay else { return }
+                // A passcode prompt is a HUMAN in the loop: an auto-rejoin without the code is
+                // guaranteed to be denied, and each cycle unmounts the entry field mid-typing.
+                if self.relayJoinNeedsPasscode { continue }
                 // Rejoin through the CURRENT browse result, never the captured one: a Bonjour
                 // endpoint pins the interface it was discovered on, and a broadcaster that came
                 // back (new port, new interface) leaves the captured endpoint resolving to the

@@ -1752,7 +1752,6 @@ struct MonitorShell: View {
                 .frame(width: feed.width, height: feed.height)
                 .clipped()
                 .offset(x: feed.x, y: feed.y)
-                .simultaneousGesture(pinchAspectGesture)
 
                 // Portrait suppresses the floating scope panels (redundant with the stacked scopes
                 // zone below); feed-anchored assists live inside LiveFeedModule. Mounted with
@@ -2009,25 +2008,6 @@ struct MonitorShell: View {
         // up by half the overshoot. Top-aligned, the canvas stays rooted at physical 0.
         .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
         .ignoresSafeArea(.container, edges: .all)
-    }
-
-    /// Pinch-to-snap the portrait feed aspect.
-    private var pinchAspectGesture: some Gesture {
-        MagnificationGesture()
-            .onEnded { value in
-                let next: PortraitFeedAspect?
-                if value > 1.15 {
-                    next = .fill
-                } else if value < 0.87 {
-                    next = .fit16x9
-                } else {
-                    next = nil
-                }
-                guard let next, next != model.preferences.portraitFeedAspect else { return }
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    model.preferences.portraitFeedAspect = next
-                }
-            }
     }
 
     private func panelTransition(_ panel: NativeAppModel.ActivePanel) -> AnyTransition {
