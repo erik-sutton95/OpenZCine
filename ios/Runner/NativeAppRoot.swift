@@ -4361,32 +4361,39 @@ final class NativeAppModel {
         // auto-reconnect-on-plug that was removed by request below — this one only ever runs
         // after an explicit arm, once.)
         if let intent = pendingSetupIntent, !isConnected, !isEstablishingConnection {
-            let match = cameras.first { discovered in
-                // The candidate must sit on the network SHAPE the armed setup asked for — the
-                // same per-kind rule as the availability chips. Without it, an armed Router
-                // watch was fulfilled instantly by the same body still sitting on the phone's
-                // hotspot: it connected over the wrong path, and because that fulfillment fired
-                // inside the add-setup sheet's dismissal, the progress cover was silently
-                // dropped — the whole connect+pair ran with no visible UI.
+            // The candidate must sit on the network SHAPE the armed setup asked for — the
+            // same per-kind rule as the availability chips. Without it, an armed Router
+            // watch was fulfilled instantly by the same body still sitting on the phone's
+            // hotspot: it connected over the wrong path, and because that fulfillment fired
+            // inside the add-setup sheet's dismissal, the progress cover was silently
+            // dropped — the whole connect+pair ran with no visible UI.
+            let shapeFits: (DiscoveredCamera) -> Bool = { [isOnCameraAccessPointNetwork] in
                 let viaHotspot = CameraStartupPolicy.usesIPhoneHotspot(
-                    host: discovered.ip, transport: "")
-                let sourceFits: Bool
+                    host: $0.ip, transport: "")
                 switch intent.kind {
                 case .usbC, .hdmiCapture:
-                    sourceFits = discovered.source == .usb
+                    return $0.source == .usb
                 case .phoneHotspot:
-                    sourceFits = discovered.source != .usb && viaHotspot
+                    return $0.source != .usb && viaHotspot
                 case .infrastructure:
-                    sourceFits =
-                        discovered.source != .usb && !viaHotspot
-                        && !isOnCameraAccessPointNetwork
+                    return $0.source != .usb && !viaHotspot && !isOnCameraAccessPointNetwork
                 case .cameraAccessPoint:
-                    sourceFits = discovered.source != .usb && isOnCameraAccessPointNetwork
+                    return $0.source != .usb && isOnCameraAccessPointNetwork
                 }
-                return sourceFits
+            }
+            let strictMatch = cameras.first { discovered in
+                shapeFits(discovered)
                     && CameraStartupPolicy.savedCamera(
                         forDiscovered: discovered, in: [intent.anchor]) != nil
             }
+            // Generic record names (a bare "Nikon ZR") are blocklisted from name matching, so
+            // a watch anchored to one can never fulfill strictly — it sat on "Searching…"
+            // forever with the camera in plain sight. The operator's tap consented to THIS
+            // camera on THIS network: when exactly one candidate fits the network shape, that
+            // is the camera they meant. Two or more stays strict — ambiguity must never
+            // auto-connect a wrong body.
+            let candidates = cameras.filter(shapeFits)
+            let match = strictMatch ?? (candidates.count == 1 ? candidates.first : nil)
             if let match {
                 pendingSetupIntent = nil
                 connectionMessage = "\(intent.anchor.displayTitle) found. Connecting…"

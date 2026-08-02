@@ -669,29 +669,33 @@ public fun SavedCamerasExperience(
         if (phase.isBusy()) return@LaunchedEffect
         val host =
             when (transport) {
-                SavedCameraTransport.USB_C ->
-                    usbCameras
-                        .firstOrNull {
-                            it.access == UsbPtpCameraAccess.READY &&
-                                SavedCameraRecords.cameraNamesMatch(
-                                    it.displayName,
-                                    anchor.cameraName,
-                                )
-                        }
+                SavedCameraTransport.USB_C -> {
+                    val ready = usbCameras.filter { it.access == UsbPtpCameraAccess.READY }
+                    (ready.firstOrNull {
+                        SavedCameraRecords.cameraNamesMatch(it.displayName, anchor.cameraName)
+                    } ?: ready.singleOrNull())
                         ?.hostKey
+                }
                 SavedCameraTransport.INFRASTRUCTURE,
                 SavedCameraTransport.PHONE_HOTSPOT,
-                ->
-                    discoveredCameras
-                        .firstOrNull {
-                            // Same per-kind network-shape rule as the availability chips: an
-                            // armed Router watch must not be fulfilled by the body still on
-                            // this phone's hotspot (wrong path, wrong record), and vice versa.
-                            SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName) &&
-                                SavedCameraRecords.isPhoneHotspotHost(it.host) ==
-                                    (transport == SavedCameraTransport.PHONE_HOTSPOT)
+                -> {
+                    // Same per-kind network-shape rule as the availability chips: an armed
+                    // Router watch must not be fulfilled by the body still on this phone's
+                    // hotspot (wrong path, wrong record), and vice versa.
+                    val fitting =
+                        discoveredCameras.filter {
+                            SavedCameraRecords.isPhoneHotspotHost(it.host) ==
+                                (transport == SavedCameraTransport.PHONE_HOTSPOT)
                         }
+                    // Generic record names (a bare "Nikon ZR") are blocklisted from name
+                    // matching, so a watch anchored to one never fulfills strictly (stuck
+                    // "Searching…" with the camera in plain sight). A single shape-fitting
+                    // candidate is the camera the tap consented to; two or more stays strict.
+                    (fitting.firstOrNull {
+                        SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName)
+                    } ?: fitting.singleOrNull())
                         ?.host
+                }
                 else -> null
             }
         if (host != null) {
