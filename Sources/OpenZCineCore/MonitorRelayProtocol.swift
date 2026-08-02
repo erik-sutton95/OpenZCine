@@ -67,6 +67,13 @@ public enum MonitorRelayProtocol {
     /// protocol produces and exists purely so a desynchronised or hostile stream cannot make the
     /// reader allocate without bound.
     public static let maximumPayloadBytes = 8 * 1024 * 1024
+
+    /// Bonjour TXT key carrying the camera host this broadcast serves. The body accepts one
+    /// initiator, so every device that can SEE a broadcast must keep its own discovery probes
+    /// off that address — a foreign Init against a served camera drops the broadcaster's
+    /// session. Advertised (rather than sent in-session) so the exclusion protects the camera
+    /// from devices that merely have the camera list open, not only from joined watchers.
+    public static let servedCameraTXTKey = "ch"
 }
 
 /// Host → viewer introduction — and viewer → host, where it may carry the watcher passcode.

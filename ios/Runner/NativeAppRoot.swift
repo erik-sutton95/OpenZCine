@@ -896,6 +896,10 @@ final class NativeAppModel {
     /// Whether the running advertisement includes peer-to-peer, so a session that later proves
     /// its topology can re-advertise to match.
     @ObservationIgnored private var relayHostAdvertisesPeerToPeer = false
+    /// The port the last listener bound, asked for again on every restart. Watchers resolve this
+    /// device through Bonjour SRV records that outlive a listener by their TTL; a restart that
+    /// moves the port strands them dialing the dead one (the RST storm in the field report).
+    @ObservationIgnored private var relayListenerPreferredPort: UInt16?
     /// Hardware HEVC for an incoming stream; created with a viewer session.
     @ObservationIgnored private var relayVideoDecoder: MonitorRelayVideoDecoder?
 
@@ -971,11 +975,20 @@ final class NativeAppModel {
             // network itself, and a viewer that wants an AP-session broadcast can join the
             // camera's network. ("Unknown keeps it on" was tried first — it put AWDL under
             // every router session whose SSID iOS would not disclose, which is most of them.)
-            let advertisesPeerToPeer = cameraAccessPointEvidence == true
+            // A live session's establishment latch outranks the SSID read: hardware regularly
+            // refuses the Wi-Fi information request (`nehelper invalid result code`), and the
+            // latch was decided when the topology actually proved itself.
+            let advertisesPeerToPeer =
+                isConnected ? establishedSessionUsedCameraAP : cameraAccessPointEvidence == true
+            host.onListening = { [weak self] port in
+                if let port { self?.relayListenerPreferredPort = port }
+            }
             host.start(
                 hostName: UIDevice.current.name,
                 cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
-                includePeerToPeer: advertisesPeerToPeer)
+                servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                includePeerToPeer: advertisesPeerToPeer,
+                preferredPort: relayListenerPreferredPort)
             relayHost = host
             relayHostAdvertisesPeerToPeer = advertisesPeerToPeer
             isRelayBroadcasting = true
@@ -2909,12 +2922,21 @@ final class NativeAppModel {
                 // The session just proved its topology; a broadcast started before it (or across
                 // a path switch) may be advertising for the wrong one. Peer-to-peer is worth its
                 // radio cost only on an AP session — and only matters for viewers still LOOKING,
-                // so the bounce is limited to an advertisement nobody has answered yet.
+                // so the bounce is limited to an advertisement nobody has answered yet. (The
+                // rebound listener asks for its old port back, so even a watcher mid-redial
+                // lands on the live listener rather than a dead SRV record.)
                 if isRelayBroadcasting, relayPeerCount == 0,
                     relayHostAdvertisesPeerToPeer != establishedSessionUsedCameraAP
                 {
                     setRelayBroadcasting(false)
                     setRelayBroadcasting(true)
+                } else {
+                    // Broadcast-before-connect: the advertisement now names the camera it
+                    // serves, so every device that can see it keeps discovery probes off the
+                    // body. A TXT re-registration, not a bounce — connections stay up.
+                    relayHost?.updateServedCamera(
+                        cameraName: session.identity.displayName,
+                        servedCameraHost: session.identity.host)
                 }
                 store.upsertSavedCamera(
                     host: session.identity.host,
@@ -3675,17 +3697,35 @@ final class NativeAppModel {
     /// exactly as long as the scan actually runs.
     func refreshCameraDiscovery() async {
         guard !isConnected, !isDemoSession else { return }
-        stopDiscoveryLoop()
+        stopDiscoveryLoop(keepRelayBrowsing: true)
         let guid = NativeCameraConnectionStore.shared.guid()
         let cameras =
             (try? await discoveryService.discover(
                 guid: guid,
-                priorityHosts: savedCameras.map(\.host)
-            ) { [weak self] message in
-                self?.connectionMessage = StartupConnectionCopy.friendly(message)
-            }) ?? []
+                priorityHosts: savedCameras.map(\.host),
+                excludedHosts: { [weak self] in
+                    self?.hostsServedByVisibleBroadcasts() ?? []
+                },
+                status: { [weak self] message in
+                    self?.connectionMessage = StartupConnectionCopy.friendly(message)
+                }
+            )) ?? []
         applyDiscoveryResults(cameras)
         startDiscoveryLoop(resetResults: false)
+    }
+
+    /// Camera hosts some visible broadcast is serving, in raw and normalized forms — the
+    /// addresses this device's discovery must not PTP-probe while those broadcasts stand.
+    private func hostsServedByVisibleBroadcasts() -> Set<String> {
+        var served: Set<String> = []
+        for discovery in discoveredRelayHosts {
+            guard let host = discovery.servedCameraHost, !host.isEmpty else { continue }
+            served.insert(host)
+            if let normalized = PTPIPPairedHosts.normalizedHost(host) {
+                served.insert(normalized)
+            }
+        }
+        return served
     }
 
     private func startDiscoveryLoop(resetResults: Bool) {
@@ -3704,13 +3744,16 @@ final class NativeAppModel {
         }
     }
 
-    private func stopDiscoveryLoop() {
+    /// `keepRelayBrowsing` holds the relay browser open across a momentary loop restart
+    /// (pull-to-refresh): the visible broadcasts are what keeps the refresh's own probe pass off
+    /// any camera those broadcasts serve — and the rows shouldn't blink out of the list either.
+    private func stopDiscoveryLoop(keepRelayBrowsing: Bool = false) {
         discoveryLoopGeneration += 1
         discoveryLoopTask?.cancel()
         discoveryLoopTask = nil
         // Broadcasts are listed beside cameras on the same screen, so they are found and forgotten
         // on the same schedule.
-        stopRelayBrowsing()
+        if !keepRelayBrowsing { stopRelayBrowsing() }
     }
 
     private func runDiscoveryLoop(guid: Data, generation: Int) async {
@@ -3731,10 +3774,14 @@ final class NativeAppModel {
             do {
                 cameras = try await discoveryService.discover(
                     guid: guid,
-                    priorityHosts: savedCameras.map(\.host)
-                ) { [weak self] message in
-                    self?.connectionMessage = StartupConnectionCopy.friendly(message)
-                }
+                    priorityHosts: savedCameras.map(\.host),
+                    excludedHosts: { [weak self] in
+                        self?.hostsServedByVisibleBroadcasts() ?? []
+                    },
+                    status: { [weak self] message in
+                        self?.connectionMessage = StartupConnectionCopy.friendly(message)
+                    }
+                )
             } catch {
                 cameras = []
                 connectionMessage =
@@ -7500,7 +7547,10 @@ final class NativeAppModel {
     /// meaningfully off the frame centre (>4% on either axis), or subject tracking is latched —
     /// a tracked box can drift through centre while panning, and reset is how tracking ends.
     /// False while locked (the lock pins it on purpose) or before any focus box is known.
+    /// A watcher sees the broadcaster's focus box ride in with the frames, but may only ACT on
+    /// it while holding control — without control the key would sit there doing nothing.
     var isFocusResetAvailable: Bool {
+        if videoSource == .relay, !relayHoldsControl { return false }
         guard !focusPointLocked, let focus = liveViewFocus, let box = focus.boxes.first,
             focus.coordinateWidth > 0, focus.coordinateHeight > 0
         else { return false }
@@ -10138,16 +10188,23 @@ final class NativeAppModel {
         restartLiveViewForQualityChange()
     }
 
-    /// The broadcaster's latency-vs-quality stance. The encoder and the per-viewer windows are
-    /// built at broadcast start, so a live broadcast restarts to adopt the change — watchers
-    /// ride through on their rejoin watchdogs.
+    /// The broadcaster's latency-vs-quality stance. Adopted LIVE: the encoder is swapped and the
+    /// host's per-peer window updated in place, while the listener — and every watcher's TCP
+    /// connection — stays up. The first restart shipped as a full broadcast bounce, which moved
+    /// the listener port and stranded watchers on the stale Bonjour SRV record for its TTL; the
+    /// decoder needs no ceremony for the swap, it already rebuilds on changed parameter sets.
     func setRelayEncoderProfile(_ profile: RelayEncoderProfile) {
         guard preferences.relayEncoderProfile != profile else { return }
         preferences.relayEncoderProfile = profile
-        if isRelayBroadcasting {
-            setRelayBroadcasting(false)
-            setRelayBroadcasting(true)
-        }
+        guard isRelayBroadcasting, let host = relayHost else { return }
+        relayVideoEncoder?.invalidate()
+        let encoder = MonitorRelayVideoEncoder(profile: profile)
+        relayVideoEncoder = encoder
+        host.onKeyframeNeeded = { encoder.requestKeyframe() }
+        host.adoptProfile(profile)
+        // The ladder restarts from the top: the old rung was chosen against the old encoder's
+        // rate behaviour, and the fresh session opens on a keyframe anyway.
+        relayBitrateAdaptation = RelayBitrateAdaptation(now: CFAbsoluteTimeGetCurrent())
     }
 
     /// Applies live to NEW joins; devices already watching keep their access until they leave.

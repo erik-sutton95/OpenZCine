@@ -58,9 +58,22 @@ struct MonitorRelayDiscovery: Identifiable, Equatable {
     let id: String
     let name: String
     let endpoint: NWEndpoint
+    /// The camera host this broadcast is serving, from the advertisement's TXT record. Any
+    /// device that can SEE the broadcast must not PTP-probe this address: the body accepts one
+    /// initiator, and a foreign Init against a served camera is exactly the "main device drops
+    /// when a watcher comes or goes" failure — the watcher's own camera-list scan knocking the
+    /// broadcaster's session over.
+    let servedCameraHost: String?
+
+    init(id: String, name: String, endpoint: NWEndpoint, servedCameraHost: String? = nil) {
+        self.id = id
+        self.name = name
+        self.endpoint = endpoint
+        self.servedCameraHost = servedCameraHost
+    }
 
     static func == (lhs: MonitorRelayDiscovery, rhs: MonitorRelayDiscovery) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id && lhs.servedCameraHost == rhs.servedCameraHost
     }
 }
 
@@ -127,28 +140,49 @@ final class MonitorRelayHost {
     private var latestState: MonitorRelayState?
     private var hostName = ""
     private var cameraName: String?
+    private var servedCameraHost: String?
+    /// The port actually bound, reported once the listener is ready. The model remembers it
+    /// across host instances and asks for it back: watchers resolve this host through Bonjour
+    /// SRV records that outlive a listener by their TTL, so a restart that moves the port
+    /// strands every watcher dialing the corpse (measured as a minutes-long RST storm).
+    private(set) var boundPort: UInt16?
+    var onListening: (@MainActor (UInt16?) -> Void)?
 
     /// `includePeerToPeer` should be true only when the camera occupies this device's Wi-Fi
     /// (camera-AP session) — that is the case peer-to-peer exists for. Everywhere else the AWDL
     /// advertisement would time-slice the very radio the camera stream and every viewer flow
     /// ride, for a path no viewer needs.
-    func start(hostName: String, cameraName: String?, includePeerToPeer: Bool) {
+    func start(
+        hostName: String, cameraName: String?, servedCameraHost: String? = nil,
+        includePeerToPeer: Bool, preferredPort: UInt16? = nil
+    ) {
         stop()
         self.hostName = hostName
         self.cameraName = cameraName
+        self.servedCameraHost = servedCameraHost
         do {
-            let listener = try NWListener(
-                using: relayParameters(includePeerToPeer: includePeerToPeer))
-            listener.service = NWListener.Service(
-                name: hostName, type: MonitorRelayProtocol.serviceType)
+            let listener = try makeListener(
+                includePeerToPeer: includePeerToPeer, preferredPort: preferredPort)
+            listener.service = advertisedService()
             listener.newConnectionHandler = { [weak self] connection in
                 Task { @MainActor in self?.accept(connection) }
             }
-            listener.stateUpdateHandler = { [weak self] state in
-                guard case .failed(let error) = state else { return }
-                Task { @MainActor in
-                    self?.onFailure?("Sharing stopped: \(error.localizedDescription)")
-                    self?.stop()
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                switch state {
+                case .ready:
+                    let port = listener?.port?.rawValue
+                    Task { @MainActor in
+                        guard let self, listener === self.listener else { return }
+                        self.boundPort = port
+                        self.onListening?(port)
+                    }
+                case .failed(let error):
+                    Task { @MainActor in
+                        self?.onFailure?("Sharing stopped: \(error.localizedDescription)")
+                        self?.stop()
+                    }
+                default:
+                    break
                 }
             }
             listener.start(queue: queue)
@@ -157,6 +191,45 @@ final class MonitorRelayHost {
         } catch {
             onFailure?("Couldn't start sharing: \(error.localizedDescription)")
         }
+    }
+
+    /// Binds the remembered port when it is still free so redials against stale Bonjour records
+    /// land on a LIVE listener; falls back to an ephemeral port rather than failing the whole
+    /// broadcast over a squatter.
+    private func makeListener(
+        includePeerToPeer: Bool, preferredPort: UInt16?
+    ) throws -> NWListener {
+        if let preferredPort, let port = NWEndpoint.Port(rawValue: preferredPort) {
+            if let listener = try? NWListener(
+                using: relayParameters(includePeerToPeer: includePeerToPeer), on: port)
+            {
+                return listener
+            }
+        }
+        return try NWListener(using: relayParameters(includePeerToPeer: includePeerToPeer))
+    }
+
+    /// The Bonjour advertisement, carrying the served camera's host in TXT so every device that
+    /// can see the broadcast keeps its discovery probes off that address.
+    private func advertisedService() -> NWListener.Service {
+        var txt = NWTXTRecord()
+        if let servedCameraHost, !servedCameraHost.isEmpty {
+            txt[MonitorRelayProtocol.servedCameraTXTKey] = servedCameraHost
+        }
+        return NWListener.Service(
+            name: hostName, type: MonitorRelayProtocol.serviceType, txtRecord: txt)
+    }
+
+    /// Re-registers the advertisement with a new camera name / served host — a TXT update, not a
+    /// listener bounce, so connections, the port, and watching devices are untouched. Covers the
+    /// broadcast-before-connect order, where the camera's identity arrives after `start`.
+    func updateServedCamera(cameraName: String?, servedCameraHost: String?) {
+        guard self.cameraName != cameraName || self.servedCameraHost != servedCameraHost else {
+            return
+        }
+        self.cameraName = cameraName
+        self.servedCameraHost = servedCameraHost
+        listener?.service = advertisedService()
     }
 
     func stop() {
@@ -362,9 +435,18 @@ final class MonitorRelayHost {
     /// Low latency: two = one on the wire and one behind it. Quality: four rides out link
     /// jitter instead of skipping — every skip avoided is a broken reference chain and a
     /// forced keyframe avoided, which is where the profile's quality actually comes from.
-    private let maxInFlightFramesPerPeer: Int
+    /// Mutable so a live profile change adopts the new window without tearing the listener
+    /// down — a listener bounce moves the port and strands every watcher on a stale Bonjour
+    /// SRV record for its TTL.
+    private var maxInFlightFramesPerPeer: Int
 
     init(profile: RelayEncoderProfile = .lowLatency) {
+        maxInFlightFramesPerPeer = profile.maxInFlightFramesPerPeer
+    }
+
+    /// Adopts a new profile's per-peer window on the LIVE broadcast; the encoder swap beside it
+    /// carries the rest of the profile. Connections and the advertisement stay up.
+    func adoptProfile(_ profile: RelayEncoderProfile) {
         maxInFlightFramesPerPeer = profile.maxInFlightFramesPerPeer
     }
 
@@ -454,8 +536,13 @@ final class MonitorRelayBrowser {
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             let discoveries = results.compactMap { result -> MonitorRelayDiscovery? in
                 guard case .service(let name, _, _, _) = result.endpoint else { return nil }
+                var servedCameraHost: String?
+                if case .bonjour(let txt) = result.metadata {
+                    servedCameraHost = txt[MonitorRelayProtocol.servedCameraTXTKey]
+                }
                 return MonitorRelayDiscovery(
-                    id: name, name: name, endpoint: result.endpoint)
+                    id: name, name: name, endpoint: result.endpoint,
+                    servedCameraHost: servedCameraHost)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             Task { @MainActor in

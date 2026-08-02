@@ -4,9 +4,18 @@ import NetworkExtension
 
 // SAFETY: `@unchecked Sendable` — holds no mutable stored state; all work runs in local async scopes.
 final class NativeCameraDiscoveryService: @unchecked Sendable {
+    /// `excludedHosts` are addresses that must not be PTP-probed — cameras some visible
+    /// broadcast is already serving. The body accepts a single initiator; probing a served
+    /// camera drops the broadcaster's session (the "main device loses connection whenever a
+    /// watcher joins or leaves" report — the watcher's own camera list was the aggressor).
+    /// Passive discovery (Bonjour, USB attach) is unaffected: listing is harmless, Init is not.
+    /// A provider rather than a set: the probe pass starts ~1.5 s into a scan, and a relay
+    /// browser started alongside it has usually sighted the broadcasts by then — the freshest
+    /// answer is the one that protects the camera.
     func discover(
         guid: Data,
         priorityHosts: [String] = [],
+        excludedHosts: @MainActor @escaping () -> Set<String> = { [] },
         status: @MainActor @escaping (String) -> Void = { _ in }
     ) async throws -> [DiscoveredCamera] {
         // USB-attached cameras are browser-driven and effectively instant; surface them without
@@ -25,7 +34,8 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
 
         await status("Still searching your network for cameras…")
         let probeResults = try await subnetProbe(
-            guid: guid, priorityHosts: priorityHosts, status: status)
+            guid: guid, priorityHosts: priorityHosts, excludedHosts: excludedHosts,
+            status: status)
         return CameraDiscovery.dedupeAndSort(usbBrowser.attachedCameras() + probeResults)
     }
 
@@ -37,8 +47,10 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
     private func subnetProbe(
         guid: Data,
         priorityHosts: [String],
+        excludedHosts: @MainActor @escaping () -> Set<String>,
         status: @MainActor @escaping (String) -> Void
     ) async throws -> [DiscoveredCamera] {
+        let excluded = await excludedHosts()
         let allLocalInterfaces = nativeLocalIPv4Interfaces()
         let scanInterfaces = allLocalInterfaces.filter {
             CameraDiscovery.isSupportedScanInterface(name: $0.name, address: $0.address)
@@ -51,9 +63,13 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         // hosts blind-probed as small as today (probing can knock a ZR out of pairing mode).
         let split = CameraDiscovery.prioritizedScanHosts(
             priorityHosts: priorityHosts, localAddresses: localAddresses)
+        // Filter the OUTPUT, not the inputs: the core adds candidates of its own (the AP
+        // address) beyond what was passed in, and every last probe candidate must respect the
+        // served-camera exclusion.
+        let priorityChunk = split.priority.filter { !excluded.contains($0) }
         let candidateChunks =
-            [split.priority].filter { !$0.isEmpty }
-            + split.remaining.chunked(into: 128)
+            [priorityChunk].filter { !$0.isEmpty }
+            + split.remaining.filter { !excluded.contains($0) }.chunked(into: 128)
 
         if scanInterfaces.isEmpty {
             let bridgeAddresses = allLocalInterfaces.filter { $0.name.hasPrefix("bridge") }
