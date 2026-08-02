@@ -172,11 +172,13 @@ public enum CameraWiFiJoinPolicy {
         {
             return nil
         }
-        // A record with positive evidence it reaches the app WITHOUT the camera's access point —
-        // a router or hotspot camera — must never turn a dropped connection into a "join
-        // NIKON_…" prompt: the camera being momentarily invisible on the shared network is not
-        // fixed by leaving that network. nil is a legacy record with no evidence either way.
-        if savedCamera?.pairedViaCameraAccessPoint == false { return nil }
+        // A saved record earns the join prompt only by POSITIVE proof it lives on the camera's
+        // access point — it joined one once, or the operator declared the AP path at pairing.
+        // false and nil both stay put: "the camera is not visible right now" is never fixed by
+        // leaving the current network for a record that never proved it needs to, and applying
+        // that configuration kicks this device off the router — taking the session AND every
+        // relay watcher with it. A fresh pairing (no record yet) keeps the wizard-driven flow.
+        if let savedCamera, savedCamera.pairedViaCameraAccessPoint != true { return nil }
         // A DISCOVERED camera is by definition reachable on the network this device is already on
         // — discovery is what found it there. Joining its access point would leave that network to
         // reach a camera we can already see.

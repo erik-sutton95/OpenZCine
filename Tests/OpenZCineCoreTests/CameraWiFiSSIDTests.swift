@@ -80,11 +80,14 @@ import Testing
 }
 
 @Test func cameraWiFiJoinPolicyDoesNotFalsePositiveOnHome1921681Subnet() {
+    // Evidence-stamped AP record: the point under test is that a HOME network sharing the
+    // camera-AP's 192.168.1.0/24 range must not fake "already on the AP" and suppress the join.
     let saved = PTPIPSavedCameraRecord(
         host: "192.168.1.1",
         displayName: "ZR_6001234",
         transport: "Wi-Fi",
-        lastSeenAt: nil
+        lastSeenAt: nil,
+        pairedViaCameraAccessPoint: true
     )
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
@@ -179,7 +182,8 @@ import Testing
         host: "192.168.1.1",
         displayName: "ZR_6001234",
         transport: "Wi-Fi",
-        lastSeenAt: nil
+        lastSeenAt: nil,
+        pairedViaCameraAccessPoint: true
     )
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
@@ -353,13 +357,37 @@ import Testing
     #expect(target == nil)
 }
 
-/// A record with no evidence either way (legacy, pre-field) keeps the historical join prompt.
-@Test func cameraWiFiJoinPolicyStillJoinsForALegacyRecordOnDrop() {
+/// A record with no evidence either way — every record on a device that cannot read SSIDs, and
+/// everything saved before the field existed — must NOT volunteer the join. This was the last
+/// hole in the "join NIKON_…" saga: a router operator's records could never earn `false`, so
+/// the legacy allowance kept prompting them to leave the router forever. Positive proof only —
+/// the same rule the proactive path already follows.
+@Test func cameraWiFiJoinPolicyDoesNotJoinForALegacyRecordOnDrop() {
     let saved = PTPIPSavedCameraRecord(
         host: "192.168.1.1",
         displayName: "ZR_6001234",
         transport: "Wi-Fi",
         lastSeenAt: nil
+    )
+    let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
+        transportKind: .ptpIP,
+        localAddresses: ["10.99.0.7"],
+        savedCamera: saved,
+        discoveredCamera: nil,
+        connectedSSID: "HOME-WIFI"
+    )
+    #expect(target == nil)
+}
+
+/// The AP-path row keeps its prompt: a record that PROVED it lives on the camera's access point
+/// still offers the join when the camera is not visible on the current network.
+@Test func cameraWiFiJoinPolicyStillJoinsForAnAPProvenRecordOnDrop() {
+    let saved = PTPIPSavedCameraRecord(
+        host: "192.168.1.1",
+        displayName: "ZR_6001234",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        pairedViaCameraAccessPoint: true
     )
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,

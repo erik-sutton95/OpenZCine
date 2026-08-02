@@ -336,3 +336,55 @@ import Testing
 
     #expect(status == .offline)
 }
+
+/// The multi-path regression, from set: a router connect (SSID unreadable, so evidence nil) was
+/// swallowed INTO the same body's camera-AP record by the cross-host merge. One merged record then
+/// ping-ponged its evidence stamp with every connect — prompting "join NIKON_…" on the router path
+/// and silently skipping the join on the AP path. An AP-proven record and an unproven record are
+/// two PATHS of one camera: separate records, grouped as one row by `SavedCameraPathGroups`.
+@Test func routerConnectDoesNotMergeIntoTheAccessPointRecord() {
+    let apRecord = PTPIPSavedCameraRecord(
+        host: "192.168.1.1",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000),
+        pairedViaCameraAccessPoint: true,
+        serialNumber: "6002199"
+    )
+
+    let records = PTPIPSavedCameraRecords.upserting(
+        host: "10.99.0.20",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(timeIntervalSince1970: 1_700_000_500),
+        pairedViaCameraAccessPoint: nil,
+        serialNumber: "6002199",
+        into: [apRecord]
+    )
+
+    #expect(records.count == 2)
+    #expect(records.contains { $0.host == "192.168.1.1" && $0.pairedViaCameraAccessPoint == true })
+    #expect(records.contains { $0.host == "10.99.0.20" })
+}
+
+/// The healing the evidence leniency exists for: a legacy record (nil evidence) absorbing the same
+/// camera's DHCP move on the same network shape — neither record is AP-proven, so they merge.
+@Test func legacyRouterRecordAbsorbsADHCPMove() {
+    let legacy = PTPIPSavedCameraRecord(
+        host: "10.99.0.20",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+
+    let records = PTPIPSavedCameraRecords.upserting(
+        host: "10.99.0.57",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(timeIntervalSince1970: 1_700_000_500),
+        pairedViaCameraAccessPoint: false,
+        into: [legacy]
+    )
+
+    #expect(records.map(\.host) == ["10.99.0.57"])
+}

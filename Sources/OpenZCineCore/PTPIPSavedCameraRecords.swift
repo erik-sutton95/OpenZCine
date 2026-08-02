@@ -246,10 +246,8 @@ public enum PTPIPSavedCameraRecords {
         return cameraNamesMatch(savedName: lhs.displayName, discoveredName: rhs.displayName)
     }
 
-    /// Whether two records reach the camera the same WAY — USB, phone hotspot, or Wi-Fi with
-    /// non-contradicting access-point evidence. Only same-kind records may merge across hosts;
-    /// unknown Wi-Fi evidence merges with either kind (legacy records heal instead of
-    /// duplicating).
+    /// Whether two records reach the camera the same WAY — USB, phone hotspot, or Wi-Fi of the
+    /// same access-point class. Only same-kind records may merge across hosts.
     private static func pathKindsCompatible(
         _ lhs: PTPIPSavedCameraRecord, _ rhs: PTPIPSavedCameraRecord
     ) -> Bool {
@@ -261,9 +259,14 @@ public enum PTPIPSavedCameraRecords {
             host: rhs.host, transport: rhs.transport)
         if lhsHotspot != rhsHotspot { return false }
         if lhsHotspot { return true }
-        if let lhsAP = lhs.pairedViaCameraAccessPoint, let rhsAP = rhs.pairedViaCameraAccessPoint,
-            lhsAP != rhsAP
-        {
+        // An AP-PROVEN record only merges with another AP-proven record — nil is NOT "either".
+        // Letting unknown evidence merge into an AP record is what swallowed the router path of
+        // a multi-path camera: one merged record then ping-ponged its evidence stamp with every
+        // connect, prompting "join NIKON_…" on the router path and silently skipping the join
+        // on the AP path. nil still merges with false, which is the healing the leniency was
+        // for (a legacy router record absorbing a DHCP move); the AP side needs no cross-host
+        // healing, because a body's AP address never changes — same-host merge covers it.
+        if (lhs.pairedViaCameraAccessPoint == true) != (rhs.pairedViaCameraAccessPoint == true) {
             return false
         }
         return true

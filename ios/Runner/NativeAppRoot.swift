@@ -890,6 +890,9 @@ final class NativeAppModel {
     @ObservationIgnored private var relayVideoEncoder: MonitorRelayVideoEncoder?
     /// Steps the outgoing bitrate against viewer backpressure; reset with each broadcast.
     @ObservationIgnored private var relayBitrateAdaptation = RelayBitrateAdaptation()
+    /// Whether the running advertisement includes peer-to-peer, so a session that later proves
+    /// its topology can re-advertise to match.
+    @ObservationIgnored private var relayHostAdvertisesPeerToPeer = false
     /// Hardware HEVC for an incoming stream; created with a viewer session.
     @ObservationIgnored private var relayVideoDecoder: MonitorRelayVideoDecoder?
 
@@ -947,15 +950,21 @@ final class NativeAppModel {
             relayVideoEncoder = encoder
             relayBitrateAdaptation = RelayBitrateAdaptation(now: CFAbsoluteTimeGetCurrent())
             host.onKeyframeNeeded = { encoder.requestKeyframe() }
+            // Peer-to-peer (AWDL) advertising time-slices the radio the camera stream rides —
+            // ~30–100 ms locks every second, measured as multi-fps loss on a router path — so it
+            // runs ONLY on positive proof the camera occupies this device's Wi-Fi (AP session),
+            // the one case where viewers have no infrastructure path. Unknown topology keeps it
+            // OFF: on infrastructure the advertisement already reaches viewers through the
+            // network itself, and a viewer that wants an AP-session broadcast can join the
+            // camera's network. ("Unknown keeps it on" was tried first — it put AWDL under
+            // every router session whose SSID iOS would not disclose, which is most of them.)
+            let advertisesPeerToPeer = cameraAccessPointEvidence == true
             host.start(
                 hostName: UIDevice.current.name,
                 cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
-                // Peer-to-peer advertising time-slices the radio the camera stream rides; it is
-                // only worth that cost when the camera occupies this device's Wi-Fi (AP session)
-                // — the one case where viewers have no infrastructure path. Unknown topology
-                // keeps it on: reachability beats smoothness when we cannot tell.
-                includePeerToPeer: cameraAccessPointEvidence ?? true)
+                includePeerToPeer: advertisesPeerToPeer)
             relayHost = host
+            relayHostAdvertisesPeerToPeer = advertisesPeerToPeer
             isRelayBroadcasting = true
             broadcastRelayState()
         } else {
@@ -2813,6 +2822,16 @@ final class NativeAppModel {
                 // Latched for the session's lifetime — recovery reads THIS, not the records.
                 establishedSessionUsedCameraAP =
                     sessionJoinedCameraAccessPoint || cameraAccessPointEvidence == true
+                // The session just proved its topology; a broadcast started before it (or across
+                // a path switch) may be advertising for the wrong one. Peer-to-peer is worth its
+                // radio cost only on an AP session — and only matters for viewers still LOOKING,
+                // so the bounce is limited to an advertisement nobody has answered yet.
+                if isRelayBroadcasting, relayPeerCount == 0,
+                    relayHostAdvertisesPeerToPeer != establishedSessionUsedCameraAP
+                {
+                    setRelayBroadcasting(false)
+                    setRelayBroadcasting(true)
+                }
                 store.upsertSavedCamera(
                     host: session.identity.host,
                     displayName: session.identity.displayName,
