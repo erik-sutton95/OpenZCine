@@ -870,10 +870,13 @@ struct StartupCameraListRow: View {
             }
             .buttonStyle(.plain)
             .disabled(isBusy)
-            .sheet(isPresented: $isAddSetupPresented) {
-                StartupAddSetupSheet(camera: camera, missingKinds: missingSetupKinds)
-                    .environment(model)
-            }
+            .sheet(
+                isPresented: $isAddSetupPresented,
+                onDismiss: { model.runPendingAddSetupAction() },
+                content: {
+                    StartupAddSetupSheet(camera: camera, missingKinds: missingSetupKinds)
+                        .environment(model)
+                })
         }
     }
 
@@ -1152,15 +1155,21 @@ struct StartupAddSetupSheet: View {
         }()
         if let title {
             Button {
-                dismiss()
+                // Anything that PRESENTS (the join cover, the connect popup) runs from the
+                // sheet's onDismiss — fired mid-dismissal it is silently dropped, which is
+                // exactly how "Join Camera Wi-Fi" did nothing. Pure state writes run now.
                 switch kind {
                 case .cameraAccessPoint:
-                    model.beginAddCameraAPSetup(for: camera)
+                    model.pendingAddSetupAction = { [weak model] in
+                        model?.beginAddCameraAPSetup(for: camera)
+                    }
                 case .usbC, .infrastructure:
                     if let match {
                         // Connecting over this path IS adding the setup — the record saves
                         // itself with the declared path at establishment.
-                        model.connectToCamera(match)
+                        model.pendingAddSetupAction = { [weak model] in
+                            model?.connectToCamera(match)
+                        }
                     } else {
                         // No match yet: ARM the watch — the first discovery on this path
                         // auto-connects (the row shows it waiting). A button that only
@@ -1175,6 +1184,7 @@ struct StartupAddSetupSheet: View {
                 case .hdmiCapture:
                     break
                 }
+                dismiss()
             } label: {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))

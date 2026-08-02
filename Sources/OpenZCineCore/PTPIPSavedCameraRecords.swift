@@ -456,23 +456,32 @@ public enum SavedCameraAvailabilityPolicy {
         if PTPIPPairedHosts.normalizedHost(rawConnectedHost ?? "") == host {
             return .connected
         }
-        // On the camera's own access point the phone has no route to a router or hotspot
-        // network, so those setups are unreachable by construction — and the body IS
-        // discovered here, so the name-match fallback (there for DHCP-moved hosts on the
-        // same network) would light exactly the setups that cannot work. Cable paths and
-        // untyped legacy records are untouched.
-        if onCameraAccessPoint,
-            let kind = camera.path?.kind,
-            kind == .infrastructure || kind == .phoneHotspot
-        {
-            return .offline
-        }
-        if let discovered = discoveredCameras.first(where: {
-            PTPIPPairedHosts.normalizedHost($0.ip) == host
-                || PTPIPSavedCameraRecords.cameraNamesMatch(
+        if let discovered = discoveredCameras.first(where: { candidate in
+            if PTPIPPairedHosts.normalizedHost(candidate.ip) == host { return true }
+            guard
+                PTPIPSavedCameraRecords.cameraNamesMatch(
                     savedName: camera.displayName,
-                    discoveredName: $0.displayName
+                    discoveredName: candidate.displayName
                 )
+            else { return false }
+            // The name-match fallback exists for DHCP-moved hosts ON THE SAME network — so
+            // it may only light a setup whose kind agrees with the network this discovery
+            // came from. A body found over the phone's hotspot (the fixed 172.20.10.x
+            // subnet) is not evidence for the Router setup, a body found over the camera's
+            // own AP is evidence for nothing but the AP setup, and so on. Cable paths and
+            // untyped legacy records keep the plain name match.
+            let viaHotspot = CameraStartupPolicy.usesIPhoneHotspot(
+                host: candidate.ip, transport: "")
+            switch camera.path?.kind {
+            case .phoneHotspot:
+                return viaHotspot
+            case .infrastructure:
+                return !viaHotspot && !onCameraAccessPoint
+            case .cameraAccessPoint:
+                return onCameraAccessPoint
+            case .usbC, .hdmiCapture, nil:
+                return true
+            }
         }) {
             return .available(discovered)
         }

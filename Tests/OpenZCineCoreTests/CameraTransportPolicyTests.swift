@@ -211,3 +211,40 @@ import Testing
             onCameraAccessPoint: true
         ) == .available(usbDiscovered))
 }
+
+@Test func hotspotDiscoveryLightsOnlyTheHotspotSetup() {
+    // A body found over the phone's hotspot (fixed 172.20.10.x subnet) must light the
+    // Hotspot setup and never the Router one — and a router-network discovery must not
+    // light the Hotspot setup.
+    let router = PTPIPSavedCameraRecord(
+        host: "192.168.1.20",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .infrastructure(networkName: nil)
+    )
+    let hotspot = PTPIPSavedCameraRecord(
+        host: "172.20.10.2",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .phoneHotspot
+    )
+    let overHotspot = DiscoveredCamera(ip: "172.20.10.3", name: "ZR_6002199", source: .bonjour)
+    let overRouter = DiscoveredCamera(ip: "192.168.1.77", name: "ZR_6002199", source: .bonjour)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router, discoveredCameras: [overHotspot], connectedHost: nil) == .offline)
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: hotspot, discoveredCameras: [overHotspot], connectedHost: nil)
+            == .available(overHotspot))
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: hotspot, discoveredCameras: [overRouter], connectedHost: nil) == .offline)
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router, discoveredCameras: [overRouter], connectedHost: nil)
+            == .available(overRouter))
+}

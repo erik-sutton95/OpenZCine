@@ -262,33 +262,66 @@ struct LiveFeedModule: View {
     // and guides magnify with the picture.
     /// Committed zoom, 1 when not zoomed.
     @State private var zoomScale: CGFloat = 1
-    /// The unit point the zoom scales about — the first pinch's location.
-    @State private var zoomAnchor: UnitPoint = .center
-    /// Committed pan, applied after the anchored scale.
+    /// Committed pan, applied after the CENTER-anchored scale.
     @State private var zoomOffset: CGSize = .zero
-    /// In-flight pinch factor; composes onto `zoomScale` while the fingers are down.
+    /// In-flight pinch factor; the render derives the live transform from it every frame.
     @GestureState private var pinchFactor: CGFloat = 1
+    /// The in-flight pinch's start location in feed coordinates — the point the zoom pivots on.
+    @GestureState private var pinchStart: CGPoint? = nil
     /// In-flight pan translation.
     @GestureState private var panDelta: CGSize = .zero
-    /// Whether the CURRENT pinch has taken its anchor; reset when the fingers lift.
-    @State private var pinchIsAnchored = false
 
     private static let maximumZoom: CGFloat = 8
 
-    private var effectiveZoom: CGFloat {
-        min(max(zoomScale * pinchFactor, 1), Self.maximumZoom)
-    }
-
     private var isZoomed: Bool { zoomScale > 1.001 }
 
-    /// Pan clamped so the picture cannot be dragged fully off screen; exact edge-pinning depends
-    /// on the anchor, so the bound is deliberately loose rather than wrong. [verify-on-HW]
+    /// Pan bound with a center-anchored scale: the picture overflows the frame by
+    /// `size·(scale−1)/2` on each side, and the offset may travel exactly that far — the
+    /// content edge pins to the frame edge. The bound falls to zero as the scale falls to 1,
+    /// which is what re-centers the picture on the way out of a zoom (the Photos feel):
+    /// clamping DURING the gesture is load-bearing, not just a commit-time tidy.
     private func clampedOffset(_ offset: CGSize, size: CGSize, scale: CGFloat) -> CGSize {
-        let limitX = size.width * (scale - 1)
-        let limitY = size.height * (scale - 1)
+        let limitX = size.width * (scale - 1) / 2
+        let limitY = size.height * (scale - 1) / 2
         return CGSize(
             width: min(max(offset.width, -limitX), limitX),
             height: min(max(offset.height, -limitY), limitY))
+    }
+
+    /// The live transform, derived fresh every frame from the committed state and whatever
+    /// gesture is in flight. One exact formula instead of anchor bookkeeping: with a
+    /// center-anchored scale, keeping the content point under the fingers pinned while the
+    /// factor changes is `O′ = (f − c) − ((f − c) − O)·m` with `s′ = s·m` — for pinching in
+    /// AND out, so both directions track the fingers at the same rate. The factor is clamped
+    /// BEFORE it is applied, so pinching past 1× accumulates no dead travel to unwind.
+    private func liveZoomTransform(size: CGSize) -> (scale: CGFloat, offset: CGSize) {
+        var scale = zoomScale
+        var offset = zoomOffset
+        if let start = pinchStart {
+            let target = min(max(zoomScale * pinchFactor, 1), Self.maximumZoom)
+            let factor = zoomScale > 0 ? target / zoomScale : 1
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            offset = CGSize(
+                width: (start.x - center.x) - ((start.x - center.x) - offset.width) * factor,
+                height: (start.y - center.y) - ((start.y - center.y) - offset.height) * factor)
+            scale = target
+        }
+        if scale > 1.001 {
+            offset.width += panDelta.width
+            offset.height += panDelta.height
+        }
+        return (scale, clampedOffset(offset, size: size, scale: scale))
+    }
+
+    /// Applies the derived zoom transform: a CENTER-anchored scale then the offset, in that
+    /// order — the pair every formula above is written against.
+    private struct FeedZoomTransform: ViewModifier {
+        let transform: (scale: CGFloat, offset: CGSize)
+        func body(content: Content) -> some View {
+            content
+                .scaleEffect(transform.scale, anchor: .center)
+                .offset(transform.offset)
+        }
     }
 
     private func zoomGestures(size: CGSize) -> some Gesture {
@@ -296,33 +329,45 @@ struct LiveFeedModule: View {
             .updating($pinchFactor) { value, state, _ in
                 state = value.magnification
             }
-            .onChanged { value in
-                // EVERY pinch pivots about its own start position — zooming after a pan from
-                // the first pinch's stale anchor reads as the picture lunging sideways. Moving
-                // the pivot must not move the picture, so the offset absorbs the
-                // anchor-dependent term of the transform (A·(1−s) in the render map); from an
-                // unzoomed state the term is zero and this is a plain re-anchor.
-                guard !pinchIsAnchored else { return }
-                pinchIsAnchored = true
-                let next = value.startAnchor
-                zoomOffset.width += (zoomAnchor.x - next.x) * size.width * (1 - zoomScale)
-                zoomOffset.height += (zoomAnchor.y - next.y) * size.height * (1 - zoomScale)
-                zoomAnchor = next
+            .updating($pinchStart) { value, state, _ in
+                // Every pinch pivots on its own start point — held for the gesture's life,
+                // reset by the state machinery when the fingers lift.
+                if state == nil { state = value.startLocation }
             }
             .onEnded { value in
-                pinchIsAnchored = false
-                let next = min(max(zoomScale * value.magnification, 1), Self.maximumZoom)
-                if next < 1.05 {
+                let (scale, offset) = liveZoomTransformEnding(
+                    magnification: value.magnification,
+                    start: value.startLocation,
+                    size: size)
+                if scale < 1.05 {
                     withAnimation(.spring(duration: 0.25)) {
                         zoomScale = 1
                         zoomOffset = .zero
-                        zoomAnchor = .center
                     }
                 } else {
-                    zoomScale = next
-                    zoomOffset = clampedOffset(zoomOffset, size: size, scale: next)
+                    zoomScale = scale
+                    zoomOffset = offset
                 }
             }
+        return zoomGesturesTail(size: size, pinch: pinch)
+    }
+
+    /// The end-of-pinch transform, computed from the gesture value itself — `@GestureState`
+    /// has already reset by `onEnded`, so the live helper can't serve the commit.
+    private func liveZoomTransformEnding(
+        magnification: CGFloat, start: CGPoint, size: CGSize
+    ) -> (scale: CGFloat, offset: CGSize) {
+        let target = min(max(zoomScale * magnification, 1), Self.maximumZoom)
+        let factor = zoomScale > 0 ? target / zoomScale : 1
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let offset = CGSize(
+            width: (start.x - center.x) - ((start.x - center.x) - zoomOffset.width) * factor,
+            height: (start.y - center.y)
+                - ((start.y - center.y) - zoomOffset.height) * factor)
+        return (target, clampedOffset(offset, size: size, scale: target))
+    }
+
+    private func zoomGesturesTail(size: CGSize, pinch: some Gesture) -> some Gesture {
         // ONE drag recognizer serves both roles — pan while zoomed, the DISP swipe when not.
         // Two drags on the same surface (a 1pt pan beside the old 28pt swipe) arbitrate
         // unpredictably: the earlier-recognizing pan starved the swipe even while inert.
@@ -423,10 +468,10 @@ struct LiveFeedModule: View {
         // AF box and focus ring are siblings of the raster, so scaling the raster alone would
         // leave them behind at unmagnified positions over a magnified picture. (Gesture locations
         // report in the pre-transform space, so tap-to-focus keeps landing on the source pixel.)
-        .scaleEffect(effectiveZoom, anchor: zoomAnchor)
-        .offset(
-            x: zoomOffset.width + (isZoomed ? panDelta.width : 0),
-            y: zoomOffset.height + (isZoomed ? panDelta.height : 0)
+        .modifier(
+            FeedZoomTransform(
+                transform: liveZoomTransform(size: CGSize(width: width, height: height))
+            )
         )
         .frame(width: width, height: height)
         .clipped()
@@ -437,7 +482,6 @@ struct LiveFeedModule: View {
             // thing at the wrong spot.
             zoomScale = 1
             zoomOffset = .zero
-            zoomAnchor = .center
         }
         // Vertical swipe switches output mode (down → clean, up → live); long-press app-locks the
         // focus point; a tap moves it. Disambiguated by motion/hold/count, in that priority.

@@ -171,6 +171,12 @@ public object SavedCameraRecords {
     }
 
     /** True when two camera-assigned names are trustworthy identity matches. */
+    /** The phone-hotspot subnet is fixed (172.20.10.x) — the host shape names the network. */
+    public fun isPhoneHotspotHost(host: String): Boolean {
+        val octets = host.trim().split(".").mapNotNull { it.toIntOrNull() }
+        return octets.size == 4 && octets[0] == 172 && octets[1] == 20 && octets[2] == 10
+    }
+
     public fun cameraNamesMatch(lhs: String, rhs: String): Boolean {
         val normalizedLhs = normalizedAssignedCameraName(lhs) ?: return false
         val normalizedRhs = normalizedAssignedCameraName(rhs) ?: return false

@@ -922,6 +922,18 @@ final class NativeAppModel {
         let kind: CameraPath.Kind
     }
     var pendingSetupIntent: PendingSetupIntent?
+    /// Add-setup sheet actions that PRESENT something (the AP join cover, the credential
+    /// scanner) must run after the sheet has actually gone — SwiftUI silently drops a
+    /// fullScreenCover presented while a sheet is mid-dismissal, which read as the sheet's
+    /// buttons doing nothing. The sheet stashes the action; its onDismiss runs it.
+    @ObservationIgnored var pendingAddSetupAction: (() -> Void)?
+
+    /// Runs and clears the stashed add-setup action; called from the sheet's onDismiss.
+    func runPendingAddSetupAction() {
+        let action = pendingAddSetupAction
+        pendingAddSetupAction = nil
+        action?()
+    }
     /// True while a relayed command is being executed on this device's session, so the
     /// surrendered-control guards let the watcher's own commands through the shared entry
     /// points they route over.
@@ -2048,7 +2060,12 @@ final class NativeAppModel {
         guard
             let ssid = CameraWiFiSSID.resolve(for: camera)
                 ?? CameraWiFiSSID.deriveSSID(fromCameraName: camera.displayName)
-        else { return }
+        else {
+            // No derivable SSID (custom/generic camera name): the scan flow reads it off the
+            // camera's own network screen. A silent return here was a dead button.
+            presentCameraWiFiScanner()
+            return
+        }
         let stored = CameraWiFiCredentialStore.password(forSSID: ssid, prefix: nil) ?? ""
         stageCameraWiFiCredentials(ssid: ssid, key: stored, cameFromScan: false)
     }

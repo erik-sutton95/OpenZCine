@@ -1141,11 +1141,26 @@ private fun SavedCameraList(
                         }
                     } else {
                         discoveredCameras.any { camera ->
-                            camera.host == record.host ||
-                                SavedCameraRecords.cameraNamesMatch(
+                            if (camera.host == record.host) return@any true
+                            if (!SavedCameraRecords.cameraNamesMatch(
                                     camera.name,
                                     record.cameraName,
                                 )
+                            ) {
+                                return@any false
+                            }
+                            // A name match only lights a setup whose kind agrees with the
+                            // network the discovery came from (iOS rule): a body found over
+                            // the phone's hotspot is not evidence for the Router setup, and
+                            // an AP setup lights on its own fixed host only.
+                            val viaHotspot =
+                                SavedCameraRecords.isPhoneHotspotHost(camera.host)
+                            when (record.transport) {
+                                SavedCameraTransport.PHONE_HOTSPOT -> viaHotspot
+                                SavedCameraTransport.INFRASTRUCTURE -> !viaHotspot
+                                SavedCameraTransport.CAMERA_ACCESS_POINT -> false
+                                SavedCameraTransport.USB_C -> true
+                            }
                         }
                     }
                 }
