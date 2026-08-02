@@ -253,26 +253,81 @@ struct LiveFeedModule: View {
     /// 0→1: how much of the AF box outline has traced in during a lock long-press.
     @State private var lockProgress: CGFloat = 0
 
-    private var punchInScale: CGFloat {
-        CGFloat(
-            Magnification.scale(
-                factor: model.assistConfiguration.magnification.factor.scale,
-                isActive: model.magnificationActive))
+    // MARK: Pinch zoom
+    //
+    // The fixed-factor MAG tool (button + factor drum, AF-box-anchored) is retired in favour of
+    // direct manipulation: pinch anywhere on the feed and it zooms about the pinch, drag to pan,
+    // pinch out (or below ~1.05×) to snap back — the Photos-app contract. The transform still
+    // goes LAST and wraps the WHOLE overlay stack (see `Magnification` for why), so the AF box
+    // and guides magnify with the picture.
+    /// Committed zoom, 1 when not zoomed.
+    @State private var zoomScale: CGFloat = 1
+    /// The unit point the zoom scales about — the first pinch's location.
+    @State private var zoomAnchor: UnitPoint = .center
+    /// Committed pan, applied after the anchored scale.
+    @State private var zoomOffset: CGSize = .zero
+    /// In-flight pinch factor; composes onto `zoomScale` while the fingers are down.
+    @GestureState private var pinchFactor: CGFloat = 1
+    /// In-flight pan translation.
+    @GestureState private var panDelta: CGSize = .zero
+
+    private static let maximumZoom: CGFloat = 8
+
+    private var effectiveZoom: CGFloat {
+        min(max(zoomScale * pinchFactor, 1), Self.maximumZoom)
     }
 
-    /// The focus box the punch-in is pinned to, read fresh each frame so moving the point — on the
-    /// body or by tap — takes the magnified view with it. Falls back to centre with no box to aim at.
-    private var punchInAnchor: UnitPoint {
-        let focus = model.liveViewFocus
-        let index = Magnification.anchorBoxIndex(
-            boxCount: focus?.boxes.count ?? 0, selectedBoxIndex: focus?.selectedBoxIndex)
-        let box = index.flatMap { focus?.boxes[$0] }
-        let anchor = Magnification.anchor(
-            boxCenterX: box?.centerX,
-            boxCenterY: box?.centerY,
-            coordinateWidth: focus?.coordinateWidth ?? 0,
-            coordinateHeight: focus?.coordinateHeight ?? 0)
-        return UnitPoint(x: anchor.x, y: anchor.y)
+    private var isZoomed: Bool { zoomScale > 1.001 }
+
+    /// Pan clamped so the picture cannot be dragged fully off screen; exact edge-pinning depends
+    /// on the anchor, so the bound is deliberately loose rather than wrong. [verify-on-HW]
+    private func clampedOffset(_ offset: CGSize, size: CGSize, scale: CGFloat) -> CGSize {
+        let limitX = size.width * (scale - 1)
+        let limitY = size.height * (scale - 1)
+        return CGSize(
+            width: min(max(offset.width, -limitX), limitX),
+            height: min(max(offset.height, -limitY), limitY))
+    }
+
+    private func zoomGestures(size: CGSize) -> some Gesture {
+        let pinch = MagnifyGesture()
+            .updating($pinchFactor) { value, state, _ in
+                state = value.magnification
+            }
+            .onChanged { value in
+                // The anchor latches on the pinch that STARTS the zoom; while zoomed, panning is
+                // how the view moves, so re-anchoring mid-zoom would make the picture jump.
+                if !isZoomed {
+                    zoomAnchor = value.startAnchor
+                }
+            }
+            .onEnded { value in
+                let next = min(max(zoomScale * value.magnification, 1), Self.maximumZoom)
+                if next < 1.05 {
+                    withAnimation(.spring(duration: 0.25)) {
+                        zoomScale = 1
+                        zoomOffset = .zero
+                        zoomAnchor = .center
+                    }
+                } else {
+                    zoomScale = next
+                    zoomOffset = clampedOffset(zoomOffset, size: size, scale: next)
+                }
+            }
+        let pan = DragGesture(minimumDistance: 1)
+            .updating($panDelta) { value, state, _ in
+                guard isZoomed else { return }
+                state = value.translation
+            }
+            .onEnded { value in
+                guard isZoomed else { return }
+                zoomOffset = clampedOffset(
+                    CGSize(
+                        width: zoomOffset.width + value.translation.width,
+                        height: zoomOffset.height + value.translation.height),
+                    size: size, scale: zoomScale)
+            }
+        return pinch.simultaneously(with: pan)
     }
 
     var body: some View {
@@ -345,17 +400,26 @@ struct LiveFeedModule: View {
                 DemoFocusPointerSurface(model: model, size: CGSize(width: width, height: height))
             }
         }
-        // Punch-in goes LAST and wraps the WHOLE stack, not the raster — see `Magnification`. The
-        // AF box and focus ring are siblings of the raster, so scaling the raster alone would leave
-        // them behind at unmagnified positions over a magnified picture.
-        //
-        // Anchoring on the box also fixes tap-to-focus while punched in for free: SwiftUI reports
-        // gesture locations in the pre-transform space, so a tap still lands on the source pixel
-        // under the finger.
-        .scaleEffect(punchInScale, anchor: punchInAnchor)
+        // The zoom goes LAST and wraps the WHOLE stack, not the raster — see `Magnification`. The
+        // AF box and focus ring are siblings of the raster, so scaling the raster alone would
+        // leave them behind at unmagnified positions over a magnified picture. (Gesture locations
+        // report in the pre-transform space, so tap-to-focus keeps landing on the source pixel.)
+        .scaleEffect(effectiveZoom, anchor: zoomAnchor)
+        .offset(
+            x: zoomOffset.width + (isZoomed ? panDelta.width : 0),
+            y: zoomOffset.height + (isZoomed ? panDelta.height : 0)
+        )
         .frame(width: width, height: height)
         .clipped()
         .contentShape(Rectangle())
+        .simultaneousGesture(zoomGestures(size: CGSize(width: width, height: height)))
+        .onChange(of: model.videoSource) { _, _ in
+            // A source switch reframes the picture; a held-over zoom would magnify the wrong
+            // thing at the wrong spot.
+            zoomScale = 1
+            zoomOffset = .zero
+            zoomAnchor = .center
+        }
         // Vertical swipe switches output mode (down → clean, up → live); long-press app-locks the
         // focus point; a tap moves it. Disambiguated by motion/hold/count, in that priority.
         .gesture(feedGesture(width: width, height: height))
@@ -407,6 +471,9 @@ struct LiveFeedModule: View {
         return
             DragGesture(minimumDistance: 28)
             .onEnded { value in
+                // While zoomed, a drag is a PAN — mode-switching on it would fling the operator
+                // out of the layout mid-inspection.
+                guard !isZoomed else { return }
                 let dy = value.translation.height
                 guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
                 // Down → clean (DISP 2); up → live (DISP 1).

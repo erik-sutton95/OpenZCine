@@ -3023,9 +3023,25 @@ final class NativeAppModel {
                     let budget = CameraConnectionTimeout.budgetSeconds(for: phase, isUSB: isUSB),
                     ContinuousClock.now - phaseStartedAt >= .seconds(budget)
                 else { continue }
+                var message = CameraConnectionTimeout.timeoutMessage(
+                    phase: phase, deviceName: self.connectionProgressDeviceName)
+                // The forgot-to-switch-networks case: a router/hotspot camera that cannot be
+                // found is overwhelmingly a phone on the WRONG network, and a spinner that
+                // never says so leaves the operator waiting on a connect that cannot succeed.
+                // AP-proven records are excluded — their remedy is the join prompt, which the
+                // connect flow already offers. ponytail: names the situation, not the stored
+                // network; stamp the last-connected SSID on the record if this needs to say
+                // WHICH network.
+                if !isUSB,
+                    let record = self.savedCameras.first(where: { $0.host == self.cameraHost }),
+                    !record.isUSBTransport, record.pairedViaCameraAccessPoint != true
+                {
+                    message +=
+                        " If the camera is on a router or hotspot, make sure this device is "
+                        + "on the same network — that is where it was reached last time."
+                }
                 self.failConnectionAttempt(
-                    message: CameraConnectionTimeout.timeoutMessage(
-                        phase: phase, deviceName: self.connectionProgressDeviceName),
+                    message: message,
                     diagnostic: isUSB ? .connectionUsbFailed : .connectionPtpFailed,
                     logReason: "timed out in \(phase) after \(Int(budget))s"
                 )

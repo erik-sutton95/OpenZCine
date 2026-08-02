@@ -850,6 +850,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
 
     /// Whether `tool` should appear on the bottom assist toolbar (LUT is always shown).
     public func isAssistToolbarButtonVisible(_ tool: MonitorAssistTool) -> Bool {
+        // Retired from the bar: zoom is a pinch on the feed now, not a tool to arm. The case
+        // survives so stored payloads keep decoding.
+        if tool == .magnification { return false }
         if MonitorAssistTool.exposureBarTools.contains(tool) {
             return exposureBarVisibleControls.contains(tool)
         }
