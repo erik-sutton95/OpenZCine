@@ -93,3 +93,20 @@ import Testing
     }
     #expect(adaptation.bitsPerSecond == 3_000_000)
 }
+
+/// A fixed floor alone sets the equilibrium in the wrong place — a 35 fps session pins at 20
+/// while the relay keeps the channel. The threshold anchors to the session's own unloaded
+/// baseline, with the absolute floor covering sessions that have not measured one yet.
+@Test func starveThresholdAnchorsToTheSoloBaseline() {
+    #expect(RelayCameraStarvePolicy.starveThresholdFPS(soloBaselineFPS: 0) == 15)
+    #expect(RelayCameraStarvePolicy.starveThresholdFPS(soloBaselineFPS: 10) == 15)
+    let anchored = RelayCameraStarvePolicy.starveThresholdFPS(soloBaselineFPS: 35)
+    #expect(abs(anchored - 25.2) < 0.001)
+}
+
+@Test func encoderProfilesTradeLatencyForQualityKnobs() {
+    #expect(RelayEncoderProfile.lowLatency.maxKeyframeInterval == 50)
+    #expect(RelayEncoderProfile.quality.maxKeyframeInterval == 120)
+    #expect(RelayEncoderProfile.lowLatency.maxInFlightFramesPerPeer == 2)
+    #expect(RelayEncoderProfile.quality.maxInFlightFramesPerPeer == 4)
+}

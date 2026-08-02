@@ -81,6 +81,10 @@ final class MonitorRelayHost {
     /// A connected viewer, and how it introduced itself.
     private struct Peer {
         let connection: NWConnection
+        /// This peer's framing state. Owned HERE, on the main actor, so the socket callback
+        /// ships only bytes — a reader captured across both isolation domains is a data-race
+        /// diagnostic on newer compilers (and they are right: nothing proved the regions apart).
+        let reader = MonitorRelayStreamReader()
         var name: String
         /// Frames handed to the socket and not yet reported processed. The backpressure signal:
         /// a peer that stops draining stops being sent to, rather than being queued for.
@@ -186,7 +190,7 @@ final class MonitorRelayHost {
         if let latestState {
             send(kind: .state, payload: encode(latestState), to: connection)
         }
-        receive(on: connection, reader: MonitorRelayStreamReader())
+        receive(on: connection)
     }
 
     private func drop(_ connection: NWConnection) {
@@ -212,29 +216,35 @@ final class MonitorRelayHost {
         onPeerCountChanged?(count)
     }
 
-    /// Viewer → host traffic. Only the control handshake travels this way today.
-    private func receive(on connection: NWConnection, reader: MonitorRelayStreamReader) {
+    /// Viewer → host traffic. Only the control handshake travels this way today. All framing
+    /// happens on the main actor against the peer's own reader; a dropped peer ends its loop
+    /// by its reader disappearing with it. (The previous shape captured the reader across both
+    /// isolation domains — a data-race diagnostic on newer compilers, and they were right that
+    /// nothing proved the regions apart.)
+    private func receive(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             [weak self, weak connection] data, _, isComplete, error in
             guard let connection else { return }
-            var messages: [MonitorRelayFraming.Decoded] = []
-            if let data, !data.isEmpty {
-                do {
-                    messages = try reader.append(data)
-                } catch {
-                    // A desynchronised stream cannot be recovered by reading further.
-                    Task { @MainActor in self?.drop(connection) }
-                    return
-                }
-            }
             Task { @MainActor in
-                guard let self else { return }
+                guard let self,
+                    let reader = self.peers[ObjectIdentifier(connection)]?.reader
+                else { return }
+                var messages: [MonitorRelayFraming.Decoded] = []
+                if let data, !data.isEmpty {
+                    do {
+                        messages = try reader.append(data)
+                    } catch {
+                        // A desynchronised stream cannot be recovered by reading further.
+                        self.drop(connection)
+                        return
+                    }
+                }
                 for message in messages { self.handle(message, from: connection) }
                 if isComplete || error != nil {
                     self.drop(connection)
                     return
                 }
-                self.receive(on: connection, reader: reader)
+                self.receive(on: connection)
             }
         }
     }
@@ -314,15 +324,21 @@ final class MonitorRelayHost {
     }
 
     /// Frames a peer may have queued but not yet drained before new ones stop being offered.
-    /// Two = one on the wire and one behind it; more is latency the viewer can never win back.
-    private static let maxInFlightFramesPerPeer = 2
+    /// Low latency: two = one on the wire and one behind it. Quality: four rides out link
+    /// jitter instead of skipping — every skip avoided is a broken reference chain and a
+    /// forced keyframe avoided, which is where the profile's quality actually comes from.
+    private let maxInFlightFramesPerPeer: Int
+
+    init(profile: RelayEncoderProfile = .lowLatency) {
+        maxInFlightFramesPerPeer = profile.maxInFlightFramesPerPeer
+    }
 
     /// Whether at least one viewer could accept a frame right now. Checked BEFORE the encode:
     /// when every peer is saturated, encoding would burn the hardware block on a frame nobody
     /// receives — and because nothing is encoded, the encoder's reference chain stays exactly
     /// where every viewer's is, so resuming needs no keyframe.
     var hasPeerReadyForFrame: Bool {
-        peers.values.contains { $0.inFlightFrames < Self.maxInFlightFramesPerPeer }
+        peers.values.contains { $0.inFlightFrames < maxInFlightFramesPerPeer }
     }
 
     func broadcast(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
@@ -339,7 +355,7 @@ final class MonitorRelayHost {
             // so a link slower than the source accumulates minutes of latency that presents as
             // "no picture at all". The state and control messages stay unconditional — they are
             // tiny, and a late reading is better than none.
-            guard peer.inFlightFrames < Self.maxInFlightFramesPerPeer else {
+            guard peer.inFlightFrames < maxInFlightFramesPerPeer else {
                 // Skipping breaks this peer's reference chain; it resumes on the next keyframe.
                 peers[key]?.needsKeyframe = true
                 keyframeWanted = true
@@ -444,6 +460,9 @@ final class MonitorRelayClient {
     var onControlToken: (@MainActor (MonitorRelayControlToken) -> Void)?
 
     private var connection: NWConnection?
+    /// The adopted session's framing state; nil outside a session. Main-actor-owned on purpose —
+    /// see `receive(on:)`.
+    private var streamReader: MonitorRelayStreamReader?
     /// Both candidate transports while the race runs; empty once one is adopted.
     private var racingConnections: [NWConnection] = []
     /// Messages issued before a transport won the race — `introduce` fires immediately after
@@ -536,7 +555,8 @@ final class MonitorRelayClient {
             winner.send(content: framed, completion: .contentProcessed { _ in })
         }
         pendingSends = []
-        receive(reader: MonitorRelayStreamReader())
+        streamReader = MonitorRelayStreamReader()
+        receive(on: winner)
     }
 
     private func candidateFailed(_ candidate: NWConnection, error: NWError) {
@@ -551,6 +571,7 @@ final class MonitorRelayClient {
     }
 
     func stop() {
+        streamReader = nil
         connectTimeout?.cancel()
         connectTimeout = nil
         for candidate in racingConnections { candidate.cancel() }
@@ -592,30 +613,32 @@ final class MonitorRelayClient {
         connection.send(content: framed, completion: .contentProcessed { _ in })
     }
 
-    private func receive(reader: MonitorRelayStreamReader) {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) {
+    /// All framing happens on the main actor against the session's own reader; the connection
+    /// identity guard kills a stale loop the moment a rejoin replaces the session. (A reader
+    /// captured across both isolation domains was a data-race diagnostic on newer compilers.)
+    private func receive(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) {
             [weak self] data, _, isComplete, error in
-            var messages: [MonitorRelayFraming.Decoded] = []
-            if let data, !data.isEmpty {
-                do {
-                    messages = try reader.append(data)
-                } catch {
-                    Task { @MainActor in
-                        self?.update(.failed("The relay stream desynchronised."))
-                        self?.stop()
-                    }
-                    return
-                }
-            }
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.connection === connection, let reader = self.streamReader
+                else { return }
+                var messages: [MonitorRelayFraming.Decoded] = []
+                if let data, !data.isEmpty {
+                    do {
+                        messages = try reader.append(data)
+                    } catch {
+                        self.update(.failed("The relay stream desynchronised."))
+                        self.stop()
+                        return
+                    }
+                }
                 for message in messages { self.handle(message) }
                 if isComplete || error != nil {
                     self.update(.failed("The broadcasting device disconnected."))
                     self.stop()
                     return
                 }
-                self.receive(reader: reader)
+                self.receive(on: connection)
             }
         }
     }

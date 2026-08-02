@@ -924,17 +924,17 @@ final class NativeAppModel {
     /// watcher needs, and every extra frame is bandwidth taken from the one being looked at.
     private static let relayFrameInterval: CFAbsoluteTime = 1.0 / 30.0
 
-    /// Below this, the broadcaster's camera feed counts as starving for the bitrate ladder.
-    /// Comfortably under every healthy live-view cadence (24/25/30) so recording starts, AF
-    /// bursts, and a 24p body never trip it, and comfortably above a radio genuinely being
-    /// suffocated by the relay's own uplink. The level is [verify-on-HW].
-    private static let relayCameraStarveFPS: Double = 15
+    /// EMA of the camera feed's fps while the relay is NOT competing with it (no peers being
+    /// served). This is the session's own definition of healthy; the starve threshold anchors
+    /// to it so the ladder keeps stepping until the operator's monitor gets its rate back —
+    /// a fixed floor alone let a 35 fps session pin at 20 while the relay kept the channel.
+    @ObservationIgnored private var relaySoloFPSBaseline: Double = 0
 
     /// Starts or stops serving this device's feed to others.
     func setRelayBroadcasting(_ broadcasting: Bool) {
         guard broadcasting != isRelayBroadcasting else { return }
         if broadcasting {
-            let host = MonitorRelayHost()
+            let host = MonitorRelayHost(profile: preferences.relayEncoderProfile)
             host.onPeerCountChanged = { [weak self] count in self?.relayPeerCount = count }
             host.onFailure = { [weak self] message in
                 self?.connectionMessage = message
@@ -946,7 +946,7 @@ final class NativeAppModel {
                 self.relayControlHeldBy = host.controlHolderName
             }
             host.onCommand = { [weak self] command in self?.executeRelayCommand(command) }
-            let encoder = MonitorRelayVideoEncoder()
+            let encoder = MonitorRelayVideoEncoder(profile: preferences.relayEncoderProfile)
             relayVideoEncoder = encoder
             relayBitrateAdaptation = RelayBitrateAdaptation(now: CFAbsoluteTimeGetCurrent())
             host.onKeyframeNeeded = { encoder.requestKeyframe() }
@@ -1092,7 +1092,9 @@ final class NativeAppModel {
         let peersFull = !relayHost.hasPeerReadyForFrame
         let cameraFeedStarved =
             videoSource == .cameraLiveView && measuredLiveViewFPS > 0
-            && measuredLiveViewFPS < Self.relayCameraStarveFPS
+            && measuredLiveViewFPS
+                < RelayCameraStarvePolicy.starveThresholdFPS(
+                    soloBaselineFPS: relaySoloFPSBaseline)
         let saturated = peersFull || cameraFeedStarved
         if let retargeted = relayBitrateAdaptation.recordTick(saturated: saturated, now: now) {
             logConnection(
@@ -2618,6 +2620,7 @@ final class NativeAppModel {
         preservingMonitorSurface: Bool = false
     ) {
         sessionJoinedCameraAccessPoint = false
+        relaySoloFPSBaseline = 0
         if let discoveredCamera {
             cameraHost = discoveredCamera.ip
         }
@@ -5575,6 +5578,15 @@ final class NativeAppModel {
                     lastGoodFrameAt = Date()
                     consecutiveBadLiveFrames = 0
                     measuredLiveViewFPS = frameRate.displayFPS
+                    // The relay's "healthy" reference: what THIS feed does when no watcher is
+                    // being served. The starve threshold anchors to it.
+                    if relayPeerCount == 0, measuredLiveViewFPS > 0 {
+                        relaySoloFPSBaseline =
+                            relaySoloFPSBaseline == 0
+                            ? measuredLiveViewFPS
+                            : relaySoloFPSBaseline
+                                + 0.05 * (measuredLiveViewFPS - relaySoloFPSBaseline)
+                    }
                     publishLiveFrameDisplay(image: image, focus: frame.focus)
                     applyLiveViewHeaderState(frame)
                     // The relay re-encodes the CLEAN frame as HEVC. A pass-through of the
@@ -9999,6 +10011,18 @@ final class NativeAppModel {
         guard preferences.qualityBias != bias else { return }
         preferences.qualityBias = bias
         restartLiveViewForQualityChange()
+    }
+
+    /// The broadcaster's latency-vs-quality stance. The encoder and the per-viewer windows are
+    /// built at broadcast start, so a live broadcast restarts to adopt the change — watchers
+    /// ride through on their rejoin watchdogs.
+    func setRelayEncoderProfile(_ profile: RelayEncoderProfile) {
+        guard preferences.relayEncoderProfile != profile else { return }
+        preferences.relayEncoderProfile = profile
+        if isRelayBroadcasting {
+            setRelayBroadcasting(false)
+            setRelayBroadcasting(true)
+        }
     }
 
     /// Re-enter live view so a stream-quality change applies now rather than on the next reconnect.

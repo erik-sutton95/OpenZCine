@@ -489,7 +489,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         photoCleanChrome: DisplayChromeVisibility = .cleanDefaults,
         photoCommandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         splitComparisonEnabled: Bool = false,
-        splitComparisonOrientation: SplitComparisonOrientation = .vertical
+        splitComparisonOrientation: SplitComparisonOrientation = .vertical,
+        relayEncoderProfile: RelayEncoderProfile = .lowLatency
     ) {
         self.dispOrder = dispOrder
         self.enabledDispModes = Self.normalizedEnabledDispModes(enabledDispModes)
@@ -517,6 +518,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.photoCommandChrome = photoCommandChrome
         self.splitComparisonEnabled = splitComparisonEnabled
         self.splitComparisonOrientation = splitComparisonOrientation
+        self.relayEncoderProfile = relayEncoderProfile
     }
 
     /// Stock defaults — forwards to ``defaults``.
@@ -573,6 +575,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// ``splitComparisonEnabled`` so switching the comparison off and on again keeps the
     /// operator's choice.
     public var splitComparisonOrientation: SplitComparisonOrientation
+    /// The broadcaster's latency-vs-quality stance for the relay encoder.
+    public var relayEncoderProfile: RelayEncoderProfile
 
     /// The chrome configuration `mode` renders on the `capture` side of the camera. Each pair owns
     /// its own set, so the operator can build a full DISP 1, a bare DISP 2 and a stripped DISP 3
@@ -643,6 +647,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case cleanChromeV2
         case photoDisplayChrome, photoCleanChrome, photoCommandChrome
         case splitComparisonEnabled, splitComparisonOrientation
+        case relayEncoderProfile
     }
 
     public init(from decoder: any Decoder) throws {
@@ -752,6 +757,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         splitComparisonOrientation =
             try container.decodeIfPresent(
                 SplitComparisonOrientation.self, forKey: .splitComparisonOrientation) ?? .vertical
+        relayEncoderProfile =
+            try container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile)
+            ?? .lowLatency
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -780,6 +788,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(photoCommandChrome, forKey: .photoCommandChrome)
         try container.encode(splitComparisonEnabled, forKey: .splitComparisonEnabled)
         try container.encode(splitComparisonOrientation, forKey: .splitComparisonOrientation)
+        try container.encode(relayEncoderProfile, forKey: .relayEncoderProfile)
     }
 
     /// Live-monitor assist visibility. Prefer ``visibleAssistTools(for:)`` when the context is known.
