@@ -75,16 +75,18 @@ private func record(
     #expect(hotspotConnected?.host == "172.20.10.2")
 }
 
-/// Chip labels: transport plus evidence tells the paths apart where "Wi-Fi" alone cannot.
-@Test func pathLabelsRefineWiFiByEvidence() {
-    #expect(
-        SavedCameraPathGroups.pathLabel(
-            for: record(host: "usb:demo", transport: "USB-C")) == "USB-C")
-    #expect(SavedCameraPathGroups.pathLabel(for: record(host: "172.20.10.2")) == "Hotspot")
-    #expect(SavedCameraPathGroups.pathLabel(for: record(host: "10.99.0.20", ap: false)) == "Router")
-    #expect(
-        SavedCameraPathGroups.pathLabel(for: record(host: "192.168.1.1", ap: true)) == "Camera AP")
-    #expect(SavedCameraPathGroups.pathLabel(for: record(host: "192.168.1.1")) == "Wi-Fi")
+/// Chip labels come from the DECLARED path; legacy records earn theirs through the one-time
+/// migration, exactly as a store read delivers them.
+@Test func pathLabelsComeFromTheDeclaredPath() {
+    func label(_ legacy: PTPIPSavedCameraRecord) -> String {
+        SavedCameraPathGroups.pathLabel(for: PTPIPSavedCameraRecords.typed(legacy)[0])
+    }
+    #expect(label(record(host: "usb:demo", transport: "USB-C")) == "USB-C")
+    #expect(label(record(host: "172.20.10.2")) == "Hotspot")
+    #expect(label(record(host: "10.99.0.20", ap: false)) == "Router")
+    #expect(label(record(host: "192.168.1.1", ap: true)) == "Camera AP")
+    // No evidence ever → the migration lands it on infrastructure, and the chip says so.
+    #expect(label(record(host: "192.168.1.1")) == "Router")
 }
 
 /// The serial survives the canonicalizing merge the way the evidence field does: an update

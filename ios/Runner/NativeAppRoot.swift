@@ -2700,12 +2700,16 @@ final class NativeAppModel {
     /// Feeds the saved record's `pairedViaCameraAccessPoint` evidence on connect success.
     @ObservationIgnored private var sessionJoinedCameraAccessPoint = false
 
-    /// How the LIVE session actually reached the camera, latched at establishment success and
-    /// held across every recovery attempt (the per-attempt flag above resets each try; this
-    /// does not). Recovery consults it instead of the saved records: the dropped session
-    /// already PROVED its topology, and records on a device that cannot read SSIDs may carry
-    /// no evidence at all.
-    @ObservationIgnored private var establishedSessionUsedCameraAP = false
+    /// The DECLARED path of the live session, locked at establishment success and held across
+    /// every recovery attempt. Recovery, the join gate and the relay's AWDL decision all
+    /// dispatch on THIS — never on saved records or a live SSID read: the session proved its
+    /// topology once, at establishment, and that answer does not change while it lives.
+    @ObservationIgnored private var activeSessionPath: CameraPath?
+
+    /// The a0864f1 latch, now derived: "did this session establish over the camera's AP".
+    private var establishedSessionUsedCameraAP: Bool {
+        activeSessionPath?.kind == .cameraAccessPoint
+    }
 
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
@@ -2916,9 +2920,13 @@ final class NativeAppModel {
                 startKeepAlive(session: session)
                 startEventDraining(session: session)
                 startLinkHealthMonitoring()
-                // Latched for the session's lifetime — recovery reads THIS, not the records.
-                establishedSessionUsedCameraAP =
-                    sessionJoinedCameraAccessPoint || cameraAccessPointEvidence == true
+                // Locked for the session's lifetime — recovery dispatches on THIS, not records.
+                // The declared path comes from the same resolution the record save uses: the
+                // session's own join proof outranks everything, then the wizard's declaration,
+                // then the host's shape.
+                activeSessionPath = declaredPathForSave(
+                    host: session.identity.host,
+                    displayName: session.identity.displayName)
                 // The session just proved its topology; a broadcast started before it (or across
                 // a path switch) may be advertising for the wrong one. Peer-to-peer is worth its
                 // radio cost only on an AP session — and only matters for viewers still LOOKING,
@@ -3087,13 +3095,12 @@ final class NativeAppModel {
                 // The forgot-to-switch-networks case: a router/hotspot camera that cannot be
                 // found is overwhelmingly a phone on the WRONG network, and a spinner that
                 // never says so leaves the operator waiting on a connect that cannot succeed.
-                // AP-proven records are excluded — their remedy is the join prompt, which the
-                // connect flow already offers. ponytail: names the situation, not the stored
-                // network; stamp the last-connected SSID on the record if this needs to say
-                // WHICH network.
+                // AP setups are excluded — their remedy is the join prompt, which the connect
+                // flow already offers. ponytail: names the situation, not the stored network;
+                // stamp the last-connected SSID on the record if this needs to say WHICH one.
                 if !isUSB,
                     let record = self.savedCameras.first(where: { $0.host == self.cameraHost }),
-                    !record.isUSBTransport, record.pairedViaCameraAccessPoint != true
+                    record.path?.kind == .infrastructure || record.path?.kind == .phoneHotspot
                 {
                     message +=
                         " If the camera is on a router or hotspot, make sure this device is "
@@ -4139,18 +4146,39 @@ final class NativeAppModel {
         return CameraWiFiSSID.isNikonZAccessPoint(ssid)
     }
 
-    /// The DECLARED path for a record being saved — from the session's own proof, the wizard's
-    /// declared method, or the host's shape (a fresh non-wizard discovery), in that order. This
-    /// is the moment transport intent becomes a persisted value instead of an artifact for
-    /// downstream code to re-derive.
+    /// The DECLARED path of the session being saved or latched — resolved once, in strict
+    /// precedence: structural host shapes, then this attempt's own proof (a join actually
+    /// applied; a readable SSID answering either way), then the saved setup's declaration,
+    /// then the wizard's, then infrastructure. This is the moment transport intent becomes a
+    /// value instead of an artifact for downstream code to re-derive.
     private func declaredPathForSave(host: String, displayName: String?) -> CameraPath {
         if host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) { return .usbC }
         if CameraStartupPolicy.usesIPhoneHotspot(host: host, transport: "") {
             return .phoneHotspot
         }
-        if sessionJoinedCameraAccessPoint || cameraAccessPointEvidence == true {
+        if sessionJoinedCameraAccessPoint {
             return .cameraAccessPoint(
                 ssid: cameraAccessPointSSID(host: host, displayName: displayName))
+        }
+        // A READABLE SSID answers either way: the camera's own network is an AP session; any
+        // other name is positive proof of infrastructure — a saved AP setup reached over the
+        // house network is, for THIS session, an infrastructure link and must recover as one.
+        switch cameraAccessPointEvidence {
+        case true?:
+            return .cameraAccessPoint(
+                ssid: cameraAccessPointSSID(host: host, displayName: displayName))
+        case false?:
+            return .infrastructure(networkName: nil)
+        case nil:
+            break
+        }
+        // Nothing readable (the common hardware case): the saved setup for this host already
+        // declares the path — a reconnect must not demote an AP setup to infrastructure just
+        // because iOS refused the Wi-Fi information request.
+        if let saved = savedCameras.first(where: {
+            $0.host == PTPIPPairedHosts.normalizedHost(host)
+        }), let path = saved.path {
+            return path
         }
         if shouldShowFirstPairWizard {
             switch firstPairTransportMethod {
@@ -4189,8 +4217,11 @@ final class NativeAppModel {
     }
 
     private func preferredJoinCameraWiFiSavedCamera() -> PTPIPSavedCameraRecord? {
+        // Only a DECLARED camera-AP setup can be a join candidate. The old filter (any non-USB
+        // record with a resolvable SSID) matched router records too, because the legacy upsert
+        // stamped a derived NIKON_… SSID onto every network record it saw.
         savedCameras.first { camera in
-            guard !camera.isUSBTransport else { return false }
+            guard camera.path?.kind == .cameraAccessPoint else { return false }
             return CameraWiFiJoinPolicy.resolvedSSID(
                 savedCamera: camera,
                 discoveredCamera: nil
@@ -4212,6 +4243,11 @@ final class NativeAppModel {
         discoveredCamera: DiscoveredCamera?,
         deviceName: String
     ) async throws {
+        // THE dispatch: only a record DECLARED as a camera-AP setup may proceed toward the join
+        // machinery. Router, hotspot and cable setups exit here — for them the code below does
+        // not exist, which is the refactor's whole point. (A nil record is a fresh pairing; the
+        // wizard gate right after owns that flow.)
+        if let savedCamera, savedCamera.path?.kind != .cameraAccessPoint { return }
         // The operator picked a path that never puts this device on the camera's own access point,
         // so joining one is wrong however tempting a saved SSID makes it look.
         if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint { return }

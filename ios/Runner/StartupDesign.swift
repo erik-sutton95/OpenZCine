@@ -960,8 +960,14 @@ struct StartupCameraListRow: View {
             parts.append("USB-C")
             parts.append("connect cable to wake the session")
         } else {
-            parts.append("Wi‑Fi")
-            if let ssid = CameraWiFiSSID.resolve(for: camera) { parts.append(ssid) }
+            parts.append(SavedCameraPathGroups.pathLabel(for: camera))
+            // The SSID belongs on the AP setup only — a router row wearing a derived NIKON_…
+            // name is the display face of the old cross-path confusion.
+            if camera.path?.kind == .cameraAccessPoint,
+                let ssid = CameraWiFiSSID.resolve(for: camera)
+            {
+                parts.append(ssid)
+            }
             parts.append(lastConnectedText)
         }
         return parts.joined(separator: " · ")

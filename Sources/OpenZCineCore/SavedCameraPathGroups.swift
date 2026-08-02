@@ -52,16 +52,10 @@ public enum SavedCameraPathGroups {
             ?? group.first
     }
 
-    /// The short label a path chip wears. The transport string alone collapses every wireless
-    /// path into "Wi-Fi"; the access-point evidence tells the router from the camera's own
-    /// network where it is known.
+    /// The short label a path chip wears — the declared path's own name. The inference chain
+    /// this replaced (USB label/host shape → hotspot subnet → evidence tri-state → "Wi-Fi")
+    /// survives only for a record built without a path, which store reads never produce.
     public static func pathLabel(for record: PTPIPSavedCameraRecord) -> String {
-        if record.isUSBTransport { return "USB-C" }
-        if CameraStartupPolicy.usesIPhoneHotspot(host: record.host, transport: record.transport) {
-            return "Hotspot"
-        }
-        if record.pairedViaCameraAccessPoint == true { return "Camera AP" }
-        if record.pairedViaCameraAccessPoint == false { return "Router" }
-        return "Wi-Fi"
+        record.path?.displayLabel ?? "Wi-Fi"
     }
 }
