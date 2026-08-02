@@ -1147,11 +1147,11 @@ final class NativeAppModel {
 
     // MARK: Relay viewer
 
-    func startRelayBrowsing() {
+    func startRelayBrowsing(includePeerToPeer: Bool = true) {
         guard relayBrowser == nil else { return }
         let browser = MonitorRelayBrowser()
         browser.onResults = { [weak self] results in self?.discoveredRelayHosts = results }
-        browser.start()
+        browser.start(includePeerToPeer: includePeerToPeer)
         relayBrowser = browser
     }
 
@@ -1174,8 +1174,10 @@ final class NativeAppModel {
         relayFailureReason = nil
         stopDiscoveryLoop()
         // …which also stopped relay browsing (camera list semantics). A viewer session needs it
-        // back: the watchdog can only rejoin a broadcast it can still see.
-        startRelayBrowsing()
+        // back: the watchdog can only rejoin a broadcast it can still see. Infrastructure-only —
+        // AWDL browsing under the decoding stream costs the watcher the same periodic radio
+        // locks it costs a broadcaster, and a rejoin only re-finds a path that already worked.
+        startRelayBrowsing(includePeerToPeer: false)
         disconnectCameraSession(resetConnection: false)
         cameraState = .blank
         resetCameraPropertyState()

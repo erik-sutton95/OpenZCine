@@ -388,11 +388,16 @@ final class MonitorRelayBrowser {
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-browser")
 
-    func start() {
+    /// `includePeerToPeer` browses over AWDL as well — which time-slices the radio the browsing
+    /// device's own streams ride. The camera list browses with it (nothing to protect, and an
+    /// AP-session broadcast is only visible that way); a viewer session browsing to keep its
+    /// rejoin watchdog sighted does NOT — it only needs to re-find a broadcast it could already
+    /// reach, and AWDL under a decoding watcher costs the same fps it costs a broadcaster.
+    func start(includePeerToPeer: Bool = true) {
         stop()
         let browser = NWBrowser(
             for: .bonjour(type: MonitorRelayProtocol.serviceType, domain: nil),
-            using: relayParameters())
+            using: relayParameters(includePeerToPeer: includePeerToPeer))
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             let discoveries = results.compactMap { result -> MonitorRelayDiscovery? in
                 guard case .service(let name, _, _, _) = result.endpoint else { return nil }
