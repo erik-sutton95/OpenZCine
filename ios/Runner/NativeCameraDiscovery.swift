@@ -26,8 +26,16 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         let usbCameras = usbBrowser.attachedCameras()
 
         await status("Searching for cameras on Wi‑Fi and USB‑C…")
-        let bonjour = await BonjourPTPBrowser().discover(timeout: 1.4)
-        let quickResults = CameraDiscovery.dedupeAndSort(usbCameras + bonjour)
+        // Bonjour and the trusted-host probe run TOGETHER: saved hosts and the camera-AP
+        // convention address are known, not blind, so probing them costs nothing extra —
+        // and the reconnect case answers in one probe round (~0.65s) without waiting out
+        // the Bonjour window first. The blind /24 sweep still only runs when both come
+        // back empty.
+        async let bonjourPass = BonjourPTPBrowser().discover(timeout: 1.4)
+        async let priorityPass = probeTrustedHosts(
+            guid: guid, priorityHosts: priorityHosts, excludedHosts: excludedHosts)
+        let (bonjour, priority) = await (bonjourPass, priorityPass)
+        let quickResults = CameraDiscovery.dedupeAndSort(usbCameras + bonjour + priority)
         if !quickResults.isEmpty {
             return quickResults
         }
@@ -113,6 +121,36 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         }
 
         return discovered
+    }
+
+    /// Probes only the KNOWN candidates — saved cameras' last hosts plus the camera-AP
+    /// convention address — in one parallel round. These are trusted addresses, so this
+    /// carries none of the blind-probe restraint the full sweep is built around.
+    private func probeTrustedHosts(
+        guid: Data,
+        priorityHosts: [String],
+        excludedHosts: @MainActor @escaping () -> Set<String>
+    ) async -> [DiscoveredCamera] {
+        let excluded = await excludedHosts()
+        let localAddresses = nativeLocalIPv4Interfaces()
+            .filter {
+                CameraDiscovery.isSupportedScanInterface(name: $0.name, address: $0.address)
+            }
+            .map(\.address)
+        let split = CameraDiscovery.prioritizedScanHosts(
+            priorityHosts: priorityHosts, localAddresses: localAddresses)
+        let hosts = split.priority.filter { !excluded.contains($0) }
+        guard !hosts.isEmpty else { return [] }
+        return await withTaskGroup(of: DiscoveredCamera?.self) { group in
+            for host in hosts {
+                group.addTask { try? await self.probe(host: host, guid: guid) }
+            }
+            var results: [DiscoveredCamera] = []
+            for await result in group {
+                if let result { results.append(result) }
+            }
+            return results
+        }
     }
 
     private func probe(host: String, guid: Data) async throws -> DiscoveredCamera? {

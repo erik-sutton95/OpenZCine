@@ -1283,8 +1283,19 @@ final class NativeAppModel {
                 self.relayFailureReason = nil
             case .failed(let reason):
                 self.liveFPS = "FAIL"
-                self.connectionMessage = reason
-                self.relayFailureReason = reason
+                // Watching from ON the camera's own Wi-Fi depends on the AP forwarding
+                // client-to-client traffic, which camera APs typically do not — the honest
+                // remedy is leaving that network (nearby broadcasts reach this device
+                // directly, no shared network needed). Say so instead of a bare "couldn't
+                // reach".
+                let hint =
+                    self.isOnCameraAccessPointNetwork
+                    ? " This device is on the camera's own Wi-Fi — leave that network and "
+                        + "watch from your regular Wi-Fi; nearby broadcasts reach this "
+                        + "device directly."
+                    : ""
+                self.connectionMessage = reason + hint
+                self.relayFailureReason = reason + hint
                 // A frozen frame that still looks live is the one failure mode a set monitor
                 // must never have — blank it so the reason overlay says what actually happened.
                 self.liveFrameImage = nil
@@ -2379,30 +2390,26 @@ final class NativeAppModel {
             if let reconnectHost = reconnectHost?.trimmingCharacters(in: .whitespacesAndNewlines),
                 !reconnectHost.isEmpty
             {
-                cameraHost = reconnectHost
-                let maxAttempts = 6
-                for attempt in 1...maxAttempts {
-                    // `isConnectionProgressPresented` goes false when the operator taps Cancel/Close
-                    // on the card — stop retrying then, even though the .handshaking phase isn't one
-                    // `dismissConnectionProgress` cancels this task from.
-                    guard !Task.isCancelled, isConnectionProgressPresented else { return }
-                    connectToCamera()
-                    // Wait for the single-flighted attempt to resolve (success or ~10s Init timeout).
-                    while isEstablishingConnection {
-                        try? await Task.sleep(for: .milliseconds(200))
-                        guard !Task.isCancelled else { return }
-                    }
-                    if isConnected { return }
-                    guard attempt < maxAttempts, isConnectionProgressPresented else { break }
-                    // Hold the card in a reconnecting state (not the flashed failure) and give the
-                    // ZR a moment to release the stale session before the next Init.
-                    connectionProgressShowsFailure = false
-                    connectionPhase = .discovering
-                    connectionMessage = "Reconnecting to \(deviceName)…"
-                    try? await Task.sleep(for: .seconds(2))
-                }
-                // Exhausted — the last connectToCamera left its failure card up.
+                _ = await directConnectLoop(
+                    host: reconnectHost, deviceName: deviceName, maxAttempts: 6)
+                // Exhausted or connected either way — the last attempt owns the card.
                 return
+            }
+
+            // Camera-AP topology is KNOWN: the body hosts the network at a fixed address (a
+            // saved AP setup's host, else the Nikon convention). Dial it directly — running a
+            // network search for an address we can already name is the whole
+            // "Searching…-fails-then-instant-retry" shape. Discovery below stays the fallback
+            // for a body at a nonstandard address.
+            if case .specificSSID(let joinedSSID) = target,
+                let direct = cameraAPDirectHost(ssid: joinedSSID)
+            {
+                connectionPhase = .discovering
+                connectionMessage = "Connecting to \(deviceName)…"
+                if await directConnectLoop(host: direct, deviceName: deviceName, maxAttempts: 2) {
+                    return
+                }
+                guard !Task.isCancelled, isConnectionProgressPresented else { return }
             }
 
             connectionPhase = .discovering
@@ -2416,10 +2423,17 @@ final class NativeAppModel {
             for _ in 0..<180 {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }
-                if !pairingDiscoveryCandidates.isEmpty || isEstablishingConnection { break }
+                if discoveredCameras.contains(where: { !$0.isUSB }) || isEstablishingConnection {
+                    break
+                }
             }
             guard !Task.isCancelled, !isEstablishingConnection else { return }
-            if let camera = pairingDiscoveryCandidates.first {
+            // The operator consented to this join, so ANY camera on the just-joined network is
+            // the one they meant — the saved-camera filter must not hide a body that already
+            // has setups on other paths (the add-setup AP join failed exactly there).
+            if let camera = pairingDiscoveryCandidates.first
+                ?? discoveredCameras.first(where: { !$0.isUSB })
+            {
                 // The operator already confirmed this join — chain straight into pairing
                 // instead of dropping them back on the wizard to tap the camera they chose.
                 connectToCamera(camera)
@@ -2467,6 +2481,49 @@ final class NativeAppModel {
                 Self.friendlyCameraWiFiJoinMessage(for: error)
             )
         }
+    }
+
+    /// The known address for a camera-AP SSID: a saved AP setup's host first, else the
+    /// Nikon convention for factory-named AP SSIDs. Nil for custom SSIDs with no record —
+    /// those genuinely need discovery.
+    private func cameraAPDirectHost(ssid: String) -> String? {
+        if let saved = savedCameras.first(where: { record in
+            if case .cameraAccessPoint(let recorded?) = record.path { return recorded == ssid }
+            return false
+        }) {
+            return saved.host
+        }
+        return CameraWiFiSSID.isNikonZAccessPoint(ssid)
+            ? CameraDiscovery.nikonZRAccessPointHost : nil
+    }
+
+    /// Dials one known host through the single-flighted connect until it lands or attempts run
+    /// out. Returns whether the session connected; the last attempt's failure card stays up.
+    private func directConnectLoop(
+        host: String, deviceName: String, maxAttempts: Int
+    ) async -> Bool {
+        cameraHost = host
+        for attempt in 1...maxAttempts {
+            // `isConnectionProgressPresented` goes false when the operator taps Cancel/Close
+            // on the card — stop retrying then, even though the .handshaking phase isn't one
+            // `dismissConnectionProgress` cancels this task from.
+            guard !Task.isCancelled, isConnectionProgressPresented else { return false }
+            connectToCamera()
+            // Wait for the single-flighted attempt to resolve (success or ~10s Init timeout).
+            while isEstablishingConnection {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled else { return false }
+            }
+            if isConnected { return true }
+            guard attempt < maxAttempts, isConnectionProgressPresented else { break }
+            // Hold the card in a reconnecting state (not the flashed failure) and give the
+            // ZR a moment to release the stale session before the next Init.
+            connectionProgressShowsFailure = false
+            connectionPhase = .discovering
+            connectionMessage = "Reconnecting to \(deviceName)…"
+            try? await Task.sleep(for: .seconds(2))
+        }
+        return false
     }
 
     private func targetSSID(for target: CameraWiFiJoinPolicy.ProactiveJoinTarget) -> String? {
@@ -3913,9 +3970,13 @@ final class NativeAppModel {
             // The first retry stays responsive, then grow to a 30s cap so a connect screen left
             // open does not keep waking a sleeping camera's Wi-Fi radio. Pull-to-refresh remains
             // an immediate, awaited scan when the operator expects a camera to appear.
-            let delay = CameraDiscovery.automaticScanRetryInterval(
+            var delay = CameraDiscovery.automaticScanRetryInterval(
                 emptyStreak: emptyStreak,
                 foundCamera: !cameras.isEmpty)
+            // An armed paired-reconnect is actively WAITING for the camera to reboot and
+            // return — backing off to half-minute scans there is the "Confirm on camera
+            // hangs forever" report. Keep watching closely until it lands or is disarmed.
+            if pendingPairedReconnectHost != nil { delay = min(delay, 2) }
             try? await Task.sleep(for: .seconds(delay))
         }
     }
@@ -4727,6 +4788,7 @@ final class NativeAppModel {
     /// the success/catch path saves the camera and reconnects with the new profile.
     private func autoAcceptPairing(_ challenge: PTPIPPairingChallenge) async -> Bool {
         acceptedPairingForCurrentAttempt = true
+        adoptPairingChallengeName(challenge)
         connectionPhase = .pairing
         connectionMessage =
             challenge.pin.map { "Pairing with code \($0)…" }
@@ -4735,8 +4797,21 @@ final class NativeAppModel {
         return true
     }
 
+    /// The challenge carries the camera's own name — stamp it onto the pending save so the
+    /// record created by the post-confirm path is never "Camera 192.168.1.1".
+    private func adoptPairingChallengeName(_ challenge: PTPIPPairingChallenge) {
+        guard let name = challenge.cameraName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !name.isEmpty,
+            let candidate = pendingPairingSaveCandidate,
+            candidate.displayName.isEmpty
+        else { return }
+        pendingPairingSaveCandidate = PendingPairingSaveCandidate(
+            host: candidate.host, displayName: name, transport: candidate.transport)
+    }
+
     private func confirmPairing(_ challenge: PTPIPPairingChallenge) async -> Bool {
-        await withCheckedContinuation { continuation in
+        adoptPairingChallengeName(challenge)
+        return await withCheckedContinuation { continuation in
             pairingContinuation?.resume(returning: false)
             pairingContinuation = continuation
             pendingPairingChallenge = challenge
