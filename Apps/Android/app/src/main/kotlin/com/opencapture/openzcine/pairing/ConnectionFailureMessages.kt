@@ -23,6 +23,19 @@ internal fun indicatesCameraForgotThisPhone(detail: String?): Boolean {
         lower.contains("rejected the ptp-ip")
 }
 
+/**
+ * Whether a saved-profile attempt's failure says the profile itself is unusable and a fresh
+ * pairing is the remedy — the Android twin of iOS `isSavedProfileUnavailable`. Beyond the
+ * refusals above, a body that HANGS UP mid-establishment is a camera whose newly created
+ * network profile has never met this initiator (the field diagnostics that motivated the iOS
+ * fix: `pairing=skipped → "The camera ended the connection"`).
+ */
+internal fun indicatesSavedProfileUnavailable(detail: String?): Boolean {
+    if (indicatesCameraForgotThisPhone(detail)) return true
+    val lower = detail?.trim()?.lowercase().orEmpty()
+    return lower.contains("closed the connection") || lower.contains("savedprofilerequired")
+}
+
 internal fun friendlyCameraConnectionFailure(raw: String?): String {
     val message = raw?.trim().orEmpty()
     if (message.isEmpty()) {

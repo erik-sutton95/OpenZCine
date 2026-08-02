@@ -467,7 +467,7 @@ public fun SavedCamerasExperience(
                         val useFirstTimePairing =
                             isCameraAp &&
                                 attempt == maxAttempts &&
-                                indicatesCameraForgotThisPhone(lastFailureDetail)
+                                indicatesSavedProfileUnavailable(lastFailureDetail)
                         val attemptSession =
                             session
                                 ?: if (useFirstTimePairing) {
