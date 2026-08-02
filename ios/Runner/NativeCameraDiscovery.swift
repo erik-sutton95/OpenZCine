@@ -188,6 +188,27 @@ enum NativeNetworkInterfaceSnapshot {
             }
         }
     }
+
+    /// Whether the Wi‑Fi radio is up. iOS has no direct query, but the AWDL peer link (`awdl0`)
+    /// runs exactly while Wi‑Fi is enabled — including when no network is joined and in the
+    /// Control Center soft-off state, where an `NEHotspotConfiguration` join still works. Only
+    /// a real Settings-level Wi‑Fi off takes it down. AWDL carries no IPv4, so this scans all
+    /// address families, unlike ``localIPv4Addresses()``. Defaults to `true` on probe failure:
+    /// never block a join on a broken snapshot.
+    static func isWiFiRadioOn() -> Bool {
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return true }
+        defer { freeifaddrs(interfaces) }
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let interface = cursor {
+            defer { cursor = interface.pointee.ifa_next }
+            guard String(cString: interface.pointee.ifa_name).hasPrefix("awdl") else { continue }
+            let flags = Int32(interface.pointee.ifa_flags)
+            if (flags & IFF_UP) != 0, (flags & IFF_RUNNING) != 0 { return true }
+        }
+        return false
+    }
 }
 
 private struct NativeLocalIPv4Interface: Sendable {

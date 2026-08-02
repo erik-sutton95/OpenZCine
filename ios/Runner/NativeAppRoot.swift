@@ -723,6 +723,8 @@ final class NativeAppModel {
     var cameraWiFiJoinKeyFromScan = false
     /// Whether the on-screen credential scanner is presented over the connect popup.
     var isCameraWiFiScannerPresented = false
+    /// "Wi‑Fi is off" prompt shown when a camera-AP flow starts while the radio is disabled.
+    var isWiFiOffPromptPresented = false
     /// Join target staged while the connect popup awaits operator confirmation.
     private(set) var pendingCameraWiFiJoinTarget: CameraWiFiJoinPolicy.ProactiveJoinTarget?
     var isMonitorPresented = false {
@@ -2046,8 +2048,20 @@ final class NativeAppModel {
         !cameraWiFiJoinPasswordDraft.isEmpty
     }
 
+    /// Every camera-AP flow needs the Wi‑Fi radio on; with it off the join can only fail after
+    /// a long, confusing search. Called at choose time (scanner open, credential staging) and
+    /// again at join time, so a mid-popup Wi‑Fi toggle still lands on the prompt.
+    private func ensureWiFiRadioIsOnForCameraAPJoin() -> Bool {
+        if NativeNetworkInterfaceSnapshot.isWiFiRadioOn(), !DemoHarness.wiFiRadioOff {
+            return true
+        }
+        isWiFiOffPromptPresented = true
+        return false
+    }
+
     /// Opens the on-screen credential scanner over the connect popup.
     func presentCameraWiFiScanner() {
+        guard ensureWiFiRadioIsOnForCameraAPJoin() else { return }
         isCameraWiFiScannerPresented = true
     }
 
@@ -2083,6 +2097,7 @@ final class NativeAppModel {
 
     private func stageCameraWiFiCredentials(ssid: String, key: String, cameFromScan: Bool) {
         isCameraWiFiScannerPresented = false
+        guard ensureWiFiRadioIsOnForCameraAPJoin() else { return }
         pendingCameraWiFiJoinTarget = .specificSSID(ssid)
         cameraWiFiJoinPasswordDraft = key
         cameraWiFiJoinKeyFromScan = cameFromScan
@@ -2332,6 +2347,11 @@ final class NativeAppModel {
         reconnectHost: String? = nil
     ) async {
         guard !Task.isCancelled else { return }
+        // Saved-row taps and post-hop rejoins reach here without passing the choose-time gates.
+        guard ensureWiFiRadioIsOnForCameraAPJoin() else {
+            dismissConnectionProgress()
+            return
+        }
 
         // Keep the popup's device-name title if it's already up from the search step.
         let deviceName =

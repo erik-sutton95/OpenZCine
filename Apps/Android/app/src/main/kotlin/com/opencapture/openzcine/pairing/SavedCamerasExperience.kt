@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -162,9 +163,11 @@ public fun SavedCamerasExperience(
     onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val work = remember { mutableStateOf<Job?>(null) }
     val handedOff = remember { mutableStateOf(false) }
     var phase by remember { mutableStateOf<SavedCameraPhase>(SavedCameraPhase.Idle) }
+    var wifiOffPromptVisible by remember { mutableStateOf(false) }
     var discoveredCameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     var attemptedUsbReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
@@ -443,6 +446,13 @@ public fun SavedCamerasExperience(
                         // Pre-scan + fail-fast retries live inside joinWithFallback.
                         val joined = environment.joinCameraAp(ssid, key)
                         if (!joined) {
+                            // Wi-Fi toggled off after the join was staged: the joiner bails
+                            // in milliseconds, and the generic copy would be misleading.
+                            if (!isWifiRadioEnabled(context)) {
+                                wifiOffPromptVisible = true
+                                phase = SavedCameraPhase.Idle
+                                return@launch
+                            }
                             phase =
                                 SavedCameraPhase.Error(
                                     "Couldn't join $ssid. Keep the camera's network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-pair with a fresh SSID/key scan.",
@@ -612,6 +622,10 @@ public fun SavedCamerasExperience(
         }
         handedOff.value = false
         if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+            if (!isWifiRadioEnabled(context)) {
+                wifiOffPromptVisible = true
+                return
+            }
             val ssid = record.wifiSsid
             if (ssid.isNullOrBlank()) {
                 phase =
@@ -685,6 +699,10 @@ public fun SavedCamerasExperience(
      */
     fun addCameraApSetup(record: SavedCameraRecord) {
         if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
+        if (!isWifiRadioEnabled(context)) {
+            wifiOffPromptVisible = true
+            return
+        }
         val ssid =
             record.wifiSsid?.takeIf(::looksLikeNikonAccessPointSsid)
                 ?: runCatching { SwiftCore.deriveAccessPointSSID(record.cameraName) }.getOrNull()
@@ -989,6 +1007,9 @@ public fun SavedCamerasExperience(
                 }
             },
         )
+    }
+    if (wifiOffPromptVisible) {
+        WifiOffPromptDialog(onDismiss = { wifiOffPromptVisible = false })
     }
     addSetupTarget?.let { group ->
         val anchor = group.first()

@@ -143,6 +143,13 @@ struct LinkExperience: View {
         } message: {
             Text(pairingAlertMessage)
         }
+        .alert("Wi‑Fi is off", isPresented: Bindable(model).isWiFiOffPromptPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(
+                "Joining the camera's Wi‑Fi needs Wi‑Fi turned on. Enable it in Control Center or Settings, then try again."
+            )
+        }
         .fullScreenCover(isPresented: connectionProgressSheetPresented) {
             ConnectionProgressSheet()
                 .environment(model)

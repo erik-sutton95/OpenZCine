@@ -156,6 +156,9 @@
     <string name="pairing_error_usb_session">Couldn\'t start the USB-C camera session. Reconnect the cable and try again.</string>
     <string name="pairing_error_usb_unreachable">Couldn\'t reach the USB-C camera. Check the cable and camera connection, then try again.</string>
     <string name="pairing_error_wifi_join">Couldn\'t reach the camera Wi‑Fi network. Keep the camera\'s network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-scan the SSID/key or enter them manually.</string>
+    <string name="pairing_wifi_off_title">Wi‑Fi is off</string>
+    <string name="pairing_wifi_off_message">Joining the camera\'s Wi‑Fi needs Wi‑Fi turned on.</string>
+    <string name="pairing_wifi_off_settings">Wi‑Fi settings</string>
     <string name="pairing_status_joining">Joining</string>
     <string name="pairing_status_connecting">Connecting</string>
     <string name="pairing_status_pairing">Pairing</string>

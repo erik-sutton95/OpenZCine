@@ -661,6 +661,7 @@ public fun PairingExperience(
     // Device title for the connect popup (SSID while joining, camera name after).
     var connectingName by remember { mutableStateOf<String?>(null) }
     var cameraWifiScannerPresented by remember { mutableStateOf(false) }
+    var wifiOffPromptVisible by remember { mutableStateOf(false) }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     var hdmiCaptureReady by remember { mutableStateOf(false) }
@@ -1067,6 +1068,10 @@ public fun PairingExperience(
 
     fun joinCameraAp(ssid: String, passphrase: String?) {
         if (ssid.isBlank()) return
+        if (!isWifiRadioEnabled(context)) {
+            wifiOffPromptVisible = true
+            return
+        }
         joinedSsid = ssid
         connectingName = ssid
         phase = PairingPhase.Joining
@@ -1103,6 +1108,10 @@ public fun PairingExperience(
      * reconnects, never a fresh pairing.
      */
     fun connectMyCamera() {
+        if (!isWifiRadioEnabled(context)) {
+            wifiOffPromptVisible = true
+            return
+        }
         cameraWifiScannerPresented = true
     }
 
@@ -1397,6 +1406,9 @@ public fun PairingExperience(
                 onDismiss = { cameraWifiScannerPresented = false },
                 onDiagnosticPhase = onDiagnosticPhase,
             )
+        }
+        if (wifiOffPromptVisible) {
+            WifiOffPromptDialog(onDismiss = { wifiOffPromptVisible = false })
         }
         // Keep scanning while the Ready-to-join card is up.
         val readySsid = (phase as? PairingPhase.ReadyToJoin)?.ssid
