@@ -1063,6 +1063,17 @@ public enum PTPCameraPropertyDecoders {
 
     /// Merges the camera's advertised focus-mode enum with the full picker list so AF modes stay
     /// selectable after a lens focus-ring override narrows the descriptor to MF-only.
+    /// Drops the automatic WB presets when the active codec is R3D: the ZR offers no
+    /// automatic white balance while recording R3D NE — its own WB menu hides Auto and
+    /// Natural auto there — so the picker must not offer a mode the body will refuse.
+    /// Every other codec passes the advertised list through untouched, and non-preset
+    /// entries (Kelvin readouts) are never filtered. Works on raw and shortened codec
+    /// labels alike. [verify-on-HW: whether N-RAW / ProRes RAW share this restriction]
+    public static func whiteBalanceOptions(advertised: [String], codec: String?) -> [String] {
+        guard let codec, codec.uppercased().contains("R3D") else { return advertised }
+        return advertised.filter { $0 != "Auto" && $0 != "Natural auto" }
+    }
+
     public static func mergedMovieFocusModeOptions(advertised: [String]) -> [String] {
         var seen = Set<String>()
         return (movieFocusModePickerOptions + advertised).filter { seen.insert($0).inserted }

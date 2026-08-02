@@ -390,10 +390,12 @@ private struct AndroidRawControlCatalog: Sendable {
                     ? WhiteBalanceKelvinPolicy.kelvinOptions : [])
                 + stillWhiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
         } else {
-            whiteBalanceValues =
-                (whiteBalanceModes.contains { $0.label == "Color temp" }
+            // Same R3D rule as the iOS drum: no automatic WB presets while recording R3D NE.
+            whiteBalanceValues = PTPCameraPropertyDecoders.whiteBalanceOptions(
+                advertised: (whiteBalanceModes.contains { $0.label == "Color temp" }
                     ? whiteBalanceKelvin.map(\.label) : [])
-                + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+                    + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label),
+                codec: properties.fileType)
         }
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: resolutionFrameRate,

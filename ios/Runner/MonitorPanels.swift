@@ -1494,12 +1494,26 @@ struct PickerPanel: View {
             // that, not the app's union. (The shutter circuits' single-value PLACEHOLDER enum is
             // filtered upstream in `refreshControlOption`, so it never reaches this cache.)
             if let cameraMode = model.cameraControlOptions[property], !cameraMode.isEmpty {
+                // R3D NE forbids automatic WB, and the codec can change after the enum was
+                // cached — filter at read time, not cache time. Movie chrome only: stills WB
+                // keeps its autos regardless of the movie codec left behind.
+                if property == .movieWhiteBalance {
+                    return PTPCameraPropertyDecoders.whiteBalanceOptions(
+                        advertised: cameraMode, codec: model.cameraState.codec)
+                }
                 return cameraMode
             }
         }
         guard !activePickerModes.isEmpty else { return picker.options }
         let hardcoded = activePickerModes[selectedMode].options
-        return hardcoded.isEmpty ? picker.options : hardcoded
+        let resolved = hardcoded.isEmpty ? picker.options : hardcoded
+        if picker == .whiteBalance, !model.isPhotographyMode,
+            activePickerModes[selectedMode].title == "Preset"
+        {
+            return PTPCameraPropertyDecoders.whiteBalanceOptions(
+                advertised: resolved, codec: model.cameraState.codec)
+        }
+        return resolved
     }
 }
 
