@@ -1,6 +1,9 @@
 import AVFoundation
 import CoreImage
 import UIKit
+import os
+
+private let uvcLogger = Logger(subsystem: "com.opencapture.openzcine", category: "uvc-capture")
 
 /// A frame handed from the capture queue to the main actor.
 ///
@@ -423,6 +426,48 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
     }
 
+    // MARK: - Signal colorimetry
+
+    /// What the capture chain CLAIMS the signal is, read from the first frame's attachments and
+    /// surfaced beside the format in settings. Two distinct field reports hide in one "the HDMI
+    /// picture looks wrong": a camera sending its recording gamma over HDMI (N-Log/HLG — flat or
+    /// green-tinted until the monitoring LUT is applied; fixed on the CAMERA's HDMI output
+    /// setting), and a dongle mis-tagging matrix or range (our side; would need an override this
+    /// readout is the evidence for). Without the readout, both look like "the app shifted my
+    /// colors".
+    var onSignalColorimetry: (@MainActor (String) -> Void)?
+    private var reportedColorimetry = false
+
+    private func reportSignalColorimetryOnce(of pixelBuffer: CVPixelBuffer) {
+        guard !reportedColorimetry else { return }
+        reportedColorimetry = true
+        func tag(_ key: CFString) -> String {
+            guard let value = CVBufferCopyAttachment(pixelBuffer, key, nil) as? String else {
+                return "untagged"
+            }
+            return Self.shortColorimetryName(value)
+        }
+        let summary =
+            "\(tag(kCVImageBufferColorPrimariesKey))/\(tag(kCVImageBufferTransferFunctionKey))"
+            + "/\(tag(kCVImageBufferYCbCrMatrixKey))"
+        uvcLogger.info("UVC signal colorimetry: \(summary, privacy: .public)")
+        Task { @MainActor [onSignalColorimetry] in onSignalColorimetry?(summary) }
+    }
+
+    /// The CoreVideo constants' raw values, shortened to what an operator can read; anything
+    /// unrecognised passes through raw — still evidence.
+    private static func shortColorimetryName(_ raw: String) -> String {
+        switch raw {
+        case "ITU_R_709_2": "709"
+        case "ITU_R_601_4": "601"
+        case "ITU_R_2020": "2020"
+        case "ITU_R_2100_HLG": "HLG"
+        case "SMPTE_ST_2084_PQ", "SMPTE_ST_2084": "PQ"
+        case "sRGB", "IEC_sRGB": "sRGB"
+        default: raw
+        }
+    }
+
     // MARK: - Frame delivery
 
     func captureOutput(
@@ -431,6 +476,7 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         from connection: AVCaptureConnection
     ) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        reportSignalColorimetryOnce(of: pixelBuffer)
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         guard
             let rendered = autoreleasepool(invoking: {

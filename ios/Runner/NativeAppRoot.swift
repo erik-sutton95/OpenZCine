@@ -4857,6 +4857,18 @@ final class NativeAppModel {
         hdmiFrameRate = FrameRateSampler()
         let source = UVCVideoSource(
             onStateChange: { [weak self] state in self?.applyHDMICaptureState(state) })
+        // The first frame's claimed colorimetry, appended to the settings readout. One line of
+        // evidence that splits "the camera sends its recording gamma over HDMI" (apply the
+        // monitoring LUT, or set the camera's HDMI output to SDR) from "the dongle mis-tags the
+        // signal" (our side to correct) — without it both read as "the app shifted my colors".
+        source.onSignalColorimetry = { [weak self] summary in
+            guard let self, case .streaming(let name, let format) = self.hdmiCaptureState
+            else { return }
+            self.applyHDMICaptureState(
+                .streaming(
+                    deviceName: name,
+                    format: format.map { "\($0) · \(summary)" } ?? summary))
+        }
         uvcSource = source
         hdmiCaptureState = .starting
         connectionMessage = UVCVideoSourceState.starting.message
