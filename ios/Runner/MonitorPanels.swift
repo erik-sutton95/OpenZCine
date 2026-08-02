@@ -3724,6 +3724,9 @@ struct OperatorSettingsPanel: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var settingsReorderActive = false
+    /// Keyboard overlap in points; insets the settings rows so a focused field can scroll
+    /// clear of the number pad (the full-bleed layout opts out of the keyboard safe area).
+    @State private var keyboardInset: CGFloat = 0
     /// Bumped on Frame.io sign-in/out so the Storage card re-reads the (non-observable)
     /// keychain state.
     @State private var frameioAccountStamp = 0
@@ -4009,7 +4012,30 @@ struct OperatorSettingsPanel: View {
                 reorderActive: $settingsReorderActive
             ) {
                 settingsRows(portrait: portrait)
+                    // The monitor's full-bleed layout ignores the keyboard safe area, so the
+                    // scroll area never shrinks when the number pad rises — which buried the
+                    // Watcher Passcode field under it. Inset the CONTENT by the keyboard
+                    // height instead; the rows scroll clear of the pad.
+                    .padding(.bottom, keyboardInset)
             }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillChangeFrameNotification)
+        ) { note in
+            guard
+                let frame =
+                    note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+            else { return }
+            let screen = UIScreen.main.bounds
+            let overlap = max(0, screen.maxY - frame.minY)
+            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = overlap }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillHideNotification)
+        ) { _ in
+            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = 0 }
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
