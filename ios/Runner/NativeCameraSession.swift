@@ -157,7 +157,8 @@ final class NativeCameraConnectionStore {
     func upsertSavedCamera(
         host: String, displayName: String, transport: String,
         onCameraAccessPoint: Bool? = nil,
-        serialNumber: String? = nil
+        serialNumber: String? = nil,
+        path: CameraPath? = nil
     ) {
         var records = PTPIPSavedCameraRecords.upserting(
             host: host,
@@ -166,12 +167,19 @@ final class NativeCameraConnectionStore {
             lastSeenAt: Date(),
             pairedViaCameraAccessPoint: onCameraAccessPoint,
             serialNumber: serialNumber,
+            path: path,
             into: savedCameras()
         )
-        if let ssid = CameraWiFiSSID.deriveSSID(fromCameraName: displayName),
-            transport.trimmingCharacters(in: .whitespacesAndNewlines)
-                .caseInsensitiveCompare(PTPIPSavedCameraRecord.usbTransportLabel) != .orderedSame
-        {
+        // The presentation SSID stamp is for the CAMERA-AP setup — stamping a derived
+        // "NIKON_…" onto every network record is what taught router records to prompt joins.
+        // An untyped call (legacy path) keeps the old stamp so migration can still read it.
+        let stampsSSID: Bool
+        switch path?.kind {
+        case .cameraAccessPoint: stampsSSID = true
+        case nil: stampsSSID = !PTPIPSavedCameraRecord.isUSBTransportLabel(transport)
+        default: stampsSSID = false
+        }
+        if stampsSSID, let ssid = CameraWiFiSSID.deriveSSID(fromCameraName: displayName) {
             records = PTPIPSavedCameraRecords.updatingWiFiSSID(
                 host: host,
                 wifiSSID: ssid,

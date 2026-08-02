@@ -12,7 +12,7 @@ import Testing
         PTPIPSavedCameraRecord(
             host: " 192.168.1.42 ",
             displayName: "",
-            transport: "USB-C",
+            transport: "Wi-Fi",
             lastSeenAt: oldSeen
         )
     ]
@@ -31,7 +31,8 @@ import Testing
                 host: "192.168.1.42",
                 displayName: "Nikon ZR",
                 transport: "Wi-Fi",
-                lastSeenAt: newSeen
+                lastSeenAt: newSeen,
+                path: .infrastructure(networkName: nil)
             )
         ])
 }
@@ -80,7 +81,7 @@ import Testing
         PTPIPSavedCameraRecord(
             host: " 192.168.1.42 ",
             displayName: "Nikon ZR",
-            transport: "USB-C",
+            transport: "Wi-Fi",
             lastSeenAt: nil
         ),
     ]
@@ -241,7 +242,10 @@ import Testing
 
     let canonical = PTPIPSavedCameraRecords.canonicalized(records)
 
-    #expect(canonical == records)
+    // Both hosts survive; canonicalization also stamps each record's declared path, so compare
+    // the identity axes rather than the whole value.
+    #expect(canonical.map(\.host) == records.map(\.host))
+    #expect(canonical.map(\.displayName) == records.map(\.displayName))
 }
 
 @Test func savedCameraRecordsRemoveByCanonicalHost() {

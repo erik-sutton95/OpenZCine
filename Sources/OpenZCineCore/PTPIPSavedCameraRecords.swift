@@ -36,7 +36,8 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         lastSeenAt: Date?,
         presentation: PTPIPSavedCameraPresentation? = nil,
         pairedViaCameraAccessPoint: Bool? = nil,
-        serialNumber: String? = nil
+        serialNumber: String? = nil,
+        path: CameraPath? = nil
     ) {
         self.host = host
         self.displayName = displayName
@@ -45,6 +46,7 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         self.presentation = presentation
         self.pairedViaCameraAccessPoint = pairedViaCameraAccessPoint
         self.serialNumber = serialNumber
+        self.path = path
     }
 
     public var host: String  // IP address, hostname, or `usb:<device-id>` key
@@ -52,17 +54,23 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
     public var transport: String  // e.g. "Wi-Fi", "USB-C"
     public var lastSeenAt: Date?
     public var presentation: PTPIPSavedCameraPresentation?
-    /// Whether this camera reaches the app over its own access point. The transport string
-    /// collapses camera-AP, phone hotspot and router into one "Wi-Fi", so it cannot answer the
-    /// one question a dropped connection asks: is joining the camera's network ever the fix for
-    /// THIS record? `false` is positive evidence it is not (router/hotspot use); `nil` is a
-    /// legacy record with no evidence, which keeps the historical prompt behavior.
+    /// LEGACY access-point evidence, superseded by `path`. Still written for downgrade safety,
+    /// read only by the one-time migration that stamps `path` onto old records. The tri-state
+    /// (`true`/`false`/`nil`) was the root of the transport disease: most connects cannot read
+    /// the SSID, so most records carried `nil`, and every consumer guessed differently.
     public var pairedViaCameraAccessPoint: Bool?
     /// The body serial stamped at connect. Identifies the CAMERA across its path records
     /// (hotspot, router and cable are separate records with separate hosts); presentation
     /// groups on it so one body reads as one row with many paths. `nil` predates the stamp —
     /// such a record stays a singleton row and self-heals into its group on the next connect.
     public var serialNumber: String?
+    /// The DECLARED path this record reaches the camera by — the record IS one camera setup,
+    /// keyed by (camera, path kind). `nil` only on records that predate the field; the store
+    /// migrates them on first read and the value never leaves `nil` afterwards.
+    public var path: CameraPath?
+
+    /// This record's row key beside identity: at most one setup per kind and camera.
+    public var pathKind: CameraPath.Kind? { path?.kind }
 
     /// User-facing title, preferring a custom name when one exists.
     public var displayTitle: String {
@@ -75,35 +83,84 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         return displayName
     }
 
-    /// Host plus name, because two bodies legitimately share an address (every camera-AP Nikon
-    /// is 192.168.1.1) and a bare-host id gave SwiftUI duplicate identities the moment both were
-    /// saved.
-    public var id: String { host + "|" + displayName.lowercased() }
+    /// Host plus name plus path kind: two bodies legitimately share an address (every camera-AP
+    /// Nikon is 192.168.1.1) and one body's AP and router setups can too, so any narrower id
+    /// gave SwiftUI duplicate identities the moment both were saved.
+    public var id: String {
+        host + "|" + displayName.lowercased() + "|" + (path?.kind.rawValue ?? "")
+    }
 
     /// Whether this camera was saved from a USB-C tethered pairing. USB records carry a
     /// `usb:<device-id>` host key, so network availability checks do not apply to them.
     public var isUSBTransport: Bool {
-        transport.trimmingCharacters(in: .whitespacesAndNewlines)
-            .caseInsensitiveCompare(Self.usbTransportLabel) == .orderedSame
+        if let path { return path.kind == .usbC }
+        return Self.isUSBTransportLabel(transport)
             || host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix)
+    }
+
+    public static func isUSBTransportLabel(_ transport: String) -> Bool {
+        transport.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare(usbTransportLabel) == .orderedSame
     }
 }
 
 /// Canonicalizes and updates saved camera profile records.
+///
+/// A record IS one camera setup: (camera identity, declared path kind) is the row key. There is
+/// no cross-kind merging and no topology inference here — the one place inference survives is
+/// `typed(_:)`, the one-time migration of records that predate the `path` field.
 public enum PTPIPSavedCameraRecords {
     public static func canonicalized(_ records: [PTPIPSavedCameraRecord])
         -> [PTPIPSavedCameraRecord]
     {
         var output: [PTPIPSavedCameraRecord] = []
-        for record in records {
+        for record in records.flatMap(typed) {
             guard let normalized = normalizedRecord(record) else { continue }
-            if let index = output.firstIndex(where: { recordsDescribeSameCamera($0, normalized) }) {
+            if let index = output.firstIndex(where: { describesSameSetup($0, normalized) }) {
                 output[index] = preferredRecord(existing: output[index], candidate: normalized)
             } else {
                 output.append(normalized)
             }
         }
         return output
+    }
+
+    /// One-time typing of a record that predates the declared path — THE residence of topology
+    /// inference, and its retirement home. Everything downstream reads `path`.
+    ///
+    /// The AP-proven case splits: a historically merged record could carry a router host under
+    /// an access-point stamp (the merge rules once allowed it), and that one poisoned record is
+    /// the recurring "join NIKON_…" prompt on router connects — each connect flip-flopped the
+    /// evidence and broke the OTHER path. The split gives each path its own row: the AP setup
+    /// keeps the AP's fixed address, the foreign host becomes the infrastructure setup it
+    /// always described.
+    public static func typed(_ record: PTPIPSavedCameraRecord) -> [PTPIPSavedCameraRecord] {
+        if record.path != nil { return [record] }
+        var typedRecord = record
+        if record.isUSBTransport {
+            typedRecord.path = .usbC
+            return [typedRecord]
+        }
+        if CameraStartupPolicy.usesIPhoneHotspot(host: record.host, transport: record.transport) {
+            typedRecord.path = .phoneHotspot
+            return [typedRecord]
+        }
+        guard record.pairedViaCameraAccessPoint == true else {
+            typedRecord.path = .infrastructure(networkName: nil)
+            return [typedRecord]
+        }
+        let ssid =
+            record.presentation?.wifiSSID
+            ?? CameraWiFiSSID.deriveSSID(fromCameraName: record.displayName)
+        typedRecord.path = .cameraAccessPoint(ssid: ssid)
+        guard record.host != CameraDiscovery.nikonZRAccessPointHost else {
+            return [typedRecord]
+        }
+        typedRecord.host = CameraDiscovery.nikonZRAccessPointHost
+        var infrastructure = record
+        infrastructure.path = .infrastructure(networkName: nil)
+        infrastructure.pairedViaCameraAccessPoint = false
+        return [typedRecord, infrastructure]
     }
 
     public static func upserting(
@@ -113,6 +170,7 @@ public enum PTPIPSavedCameraRecords {
         lastSeenAt: Date?,
         pairedViaCameraAccessPoint: Bool? = nil,
         serialNumber: String? = nil,
+        path: CameraPath? = nil,
         into records: [PTPIPSavedCameraRecord]
     ) -> [PTPIPSavedCameraRecord] {
         guard let host = PTPIPPairedHosts.normalizedHost(rawHost) else {
@@ -124,7 +182,8 @@ public enum PTPIPSavedCameraRecords {
             transport: normalizedTransport(rawTransport),
             lastSeenAt: lastSeenAt,
             pairedViaCameraAccessPoint: pairedViaCameraAccessPoint,
-            serialNumber: normalizedOptionalTag(serialNumber)
+            serialNumber: normalizedOptionalTag(serialNumber),
+            path: path
         )
         return canonicalized(records + [updated])
     }
@@ -217,14 +276,22 @@ public enum PTPIPSavedCameraRecords {
             lastSeenAt: record.lastSeenAt,
             presentation: normalizedPresentation(record.presentation),
             pairedViaCameraAccessPoint: record.pairedViaCameraAccessPoint,
-            serialNumber: record.serialNumber
+            serialNumber: record.serialNumber,
+            path: record.path
         )
     }
 
-    private static func recordsDescribeSameCamera(
+    /// Whether two typed records are the same setup — the same camera reached by the same KIND
+    /// of path. This replaced `recordsDescribeSameCamera` + `pathKindsCompatible` + the
+    /// evidence gate: with the path declared, "may these merge?" stops being a heuristic.
+    private static func describesSameSetup(
         _ lhs: PTPIPSavedCameraRecord,
         _ rhs: PTPIPSavedCameraRecord
     ) -> Bool {
+        // Kind first: one camera's AP and router setups are two rows FOREVER — the historical
+        // cross-kind swallow is what poisoned multi-path records. (Both-nil only occurs on
+        // records built directly in tests; `canonicalized` types everything first.)
+        guard lhs.path?.kind == rhs.path?.kind else { return false }
         // A shared address only means "same camera" when the names don't contradict it. Every
         // camera-AP Nikon is 192.168.1.1, so a bare host match let a newly paired second body
         // swallow the first one's record (#293); DHCP reuse does the same on a router. Two
@@ -233,43 +300,13 @@ public enum PTPIPSavedCameraRecords {
             return namesCompatible(lhs.displayName, rhs.displayName)
         }
         // Two stamped serials that differ are two bodies regardless of the name (#293's
-        // lineage). Equal names alone must not merge across hosts either: the same body saved
-        // over hotspot, router and cable is three records ON PURPOSE — path grouping presents
-        // them as one row. The cross-host merge exists to absorb a DHCP move within one network
-        // shape, so it additionally requires the same path kind.
+        // lineage). The cross-host merge below absorbs a DHCP move within one kind.
         if let lhsSerial = lhs.serialNumber, let rhsSerial = rhs.serialNumber,
             !lhsSerial.isEmpty, !rhsSerial.isEmpty, lhsSerial != rhsSerial
         {
             return false
         }
-        guard pathKindsCompatible(lhs, rhs) else { return false }
         return cameraNamesMatch(savedName: lhs.displayName, discoveredName: rhs.displayName)
-    }
-
-    /// Whether two records reach the camera the same WAY — USB, phone hotspot, or Wi-Fi of the
-    /// same access-point class. Only same-kind records may merge across hosts.
-    private static func pathKindsCompatible(
-        _ lhs: PTPIPSavedCameraRecord, _ rhs: PTPIPSavedCameraRecord
-    ) -> Bool {
-        if lhs.isUSBTransport != rhs.isUSBTransport { return false }
-        if lhs.isUSBTransport { return true }
-        let lhsHotspot = CameraStartupPolicy.usesIPhoneHotspot(
-            host: lhs.host, transport: lhs.transport)
-        let rhsHotspot = CameraStartupPolicy.usesIPhoneHotspot(
-            host: rhs.host, transport: rhs.transport)
-        if lhsHotspot != rhsHotspot { return false }
-        if lhsHotspot { return true }
-        // An AP-PROVEN record only merges with another AP-proven record — nil is NOT "either".
-        // Letting unknown evidence merge into an AP record is what swallowed the router path of
-        // a multi-path camera: one merged record then ping-ponged its evidence stamp with every
-        // connect, prompting "join NIKON_…" on the router path and silently skipping the join
-        // on the AP path. nil still merges with false, which is the healing the leniency was
-        // for (a legacy router record absorbing a DHCP move); the AP side needs no cross-host
-        // healing, because a body's AP address never changes — same-host merge covers it.
-        if (lhs.pairedViaCameraAccessPoint == true) != (rhs.pairedViaCameraAccessPoint == true) {
-            return false
-        }
-        return true
     }
 
     /// Whether two display names could describe one body. Uses the same normalization as
@@ -305,6 +342,18 @@ public enum PTPIPSavedCameraRecords {
         // connection recorded — a reconnect upsert usually knows nothing about the topology.
         if merged.pairedViaCameraAccessPoint == nil {
             merged.pairedViaCameraAccessPoint = fallback.pairedViaCameraAccessPoint
+        }
+        // Same-kind merges keep the richer payload: an SSID or network name learned once must
+        // not be erased by a later upsert that happens not to know it.
+        switch (merged.path, fallback.path) {
+        case (.cameraAccessPoint(nil)?, .cameraAccessPoint(let ssid?)?):
+            merged.path = .cameraAccessPoint(ssid: ssid)
+        case (.infrastructure(nil)?, .infrastructure(let network?)?):
+            merged.path = .infrastructure(networkName: network)
+        case (nil, let fallbackPath?):
+            merged.path = fallbackPath
+        default:
+            break
         }
         if merged.serialNumber == nil {
             merged.serialNumber = fallback.serialNumber
@@ -537,13 +586,16 @@ public enum CameraStartupPolicy {
     }
 
     private static func isIPhoneHotspotCamera(_ camera: PTPIPSavedCameraRecord) -> Bool {
-        usesIPhoneHotspot(host: camera.host, transport: camera.transport)
+        // Records reaching here are canonicalized, hence typed: the declared path answers.
+        camera.path?.kind == .phoneHotspot
     }
 
     /// True when a camera reaches the app over the iPhone's Personal Hotspot — the phone hosts and
     /// the camera joins, so the phone never joins a network. Identified by a hotspot transport label
     /// or a 172.20.10.x hotspot-subnet host. Pass `transport: ""` to check a bare host (e.g. a
-    /// freshly discovered camera with no saved transport).
+    /// freshly discovered camera with no saved transport). LEGACY inference: with records typed,
+    /// this survives only for the one-time migration and for classifying a FRESH discovery that
+    /// has no record yet.
     public static func usesIPhoneHotspot(host: String, transport: String) -> Bool {
         isIPhoneHotspotTransport(transport) || isIPhoneHotspotHost(host)
     }

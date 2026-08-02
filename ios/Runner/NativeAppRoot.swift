@@ -2943,7 +2943,10 @@ final class NativeAppModel {
                     displayName: session.identity.displayName,
                     transport: transport,
                     onCameraAccessPoint: cameraAccessPointEvidence,
-                    serialNumber: session.identity.serialNumber
+                    serialNumber: session.identity.serialNumber,
+                    path: declaredPathForSave(
+                        host: session.identity.host,
+                        displayName: session.identity.displayName)
                 )
                 refreshSavedCameras()
                 markFirstPairWizardCompleted()
@@ -4136,6 +4139,33 @@ final class NativeAppModel {
         return CameraWiFiSSID.isNikonZAccessPoint(ssid)
     }
 
+    /// The DECLARED path for a record being saved — from the session's own proof, the wizard's
+    /// declared method, or the host's shape (a fresh non-wizard discovery), in that order. This
+    /// is the moment transport intent becomes a persisted value instead of an artifact for
+    /// downstream code to re-derive.
+    private func declaredPathForSave(host: String, displayName: String?) -> CameraPath {
+        if host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) { return .usbC }
+        if CameraStartupPolicy.usesIPhoneHotspot(host: host, transport: "") {
+            return .phoneHotspot
+        }
+        if sessionJoinedCameraAccessPoint || cameraAccessPointEvidence == true {
+            return .cameraAccessPoint(
+                ssid: cameraAccessPointSSID(host: host, displayName: displayName))
+        }
+        if shouldShowFirstPairWizard {
+            switch firstPairTransportMethod {
+            case .cameraAccessPoint:
+                return .cameraAccessPoint(
+                    ssid: cameraAccessPointSSID(host: host, displayName: displayName))
+            case .phoneHotspot: return .phoneHotspot
+            case .usbC: return .usbC
+            case .hdmiCapture: return .hdmiCapture
+            case .wiFiNetwork: return .infrastructure(networkName: nil)
+            }
+        }
+        return .infrastructure(networkName: nil)
+    }
+
     private func savePairedCamera(
         host: String, displayName: String, transport: String, serialNumber: String? = nil
     ) {
@@ -4150,7 +4180,8 @@ final class NativeAppModel {
             displayName: displayName,
             transport: transport,
             onCameraAccessPoint: onCameraAccessPoint,
-            serialNumber: serialNumber
+            serialNumber: serialNumber,
+            path: declaredPathForSave(host: host, displayName: displayName)
         )
         refreshSavedCameras()
         markFirstPairWizardCompleted()
