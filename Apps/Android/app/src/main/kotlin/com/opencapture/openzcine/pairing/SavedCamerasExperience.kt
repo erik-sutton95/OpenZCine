@@ -672,7 +672,12 @@ public fun SavedCamerasExperience(
                 ->
                     discoveredCameras
                         .firstOrNull {
-                            SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName)
+                            // Same per-kind network-shape rule as the availability chips: an
+                            // armed Router watch must not be fulfilled by the body still on
+                            // this phone's hotspot (wrong path, wrong record), and vice versa.
+                            SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName) &&
+                                SavedCameraRecords.isPhoneHotspotHost(it.host) ==
+                                    (transport == SavedCameraTransport.PHONE_HOTSPOT)
                         }
                         ?.host
                 else -> null

@@ -697,6 +697,12 @@ final class NativeAppModel {
     /// Whether an established session dropped and is being recovered behind a preserved monitor.
     /// Drives the recovery affordance over the held frame (`MonitorRecoveryOverlay`).
     private(set) var sessionRecovery: SessionRecoveryState = .idle
+    /// True once the attempt-1 card grace has run out (the card shows immediately from attempt 2).
+    /// Model-owned deliberately: this timer lived in the overlay as a `.task`, but the overlay
+    /// renders NOTHING until the card shows and SwiftUI does not run `.task` on content-less
+    /// views — the timer that was supposed to reveal the card could never start, which left a
+    /// stalled attempt 1 as a permanent RECOV chip with no card and no way out.
+    private(set) var sessionRecoveryCardGraceElapsed = false
     var cameraHost = "192.168.1.1"
     var connectionMessage = "Join your camera's Wi‑Fi network, then come back here to connect."
     var connectedIdentity: NativeCameraIdentity?
@@ -2797,6 +2803,8 @@ final class NativeAppModel {
         pendingPairedReconnectSSID = nil
         lastPairedRejoinAttemptAt = nil
         pairedReconnectSawCameraLeave = false
+        pairedReconnectFastPathTask?.cancel()
+        pairedReconnectFastPathTask = nil
         let failedAttempt = connectionProgressShowsFailure
         dismissConnectionProgress()
         guard !failedAttempt else { return }
@@ -3662,6 +3670,7 @@ final class NativeAppModel {
     /// session drops (cable knocked loose, camera power-cycled). Cancelled by any operator-driven
     /// teardown so a manual disconnect can never race a retry back into a live session.
     @ObservationIgnored private var sessionRecoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var recoveryCardGraceTask: Task<Void, Never>?
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
@@ -3698,6 +3707,8 @@ final class NativeAppModel {
     @ObservationIgnored private var pendingPairedReconnectSSID: String?
     /// Throttle for the paired-reconnect Wi‑Fi re-apply so it isn't fired every discovery cycle.
     @ObservationIgnored private var lastPairedRejoinAttemptAt: Date?
+    /// Active post-confirm fast path (see `beginPairedReconnectFastPath`).
+    @ObservationIgnored private var pairedReconnectFastPathTask: Task<Void, Never>?
     private(set) var cameraPropertySnapshot = PTPCameraPropertySnapshot()
     /// True while a still release is in flight (optimistic UI lock on the shutter).
     private(set) var isStillCapturing = false
@@ -4222,6 +4233,67 @@ final class NativeAppModel {
         WiFiJoinCoordinator.shared.reapplyCameraNetwork(ssid: ssid)
     }
 
+    /// Post-confirm fast path for the camera-AP case ("Confirm on camera" taking forever).
+    ///
+    /// After the body-side Confirm the camera reboots its AP. The passive path re-applies the
+    /// camera's Wi-Fi only at the END of each discovery pass — and with the phone fallen back to
+    /// its home network, a pass can include a blind /24 sweep of the WRONG network, so the rejoin
+    /// cadence silently stretched from "every 5 s" to "every sweep". This loop owns the return
+    /// directly: re-apply the camera network on a fixed cadence, and the moment the phone is back
+    /// on the camera's SSID, dial the known AP host — no discovery in the critical path. The
+    /// passive discovery machinery stays untouched underneath as the fallback (and remains the
+    /// only mechanism for router-path confirms, where there is no SSID to chase).
+    private func beginPairedReconnectFastPath(host: String, ssid: String?) {
+        pairedReconnectFastPathTask?.cancel()
+        pairedReconnectFastPathTask = nil
+        guard let ssid, !ssid.isEmpty else { return }
+        pairedReconnectFastPathTask = Task { [weak self] in
+            let deadline = ContinuousClock.now + .seconds(90)
+            var lastReapply: ContinuousClock.Instant?
+            var sawCameraNetworkDrop = false
+            while !Task.isCancelled, ContinuousClock.now < deadline {
+                guard let self, !self.isConnected else { return }
+                // Both gone = the operator abandoned the flow; the passive path owns any rest.
+                if !self.isConnectionProgressPresented, self.pendingPairedReconnectHost == nil {
+                    return
+                }
+                if self.isEstablishingConnection {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    continue
+                }
+                let current = await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
+                if let current, current.caseInsensitiveCompare(ssid) == .orderedSame {
+                    // Pre-confirm, the phone is often STILL on the camera's old AP — dialing
+                    // then grabs the lingering pre-confirm session (what `sawCameraLeave`
+                    // exists to prevent). Dial only once the camera has been seen going away:
+                    // our own off-network observation, or discovery missing it.
+                    guard sawCameraNetworkDrop || self.pairedReconnectSawCameraLeave else {
+                        try? await Task.sleep(for: .seconds(1))
+                        continue
+                    }
+                    // Back on the camera's rebooted network: dial the fixed AP host directly.
+                    self.cameraHost = host
+                    self.connectToCamera()
+                    while self.isEstablishingConnection, !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(200))
+                    }
+                    if self.isConnected { return }
+                    // Give the ZR a moment to release its stale session before the next Init.
+                    try? await Task.sleep(for: .seconds(2))
+                } else {
+                    // The phone got kicked off the camera's AP — that IS the restart signal.
+                    sawCameraNetworkDrop = true
+                    let now = ContinuousClock.now
+                    if lastReapply == nil || now - lastReapply! >= .seconds(5) {
+                        lastReapply = now
+                        WiFiJoinCoordinator.shared.reapplyCameraNetwork(ssid: ssid)
+                    }
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+        }
+    }
+
     private func applyDiscoveryResults(_ cameras: [DiscoveredCamera]) {
         discoveredCameras = cameras
 
@@ -4258,10 +4330,27 @@ final class NativeAppModel {
         // after an explicit arm, once.)
         if let intent = pendingSetupIntent, !isConnected, !isEstablishingConnection {
             let match = cameras.first { discovered in
-                let sourceFits =
-                    intent.kind == .usbC
-                    ? discovered.source == .usb
-                    : discovered.source != .usb
+                // The candidate must sit on the network SHAPE the armed setup asked for — the
+                // same per-kind rule as the availability chips. Without it, an armed Router
+                // watch was fulfilled instantly by the same body still sitting on the phone's
+                // hotspot: it connected over the wrong path, and because that fulfillment fired
+                // inside the add-setup sheet's dismissal, the progress cover was silently
+                // dropped — the whole connect+pair ran with no visible UI.
+                let viaHotspot = CameraStartupPolicy.usesIPhoneHotspot(
+                    host: discovered.ip, transport: "")
+                let sourceFits: Bool
+                switch intent.kind {
+                case .usbC, .hdmiCapture:
+                    sourceFits = discovered.source == .usb
+                case .phoneHotspot:
+                    sourceFits = discovered.source != .usb && viaHotspot
+                case .infrastructure:
+                    sourceFits =
+                        discovered.source != .usb && !viaHotspot
+                        && !isOnCameraAccessPointNetwork
+                case .cameraAccessPoint:
+                    sourceFits = discovered.source != .usb && isOnCameraAccessPointNetwork
+                }
                 return sourceFits
                     && CameraStartupPolicy.savedCamera(
                         forDiscovered: discovered, in: [intent.anchor]) != nil
@@ -4544,6 +4633,11 @@ final class NativeAppModel {
         }
         connectionMessage = message
         startDiscoveryLoop(resetResults: false)
+        // AP-path confirms chase the camera's rebooted network directly; router-path confirms
+        // (no SSID armed) keep discovery as the sole mechanism.
+        if let host = pendingPairedReconnectHost {
+            beginPairedReconnectFastPath(host: host, ssid: pendingPairedReconnectSSID)
+        }
     }
 
     private func transportLabel(for source: DiscoverySource?, fallback: String?) -> String {
@@ -4889,6 +4983,13 @@ final class NativeAppModel {
     /// that replaced it.
     @ObservationIgnored private var sessionRecoveryGeneration = 0
 
+    /// How long the operator's card waits behind attempt 1 (attempt 2+ shows it at once).
+    private static let recoveryCardGrace: Duration = .seconds(2.5)
+    /// Ceiling on ONE automatic recovery attempt. Recovery connects run without the phase
+    /// watchdog, and a dial into a vanished network (a killed hotspot) can block a socket past
+    /// every cancellation — without this bound, attempt 1 never ends and the loop never marches.
+    private static let recoveryAttemptDeadline: Duration = .seconds(30)
+
     /// Recovers an ESTABLISHED session that dropped underneath the operator — a knocked USB cable,
     /// a camera power cycle, a wedged command channel — without leaving live view.
     ///
@@ -4914,6 +5015,17 @@ final class NativeAppModel {
             await self?.runSessionRecovery(host: target)
             guard let self, self.sessionRecoveryGeneration == generation else { return }
             self.sessionRecoveryTask = nil
+        }
+        // Attempt-1 card grace (see `sessionRecoveryCardGraceElapsed`): most drops heal on the
+        // immediate first retry, so the card waits this out — but it must always arrive if the
+        // attempt is still running, or a stalled attempt leaves the operator with no exit.
+        sessionRecoveryCardGraceElapsed = false
+        recoveryCardGraceTask?.cancel()
+        recoveryCardGraceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.recoveryCardGrace)
+            guard let self, !Task.isCancelled else { return }
+            guard self.sessionRecoveryGeneration == generation else { return }
+            self.sessionRecoveryCardGraceElapsed = true
         }
         // Keep the watchers alive on the held frame: with no fresh camera frames, every
         // viewer's stall watchdog would tear down and rejoin in a loop for the whole outage.
@@ -4943,8 +5055,23 @@ final class NativeAppModel {
             guard case .retrying = state else { return }
             cameraHost = host
             connectToCamera(preservingMonitorSurface: true)
-            await establishmentTask?.value
+            // Bound the attempt by polling the establishment latch, NOT by awaiting the task:
+            // a wedged attempt's `value` never resolves (cancellation cannot interrupt a blocked
+            // socket read, per #264), and awaiting it would wedge this loop with it.
+            var attemptElapsed: Duration = .zero
+            while isEstablishingConnection, !Task.isCancelled,
+                attemptElapsed < Self.recoveryAttemptDeadline
+            {
+                try? await Task.sleep(for: .milliseconds(250))
+                attemptElapsed += .milliseconds(250)
+            }
             if Task.isCancelled { return }
+            if isEstablishingConnection {
+                logConnection(
+                    "recovery attempt stalled past \(Self.recoveryAttemptDeadline) host=\(host) — abandoning it"
+                )
+                clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
+            }
             if cameraSession != nil {
                 sessionRecovery = .idle
                 logConnection("recovered host=\(host) after \(failures) failed attempt(s)")
@@ -4991,6 +5118,9 @@ final class NativeAppModel {
         sessionRecoveryGeneration += 1
         sessionRecoveryTask?.cancel()
         sessionRecoveryTask = nil
+        recoveryCardGraceTask?.cancel()
+        recoveryCardGraceTask = nil
+        sessionRecoveryCardGraceElapsed = false
         relayRecoveryHeartbeatTask?.cancel()
         relayRecoveryHeartbeatTask = nil
         sessionRecovery = .idle
