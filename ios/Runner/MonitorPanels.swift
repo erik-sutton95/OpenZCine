@@ -3903,6 +3903,8 @@ struct OperatorSettingsPanel: View {
                 Text("Operator Setup")
                     .font(.system(size: 24, weight: .semibold, design: .default))
                     .foregroundStyle(LiveDesign.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
             Spacer()
             SettingsLiveTile()
@@ -3930,8 +3932,10 @@ struct OperatorSettingsPanel: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 5) {
                 ForEach(OperatorSettingsTab.allCases) { tab in
+                    // Intrinsic width in the strip (the landscape rail keeps its fixed 146):
+                    // fixed-width chips left portrait showing two of seven tabs, which read
+                    // as a clipped bar rather than a scrollable one.
                     settingsTabButton(tab)
-                        .frame(width: 146)
                 }
             }
             .padding(6)

@@ -958,24 +958,35 @@ struct SettingsInlineRow<Trailing: View>: View {
                 Rectangle().fill(LiveDesign.hairline).frame(height: 1)
             }
             if stacked {
-                VStack(alignment: .leading, spacing: 6) {
-                    labelRow
-                    trailing
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, minHeight: 44)
+                stackedRow
             } else {
-                HStack(spacing: 8) {
-                    labelRow
-                    Spacer(minLength: 12)
-                    trailing
+                // Inline when the control fits beside the label; otherwise the row WRAPS into
+                // the stacked form instead of running off the trailing edge — narrow widths
+                // (portrait, Display Zoom, small phones) hit this on every segmented row.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        labelRow
+                        Spacer(minLength: 12)
+                        trailing
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    // Stay greedy so a divided row card fills its full grid span instead of
+                    // shrink-wrapping to the rows' intrinsic width (which would clip titles).
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    stackedRow
                 }
-                // Stay greedy so a divided row card fills its full grid span instead of shrink-wrapping
-                // to the rows' intrinsic width (which would clip titles on the left).
-                .frame(maxWidth: .infinity, minHeight: 50)
             }
         }
+    }
+
+    private var stackedRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            labelRow
+            trailing
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 44)
     }
 
     private var labelRow: some View {

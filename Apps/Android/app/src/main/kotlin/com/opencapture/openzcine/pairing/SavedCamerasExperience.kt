@@ -158,6 +158,8 @@ public fun SavedCamerasExperience(
     suppressedUsbAutoReconnectHosts: Set<String> = emptySet(),
     onUsbAutoReconnectSuppressionCleared: (String) -> Unit = {},
     onShareDiagnostics: (() -> Unit)? = null,
+    nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast> = emptyList(),
+    onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
@@ -772,6 +774,8 @@ public fun SavedCamerasExperience(
                                     )
                                 )
                             },
+                            nearbyBroadcasts = nearbyBroadcasts,
+                            onWatchBroadcast = onWatchBroadcast,
                             fillAvailableHeight = true,
                             scrollRows = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -811,6 +815,8 @@ public fun SavedCamerasExperience(
                                         )
                                     )
                                 },
+                                nearbyBroadcasts = nearbyBroadcasts,
+                                onWatchBroadcast = onWatchBroadcast,
                                 fillAvailableHeight = false,
                                 scrollRows = false,
                                 modifier = Modifier.fillMaxWidth(),
@@ -939,12 +945,36 @@ public fun SavedCamerasExperience(
         )
     }
     addSetupTarget?.let { group ->
+        val anchor = group.first()
         SavedCameraAddSetupDialog(
             group = group,
+            usbReadyHostKey =
+                usbCameras.firstOrNull { it.access == UsbPtpCameraAccess.READY }?.hostKey,
+            routerDiscoveredHost =
+                discoveredCameras
+                    .firstOrNull {
+                        SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName)
+                    }
+                    ?.host,
             onDismiss = { addSetupTarget = null },
             onJoinCameraAp = { record ->
                 addSetupTarget = null
                 addCameraApSetup(record)
+            },
+            onConnectSetup = { transport, host ->
+                addSetupTarget = null
+                // Connecting over this path IS adding the setup: the record saves itself with
+                // this transport on success. A fresh profileID keeps the new setup from
+                // merging into the sibling it was copied from.
+                reconnect(
+                    anchor.copy(
+                        transport = transport,
+                        host = host,
+                        profileID = host,
+                        wifiSsid = null,
+                        lastSeenAtEpochMillis = null,
+                    )
+                )
             },
         )
     }
@@ -1009,6 +1039,8 @@ private fun SavedCameraList(
     onRemove: (List<SavedCameraRecord>) -> Unit,
     onAddSetup: (List<SavedCameraRecord>) -> Unit,
     onForgetSetup: (SavedCameraRecord) -> Unit,
+    nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast>,
+    onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit,
     fillAvailableHeight: Boolean,
     scrollRows: Boolean,
     modifier: Modifier,
@@ -1080,6 +1112,52 @@ private fun SavedCameraList(
                         onAddSetup = { onAddSetup(group) },
                         onForgetSetup = onForgetSetup,
                     )
+                }
+            }
+            // Broadcasts are listed beside cameras on the same screen — found and forgotten
+            // on the same schedule, exactly like the iOS camera list.
+            Spacer(Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.saved_nearby_broadcasts),
+                color = StartupColors.muted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.4.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            if (nearbyBroadcasts.isEmpty()) {
+                Text(
+                    stringResource(R.string.saved_nearby_broadcasts_empty),
+                    color = StartupColors.dim,
+                    fontSize = 12.sp,
+                )
+            } else {
+                nearbyBroadcasts.forEach { broadcast ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
+                            .clickable(enabled = !busy) { onWatchBroadcast(broadcast) }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            broadcast.name,
+                            color = StartupColors.ink,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        StartupFilledButton(
+                            text = stringResource(R.string.relay_watch),
+                            enabled = !busy,
+                            onClick = { onWatchBroadcast(broadcast) },
+                            modifier = Modifier.width(96.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
@@ -1327,8 +1405,11 @@ private fun SavedCameraSetupChip(
 @Composable
 private fun SavedCameraAddSetupDialog(
     group: List<SavedCameraRecord>,
+    usbReadyHostKey: String?,
+    routerDiscoveredHost: String?,
     onDismiss: () -> Unit,
     onJoinCameraAp: (SavedCameraRecord) -> Unit,
+    onConnectSetup: (SavedCameraTransport, String) -> Unit,
 ) {
     val active = group.first()
     AlertDialog(
@@ -1380,10 +1461,61 @@ private fun SavedCameraAddSetupDialog(
                             fontSize = 12.5.sp,
                             lineHeight = 17.sp,
                         )
-                        if (kind == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-                            TextButton(onClick = { onJoinCameraAp(active) }) {
-                                Text(stringResource(R.string.saved_setup_ap_action_join))
-                            }
+                        // Every row DOES something — connect immediately when the path is
+                        // already reachable, else dismiss into the list, which is watching.
+                        when (kind) {
+                            SavedCameraTransport.CAMERA_ACCESS_POINT ->
+                                TextButton(onClick = { onJoinCameraAp(active) }) {
+                                    Text(stringResource(R.string.saved_setup_ap_action_join))
+                                }
+                            SavedCameraTransport.USB_C ->
+                                TextButton(
+                                    onClick = {
+                                        val hostKey = usbReadyHostKey
+                                        if (hostKey != null) {
+                                            onConnectSetup(SavedCameraTransport.USB_C, hostKey)
+                                        } else {
+                                            onDismiss()
+                                        }
+                                    },
+                                ) {
+                                    Text(
+                                        stringResource(
+                                            if (usbReadyHostKey != null) {
+                                                R.string.saved_setup_connect_now
+                                            } else {
+                                                R.string.saved_setup_connect_when_plugged
+                                            }
+                                        )
+                                    )
+                                }
+                            SavedCameraTransport.INFRASTRUCTURE ->
+                                TextButton(
+                                    onClick = {
+                                        val host = routerDiscoveredHost
+                                        if (host != null) {
+                                            onConnectSetup(
+                                                SavedCameraTransport.INFRASTRUCTURE, host
+                                            )
+                                        } else {
+                                            onDismiss()
+                                        }
+                                    },
+                                ) {
+                                    Text(
+                                        stringResource(
+                                            if (routerDiscoveredHost != null) {
+                                                R.string.saved_setup_connect_now
+                                            } else {
+                                                R.string.saved_setup_find_on_network
+                                            }
+                                        )
+                                    )
+                                }
+                            SavedCameraTransport.PHONE_HOTSPOT ->
+                                TextButton(onClick = onDismiss) {
+                                    Text(stringResource(R.string.saved_setup_wait_for_camera))
+                                }
                         }
                     }
                 }

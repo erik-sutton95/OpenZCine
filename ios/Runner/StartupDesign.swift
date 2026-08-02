@@ -1090,26 +1090,73 @@ struct StartupAddSetupSheet: View {
                     .font(.system(size: 12.5, weight: .regular, design: .rounded))
                     .foregroundStyle(StartupColors.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                if kind == .cameraAccessPoint {
-                    Button {
-                        dismiss()
-                        model.beginAddCameraAPSetup(for: camera)
-                    } label: {
-                        Text("Join Camera Wi-Fi")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(StartupColors.ink)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(StartupColors.accent.opacity(0.35), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
+                // Every row DOES something — a "+ Add setup" that only explains is a dead
+                // end. Try-now-else-watch: connect immediately when the path is already
+                // reachable, otherwise dismiss into the list, which is watching for it.
+                setupActionButton(kind)
                     .padding(.top, 4)
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(12)
         .background(StartupColors.tile.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// The discovered camera that would satisfy this kind RIGHT NOW, if any.
+    private func discoveredMatch(for kind: CameraPath.Kind) -> DiscoveredCamera? {
+        switch kind {
+        case .usbC:
+            return model.discoveredCameras.first { $0.source == .usb }
+        case .infrastructure:
+            return model.discoveredCameras.first { discovered in
+                discovered.source != .usb
+                    && CameraStartupPolicy.savedCamera(
+                        forDiscovered: discovered, in: [camera]) != nil
+            }
+        case .cameraAccessPoint, .phoneHotspot, .hdmiCapture:
+            return nil
+        }
+    }
+
+    @ViewBuilder private func setupActionButton(_ kind: CameraPath.Kind) -> some View {
+        let match = discoveredMatch(for: kind)
+        let title: String? = {
+            switch kind {
+            case .cameraAccessPoint: return "Join Camera Wi-Fi"
+            case .usbC: return match != nil ? "Connect Now" : "Connect When Plugged In"
+            case .infrastructure:
+                return match != nil ? "Connect Now" : "Find On This Network"
+            case .phoneHotspot: return "Wait For Camera"
+            case .hdmiCapture: return nil
+            }
+        }()
+        if let title {
+            Button {
+                dismiss()
+                switch kind {
+                case .cameraAccessPoint:
+                    model.beginAddCameraAPSetup(for: camera)
+                case .usbC, .infrastructure:
+                    if let match {
+                        // Connecting over this path IS adding the setup — the record saves
+                        // itself with the declared path at establishment.
+                        model.connectToCamera(match)
+                    } else if kind == .infrastructure {
+                        Task { await model.refreshCameraDiscovery() }
+                    }
+                case .phoneHotspot, .hdmiCapture:
+                    break
+                }
+            } label: {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(StartupColors.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(StartupColors.accent.opacity(0.35), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private func icon(for kind: CameraPath.Kind) -> String {
