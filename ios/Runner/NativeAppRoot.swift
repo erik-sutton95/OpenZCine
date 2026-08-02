@@ -2066,6 +2066,22 @@ final class NativeAppModel {
         !cameraWiFiJoinPasswordDraft.isEmpty
     }
 
+    /// Presents the connect card in a "watching this network" state for an armed infrastructure
+    /// setup watch, so Find On This Network shows progress from the tap onward. Fulfillment
+    /// (`applyDiscoveryResults`) drives the same card through the normal connect phases; Cancel
+    /// disarms the watch via `cancelConnectionAttempt`.
+    func presentSetupWatchProgress(for camera: PTPIPSavedCameraRecord) {
+        connectionProgressDeviceName = ConnectionProgressCopy.resolveDisplayName(
+            rawName: camera.displayName, savedCamera: camera)
+        connectionProgressIsUSB = false
+        connectionProgressShowsFailure = false
+        connectionFailureDetail = ""
+        connectionPhase = .discovering
+        connectionMessage =
+            "Looking for \(connectionProgressDeviceName) on this network. Keep Connect to PC on."
+        isConnectionProgressPresented = true
+    }
+
     /// Every camera-AP flow needs the Wi‑Fi radio on; with it off the join can only fail after
     /// a long, confusing search. Called at choose time (scanner open, credential staging) and
     /// again at join time, so a mid-popup Wi‑Fi toggle still lands on the prompt.
@@ -2817,6 +2833,8 @@ final class NativeAppModel {
         pairedReconnectSawCameraLeave = false
         pairedReconnectFastPathTask?.cancel()
         pairedReconnectFastPathTask = nil
+        // An armed setup watch dies with its card for the same reason.
+        pendingSetupIntent = nil
         let failedAttempt = connectionProgressShowsFailure
         dismissConnectionProgress()
         guard !failedAttempt else { return }
@@ -3033,7 +3051,8 @@ final class NativeAppModel {
                     attempt = try await establishStartupSession(
                         host: host,
                         guid: guid,
-                        strategy: strategy
+                        strategy: strategy,
+                        allowsPairingEscalation: !preservingMonitorSurface
                     )
                 } catch let error
                     where strategy == .savedProfile && !preservingMonitorSurface
@@ -3055,7 +3074,8 @@ final class NativeAppModel {
                     attempt = try await establishStartupSession(
                         host: host,
                         guid: guid,
-                        strategy: strategy
+                        strategy: strategy,
+                        allowsPairingEscalation: !preservingMonitorSurface
                     )
                 }
                 let initialSession = attempt.session
@@ -4668,7 +4688,8 @@ final class NativeAppModel {
     private func establishStartupSession(
         host: String,
         guid: Data,
-        strategy: CameraConnectionStrategy
+        strategy: CameraConnectionStrategy,
+        allowsPairingEscalation: Bool = true
     ) async throws -> (session: NativeCameraSession, requestedPairing: Bool) {
         connectionStageDetail = ""
         let diagnosticBox = establishmentDiagnostic
@@ -4706,9 +4727,17 @@ final class NativeAppModel {
                 )
                 return (session, false)
             } catch {
-                guard isSavedProfileUnavailable(error) else { throw error }
-                NativeCameraConnectionStore.shared.forgetKnownPairing(host: host)
-                refreshSavedCameras()
+                // Escalation needs BOTH: an operator-initiated connect (recovery reconnects a
+                // session that was healthy seconds ago — a failure there means wedged or
+                // rebooting, never unpaired, and a pairing barrage against a wedged body only
+                // digs it deeper), and the profile-unavailable signal. The signal includes bare
+                // connection-closed, which a wedged body emits for EVERY attempt — that
+                // combination is what deleted an operator's saved setups mid-outage.
+                guard allowsPairingEscalation, isSavedProfileUnavailable(error) else {
+                    throw error
+                }
+                // Deliberately NOT forgetting the saved records up front: success re-saves and
+                // merges them anyway, and a failed escalation must cost the operator nothing.
                 connectionMessage =
                     "Saved camera profile was out of date. Setting up again…"
                 let session = try await establishFirstTimePairingSession(

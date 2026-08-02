@@ -550,8 +550,12 @@ final class MonitorRelayBrowser {
     /// reach, and AWDL under a decoding watcher costs the same fps it costs a broadcaster.
     func start(includePeerToPeer: Bool = true) {
         stop()
+        // MUST be the TXT-record descriptor: plain `.bonjour` never delivers TXT metadata, so
+        // the served-camera `ch=` key below parsed as nil on every watcher — the probe
+        // exclusion it feeds protected nothing, and a watcher's camera list kept PTP-probing
+        // the broadcaster's live body (the share-this-feed drop storm).
         let browser = NWBrowser(
-            for: .bonjour(type: MonitorRelayProtocol.serviceType, domain: nil),
+            for: .bonjourWithTXTRecord(type: MonitorRelayProtocol.serviceType, domain: nil),
             using: relayParameters(includePeerToPeer: includePeerToPeer))
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             let discoveries = results.compactMap { result -> MonitorRelayDiscovery? in

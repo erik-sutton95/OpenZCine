@@ -1116,6 +1116,13 @@ struct StartupAddSetupSheet: View {
                         // dismissed here is what made add-setup feel dead.
                         model.pendingSetupIntent = .init(anchor: camera, kind: kind)
                         if kind == .infrastructure {
+                            // The watch gets a VISIBLE card from the tap (Cancel disarms).
+                            // Without one, the later auto-fulfillment read as the whole flow
+                            // "doing stuff in the background" — and any card presented at
+                            // fulfillment could land mid-sheet-dismissal and be dropped.
+                            model.pendingAddSetupAction = { [weak model] in
+                                model?.presentSetupWatchProgress(for: camera)
+                            }
                             Task { await model.refreshCameraDiscovery() }
                         }
                     }

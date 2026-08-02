@@ -26,15 +26,20 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         let usbCameras = usbBrowser.attachedCameras()
 
         await status("Searching for cameras on Wi‑Fi and USB‑C…")
-        // Bonjour and the trusted-host probe run TOGETHER: saved hosts and the camera-AP
-        // convention address are known, not blind, so probing them costs nothing extra —
-        // and the reconnect case answers in one probe round (~0.65s) without waiting out
-        // the Bonjour window first. The blind /24 sweep still only runs when both come
-        // back empty.
-        async let bonjourPass = BonjourPTPBrowser().discover(timeout: 1.4)
-        async let priorityPass = probeTrustedHosts(
-            guid: guid, priorityHosts: priorityHosts, excludedHosts: excludedHosts)
-        let (bonjour, priority) = await (bonjourPass, priorityPass)
+        // Bonjour FIRST, and the trusted-host probe only covers what Bonjour did not report.
+        // A PTP probe is an Init the body must answer — probing a body that is already
+        // advertising is not just wasted, it is the drop mechanism: a body another device
+        // holds a session with closes that session's event channel when a second initiator
+        // knocks. Running the probe concurrently with Bonjour (tried for speed) had this
+        // device's every-few-seconds quick pass knocking a live body it was about to list
+        // anyway. The reconnect case a probe exists for — a body that just rebooted and is
+        // not advertising yet — still gets its probe round, after the 1.4 s window.
+        let bonjour = await BonjourPTPBrowser().discover(timeout: 1.4)
+        let bonjourHosts = Set(bonjour.compactMap { PTPIPPairedHosts.normalizedHost($0.ip) })
+        let priority = await probeTrustedHosts(
+            guid: guid,
+            priorityHosts: priorityHosts,
+            excludedHosts: { excludedHosts().union(bonjourHosts) })
         let quickResults = CameraDiscovery.dedupeAndSort(usbCameras + bonjour + priority)
         if !quickResults.isEmpty {
             return quickResults
