@@ -16,6 +16,8 @@ import com.opencapture.openzcine.settings.OperatorSettingsTab
  * mirrored from `ios/Runner/DemoHarness.swift`).
  */
 object DemoHarness {
+    fun relayWatchEndpoint(intent: android.content.Intent): Pair<String, Int>? = null
+
     /** Never matched in release: the extra is read only by the debug harness. */
     const val EXTRA_DEMO_FEED = "zc.demo.feed"
 

@@ -313,6 +313,7 @@ dependencies {
     implementation(libs.mlkit.text.recognition)
 
     testImplementation(libs.kotlin.test.junit)
+    testImplementation(libs.json)
     testImplementation(libs.kotlinx.coroutines.test)
 
     androidTestImplementation(libs.androidx.test.core)

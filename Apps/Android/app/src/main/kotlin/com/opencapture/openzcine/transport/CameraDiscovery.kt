@@ -29,7 +29,13 @@ sealed interface NsdEvent {
     data class ServiceFound(val serviceName: String) : NsdEvent
 
     /** A found service resolved to a reachable host/port. */
-    data class ServiceResolved(val serviceName: String, val host: String, val port: Int) : NsdEvent
+    data class ServiceResolved(
+        val serviceName: String,
+        val host: String,
+        val port: Int,
+        /** DNS-SD TXT attributes, UTF-8 decoded. The relay directory reads `ch` from here. */
+        val attributes: Map<String, String> = emptyMap(),
+    ) : NsdEvent
 
     /** A previously found service disappeared from the network. */
     data class ServiceLost(val serviceName: String) : NsdEvent

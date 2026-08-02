@@ -79,8 +79,11 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -149,6 +152,7 @@ public enum class OperatorSettingsTab(
     @StringRes public val pillResource: Int,
 ) {
     LINK(R.string.settings_tab_link, R.string.settings_tab_link, R.string.settings_rail_connection, R.string.settings_subtitle_link, R.string.settings_pill_live),
+    SHARING(R.string.settings_tab_sharing, R.string.settings_tab_sharing, R.string.settings_rail_sharing, R.string.settings_subtitle_sharing, R.string.settings_pill_sharing),
     ASSIST(R.string.settings_tab_assist, R.string.settings_tab_assist_compact, R.string.settings_rail_assist, R.string.settings_subtitle_assist, R.string.settings_pill_assist),
     CONTROLS(R.string.settings_tab_controls, R.string.settings_tab_controls, R.string.settings_rail_controls, R.string.settings_subtitle_controls, R.string.settings_pill_touch),
     DISPLAY(R.string.settings_tab_display, R.string.settings_tab_display, R.string.settings_rail_display, R.string.settings_subtitle_display, R.string.settings_pill_visibility),
@@ -193,6 +197,9 @@ internal fun OperatorSettingsScreen(
     onShowGuideOnNextRealFrame: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
     initialTab: OperatorSettingsTab = OperatorSettingsTab.LINK,
+    relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
+    relaySharingEnabled: Boolean = false,
+    onRelayShareToggle: ((Boolean) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -288,10 +295,13 @@ internal fun OperatorSettingsScreen(
                 // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
                 SettingsHeader(session, linkHealth, compact)
                 if (compact) {
-                    SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
+                    SettingsTabStrip(selectedTab, showSharing = relaySharing != null, onSelect = { selectedTab = it })
                     SettingsContentPane(
                         selectedTab,
                         session,
+                        relaySharing,
+                        relaySharingEnabled,
+                        onRelayShareToggle,
                         settings,
                         assistState,
                         mediaCacheStore,
@@ -320,10 +330,13 @@ internal fun OperatorSettingsScreen(
                         Modifier.fillMaxWidth().weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
+                        SettingsTabRail(selectedTab, showSharing = relaySharing != null, onSelect = { selectedTab = it })
                         SettingsContentPane(
                             selectedTab,
                             session,
+                            relaySharing,
+                            relaySharingEnabled,
+                            onRelayShareToggle,
                             settings,
                             assistState,
                             mediaCacheStore,
@@ -491,6 +504,7 @@ private fun SettingsLiveTile(
 @Composable
 private fun SettingsTabStrip(
     selected: OperatorSettingsTab,
+    showSharing: Boolean,
     onSelect: (OperatorSettingsTab) -> Unit,
 ) {
     Row(
@@ -500,7 +514,9 @@ private fun SettingsTabStrip(
             .padding(6.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        OperatorSettingsTab.entries.forEach { tab ->
+        OperatorSettingsTab.entries
+            .filter { it != OperatorSettingsTab.SHARING || showSharing }
+            .forEach { tab ->
             Box(Modifier.width(146.dp)) {
                 SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
             }
@@ -510,12 +526,18 @@ private fun SettingsTabStrip(
 
 /** Vertical tab rail, 146dp wide on full-height glass (iOS `settingsRail`). */
 @Composable
-private fun SettingsTabRail(selected: OperatorSettingsTab, onSelect: (OperatorSettingsTab) -> Unit) {
+private fun SettingsTabRail(
+    selected: OperatorSettingsTab,
+    showSharing: Boolean,
+    onSelect: (OperatorSettingsTab) -> Unit,
+) {
     Column(
         Modifier.width(146.dp).fillMaxHeight().glass(ChromeShape).padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        OperatorSettingsTab.entries.forEach { tab ->
+        OperatorSettingsTab.entries
+            .filter { it != OperatorSettingsTab.SHARING || showSharing }
+            .forEach { tab ->
             SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
         }
     }
@@ -562,6 +584,9 @@ private fun SettingsTabButton(tab: OperatorSettingsTab, active: Boolean, onClick
 private fun SettingsContentPane(
     tab: OperatorSettingsTab,
     session: CameraSession?,
+    relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
+    relaySharingEnabled: Boolean,
+    onRelayShareToggle: ((Boolean) -> Unit)?,
     settings: OperatorSettings,
     assistState: AssistState,
     mediaCacheStore: MediaCacheStore,
@@ -653,6 +678,14 @@ private fun SettingsContentPane(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         when (tab) {
+                            OperatorSettingsTab.SHARING ->
+                                SharingRows(
+                                    sharing = relaySharing,
+                                    settings = settings,
+                                    enabled = relaySharingEnabled,
+                                    onShareToggle = onRelayShareToggle,
+                                    onInteraction = onInteraction,
+                                )
                             OperatorSettingsTab.LINK ->
                                 LinkRows(
                                     session = session,
@@ -706,6 +739,104 @@ private fun SettingsContentPane(
                                     onShowGuideOnNextRealFrame = onShowGuideOnNextRealFrame,
                                 )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Sharing tab — 1:1 with iOS `sharingRows`: enable, watcher count, 4-digit watcher passcode,
+ * control-requests policy, and the live control rows (requested / held-by with Take Back).
+ * Watchers never see this tab (no daisy-chaining) — the tab itself is filtered out when no
+ * sharing surface exists.
+ */
+@Composable
+private fun SharingRows(
+    sharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
+    settings: OperatorSettings,
+    enabled: Boolean,
+    onShareToggle: ((Boolean) -> Unit)?,
+    onInteraction: () -> Unit,
+) {
+    if (sharing == null) {
+        SettingsRowCard {
+            SettingsInlineRow(
+                title = stringResource(R.string.sharing_share_this_feed),
+                showTopDivider = false,
+            ) {
+                SettingsValueText(stringResource(R.string.sharing_share_unavailable))
+            }
+        }
+        return
+    }
+    val ui by sharing.ui.collectAsState()
+    var passcodeDraft by remember { mutableStateOf(settings.relayWatcherPasscode.value) }
+    SettingsRowCard {
+        SettingsSwitchRow(
+            stringResource(R.string.sharing_share_this_feed),
+            isOn = enabled,
+            showTopDivider = false,
+        ) {
+            onShareToggle?.invoke(!enabled)
+            onInteraction()
+        }
+        SettingsInlineRow(title = stringResource(R.string.sharing_watching)) {
+            SettingsValueText(stringResource(R.string.sharing_watching_count, ui.watcherCount))
+        }
+        SettingsInlineRow(title = stringResource(R.string.sharing_watcher_passcode)) {
+            BasicTextField(
+                value = passcodeDraft,
+                onValueChange = { new ->
+                    passcodeDraft = new.filter(Char::isDigit).take(4)
+                    // Applies live to NEW joins, exactly like iOS; watchers already in keep
+                    // their access until they leave. A cleared field means open.
+                    if (passcodeDraft.length == 4 || passcodeDraft.isEmpty()) {
+                        settings.relayWatcherPasscode.value = passcodeDraft
+                        sharing.watcherPasscode = passcodeDraft
+                    }
+                },
+                textStyle =
+                    LocalTextStyle.current.copy(
+                        color = LiveDesign.text,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.End,
+                    ),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.width(96.dp),
+            )
+        }
+        SettingsSwitchRow(
+            stringResource(R.string.sharing_control_requests),
+            isOn = settings.relayAllowsControlRequests.value,
+        ) {
+            settings.relayAllowsControlRequests.toggle()
+            sharing.allowsControlRequests = settings.relayAllowsControlRequests.value
+            onInteraction()
+        }
+        ui.pendingControlRequestName?.let {
+            SettingsInlineRow(title = stringResource(R.string.sharing_control_requested)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SettingsActionPill(stringResource(R.string.sharing_decline)) {
+                        sharing.declinePendingControl()
+                    }
+                    SettingsActionPill(stringResource(R.string.sharing_grant)) {
+                        sharing.grantPendingControl()
+                    }
+                }
+            }
+        }
+        ui.controlHolderName?.let { holder ->
+            SettingsInlineRow(title = stringResource(R.string.sharing_control_held_by)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SettingsValueText(holder)
+                    SettingsActionPill(stringResource(R.string.sharing_take_back)) {
+                        sharing.reclaimControl()
                     }
                 }
             }

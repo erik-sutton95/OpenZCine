@@ -709,6 +709,21 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         }
     }
 
+    /** One persisted string: Compose-observable value, write-through on set. */
+    public inner class Text internal constructor(
+        public val key: String,
+        public val default: String,
+    ) {
+        private val state = mutableStateOf(preferences.getString(key, default) ?: default)
+
+        public var value: String
+            get() = state.value
+            set(new) {
+                state.value = new
+                preferences.edit().putString(key, new).apply()
+            }
+    }
+
     // Display chrome — maps to iOS `DisplayChromeVisibility`. One set per (DISP mode, capture
     // side); each set is keyed `<prefix><section.key>`, so DISP 1 video keeps the original
     // `display.statusBar`-style keys and nothing an operator already stored moves.
@@ -913,6 +928,12 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         Toggle("controls.mediaRemoteShutter.v1", default = true)
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
+
+    // Sharing (the monitor relay) — iOS `relayWatcherPasscode` / `relayAllowsControlRequests`.
+    // The share switch itself is runtime state, exactly like iOS's `isRelayBroadcasting`.
+    public val relayWatcherPasscode: Text = Text("sharing.watcherPasscode", default = "")
+    public val relayAllowsControlRequests: Toggle =
+        Toggle("sharing.allowsControlRequests", default = true)
     /**
      * Enables the live-view focus-by-wire scrub strip in video and photo mode (**default off**).
      * Surfaced as a row inside the FOCUS popup rather than Operator Setup, mirroring the iOS

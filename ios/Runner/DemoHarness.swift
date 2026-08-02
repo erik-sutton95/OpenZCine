@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 import UIKit
 import os
@@ -687,6 +688,20 @@ enum DemoHarness {
                 // AUTOSTART this is applied earlier (before scope seeding) — see above; this branch
                 // covers the non-autostart launch path.
                 model.preferences.portraitFeedAspect = aspect
+            }
+            if let endpoint = env["ZC_DEMO_RELAY_JOIN_HOST"],
+                let colon = endpoint.lastIndex(of: ":"),
+                let port = UInt16(endpoint[endpoint.index(after: colon)...])
+            {
+                // Direct-endpoint join (host:port), bypassing Bonjour — cross-platform wire
+                // verification through adb forward, where mDNS cannot cross network segments.
+                let host = String(endpoint[..<colon])
+                model.joinRelay(
+                    MonitorRelayDiscovery(
+                        id: "direct", name: "Direct",
+                        endpoint: .hostPort(
+                            host: NWEndpoint.Host(host),
+                            port: NWEndpoint.Port(rawValue: port) ?? 15_750)))
             }
             if env["ZC_DEMO_RELAY_JOIN"] == "1" {
                 // Verification affordance: browse for a broadcasting device and join the first one
