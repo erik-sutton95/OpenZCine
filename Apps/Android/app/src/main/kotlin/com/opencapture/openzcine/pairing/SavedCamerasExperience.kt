@@ -1179,8 +1179,17 @@ private fun SavedCameraList(
             } else {
                 // One ROW per body: records stay one-per-setup on disk; the assigned name
                 // groups them here (Android's identity axis -- see SavedCameraGroups).
+                val onCameraApNetwork = isOnCameraAccessPointNetwork(LocalContext.current)
                 val isDiscovered = { record: SavedCameraRecord ->
-                    if (record.transport == SavedCameraTransport.USB_C) {
+                    if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT &&
+                        !onCameraApNetwork
+                    ) {
+                        // The AP host is the fixed convention address any home network can
+                        // also occupy (the router itself, or a DHCP lease) — something
+                        // answering there off the camera's own network is not the camera's
+                        // AP, so the chip must not light (iOS core rule).
+                        false
+                    } else if (record.transport == SavedCameraTransport.USB_C) {
                         usbCameras.any {
                             it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
                         }

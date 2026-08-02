@@ -453,6 +453,14 @@ public enum SavedCameraAvailabilityPolicy {
         guard let host = PTPIPPairedHosts.normalizedHost(camera.host) else {
             return .offline
         }
+        // An AP setup is reachable ONLY from the camera's own network. Its host is the fixed
+        // convention address (192.168.1.1), which any home network can also occupy — the router
+        // itself, or a DHCP lease — so something answering at that address off the camera's AP
+        // is not the camera's AP. Without this, the AP chip lit green (and won the active-path
+        // pick) while phone and camera both sat on the home router.
+        if camera.path?.kind == .cameraAccessPoint, !onCameraAccessPoint {
+            return .offline
+        }
         if PTPIPPairedHosts.normalizedHost(rawConnectedHost ?? "") == host {
             return .connected
         }

@@ -212,6 +212,46 @@ import Testing
         ) == .available(usbDiscovered))
 }
 
+@Test func cameraAPSetupReadsOfflineOffItsNetworkEvenWhenItsHostAnswers() {
+    // Home-router collision: the AP setup's host is the fixed convention address, which a
+    // home network can also occupy (the router itself, or a DHCP lease). Something answering
+    // there while the phone is NOT on the camera's AP must not light the AP chip — this was
+    // "Camera AP reads green while phone and camera both sit on the home router".
+    let apSetup = PTPIPSavedCameraRecord(
+        host: "192.168.1.1",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_02199")
+    )
+    let phantom = DiscoveredCamera(ip: "192.168.1.1", name: "ZR_6002199", source: .subnetProbe)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [phantom],
+            connectedHost: nil,
+            onCameraAccessPoint: false
+        ) == .offline)
+    // On the camera's own network the same host match keeps lighting it.
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [phantom],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(phantom))
+    // A connected session at that address off the AP network belongs to whatever network
+    // the phone is on — never to the AP setup.
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [],
+            connectedHost: "192.168.1.1",
+            onCameraAccessPoint: false
+        ) == .offline)
+}
+
 @Test func hotspotDiscoveryLightsOnlyTheHotspotSetup() {
     // A body found over the phone's hotspot (fixed 172.20.10.x subnet) must light the
     // Hotspot setup and never the Router one — and a router-network discovery must not
