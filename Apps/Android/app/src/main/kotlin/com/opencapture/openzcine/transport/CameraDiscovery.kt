@@ -108,8 +108,11 @@ class CameraDiscovery(private val browser: NsdBrowser) {
          * ranges. Keep the small parser here instead of crossing JNI: discovery must remain
          * safe and JVM-testable when the optional Swift library is not installed.
          *
-         * The default shared policy deliberately excludes `10/8`, even though it is RFC 1918,
-         * so mDNS discovery does not broaden the camera search beyond the iOS default scope.
+         * Mirrors the shared policy (`CameraDiscovery.swift isPrivateIPv4`): all three RFC 1918
+         * ranges INCLUDING `10/8` — set and travel routers commonly hand out 10.x, and iOS
+         * added it deliberately for exactly that. This filter previously excluded 10/8 (with a
+         * comment claiming the core agreed, which had since stopped being true): a camera on a
+         * 10.x router was discoverable on iOS and invisible on Android.
          */
         internal fun isSupportedPtpIpDiscoveryHost(host: String): Boolean {
             val octets = host.split('.')
@@ -122,7 +125,8 @@ class CameraDiscovery(private val browser: NsdBrowser) {
                 }
             if (values.any { it !in 0..255 }) return false
 
-            return (values[0] == 172 && values[1] in 16..31) ||
+            return values[0] == 10 ||
+                (values[0] == 172 && values[1] in 16..31) ||
                 (values[0] == 192 && values[1] == 168)
         }
 
