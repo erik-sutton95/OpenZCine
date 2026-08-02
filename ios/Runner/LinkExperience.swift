@@ -150,6 +150,16 @@ struct LinkExperience: View {
                 "Joining the camera's Wi‑Fi needs Wi‑Fi turned on. Enable it in Control Center or Settings, then try again."
             )
         }
+        .alert(
+            "Leave the camera's Wi‑Fi",
+            isPresented: Bindable(model).isWatcherOnCameraAPNoticePresented
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(
+                "This device is on the camera's own Wi‑Fi, which doesn't pass traffic between devices — the broadcast can't reach it here. Switch to your regular Wi‑Fi, then join."
+            )
+        }
         .fullScreenCover(isPresented: connectionProgressSheetPresented) {
             ConnectionProgressSheet()
                 .environment(model)

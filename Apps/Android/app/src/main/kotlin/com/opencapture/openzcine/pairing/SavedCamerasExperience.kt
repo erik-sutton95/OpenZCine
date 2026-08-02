@@ -168,6 +168,18 @@ public fun SavedCamerasExperience(
     val handedOff = remember { mutableStateOf(false) }
     var phase by remember { mutableStateOf<SavedCameraPhase>(SavedCameraPhase.Idle) }
     var wifiOffPromptVisible by remember { mutableStateOf(false) }
+    var watchOnCameraApNoticeVisible by remember { mutableStateOf(false) }
+    // A watcher ON the camera's own AP can SEE broadcasts (multicast discovery gets through)
+    // but its join cannot — camera APs isolate their clients. Block the doomed join with the
+    // remedy instead of failing after the connect wait.
+    val gatedWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit =
+        { broadcast ->
+            if (isOnCameraAccessPointNetwork(context)) {
+                watchOnCameraApNoticeVisible = true
+            } else {
+                onWatchBroadcast(broadcast)
+            }
+        }
     var discoveredCameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     var attemptedUsbReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
@@ -844,7 +856,7 @@ public fun SavedCamerasExperience(
                                 )
                             },
                             nearbyBroadcasts = nearbyBroadcasts,
-                            onWatchBroadcast = onWatchBroadcast,
+                            onWatchBroadcast = gatedWatchBroadcast,
                             fillAvailableHeight = true,
                             scrollRows = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -885,7 +897,7 @@ public fun SavedCamerasExperience(
                                     )
                                 },
                                 nearbyBroadcasts = nearbyBroadcasts,
-                                onWatchBroadcast = onWatchBroadcast,
+                                onWatchBroadcast = gatedWatchBroadcast,
                                 fillAvailableHeight = false,
                                 scrollRows = false,
                                 modifier = Modifier.fillMaxWidth(),
@@ -1015,6 +1027,13 @@ public fun SavedCamerasExperience(
     }
     if (wifiOffPromptVisible) {
         WifiOffPromptDialog(onDismiss = { wifiOffPromptVisible = false })
+    }
+    if (watchOnCameraApNoticeVisible) {
+        WifiOffPromptDialog(
+            onDismiss = { watchOnCameraApNoticeVisible = false },
+            title = R.string.watch_on_camera_ap_title,
+            message = R.string.watch_on_camera_ap_message,
+        )
     }
     addSetupTarget?.let { group ->
         val anchor = group.first()

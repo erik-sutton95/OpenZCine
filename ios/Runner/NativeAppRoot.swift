@@ -731,6 +731,10 @@ final class NativeAppModel {
     var isCameraWiFiScannerPresented = false
     /// "Wi‑Fi is off" prompt shown when a camera-AP flow starts while the radio is disabled.
     var isWiFiOffPromptPresented = false
+    /// Shown when a watcher taps a broadcast while this device sits on the camera's own AP —
+    /// the join can't work there (camera APs isolate their clients), so the tap explains
+    /// the remedy instead of running the doomed 15 s connect race.
+    var isWatcherOnCameraAPNoticePresented = false
     /// Join target staged while the connect popup awaits operator confirmation.
     private(set) var pendingCameraWiFiJoinTarget: CameraWiFiJoinPolicy.ProactiveJoinTarget?
     var isMonitorPresented = false {
@@ -1238,6 +1242,14 @@ final class NativeAppModel {
     /// Joins a broadcasting device. The viewer has no camera session of its own — by design, since
     /// the camera would refuse a second one anyway.
     func joinRelay(_ discovery: MonitorRelayDiscovery) {
+        // A watcher ON the camera's own AP can SEE the broadcast (multicast discovery gets
+        // through) but its join cannot — camera APs don't pass traffic between their clients,
+        // so the 15 s connect race is doomed before it starts. Block it with the remedy
+        // instead of failing after the wait.
+        guard !isOnCameraAccessPointNetwork else {
+            isWatcherOnCameraAPNoticePresented = true
+            return
+        }
         // A second join must not leave the first client running: its callbacks keep writing the
         // shared viewer state, so a stale 15 s timeout would stamp FAIL over a healthy new stream.
         relayClient?.stop()

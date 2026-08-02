@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
 import android.provider.Settings
+import androidx.annotation.StringRes
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,18 +25,37 @@ internal fun isWifiRadioEnabled(context: Context): Boolean =
         ?.isWifiEnabled != false
 
 /**
- * "Wi‑Fi is off" prompt shown instead of starting a camera-AP join while the
- * radio is disabled. The confirm button opens Android's system Wi‑Fi panel
- * (API 29+, the app's minSdk floor) so the operator can flip it on in place;
- * they re-tap the setup afterwards.
+ * Whether this phone currently sits on a camera's own soft-AP network. Used to
+ * block joins that cannot work from there (camera APs isolate their clients).
+ * Reads the associated SSID, which needs the location permission the app
+ * already holds for Wi‑Fi discovery; an unreadable SSID reports `false`.
+ */
+internal fun isOnCameraAccessPointNetwork(context: Context): Boolean {
+    val wifi =
+        context.applicationContext.getSystemService(WifiManager::class.java) ?: return false
+    @Suppress("DEPRECATION")
+    val raw = wifi.connectionInfo?.ssid ?: return false
+    return looksLikeNikonAccessPointSsid(raw.trim().removeSurrounding("\""))
+}
+
+/**
+ * Network-remedy prompt for camera-AP flows. Defaults to the "Wi‑Fi is off"
+ * copy; the watch-blocked case reuses the same shape with its own strings.
+ * The confirm button opens Android's system Wi‑Fi panel (API 29+, the app's
+ * minSdk floor) so the operator can fix the network in place; they re-tap
+ * afterwards.
  */
 @Composable
-internal fun WifiOffPromptDialog(onDismiss: () -> Unit) {
+internal fun WifiOffPromptDialog(
+    onDismiss: () -> Unit,
+    @StringRes title: Int = R.string.pairing_wifi_off_title,
+    @StringRes message: Int = R.string.pairing_wifi_off_message,
+) {
     val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.pairing_wifi_off_title)) },
-        text = { Text(stringResource(R.string.pairing_wifi_off_message)) },
+        title = { Text(stringResource(title)) },
+        text = { Text(stringResource(message)) },
         confirmButton = {
             TextButton(
                 onClick = {

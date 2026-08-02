@@ -159,6 +159,8 @@
     <string name="pairing_wifi_off_title">Wi‑Fi is off</string>
     <string name="pairing_wifi_off_message">Joining the camera\'s Wi‑Fi needs Wi‑Fi turned on.</string>
     <string name="pairing_wifi_off_settings">Wi‑Fi settings</string>
+    <string name="watch_on_camera_ap_title">Leave the camera\'s Wi‑Fi</string>
+    <string name="watch_on_camera_ap_message">This phone is on the camera\'s own Wi‑Fi, which doesn\'t pass traffic between devices — the broadcast can\'t reach it here. Switch to your regular Wi‑Fi, then join.</string>
     <string name="pairing_status_joining">Joining</string>
     <string name="pairing_status_connecting">Connecting</string>
     <string name="pairing_status_pairing">Pairing</string>
