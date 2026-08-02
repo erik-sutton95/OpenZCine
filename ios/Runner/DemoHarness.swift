@@ -22,6 +22,10 @@ enum DemoHarness {
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
     static let panelTab = value("ZC_DEMO_PANEL_TAB")
+    /// `ZC_DEMO_WIZARD_EXPANDED=1` seeds the wizard transport card's nested options open —
+    /// expansion is a tap, unreachable headless, and the expanded overflow is what screenshots
+    /// must check.
+    static let wizardExpanded = flag("ZC_DEMO_WIZARD_EXPANDED")
     /// `ZC_DEMO_LIVE_GUIDE_STEP=camera|assist|system` opens a deterministic guide card.
     static let liveGuideStep = value("ZC_DEMO_LIVE_GUIDE_STEP")
     /// `ZC_DEMO_RED_BLOCKED=ap|off` forces the RED download blocked state for screenshots.
@@ -300,6 +304,10 @@ enum DemoHarness {
                     // Verification affordance: broadcast the demo still through the real relay
                     // path so a second simulator can join and prove the whole chain. Demo-only, so
                     // the ticker deliberately runs for the app's lifetime.
+                    if let code = env["ZC_DEMO_RELAY_PASSCODE"] {
+                        // Before the broadcast starts, so the listener comes up already gated.
+                        model.setRelayWatcherPasscode(code)
+                    }
                     model.setRelayBroadcasting(true)
                     if env["ZC_DEMO_RELAY_GRANT"] == "1" {
                         // Auto-answer the first request so the grant path runs without a tap.
@@ -683,6 +691,10 @@ enum DemoHarness {
             if env["ZC_DEMO_RELAY_JOIN"] == "1" {
                 // Verification affordance: browse for a broadcasting device and join the first one
                 // that appears, so the viewer half needs no taps to reach.
+                if let code = env["ZC_DEMO_RELAY_JOIN_PASSCODE"] {
+                    // Stands in for the code the operator typed on a previous join.
+                    model.demoRelayJoinPasscode = code
+                }
                 Task { @MainActor in
                     model.startRelayBrowsing()
                     for _ in 0..<120 {

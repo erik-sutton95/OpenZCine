@@ -2106,13 +2106,7 @@ struct StartupWizardTransportCard: View {
     /// Whether the nested choice is open. Cards without nested options never set it.
     /// The debug seed exists because expansion is a tap — unreachable headless — and the
     /// expanded step's overflow behavior is exactly what screenshots must check.
-    @State private var showsOptions: Bool = {
-        #if DEBUG
-            return ProcessInfo.processInfo.environment["ZC_DEMO_WIZARD_EXPANDED"] == "1"
-        #else
-            return false
-        #endif
-    }()
+    @State private var showsOptions: Bool = DemoHarness.wizardExpanded
 
     private var options: [NativeAppModel.FirstPairTransportMethod] { card.options }
 

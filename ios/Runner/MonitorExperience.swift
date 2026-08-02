@@ -920,21 +920,56 @@ private struct LiveFeedWaitingOverlay: View {
                         .foregroundStyle(LiveDesign.text.opacity(0.55))
                         .frame(maxWidth: 400)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        model.retryRelayJoin()
-                    } label: {
-                        Text("Try again")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(LiveDesign.text.opacity(0.8))
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
+                    if model.relayJoinNeedsPasscode {
+                        RelayJoinPasscodeEntry()
+                            .padding(.top, 2)
+                    } else {
+                        Button {
+                            model.retryRelayJoin()
+                        } label: {
+                            Text("Try again")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(LiveDesign.text.opacity(0.8))
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 8)
+                                .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, 2)
                 }
             }
         }
+    }
+}
+
+/// The broadcast asked for a passcode: four digits, joined on completion. Lives on the empty
+/// feed where the refusal reason is already showing.
+private struct RelayJoinPasscodeEntry: View {
+    @Environment(NativeAppModel.self) private var model
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("0000", text: $draft)
+            .keyboardType(.numberPad)
+            .textContentType(.oneTimeCode)
+            .multilineTextAlignment(.center)
+            .font(.system(size: 22, weight: .semibold, design: .monospaced))
+            .foregroundStyle(LiveDesign.text.opacity(0.9))
+            .frame(width: 132)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(LiveDesign.text.opacity(0.12)))
+            .focused($focused)
+            .onAppear { focused = true }
+            .onChange(of: draft) { _, next in
+                let digits = String(next.filter(\.isNumber).prefix(4))
+                if digits != next { draft = digits }
+                if digits.count == 4 {
+                    model.submitRelayPasscode(digits)
+                    draft = ""
+                }
+            }
     }
 }
 

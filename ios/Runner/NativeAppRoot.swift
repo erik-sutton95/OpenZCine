@@ -861,6 +861,9 @@ final class NativeAppModel {
         /// the real prompt derives from saved records plus live hotspot state, so neither state
         /// is reachable headless. Compiled out of Release.
         var demoRecoveryPromptOverride: CameraStartupRecoveryPrompt?
+
+        /// Verification affordance: the watcher passcode a previous join would have stored.
+        var demoRelayJoinPasscode: String?
     #endif
 
     /// What the monitor may truthfully display, given the picture source and the control link.
@@ -907,6 +910,10 @@ final class NativeAppModel {
     var relayControlHeldBy: String?
     var discoveredRelayHosts: [MonitorRelayDiscovery] = []
     var relayClientState: MonitorRelayClient.State = .idle
+    /// The broadcast refused this device for want of a passcode; the waiting overlay asks.
+    var relayJoinNeedsPasscode = false
+    /// Whether the broadcaster entertains control requests, from the state payload.
+    var relayAllowsControlRequests = true
     /// Why the viewer link is down, shown on the empty feed where the operator is actually
     /// looking. The FPS chip can only say "FAIL"; this carries the reason — a version mismatch,
     /// an unreachable route, a suspended broadcaster — and clears when frames flow again.
@@ -935,6 +942,8 @@ final class NativeAppModel {
         guard broadcasting != isRelayBroadcasting else { return }
         if broadcasting {
             let host = MonitorRelayHost(profile: preferences.relayEncoderProfile)
+            host.watcherPasscode = preferences.relayWatcherPasscode
+            host.allowsControlRequests = preferences.relayAllowsControlRequests
             host.onPeerCountChanged = { [weak self] count in self?.relayPeerCount = count }
             host.onFailure = { [weak self] message in
                 self?.connectionMessage = message
@@ -1019,7 +1028,8 @@ final class NativeAppModel {
                     MonitorRelayState.Value(label: $0.label, value: $0.value)
                 },
                 mediaStatus: cameraState.mediaStatus,
-                isRecording: isRecording))
+                isRecording: isRecording,
+                allowsControlRequests: preferences.relayAllowsControlRequests))
     }
 
     /// Wire encoding for the focus result. Numeric on purpose — a new enum case must not shift
@@ -1237,13 +1247,46 @@ final class NativeAppModel {
         client.onFrame = { [weak self] metadata, image in
             self?.applyRelayFrame(metadata: metadata, image: image)
         }
+        client.onJoinDenied = { [weak self] denial in
+            guard let self else { return }
+            self.relayJoinNeedsPasscode = denial.passcodeRequired
+            self.relayFailureReason = denial.reason
+            self.liveFPS = "FAIL"
+            self.liveFrameImage = nil
+        }
         relayHoldsControl = false
         relayControlHolderName = nil
+        relayJoinNeedsPasscode = false
         relayClient = client
         lastGoodFrameAt = Date()
         client.connect(to: discovery.endpoint)
-        client.introduce(deviceName: UIDevice.current.name)
+        var joinPasscode = Self.storedRelayPasscode(forHost: discovery.name)
+        #if DEBUG
+            joinPasscode = joinPasscode ?? demoRelayJoinPasscode
+        #endif
+        client.introduce(deviceName: UIDevice.current.name, passcode: joinPasscode)
         startRelayWatchdog(for: discovery)
+    }
+
+    /// Watcher passcodes, remembered per broadcaster so a set's code is typed once per device.
+    private static let relayPasscodesKey = "relayWatcherPasscodes"
+
+    static func storedRelayPasscode(forHost host: String) -> String? {
+        let stored =
+            UserDefaults.standard.dictionary(forKey: relayPasscodesKey) as? [String: String]
+        return stored?[host]
+    }
+
+    /// Stores the entered code and rejoins with it.
+    func submitRelayPasscode(_ code: String) {
+        guard let target = relayJoinTarget else { return }
+        var stored =
+            (UserDefaults.standard.dictionary(forKey: Self.relayPasscodesKey) as? [String: String])
+            ?? [:]
+        stored[target.name] = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(stored, forKey: Self.relayPasscodesKey)
+        relayJoinNeedsPasscode = false
+        joinRelay(target)
     }
 
     /// The empty-feed overlay's Try Again — a human-paced version of the watchdog.
@@ -1317,6 +1360,8 @@ final class NativeAppModel {
     }
 
     private func applyRelayState(_ state: MonitorRelayState) {
+        // Absent means an older host that predates the policy — allowed, the old behavior.
+        relayAllowsControlRequests = state.allowsControlRequests ?? true
         cameraState = CameraDisplayState(
             recordState: state.recordState,
             timecode: liveTimecode,
@@ -10035,6 +10080,23 @@ final class NativeAppModel {
             setRelayBroadcasting(false)
             setRelayBroadcasting(true)
         }
+    }
+
+    /// Applies live to NEW joins; devices already watching keep their access until they leave.
+    func setRelayWatcherPasscode(_ code: String) {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard preferences.relayWatcherPasscode != trimmed else { return }
+        preferences.relayWatcherPasscode = trimmed
+        relayHost?.watcherPasscode = trimmed
+    }
+
+    /// Applies live: the state broadcast tells watchers, whose ask buttons hide immediately.
+    func setRelayAllowsControlRequests(_ allows: Bool) {
+        guard preferences.relayAllowsControlRequests != allows else { return }
+        preferences.relayAllowsControlRequests = allows
+        relayHost?.allowsControlRequests = allows
+        if !allows { declineRelayControl() }
+        broadcastRelayState()
     }
 
     /// Re-enter live view so a stream-quality change applies now rather than on the next reconnect.

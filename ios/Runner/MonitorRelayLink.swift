@@ -86,6 +86,10 @@ final class MonitorRelayHost {
         /// diagnostic on newer compilers (and they are right: nothing proved the regions apart).
         let reader = MonitorRelayStreamReader()
         var name: String
+        /// False while a required passcode has not been presented. An unauthorized peer
+        /// receives the host hello and NOTHING else — no state, no frames — until its own
+        /// hello carries the right code.
+        var authorized: Bool
         /// Frames handed to the socket and not yet reported processed. The backpressure signal:
         /// a peer that stops draining stops being sent to, rather than being queued for.
         var inFlightFrames = 0
@@ -112,6 +116,11 @@ final class MonitorRelayHost {
 
     private var listener: NWListener?
     private var peers: [ObjectIdentifier: Peer] = [:]
+    /// Watchers must present this to receive anything beyond the hello; empty means open.
+    var watcherPasscode = ""
+    /// Whether watcher control requests are entertained at all. Broadcast in the state payload
+    /// so watchers hide the ask instead of sending requests into a void.
+    var allowsControlRequests = true
     private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-host")
     /// Sent to every viewer that connects, so a late joiner is not staring at nothing until the
     /// next state change happens to come along.
@@ -165,7 +174,8 @@ final class MonitorRelayHost {
 
     private func accept(_ connection: NWConnection) {
         relayLogger.info("relay host: viewer connected (\(self.peers.count + 1) total)")
-        peers[ObjectIdentifier(connection)] = Peer(connection: connection, name: "A device")
+        peers[ObjectIdentifier(connection)] = Peer(
+            connection: connection, name: "A device", authorized: watcherPasscode.isEmpty)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
             switch state {
@@ -187,7 +197,7 @@ final class MonitorRelayHost {
                     version: MonitorRelayProtocol.version, hostName: hostName,
                     cameraName: cameraName)),
             to: connection)
-        if let latestState {
+        if let latestState, peers[ObjectIdentifier(connection)]?.authorized == true {
             send(kind: .state, payload: encode(latestState), to: connection)
         }
         receive(on: connection)
@@ -261,8 +271,33 @@ final class MonitorRelayHost {
             else { return }
             peers[key]?.name = hello.hostName
             if controlHolder == key { controlHolderName = hello.hostName }
+            if peers[key]?.authorized == false {
+                if hello.passcode == watcherPasscode {
+                    peers[key]?.authorized = true
+                    if let latestState {
+                        send(kind: .state, payload: encode(latestState), to: connection)
+                    }
+                } else {
+                    // Refused, with the reason on the wire — a watcher staring at a silent
+                    // black feed cannot tell a passcode from a broken network. Dropped after
+                    // the send lands so the refusal is not cancelled with the socket.
+                    relayLogger.info("relay host: viewer refused (passcode)")
+                    let denial = encode(
+                        MonitorRelayJoinDenied(
+                            reason: "This broadcast asks for a passcode.",
+                            passcodeRequired: true))
+                    connection.send(
+                        content: MonitorRelayFraming.encode(kind: .joinDenied, payload: denial),
+                        completion: .contentProcessed { [weak self] _ in
+                            Task { @MainActor in self?.drop(connection) }
+                        })
+                }
+            }
         case .requestControl:
-            guard let peer = peers[key] else { return }
+            guard let peer = peers[key], peer.authorized else { return }
+            // Policy off → the request is not entertained; the state payload already told the
+            // watcher, so anything landing here is a stale UI racing the policy change.
+            guard allowsControlRequests else { return }
             pendingRequest = key
             pendingRequestName = peer.name
             onControlChanged?()
@@ -276,7 +311,7 @@ final class MonitorRelayHost {
                     MonitorRelayCommand.self, from: message.payload)
             else { return }
             onCommand?(command)
-        case .state, .frame, .controlToken:
+        case .state, .frame, .controlToken, .joinDenied:
             break  // Host → viewer only.
         }
     }
@@ -349,7 +384,7 @@ final class MonitorRelayHost {
         else { return }
         let framed = MonitorRelayFraming.encode(kind: .frame, payload: payload)
         var keyframeWanted = false
-        for (key, peer) in peers {
+        for (key, peer) in peers where peer.authorized {
             // A monitor shows the newest frame or it is not a monitor. A peer that has not
             // drained is SKIPPED, never queued for: fire-and-forget sends buffer without bound,
             // so a link slower than the source accumulates minutes of latency that presents as
@@ -379,7 +414,9 @@ final class MonitorRelayHost {
     }
 
     private func broadcast(kind: MonitorRelayProtocol.Kind, payload: Data) {
-        for peer in peers.values { send(kind: kind, payload: payload, to: peer.connection) }
+        for peer in peers.values where peer.authorized {
+            send(kind: kind, payload: payload, to: peer.connection)
+        }
     }
 
     private func send(kind: MonitorRelayProtocol.Kind, payload: Data, to connection: NWConnection) {
@@ -463,6 +500,9 @@ final class MonitorRelayClient {
     /// The adopted session's framing state; nil outside a session. Main-actor-owned on purpose —
     /// see `receive(on:)`.
     private var streamReader: MonitorRelayStreamReader?
+    /// The host refused the join (wrong or missing passcode). Fires INSTEAD of a failure state
+    /// so the model can ask for the code rather than showing a dead-link error.
+    var onJoinDenied: (@MainActor (MonitorRelayJoinDenied) -> Void)?
     /// Both candidate transports while the race runs; empty once one is adopted.
     private var racingConnections: [NWConnection] = []
     /// Messages issued before a transport won the race — `introduce` fires immediately after
@@ -583,12 +623,14 @@ final class MonitorRelayClient {
         if state != .idle { update(.idle) }
     }
 
-    /// Introduces this device so a control request can name who is asking.
-    func introduce(deviceName: String) {
+    /// Introduces this device so a control request can name who is asking — and carries the
+    /// watcher passcode when the broadcast requires one.
+    func introduce(deviceName: String, passcode: String? = nil) {
         guard
             let payload = try? JSONEncoder().encode(
                 MonitorRelayHello(
-                    version: MonitorRelayProtocol.version, hostName: deviceName, cameraName: nil))
+                    version: MonitorRelayProtocol.version, hostName: deviceName, cameraName: nil,
+                    passcode: passcode))
         else { return }
         send(kind: .hello, payload: payload)
     }
@@ -675,6 +717,15 @@ final class MonitorRelayClient {
                     MonitorRelayControlToken.self, from: message.payload)
             else { return }
             onControlToken?(token)
+        case .joinDenied:
+            let denial = try? JSONDecoder().decode(
+                MonitorRelayJoinDenied.self, from: message.payload)
+            onJoinDenied?(
+                denial
+                    ?? MonitorRelayJoinDenied(
+                        reason: "The broadcasting device refused this join.",
+                        passcodeRequired: false))
+            stop()
         case .requestControl, .releaseControl, .command:
             break  // Viewer → host only.
         }

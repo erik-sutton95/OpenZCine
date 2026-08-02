@@ -3623,6 +3623,7 @@ struct ScrollMoreCue: View {
 /// they survive dismissing the panel back to live view.
 enum OperatorSettingsTab: String, CaseIterable, Identifiable {
     case link = "Link"
+    case sharing = "Sharing"
     case assist = "View Assist"
     case controls = "Controls"
     case display = "Display"
@@ -3638,6 +3639,7 @@ enum OperatorSettingsTab: String, CaseIterable, Identifiable {
 
     static func demoLaunchTab(_ rawValue: String?) -> OperatorSettingsTab {
         switch rawValue {
+        case "sharing": .sharing
         case "assist": .assist
         case "controls": .controls
         case "display": .display
@@ -3697,6 +3699,28 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
         case "feature": .featureRequest
         default: nil
         }
+    }
+}
+
+/// Four digits, committed as they complete; clearing commits an open broadcast. Local draft so
+/// half-typed codes never hit the wire.
+private struct RelayPasscodeField: View {
+    let code: String
+    let onCommit: (String) -> Void
+    @State private var draft = ""
+
+    var body: some View {
+        TextField("None", text: $draft)
+            .keyboardType(.numberPad)
+            .multilineTextAlignment(.trailing)
+            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+            .frame(width: 96)
+            .onAppear { draft = code }
+            .onChange(of: draft) { _, next in
+                let digits = String(next.filter(\.isNumber).prefix(4))
+                if digits != next { draft = digits }
+                if digits.count == 4 || digits.isEmpty { onCommit(digits) }
+            }
     }
 }
 
@@ -4011,6 +4035,7 @@ struct OperatorSettingsPanel: View {
     private var subtitle: String {
         switch selectedTab {
         case .link: "Connection state and link behavior."
+        case .sharing: "Broadcast this feed and manage its watchers."
         case .assist: "Behavior for live-view tools."
         case .controls: "Touch behavior and safety."
         case .display: "Live view buttons and chrome."
@@ -4022,6 +4047,7 @@ struct OperatorSettingsPanel: View {
     private var pillText: String {
         switch selectedTab {
         case .link: "Live"
+        case .sharing: "Share"
         case .assist: "Assist"
         case .controls: "Touch"
         case .display: "Visibility"
@@ -4033,11 +4059,105 @@ struct OperatorSettingsPanel: View {
     private func tabSubtitle(_ tab: OperatorSettingsTab) -> String {
         switch tab {
         case .link: "Connection"
+        case .sharing: "Broadcast & watchers"
         case .assist: "Scopes & overlays"
         case .controls: "Dials and safety"
         case .display: "Live view"
         case .storage: "Cache & accounts"
         case .system: "App behavior"
+        }
+    }
+
+    @ViewBuilder private var sharingRows: some View {
+        SettingsRowCard {
+            SettingsInlineRow(
+                title: "Share This Feed",
+                help:
+                    "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi — its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
+                showTopDivider: false
+            ) {
+                SettingsSegmented(
+                    options: ["Off", "On"],
+                    selected: model.isRelayBroadcasting ? "On" : "Off"
+                ) { value in
+                    model.setRelayBroadcasting(value == "On")
+                }
+            }
+            if model.isRelayBroadcasting {
+                SettingsInlineRow(
+                    title: "Watching",
+                    help:
+                        "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control."
+                ) {
+                    SettingsValueText(
+                        value: model.relayPeerCount == 1
+                            ? "1 device" : "\(model.relayPeerCount) devices")
+                }
+            }
+            SettingsInlineRow(
+                title: "Broadcast Priority",
+                help:
+                    "Low latency is the tightest glass-to-glass path — the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
+            ) {
+                SettingsSegmented(
+                    options: RelayEncoderProfile.allCases.map(\.title),
+                    selected: model.preferences.relayEncoderProfile.title
+                ) { value in
+                    guard
+                        let profile = RelayEncoderProfile.allCases.first(where: {
+                            $0.title == value
+                        })
+                    else { return }
+                    model.setRelayEncoderProfile(profile)
+                }
+            }
+            SettingsInlineRow(
+                title: "Watcher Passcode",
+                help:
+                    "Watchers must enter this code once per device before they receive anything — no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave."
+            ) {
+                RelayPasscodeField(
+                    code: model.preferences.relayWatcherPasscode,
+                    onCommit: { model.setRelayWatcherPasscode($0) })
+            }
+            SettingsInlineRow(
+                title: "Control Requests",
+                help:
+                    "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way."
+            ) {
+                SettingsSegmented(
+                    options: ["Off", "On"],
+                    selected: model.preferences.relayAllowsControlRequests ? "On" : "Off"
+                ) { value in
+                    model.setRelayAllowsControlRequests(value == "On")
+                }
+            }
+            if let requester = model.relayPendingControlRequest {
+                SettingsInlineRow(
+                    title: "Control Requested",
+                    help:
+                        "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
+                ) {
+                    HStack(spacing: 8) {
+                        SettingsActionPill(title: "Decline") { model.declineRelayControl() }
+                        SettingsActionPill(title: "Grant to \(requester)") {
+                            model.grantRelayControl()
+                        }
+                    }
+                }
+            }
+            if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
+                SettingsInlineRow(
+                    title: "Camera Control",
+                    help:
+                        "Take the camera back. This device holds the link, so it never has to ask."
+                ) {
+                    HStack(spacing: 8) {
+                        SettingsValueText(value: holder)
+                        SettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
+                    }
+                }
+            }
         }
     }
 
@@ -4090,14 +4210,18 @@ struct OperatorSettingsPanel: View {
                     help:
                         "The camera answers one device at a time, so control is passed rather than shared. Ask for it and the broadcasting device decides; it can also take it back at any moment, because it is the one actually holding the camera link."
                 ) {
-                    SettingsActionPill(
-                        title: model.relayHoldsControl ? "Give back" : "Ask for control"
-                    ) {
-                        if model.relayHoldsControl {
-                            model.releaseRelayControl()
-                        } else {
-                            model.requestRelayControl()
+                    if model.relayHoldsControl || model.relayAllowsControlRequests {
+                        SettingsActionPill(
+                            title: model.relayHoldsControl ? "Give back" : "Ask for control"
+                        ) {
+                            if model.relayHoldsControl {
+                                model.releaseRelayControl()
+                            } else {
+                                model.requestRelayControl()
+                            }
                         }
+                    } else {
+                        SettingsValueText(value: "Not offered by the broadcaster")
                     }
                 }
                 SettingsInlineRow(
@@ -4107,55 +4231,6 @@ struct OperatorSettingsPanel: View {
                     SettingsValueText(
                         value: model.relayHoldsControl
                             ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
-                }
-            }
-            if let requester = model.relayPendingControlRequest {
-                SettingsInlineRow(
-                    title: "Control Requested",
-                    help:
-                        "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
-                ) {
-                    HStack(spacing: 8) {
-                        SettingsActionPill(title: "Decline") { model.declineRelayControl() }
-                        SettingsActionPill(title: "Grant to \(requester)") {
-                            model.grantRelayControl()
-                        }
-                    }
-                }
-            }
-            if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
-                SettingsInlineRow(
-                    title: "Camera Control",
-                    help:
-                        "Take the camera back. This device holds the link, so it never has to ask."
-                ) {
-                    HStack(spacing: 8) {
-                        SettingsValueText(value: holder)
-                        SettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
-                    }
-                }
-            }
-            SettingsInlineRow(
-                title: "Share This Feed",
-                help:
-                    "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device, so it covers a set router, a phone hotspot, the camera's own access point and a cable link alike."
-            ) {
-                SettingsSegmented(
-                    options: ["Off", "On"],
-                    selected: model.isRelayBroadcasting ? "On" : "Off"
-                ) { value in
-                    model.setRelayBroadcasting(value == "On")
-                }
-            }
-            if model.isRelayBroadcasting {
-                SettingsInlineRow(
-                    title: "Watching",
-                    help:
-                        "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera."
-                ) {
-                    SettingsValueText(
-                        value: model.relayPeerCount == 1
-                            ? "1 device" : "\(model.relayPeerCount) devices")
                 }
             }
             SettingsInlineRow(
@@ -4714,6 +4789,8 @@ struct OperatorSettingsPanel: View {
         switch selectedTab {
         case .link:
             linkRows
+        case .sharing:
+            sharingRows
         case .assist:
             ViewAssistSettingsRows(portrait: portrait)
                 .environment(model)

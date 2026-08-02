@@ -490,7 +490,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         photoCommandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         splitComparisonEnabled: Bool = false,
         splitComparisonOrientation: SplitComparisonOrientation = .vertical,
-        relayEncoderProfile: RelayEncoderProfile = .lowLatency
+        relayEncoderProfile: RelayEncoderProfile = .lowLatency,
+        relayWatcherPasscode: String = "",
+        relayAllowsControlRequests: Bool = true
     ) {
         self.dispOrder = dispOrder
         self.enabledDispModes = Self.normalizedEnabledDispModes(enabledDispModes)
@@ -519,6 +521,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.splitComparisonEnabled = splitComparisonEnabled
         self.splitComparisonOrientation = splitComparisonOrientation
         self.relayEncoderProfile = relayEncoderProfile
+        self.relayWatcherPasscode = relayWatcherPasscode
+        self.relayAllowsControlRequests = relayAllowsControlRequests
     }
 
     /// Stock defaults — forwards to ``defaults``.
@@ -577,6 +581,11 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var splitComparisonOrientation: SplitComparisonOrientation
     /// The broadcaster's latency-vs-quality stance for the relay encoder.
     public var relayEncoderProfile: RelayEncoderProfile
+    /// Watchers must enter this to receive the broadcast; empty means open. Four digits by UI
+    /// convention, but the wire and the check treat it as an opaque string.
+    public var relayWatcherPasscode: String
+    /// Whether watchers may ask for camera control at all.
+    public var relayAllowsControlRequests: Bool
 
     /// The chrome configuration `mode` renders on the `capture` side of the camera. Each pair owns
     /// its own set, so the operator can build a full DISP 1, a bare DISP 2 and a stripped DISP 3
@@ -648,6 +657,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case photoDisplayChrome, photoCleanChrome, photoCommandChrome
         case splitComparisonEnabled, splitComparisonOrientation
         case relayEncoderProfile
+        case relayWatcherPasscode, relayAllowsControlRequests
     }
 
     public init(from decoder: any Decoder) throws {
@@ -760,6 +770,10 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         relayEncoderProfile =
             try container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile)
             ?? .lowLatency
+        relayWatcherPasscode =
+            try container.decodeIfPresent(String.self, forKey: .relayWatcherPasscode) ?? ""
+        relayAllowsControlRequests =
+            try container.decodeIfPresent(Bool.self, forKey: .relayAllowsControlRequests) ?? true
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -789,6 +803,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(splitComparisonEnabled, forKey: .splitComparisonEnabled)
         try container.encode(splitComparisonOrientation, forKey: .splitComparisonOrientation)
         try container.encode(relayEncoderProfile, forKey: .relayEncoderProfile)
+        try container.encode(relayWatcherPasscode, forKey: .relayWatcherPasscode)
+        try container.encode(relayAllowsControlRequests, forKey: .relayAllowsControlRequests)
     }
 
     /// Live-monitor assist visibility. Prefer ``visibleAssistTools(for:)`` when the context is known.

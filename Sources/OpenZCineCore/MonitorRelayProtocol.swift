@@ -55,6 +55,10 @@ public enum MonitorRelayProtocol {
         case releaseControl = 0x11
         /// Viewer → host: a camera command, honoured only from the control holder.
         case command = 0x12
+        /// Host → viewer: the join was refused (wrong or missing passcode). Sent instead of
+        /// state/frames; the viewer surfaces the reason and, when `passcodeRequired`, asks for
+        /// the code and rejoins.
+        case joinDenied = 0x05
     }
 
     /// Maximum payload a single message may carry.
@@ -65,12 +69,13 @@ public enum MonitorRelayProtocol {
     public static let maximumPayloadBytes = 8 * 1024 * 1024
 }
 
-/// Host → viewer introduction.
+/// Host → viewer introduction — and viewer → host, where it may carry the watcher passcode.
 public struct MonitorRelayHello: Codable, Equatable, Sendable {
-    public init(version: Int, hostName: String, cameraName: String?) {
+    public init(version: Int, hostName: String, cameraName: String?, passcode: String? = nil) {
         self.version = version
         self.hostName = hostName
         self.cameraName = cameraName
+        self.passcode = passcode
     }
 
     public let version: Int
@@ -78,6 +83,19 @@ public struct MonitorRelayHello: Codable, Equatable, Sendable {
     public let hostName: String
     /// The camera the host is holding, when it has one.
     public let cameraName: String?
+    /// Viewer → host only: the watcher passcode, when the broadcast requires one. Optional on
+    /// the wire so payloads from before the field decode unchanged.
+    public let passcode: String?
+}
+
+/// Host → viewer join refusal.
+public struct MonitorRelayJoinDenied: Codable, Equatable, Sendable {
+    public init(reason: String, passcodeRequired: Bool) {
+        self.reason = reason
+        self.passcodeRequired = passcodeRequired
+    }
+    public let reason: String
+    public let passcodeRequired: Bool
 }
 
 /// Host → viewer camera readouts. Mirrors the fields the monitor chrome renders rather than
@@ -105,7 +123,8 @@ public struct MonitorRelayState: Codable, Equatable, Sendable {
         temperature: String,
         values: [Value],
         mediaStatus: MediaStatus?,
-        isRecording: Bool
+        isRecording: Bool,
+        allowsControlRequests: Bool? = nil
     ) {
         self.recordState = recordState
         self.resolutionFrameRate = resolutionFrameRate
@@ -119,6 +138,7 @@ public struct MonitorRelayState: Codable, Equatable, Sendable {
         self.values = values
         self.mediaStatus = mediaStatus
         self.isRecording = isRecording
+        self.allowsControlRequests = allowsControlRequests
     }
 
     public let recordState: RecordState
@@ -133,6 +153,9 @@ public struct MonitorRelayState: Codable, Equatable, Sendable {
     public let values: [Value]
     public let mediaStatus: MediaStatus?
     public let isRecording: Bool
+    /// Whether the host accepts watcher control requests. Optional on the wire (older hosts
+    /// don't send it); absent means allowed — the pre-policy behavior.
+    public var allowsControlRequests: Bool?
 }
 
 /// The readings that belong to one specific frame, sent alongside it.
