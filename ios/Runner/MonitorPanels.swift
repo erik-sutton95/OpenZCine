@@ -32,8 +32,23 @@ struct CommandMonitor: View {
                 )
                 // Match the live-mode deck's span so the dashboard lines up with the live HUD
                 // and clears both rails the same way.
-                let leading = layout.topInfoDeck.x
-                let trailing = viewportWidth - (layout.topInfoDeck.x + layout.topInfoDeck.width)
+                // The live deck's x aligns content with the FEED — which command mode does
+                // not have. On a wide canvas (iPad) that alignment donates the whole feed
+                // offset to an empty left margin, so clamp both insets to rail clearance
+                // there; phones keep the deck-aligned insets exactly.
+                // Leading clears the lock/battery cluster; trailing must clear the WIDER
+                // system rail (media + settings buttons top-right).
+                let isWideCanvas = viewportWidth > 1000
+                let leading =
+                    isWideCanvas
+                    ? min(layout.topInfoDeck.x, max(feedSafeArea.leading, 20) + 112)
+                    : layout.topInfoDeck.x
+                let trailingRaw =
+                    viewportWidth - (layout.topInfoDeck.x + layout.topInfoDeck.width)
+                let trailing =
+                    isWideCanvas
+                    ? min(trailingRaw, max(feedSafeArea.trailing, 20) + 176)
+                    : trailingRaw
 
                 content
                     // Same stand-down as the capture strip: a watcher holds control, the
@@ -165,8 +180,12 @@ struct CommandPrimaryGrid: View {
         GeometryReader { proxy in
             let tiles = self.tiles
             let rows = max(1, Int((Double(tiles.count) / Double(columns)).rounded(.up)))
-            let rowHeight = max(
-                44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows))
+            // Fill the height on phones, but never stretch a tile past a readable card —
+            // the leftover breathing room reads better than title-and-value islands adrift
+            // in an empty slab (the iPad complaint).
+            let rowHeight = min(
+                150,
+                max(44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows)))
             let tileWidth = (proxy.size.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
             ZStack(alignment: .topLeading) {
                 ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
@@ -536,7 +555,11 @@ struct CommandTile: View {
                 .minimumScaleFactor(0.64)
             Spacer(minLength: 0)
             Text(value)
-                .font(.system(size: 24, weight: .medium, design: .monospaced))
+                // Tall (tablet) tiles carry the value at dashboard scale; phone tiles keep
+                // today's 24pt exactly.
+                .font(
+                    .system(size: height > 120 ? 34 : 24, weight: .medium, design: .monospaced)
+                )
                 .foregroundStyle(LiveDesign.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.46)
