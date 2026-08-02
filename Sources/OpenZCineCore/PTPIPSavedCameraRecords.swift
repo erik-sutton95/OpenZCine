@@ -447,13 +447,25 @@ public enum SavedCameraAvailabilityPolicy {
     public static func resolve(
         camera: PTPIPSavedCameraRecord,
         discoveredCameras: [DiscoveredCamera],
-        connectedHost rawConnectedHost: String?
+        connectedHost rawConnectedHost: String?,
+        onCameraAccessPoint: Bool = false
     ) -> SavedCameraAvailability {
         guard let host = PTPIPPairedHosts.normalizedHost(camera.host) else {
             return .offline
         }
         if PTPIPPairedHosts.normalizedHost(rawConnectedHost ?? "") == host {
             return .connected
+        }
+        // On the camera's own access point the phone has no route to a router or hotspot
+        // network, so those setups are unreachable by construction — and the body IS
+        // discovered here, so the name-match fallback (there for DHCP-moved hosts on the
+        // same network) would light exactly the setups that cannot work. Cable paths and
+        // untyped legacy records are untouched.
+        if onCameraAccessPoint,
+            let kind = camera.path?.kind,
+            kind == .infrastructure || kind == .phoneHotspot
+        {
+            return .offline
         }
         if let discovered = discoveredCameras.first(where: {
             PTPIPPairedHosts.normalizedHost($0.ip) == host

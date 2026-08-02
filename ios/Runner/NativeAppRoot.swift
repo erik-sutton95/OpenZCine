@@ -4176,12 +4176,26 @@ final class NativeAppModel {
     /// Access-point evidence for the record being saved: a configuration applied this attempt is
     /// direct proof; a readable SSID answers either way; nothing readable is no evidence (nil),
     /// which preserves whatever an earlier connection recorded.
+    /// Whether the phone is, right now, on a camera's own Wi-Fi — availability chips use
+    /// this to stop a same-body discovery over the AP from lighting router/hotspot setups
+    /// that have no route from here.
+    var isOnCameraAccessPointNetwork: Bool { cameraAccessPointEvidence == true }
+
     private var cameraAccessPointEvidence: Bool? {
         if sessionJoinedCameraAccessPoint { return true }
         guard let ssid = connectedWiFiSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
             !ssid.isEmpty
         else { return nil }
-        return CameraWiFiSSID.isNikonZAccessPoint(ssid)
+        if CameraWiFiSSID.isNikonZAccessPoint(ssid) { return true }
+        // A renamed camera AP won't match the factory pattern, but a saved AP setup that
+        // recorded this exact SSID is proof all the same.
+        if savedCameras.contains(where: { record in
+            if case .cameraAccessPoint(let saved?) = record.path { return saved == ssid }
+            return false
+        }) {
+            return true
+        }
+        return false
     }
 
     /// The DECLARED path of the session being saved or latched — resolved once, in strict

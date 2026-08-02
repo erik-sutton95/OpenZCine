@@ -152,3 +152,62 @@ import Testing
 
     #expect(availability == .available(discovered))
 }
+
+@Test func routerSetupReadsOfflineWhileOnTheCameraAccessPoint() {
+    // On the camera's own AP the body is discovered — over a network the router setup
+    // cannot use. The name-match fallback must not light it.
+    let router = PTPIPSavedCameraRecord(
+        host: "192.168.1.20",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .infrastructure(networkName: "StudioNet")
+    )
+    let overAP = DiscoveredCamera(ip: "192.168.0.1", name: "ZR_6002199", source: .bonjour)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router,
+            discoveredCameras: [overAP],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .offline)
+    // Off the AP the same discovery keeps lighting it (the DHCP-moved-host case).
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router,
+            discoveredCameras: [overAP],
+            connectedHost: nil,
+            onCameraAccessPoint: false
+        ) == .available(overAP))
+    // The AP setup itself, and cable paths, are untouched by the flag.
+    let apSetup = PTPIPSavedCameraRecord(
+        host: "192.168.0.1",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .cameraAccessPoint(ssid: "NikonZR_123")
+    )
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [overAP],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(overAP))
+    let usb = PTPIPSavedCameraRecord(
+        host: "usb:abc123",
+        displayName: "ZR_6002199",
+        transport: "USB-C",
+        lastSeenAt: Date(),
+        path: .usbC
+    )
+    let usbDiscovered = DiscoveredCamera(ip: "usb:ABC123", name: "ZR_6002199", source: .usb)
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: usb,
+            discoveredCameras: [usbDiscovered],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(usbDiscovered))
+}

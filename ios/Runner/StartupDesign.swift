@@ -343,7 +343,8 @@ struct StartupSavedCamerasView: View {
                             SavedCameraAvailabilityPolicy.resolve(
                                 camera: record,
                                 discoveredCameras: model.discoveredCameras,
-                                connectedHost: model.connectedIdentity?.host
+                                connectedHost: model.connectedIdentity?.host,
+                                onCameraAccessPoint: model.isOnCameraAccessPointNetwork
                             )
                         }
                         if let active = SavedCameraPathGroups.activePath(
@@ -1108,6 +1109,9 @@ struct StartupAddSetupSheet: View {
         case .usbC:
             return model.discoveredCameras.first { $0.source == .usb }
         case .infrastructure:
+            // On the camera's own AP this body is discovered — over a network the router
+            // setup can't use. Same rule as the availability chips: no route, no match.
+            guard !model.isOnCameraAccessPointNetwork else { return nil }
             return model.discoveredCameras.first { discovered in
                 discovered.source != .usb
                     && CameraStartupPolicy.savedCamera(
