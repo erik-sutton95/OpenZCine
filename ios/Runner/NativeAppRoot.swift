@@ -3830,6 +3830,11 @@ final class NativeAppModel {
 
     private func startDiscoveryLoop(resetResults: Bool) {
         guard discoveryLoopTask == nil, !isConnected, !isDemoSession else { return }
+        // Cable events refresh the list the moment they happen — the loop's own cadence backs
+        // off to 30 s once a camera is found, far too slow for "I just pulled the plug".
+        USBCameraDeviceBrowser.shared.onDeviceListChanged = { [weak self] in
+            Task { @MainActor in self?.refreshUSBDiscoveryResults() }
+        }
         startRelayBrowsing()
         if resetResults {
             discoveredCameras = []
@@ -3847,6 +3852,16 @@ final class NativeAppModel {
     /// `keepRelayBrowsing` holds the relay browser open across a momentary loop restart
     /// (pull-to-refresh): the visible broadcasts are what keeps the refresh's own probe pass off
     /// any camera those broadcasts serve — and the rows shouldn't blink out of the list either.
+    /// Re-derives the discovery results from the live USB device list, keeping the network
+    /// entries as they were — attach and detach both land instantly (detach un-lights the
+    /// chip; attach lets an armed Connect-When-Plugged-In watch fulfill without waiting).
+    private func refreshUSBDiscoveryResults() {
+        guard !isConnected, !isDemoSession, discoveryLoopTask != nil else { return }
+        let usb = USBCameraDeviceBrowser.shared.attachedCameras()
+        let network = discoveredCameras.filter { $0.source != .usb }
+        applyDiscoveryResults(CameraDiscovery.dedupeAndSort(usb + network))
+    }
+
     private func stopDiscoveryLoop(keepRelayBrowsing: Bool = false) {
         discoveryLoopGeneration += 1
         discoveryLoopTask?.cancel()

@@ -128,6 +128,15 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         }
     }
 
+    /// Fires on every attach/detach so the camera list can react NOW instead of on the next
+    /// discovery cycle — the loop backs off to 30 s once a camera is found, which left a
+    /// pulled cable reading green for that whole window. Assigned once by the model.
+    var onDeviceListChanged: (@Sendable () -> Void)? {
+        get { lock.withLock { deviceListChangedCallback } }
+        set { lock.withLock { deviceListChangedCallback = newValue } }
+    }
+    private var deviceListChangedCallback: (@Sendable () -> Void)?
+
     /// Whether iOS has denied camera-control access (drives the permission-recovery copy).
     var isControlAuthorizationDenied: Bool {
         lock.lock()
@@ -196,6 +205,7 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         usbLogger.info(
             "USB camera attached: \(device.name ?? "unnamed", privacy: .private(mask: .hash))")
         AppDiagnostics.shared.record(.usbCameraAttached)
+        onDeviceListChanged?()
     }
 
     func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
@@ -215,6 +225,7 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         usbLogger.info(
             "USB camera detached: \(device.name ?? "unnamed", privacy: .private(mask: .hash))")
         AppDiagnostics.shared.record(.usbCameraDetached)
+        onDeviceListChanged?()
     }
 
     /// Pre-warm open finished (delegate callback relay). Clears the in-flight marker so a connect
