@@ -963,8 +963,23 @@ struct StartupCameraListRow: View {
             : "Remove \(camera.displayTitle) from saved cameras on this iPhone."
     }
 
+    /// The armed add-setup watch, when it targets this body.
+    private var armedSetupKind: CameraPath.Kind? {
+        guard let intent = model.pendingSetupIntent,
+            intent.anchor.displayTitle.localizedCaseInsensitiveCompare(camera.displayTitle)
+                == .orderedSame
+        else { return nil }
+        return intent.kind
+    }
+
     private var statusText: String {
         if isRecoveryTarget { return "Waiting for hotspot" }
+        switch armedSetupKind {
+        case .usbC: return "Waiting for cable"
+        case .infrastructure: return "Watching this network"
+        case .phoneHotspot: return "Waiting for hotspot"
+        default: break
+        }
         switch availability {
         case .connected: return "Connected"
         case .available:
@@ -978,6 +993,7 @@ struct StartupCameraListRow: View {
 
     private var statusColor: Color {
         if isRecoveryTarget { return StartupColors.accent }
+        if armedSetupKind != nil { return StartupColors.accent }
         switch availability {
         case .connected, .available:
             if let usbScan, !usbScan.ready { return StartupColors.accent }
@@ -1145,10 +1161,18 @@ struct StartupAddSetupSheet: View {
                         // Connecting over this path IS adding the setup — the record saves
                         // itself with the declared path at establishment.
                         model.connectToCamera(match)
-                    } else if kind == .infrastructure {
-                        Task { await model.refreshCameraDiscovery() }
+                    } else {
+                        // No match yet: ARM the watch — the first discovery on this path
+                        // auto-connects (the row shows it waiting). A button that only
+                        // dismissed here is what made add-setup feel dead.
+                        model.pendingSetupIntent = .init(anchor: camera, kind: kind)
+                        if kind == .infrastructure {
+                            Task { await model.refreshCameraDiscovery() }
+                        }
                     }
-                case .phoneHotspot, .hdmiCapture:
+                case .phoneHotspot:
+                    model.pendingSetupIntent = .init(anchor: camera, kind: kind)
+                case .hdmiCapture:
                     break
                 }
             } label: {

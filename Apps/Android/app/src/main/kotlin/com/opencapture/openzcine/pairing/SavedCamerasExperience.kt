@@ -171,6 +171,10 @@ public fun SavedCamerasExperience(
     var removalTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
     var renameTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
     var addSetupTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
+    // An armed add-setup watch (iOS pendingSetupIntent): the sheet's no-match buttons arm it,
+    // and the first discovery on that path connects — the tap was consent given in advance.
+    var armedSetupWatch by
+        remember { mutableStateOf<Pair<SavedCameraRecord, SavedCameraTransport>?>(null) }
     var renameDraft by remember { mutableStateOf("") }
 
     LaunchedEffect(environment) {
@@ -631,6 +635,48 @@ public fun SavedCamerasExperience(
         beginReconnectWork(record, cameraApSsid = null, cameraApKey = null)
     }
 
+    // Fulfill an armed add-setup watch: the first discovery on the asked-for path connects,
+    // through the same synthesized-record reconnect the sheet's Connect Now uses. Strict
+    // name matching — a mismatch just leaves the row waiting, never connects a wrong body.
+    LaunchedEffect(armedSetupWatch, discoveredCameras, usbCameras) {
+        val (anchor, transport) = armedSetupWatch ?: return@LaunchedEffect
+        if (phase.isBusy()) return@LaunchedEffect
+        val host =
+            when (transport) {
+                SavedCameraTransport.USB_C ->
+                    usbCameras
+                        .firstOrNull {
+                            it.access == UsbPtpCameraAccess.READY &&
+                                SavedCameraRecords.cameraNamesMatch(
+                                    it.displayName,
+                                    anchor.cameraName,
+                                )
+                        }
+                        ?.hostKey
+                SavedCameraTransport.INFRASTRUCTURE,
+                SavedCameraTransport.PHONE_HOTSPOT,
+                ->
+                    discoveredCameras
+                        .firstOrNull {
+                            SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName)
+                        }
+                        ?.host
+                else -> null
+            }
+        if (host != null) {
+            armedSetupWatch = null
+            reconnect(
+                anchor.copy(
+                    transport = transport,
+                    host = host,
+                    profileID = host,
+                    wifiSsid = null,
+                    lastSeenAtEpochMillis = null,
+                )
+            )
+        }
+    }
+
     /**
      * "+ Add setup -> Camera access point" on a camera saved another way. With a derivable SSID
      * and a stored key this stages the normal Ready-to-join confirm on a synthetic AP record --
@@ -975,6 +1021,10 @@ public fun SavedCamerasExperience(
                         lastSeenAtEpochMillis = null,
                     )
                 )
+            },
+            onArmSetupWatch = { transport ->
+                addSetupTarget = null
+                armedSetupWatch = anchor to transport
             },
         )
     }
@@ -1410,6 +1460,7 @@ private fun SavedCameraAddSetupDialog(
     onDismiss: () -> Unit,
     onJoinCameraAp: (SavedCameraRecord) -> Unit,
     onConnectSetup: (SavedCameraTransport, String) -> Unit,
+    onArmSetupWatch: (SavedCameraTransport) -> Unit,
 ) {
     val active = group.first()
     AlertDialog(
@@ -1475,7 +1526,7 @@ private fun SavedCameraAddSetupDialog(
                                         if (hostKey != null) {
                                             onConnectSetup(SavedCameraTransport.USB_C, hostKey)
                                         } else {
-                                            onDismiss()
+                                            onArmSetupWatch(SavedCameraTransport.USB_C)
                                         }
                                     },
                                 ) {
@@ -1498,7 +1549,9 @@ private fun SavedCameraAddSetupDialog(
                                                 SavedCameraTransport.INFRASTRUCTURE, host
                                             )
                                         } else {
-                                            onDismiss()
+                                            onArmSetupWatch(
+                                                SavedCameraTransport.INFRASTRUCTURE
+                                            )
                                         }
                                     },
                                 ) {
@@ -1513,7 +1566,11 @@ private fun SavedCameraAddSetupDialog(
                                     )
                                 }
                             SavedCameraTransport.PHONE_HOTSPOT ->
-                                TextButton(onClick = onDismiss) {
+                                TextButton(
+                                    onClick = {
+                                        onArmSetupWatch(SavedCameraTransport.PHONE_HOTSPOT)
+                                    },
+                                ) {
                                     Text(stringResource(R.string.saved_setup_wait_for_camera))
                                 }
                         }
