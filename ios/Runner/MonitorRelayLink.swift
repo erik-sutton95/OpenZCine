@@ -540,7 +540,10 @@ final class MonitorRelayBrowser {
     private(set) var results: [MonitorRelayDiscovery] = []
     var onResults: (@MainActor ([MonitorRelayDiscovery]) -> Void)?
 
-    private var browser: NWBrowser?
+    private var listBrowser: NWBrowser?
+    private var txtBrowser: NWBrowser?
+    /// Rows per browser, keyed by service name; a broadcast lists if EITHER browser sees it.
+    private var rowsByDescriptor: [String: [String: MonitorRelayDiscovery]] = [:]
     private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-browser")
 
     /// `includePeerToPeer` browses over AWDL as well — which time-slices the radio the browsing
@@ -548,15 +551,42 @@ final class MonitorRelayBrowser {
     /// AP-session broadcast is only visible that way); a viewer session browsing to keep its
     /// rejoin watchdog sighted does NOT — it only needs to re-find a broadcast it could already
     /// reach, and AWDL under a decoding watcher costs the same fps it costs a broadcaster.
+    ///
+    /// TWO browsers on purpose. Listing must never hinge on `.bonjourWithTXTRecord`: that
+    /// descriptor is the only way to RECEIVE the served-camera `ch=` key (plain `.bonjour`
+    /// never delivers TXT — the original drop-storm hole), but a live report has a broadcast
+    /// missing from a watcher's list since the descriptor swap, so the battle-tested plain
+    /// browse runs alongside it. Rows come from either; `ch=` enriches from whichever browser
+    /// delivered metadata. Both log state and results — a silent browser is how "not in the
+    /// list, and the camera keeps dropping" went undiagnosable.
     func start(includePeerToPeer: Bool = true) {
         stop()
-        // MUST be the TXT-record descriptor: plain `.bonjour` never delivers TXT metadata, so
-        // the served-camera `ch=` key below parsed as nil on every watcher — the probe
-        // exclusion it feeds protected nothing, and a watcher's camera list kept PTP-probing
-        // the broadcaster's live body (the share-this-feed drop storm).
+        listBrowser = makeBrowser(
+            label: "list",
+            descriptor: .bonjour(type: MonitorRelayProtocol.serviceType, domain: nil),
+            includePeerToPeer: includePeerToPeer)
+        txtBrowser = makeBrowser(
+            label: "txt",
+            descriptor: .bonjourWithTXTRecord(type: MonitorRelayProtocol.serviceType, domain: nil),
+            includePeerToPeer: includePeerToPeer)
+    }
+
+    private func makeBrowser(
+        label: String, descriptor: NWBrowser.Descriptor, includePeerToPeer: Bool
+    ) -> NWBrowser {
         let browser = NWBrowser(
-            for: .bonjourWithTXTRecord(type: MonitorRelayProtocol.serviceType, domain: nil),
+            for: descriptor,
             using: relayParameters(includePeerToPeer: includePeerToPeer))
+        browser.stateUpdateHandler = { state in
+            // `.failed`/`.waiting` carry the network's own reason — PolicyDenied here is the
+            // Local Network permission signal (TN3179: there is no query API, only this).
+            switch state {
+            case .failed(let error), .waiting(let error):
+                logConnection("relay browse[\(label)] state=\(state) error=\(error)")
+            default:
+                break
+            }
+        }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             let discoveries = results.compactMap { result -> MonitorRelayDiscovery? in
                 guard case .service(let name, _, _, _) = result.endpoint else { return nil }
@@ -568,19 +598,45 @@ final class MonitorRelayBrowser {
                     id: name, name: name, endpoint: result.endpoint,
                     servedCameraHost: servedCameraHost)
             }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            let listing = discoveries.map { "\($0.name)(ch=\($0.servedCameraHost ?? "nil"))" }
+                .joined(separator: " ")
+            logConnection("relay browse[\(label)] results=\(discoveries.count) [\(listing)]")
             Task { @MainActor in
-                self?.results = discoveries
-                self?.onResults?(discoveries)
+                self?.mergeResults(discoveries, from: label)
             }
         }
         browser.start(queue: queue)
-        self.browser = browser
+        return browser
+    }
+
+    private func mergeResults(_ discoveries: [MonitorRelayDiscovery], from label: String) {
+        rowsByDescriptor[label] = Dictionary(
+            uniqueKeysWithValues: discoveries.map { ($0.name, $0) })
+        var merged: [String: MonitorRelayDiscovery] = [:]
+        for rows in rowsByDescriptor.values {
+            for (name, row) in rows {
+                let existing = merged[name]
+                // Insert if new; upgrade only to a row that carries the probe shield.
+                if existing == nil
+                    || (existing?.servedCameraHost == nil && row.servedCameraHost != nil)
+                {
+                    merged[name] = row
+                }
+            }
+        }
+        let sorted = merged.values.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        results = sorted
+        onResults?(sorted)
     }
 
     func stop() {
-        browser?.cancel()
-        browser = nil
+        listBrowser?.cancel()
+        listBrowser = nil
+        txtBrowser?.cancel()
+        txtBrowser = nil
+        rowsByDescriptor = [:]
         results = []
     }
 }

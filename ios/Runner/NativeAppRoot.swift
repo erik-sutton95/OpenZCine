@@ -3983,10 +3983,24 @@ final class NativeAppModel {
     /// Camera hosts some visible broadcast is serving (raw and normalized forms), plus any host
     /// a broadcast served within the linger window — the addresses this device's discovery must
     /// not PTP-probe.
+    ///
+    /// A visible broadcast that names NO served host shields every saved host instead: either
+    /// the TXT record didn't arrive (the exact watcher-side failure behind the drop storm) or
+    /// the broadcaster serves a camera-less source — and in both cases someone nearby is live,
+    /// while a skipped probe costs nothing visible (saved rows light via network shape + name,
+    /// not the probe).
     private func hostsServedByVisibleBroadcasts() -> Set<String> {
         let now = Date()
         for discovery in discoveredRelayHosts {
-            guard let host = discovery.servedCameraHost, !host.isEmpty else { continue }
+            guard let host = discovery.servedCameraHost, !host.isEmpty else {
+                for saved in savedCameras.map(\.host) where !saved.isEmpty {
+                    recentlyServedCameraHosts[saved] = now
+                    if let normalized = PTPIPPairedHosts.normalizedHost(saved) {
+                        recentlyServedCameraHosts[normalized] = now
+                    }
+                }
+                continue
+            }
             recentlyServedCameraHosts[host] = now
             if let normalized = PTPIPPairedHosts.normalizedHost(host) {
                 recentlyServedCameraHosts[normalized] = now
