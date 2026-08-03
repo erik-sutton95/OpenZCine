@@ -49,6 +49,14 @@ private func relayParameters(includePeerToPeer: Bool = true) -> NWParameters {
     // pulling focus against.
     if let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
         tcp.noDelay = true
+        // A vanished peer (battery death, out of range) must not pin state for the TCP
+        // retransmission eternity: a watcher holding the control token kept it — and kept the
+        // broadcaster's own controls stood down — until the OS gave up, minutes later. ~25 s
+        // to a dead-peer verdict.
+        tcp.enableKeepalive = true
+        tcp.keepaliveIdle = 10
+        tcp.keepaliveInterval = 5
+        tcp.keepaliveCount = 3
     }
     return parameters
 }
@@ -105,8 +113,12 @@ final class CameraInUseBeacon {
         var txt = NWTXTRecord()
         txt[MonitorRelayProtocol.servedCameraTXTKey] = servedCameraHost
         txt[MonitorRelayProtocol.watchableTXTKey] = "0"
+        // A DISTINCT service name: the beacon's cancel() is asynchronous, and a real broadcast
+        // starting under the same name races mDNS conflict resolution into an "iPhone (2)"
+        // rename — which breaks the watchers' saved-passcode key and rejoin-by-name match.
+        // The beacon is never rendered or joined, so its name only needs to not collide.
         listener.service = NWListener.Service(
-            name: hostName, type: MonitorRelayProtocol.serviceType, txtRecord: txt)
+            name: "\(hostName) in-use", type: MonitorRelayProtocol.serviceType, txtRecord: txt)
         // Advertise-only: the port exists because Bonjour needs one, not to serve anyone.
         listener.newConnectionHandler = { connection in connection.cancel() }
         listener.stateUpdateHandler = { state in
@@ -226,8 +238,11 @@ final class MonitorRelayHost {
                     }
                 case .failed(let error):
                     Task { @MainActor in
-                        self?.onFailure?("Sharing stopped: \(error.localizedDescription)")
-                        self?.stop()
+                        // Identity-guarded like `.ready`: a late failure from a listener the
+                        // broadcast bounce already replaced must not tear down its successor.
+                        guard let self, listener === self.listener else { return }
+                        self.onFailure?("Sharing stopped: \(error.localizedDescription)")
+                        self.stop()
                     }
                 default:
                     break
@@ -523,7 +538,11 @@ final class MonitorRelayHost {
     /// receives — and because nothing is encoded, the encoder's reference chain stays exactly
     /// where every viewer's is, so resuming needs no keyframe.
     var hasPeerReadyForFrame: Bool {
-        peers.values.contains { $0.inFlightFrames < maxInFlightFramesPerPeer }
+        // Authorized only: frames are never sent to an unauthenticated peer, whose in-flight
+        // count is permanently zero — counting it kept the congestion signal reading "ready"
+        // (so the bitrate ladder's saturation half never fired) the whole time a lurker sat on
+        // a passcoded broadcast.
+        peers.values.contains { $0.authorized && $0.inFlightFrames < maxInFlightFramesPerPeer }
     }
 
     func broadcast(frameMetadata: MonitorRelayFrameMetadata, image: Data) {

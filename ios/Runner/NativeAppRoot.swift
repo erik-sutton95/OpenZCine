@@ -2951,6 +2951,9 @@ final class NativeAppModel {
 
     /// Dismisses the connection progress sheet without tearing down an active session.
     func dismissConnectionProgress() {
+        // The connection made it (or the operator left): the phase watchdog's job is done.
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = nil
         if connectionPhase == .joiningWiFi || connectionPhase == .readyToJoin
             || connectionPhase == .discovering
             || pendingCameraWiFiJoinTarget != nil
@@ -3100,8 +3103,15 @@ final class NativeAppModel {
             defer {
                 if connectionGeneration == generation {
                     isEstablishingConnection = false
-                    connectionTimeoutTask?.cancel()
-                    connectionTimeoutTask = nil
+                    // `enterLiveView` is this task's LAST statement, so cancelling the phase
+                    // watchdog here disarmed the `.preparingLiveView` budget at the exact
+                    // instant it began — "connected but never started live view" then had no
+                    // bounded exit (the audit's H2). The first decoded frame cancels it via
+                    // `dismissConnectionProgress`; teardown paths cancel it themselves.
+                    if connectionPhase != .preparingLiveView {
+                        connectionTimeoutTask?.cancel()
+                        connectionTimeoutTask = nil
+                    }
                 }
             }
             if let previousSession {
@@ -5289,10 +5299,20 @@ final class NativeAppModel {
     /// Only ever runs against a host this app was already connected to, so a retry can never
     /// blind-probe a camera sitting on its pairing wizard (probing knocks the body out of pairing).
     private func beginSessionRecovery(host: String, reason: String) {
-        guard !isDemoSession, isMonitorPresented, sessionRecoveryTask == nil else { return }
+        // Any evidence of a session to recover arms it — a control session that exists or
+        // existed, or a presented monitor. Requiring the MONITOR alone (the old guard) silently
+        // dropped every death before the first frame, on the ready page, or behind a
+        // full-screen panel, while the UI said "connected" forever (the audit's H1/H5).
+        guard !isDemoSession,
+            isCameraControlSession || cameraSession != nil || isMonitorPresented,
+            sessionRecoveryTask == nil
+        else { return }
         // A paused storm is already waiting on the operator; the same dead session's other loss
         // reporters (event channel AND stall watchdog fire for one drop) must not re-count it.
+        // The spent-budget card is equally an operator decision — a later loss reporter must
+        // not restart a whole fresh automatic run behind it.
         if case .pausedAfterRepeatedDrops = sessionRecovery { return }
+        if case .waitingForOperator = sessionRecovery { return }
         let target = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return }
         connection = .reconnecting
@@ -5306,10 +5326,23 @@ final class NativeAppModel {
         // keep the picture the broadcaster is holding — same as the broadcaster's own monitor.
         relayRecoveryHeartbeatTask?.cancel()
         relayRecoveryHeartbeatTask = Task { [weak self] in
+            var heldBeats = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled else { return }
                 guard self.sessionRecovery != .idle else { return }
+                // A recovery that gave up (storm pause / spent budget) is the operator's to
+                // resolve; re-sending the frozen frame forever would keep every watcher on a
+                // healthy-looking feed with no hint the broadcaster stopped trying. One minute
+                // of held frames bridges the operator's decision, then the watchers' own stall
+                // watchdogs take over honestly.
+                switch self.sessionRecovery {
+                case .pausedAfterRepeatedDrops, .waitingForOperator:
+                    heldBeats += 1
+                    if heldBeats > 30 { return }
+                default:
+                    heldBeats = 0
+                }
                 if self.isRelayBroadcasting, let held = self.liveFrameImage {
                     self.broadcastRelayFrame(image: held)
                 }
@@ -6287,6 +6320,10 @@ final class NativeAppModel {
         // with nothing on foreground re-stopping it, it kept time-slicing the radio under a
         // later resumed session.
         stopDiscoveryLoop()
+        // Above the session guard: during a recovery gap `cameraSession` is nil, and the loop
+        // kept opening PTP sessions until iOS suspended the app mid-handshake — leaving the
+        // body holding a slot with no CloseSession.
+        cancelSessionRecovery()
         guard let session = cameraSession else { return }
         liveViewTask?.cancel()
         liveViewTask = nil
@@ -6322,8 +6359,23 @@ final class NativeAppModel {
         AppDiagnostics.shared.record(.enteredForeground)
         screenWakeSuppressedForBackground = false
         syncScreenWakePolicy()
+        // A relay watcher has no camera session, and `startDiscoveryLoop` bails on its
+        // `isConnected` guard — so after one background round-trip the viewer browse never
+        // came back, `discoveredRelayHosts` stayed empty, and the rejoin watchdog was blind
+        // for the rest of the session (the audit's relay S1 #1).
+        if videoSource == .relay {
+            startRelayBrowsing(includePeerToPeer: false)
+            return
+        }
         guard let session = cameraSession else {
-            startDiscoveryLoop(resetResults: false)
+            if isCameraControlSession, isMonitorPresented {
+                // Backgrounding cancelled an in-flight recovery (deliberately — see
+                // `enterBackground`); the operator came back to the held frame, so pick the
+                // reconnect back up instead of leaving a dead monitor.
+                beginSessionRecovery(host: cameraHost, reason: "foreground resume")
+            } else {
+                startDiscoveryLoop(resetResults: false)
+            }
             return
         }
         startKeepAlive(session: session)
@@ -6360,6 +6412,15 @@ final class NativeAppModel {
     /// timeout. On breach the fetch's transaction closes the command socket and the streaming loop
     /// recovers, instead of the fetch hanging forever and jamming the whole command channel.
     private static let liveViewFrameDeadline: Duration = .seconds(6)
+
+    /// The steady-state bound rides measured latency: a breach CLOSES the command socket, so a
+    /// fixed 6 s converts one multi-second radio stall on a high-RTT link (WiFi5 double-hop)
+    /// into a full session teardown — the exact churn the storm guard exists to absorb. Floor
+    /// 6 s so healthy links stay snappy; ceiling 15 s so a dead link still fails promptly.
+    private func liveViewFrameDeadline(for session: NativeCameraSession) -> Duration {
+        let rttMilliseconds = session.readLastCommandRoundTripMilliseconds() ?? 100
+        return .seconds(min(15.0, max(6.0, rttMilliseconds * 25 / 1000)))
+    }
 
     /// The FIRST frame after `StartLiveView` gets more headroom than steady-state frames: the sensor
     /// is spinning up the stream and the initial JPEG is the largest, so a legitimately-slow-but-alive
@@ -6440,7 +6501,7 @@ final class NativeAppModel {
             // Whether the stream is currently configured for Command's header-only pulls, so the
             // size change is applied exactly once per DISP transition instead of every frame.
             var headerOnly = false
-            nextFrameTask = liveFrameTask(session)
+            nextFrameTask = liveFrameTask(session, deadline: liveViewFrameDeadline(for: session))
             while !Task.isCancelled {
                 if shouldPauseLiveFeed {
                     // Feed hidden behind a full-screen cover: stop pulling frames AND end live
@@ -6482,7 +6543,8 @@ final class NativeAppModel {
                     frameRate = FrameRateSampler()
                     lastLevelUpdateTime = 0
                     lastScopeSampleTime = 0
-                    nextFrameTask = liveFrameTask(session)
+                    nextFrameTask = liveFrameTask(
+                        session, deadline: liveViewFrameDeadline(for: session))
                 }
                 // Entering or leaving Command: restart the stream at the size that mode wants.
                 // One stop/start per DISP transition — the same count the old pause/resume paid.
@@ -6521,7 +6583,8 @@ final class NativeAppModel {
                     applyLiveViewHeaderState(frame)
                     applyLiveViewHeaderTimecode(frame.timecode)
                     publishWatchState()
-                    nextFrameTask = liveFrameTask(session)
+                    nextFrameTask = liveFrameTask(
+                        session, deadline: liveViewFrameDeadline(for: session))
                     await runCommandModeSafePoint(session: session)
                     try? await Task.sleep(for: Self.commandHeaderPullInterval)
                     continue
@@ -6533,7 +6596,8 @@ final class NativeAppModel {
                 // the "one JPEG" bound this replaced was memory caution, not a protocol rule;
                 // the transaction gate still serializes the wire, so the camera never sees
                 // overlapped operations).
-                nextFrameTask = liveFrameTask(session)
+                nextFrameTask = liveFrameTask(
+                    session, deadline: liveViewFrameDeadline(for: session))
                 // Scopes must meter the clean frame, never the assist-composited bake
                 // (`cleanFrame` is a second reference to a bitmap the render memo retains anyway).
                 let cleanFrame = await frameDecoder.decode(frame.jpeg)
@@ -11045,7 +11109,12 @@ final class NativeAppModel {
         guard preferences.relayAllowsControlRequests != allows else { return }
         preferences.relayAllowsControlRequests = allows
         relayHost?.allowsControlRequests = allows
-        if !allows { declineRelayControl() }
+        if !allows {
+            declineRelayControl()
+            // Declining only clears a PENDING request — a watcher already holding the token
+            // kept it (and kept issuing commands) after the operator turned control off.
+            reclaimRelayControl()
+        }
         broadcastRelayState()
     }
 
