@@ -2786,7 +2786,8 @@ struct LUTPickerContent: View {
     @State private var deletionErrorMessage: String?
     /// Tracks whether a usable internet path exists, so the RED download (which needs the public
     /// internet) is blocked while the phone is on the camera's local-only Wi‑Fi AP.
-    @State private var reachability = InternetReachability()
+    /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
+    private var reachability: InternetReachability { .shared }
 
     /// Narrows the RED drum to one output color space (it ships ~16 looks per space).
     enum RedOutputFilter: String, CaseIterable {

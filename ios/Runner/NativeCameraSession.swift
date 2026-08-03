@@ -375,7 +375,15 @@ final class NativeCameraSession: @unchecked Sendable {
     private func recordCommandRoundTrip(startedAt: Date) {
         let milliseconds = Date().timeIntervalSince(startedAt) * 1000
         metricsLock.lock()
-        lastCommandRoundTripMilliseconds = milliseconds
+        // EWMA, not a raw overwrite: this figure paces the between-frames polls and feeds the
+        // link-health bars, and a single outlier used to swing the poll stride 4↔20 in one
+        // sample. α=0.25 tracks genuine latency shifts within a few samples while absorbing
+        // one-off jitter.
+        if let previous = lastCommandRoundTripMilliseconds {
+            lastCommandRoundTripMilliseconds = previous + 0.25 * (milliseconds - previous)
+        } else {
+            lastCommandRoundTripMilliseconds = milliseconds
+        }
         metricsLock.unlock()
     }
 
@@ -526,11 +534,14 @@ final class NativeCameraSession: @unchecked Sendable {
     /// Parameter1 = 0 clears the queue after the read so the same events aren't processed twice.
     /// Empty on any non-OK answer (the op is capability-checked by the caller). [verify-on-HW]
     func pollDeviceEvents() async -> [PTPEvent] {
+        let startedAt = Date()
         guard
             let result = try? await transact(
                 operationCode: .getEventEx, parameters: [0], dataPhase: .dataIn),
             result.operationResponse.responseCode == .ok
         else { return [] }
+        // A small, regular command — the honest RTT sample for poll pacing and link health.
+        recordCommandRoundTrip(startedAt: startedAt)
         return PTPNikonEventList.parse(Array(result.data))
     }
 
@@ -628,10 +639,12 @@ final class NativeCameraSession: @unchecked Sendable {
     /// a stuck nil-deadline fetch holds the serial transaction gate, starving every other command
     /// ("connected but frozen, and all control dead").
     func liveViewFrame(deadline: Duration? = nil) async throws -> PTPLiveViewFrame {
-        let startedAt = Date()
+        // Deliberately NOT an RTT sample: a frame fetch carries the whole JPEG, so its duration
+        // measures payload transfer, not command latency — feeding it into the poll pacing made
+        // the stride react to picture size as if the link had slowed. Small commands
+        // (`pollDeviceEvents`, keep-alive) own the RTT signal.
         let result = try await transact(
             operationCode: .getLiveViewImageEx, dataPhase: .dataIn, deadline: deadline)
-        recordCommandRoundTrip(startedAt: startedAt)
         guard result.operationResponse.responseCode == .ok else {
             throw NativeCameraSessionError.operationRejected(
                 .getLiveViewImageEx,

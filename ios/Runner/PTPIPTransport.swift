@@ -341,6 +341,8 @@ final class PTPIPSocket: @unchecked Sendable {
     private let descriptorLock = NSLock()
     private var descriptor: Int32 = -1
     private var readBuffer = PTPIPReadBuffer()
+    /// Reused `recv` scratch (serial-queue-owned) — see `receiveOnQueue` for why.
+    private var receiveScratch: [UInt8] = []
 
     func start() async throws {
         try await performOnQueue { try self.connectOnQueue() }
@@ -462,6 +464,22 @@ final class PTPIPSocket: @unchecked Sendable {
             newDescriptor, IPPROTO_TCP, TCP_KEEPCNT, &keepProbeCount,
             socklen_t(MemoryLayout<Int32>.size))
 
+        // A peer-closed socket must surface as a send error, never SIGPIPE (the Android facade
+        // already sets this; iOS had silently diverged).
+        var noSigPipe: Int32 = 1
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
+            socklen_t(MemoryLayout<Int32>.size))
+
+        // Live-view frames arrive as ~100 KB bursts every frame period; the default receive
+        // window under-buffers that on a lossy AP and turns transient congestion into stalled
+        // reads. Half a megabyte absorbs several frames of burst without meaningfully delaying
+        // loss feedback.
+        var receiveBufferBytes: Int32 = 512 * 1024
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_RCVBUF, &receiveBufferBytes,
+            socklen_t(MemoryLayout<Int32>.size))
+
         let flags = fcntl(newDescriptor, F_GETFL, 0)
         if flags >= 0 {
             _ = fcntl(newDescriptor, F_SETFL, flags | O_NONBLOCK)
@@ -533,6 +551,13 @@ final class PTPIPSocket: @unchecked Sendable {
 
     private func receiveOnQueue(maximumLength: Int) throws -> Data {
         let descriptor = try currentDescriptor()
+        // One scratch buffer per transport, grown to the largest read ever asked for: the old
+        // per-recv `[UInt8](repeating: 0, …)` zero-filled up to 256 KiB per call — at ~100 KB
+        // × 30 fps that was tens of MB/s of pure allocator+memset churn on the socket queue.
+        // Safe without locking: this only runs on the transport's serial queue.
+        if receiveScratch.count < maximumLength {
+            receiveScratch = [UInt8](repeating: 0, count: maximumLength)
+        }
         // Loop rather than recurse: a flaky link can deliver a stream of spurious poll wakeups
         // followed by EAGAIN/EINTR, and recursing per retry once grew the stack until it crashed
         // the socket queue. The loop re-polls (bounded by the descriptor timeout) in constant
@@ -540,12 +565,13 @@ final class PTPIPSocket: @unchecked Sendable {
         while true {
             try waitForDescriptor(descriptor, events: Int16(POLLIN), label: "\(label) receive")
 
-            var bytes = [UInt8](repeating: 0, count: maximumLength)
-            let received = bytes.withUnsafeMutableBytes { rawBuffer in
+            let received = receiveScratch.withUnsafeMutableBytes { rawBuffer in
                 Darwin.recv(descriptor, rawBuffer.baseAddress, maximumLength, 0)
             }
             if received > 0 {
-                return Data(bytes.prefix(received))
+                return receiveScratch.withUnsafeBytes { rawBuffer in
+                    Data(bytes: rawBuffer.baseAddress!, count: received)
+                }
             }
             if received == 0 {
                 throw NativeCameraSessionError.connectionClosed

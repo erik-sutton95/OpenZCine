@@ -111,6 +111,14 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         guard !alreadyStarted else { return }
 
         browser.delegate = self
+        // LOCAL cameras only, explicitly: this browser runs for the whole app lifetime, and an
+        // unconstrained mask lets ImageCaptureCore also browse SHARED/NETWORK devices — a
+        // continuous mDNS presence on the same radio the live feed rides.
+        browser.browsedDeviceTypeMask =
+            ICDeviceTypeMask(
+                rawValue: ICDeviceTypeMask.camera.rawValue
+                    | ICDeviceLocationTypeMask.local.rawValue
+            ) ?? .camera
         let status = browser.controlAuthorizationStatus
         setAuthorizationStatus(status)
         if status == .notDetermined {
