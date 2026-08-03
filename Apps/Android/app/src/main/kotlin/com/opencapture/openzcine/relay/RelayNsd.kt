@@ -21,6 +21,12 @@ data class RelayBroadcast(
      * future active path inherits the exclusion for free, matching iOS.
      */
     val servedCameraHost: String?,
+    /**
+     * False for a "camera in use" beacon (TXT `w=0`): a device holding a session without
+     * sharing. Nothing to join — hide the row — but the served-camera exclusion applies
+     * exactly as for a broadcast.
+     */
+    val isWatchable: Boolean = true,
 )
 
 /** Browses `_openzcine-mon._tcp` into a live broadcast list — the iOS relay browser's twin. */
@@ -40,6 +46,9 @@ class RelayBroadcastDirectory(private val browser: NsdBrowser) {
                                         event.attributes[
                                             MonitorRelayWire.SERVED_CAMERA_TXT_KEY]
                                             ?.takeIf(String::isNotBlank),
+                                    isWatchable =
+                                        event.attributes[
+                                            MonitorRelayWire.WATCHABLE_TXT_KEY] != "0",
                                 ))
                     is NsdEvent.ServiceLost -> known - event.serviceName
                     is NsdEvent.ServiceFound -> known
@@ -57,7 +66,7 @@ class RelayBroadcastDirectory(private val browser: NsdBrowser) {
 class RelayAdvertiser(private val nsdManager: NsdManager) {
     private var listener: NsdManager.RegistrationListener? = null
 
-    fun register(deviceName: String, port: Int, servedCameraHost: String?) {
+    fun register(deviceName: String, port: Int, servedCameraHost: String?, watchable: Boolean = true) {
         unregister()
         val info =
             NsdServiceInfo().apply {
@@ -67,6 +76,7 @@ class RelayAdvertiser(private val nsdManager: NsdManager) {
                 servedCameraHost
                     ?.takeIf(String::isNotBlank)
                     ?.let { setAttribute(MonitorRelayWire.SERVED_CAMERA_TXT_KEY, it) }
+                if (!watchable) setAttribute(MonitorRelayWire.WATCHABLE_TXT_KEY, "0")
             }
         val registration =
             object : NsdManager.RegistrationListener {
@@ -94,5 +104,49 @@ class RelayAdvertiser(private val nsdManager: NsdManager) {
             }
         }
         listener = null
+    }
+}
+
+/**
+ * Advertises "this camera is in use" while this device holds a session WITHOUT sharing — the
+ * Android twin of the iOS `CameraInUseBeacon`. Same service type and `ch=` key, flagged `w=0`:
+ * every other device's probe exclusion engages exactly as for a broadcast, no list shows a
+ * joinable row, and the bound port only closes whatever connects (nothing is served).
+ */
+class CameraInUseBeacon(nsdManager: NsdManager, private val deviceName: String) {
+    private val advertiser = RelayAdvertiser(nsdManager)
+    private var socket: java.net.ServerSocket? = null
+
+    fun start(servedCameraHost: String) {
+        stop()
+        if (servedCameraHost.isBlank()) return
+        val server =
+            try {
+                java.net.ServerSocket(0)
+            } catch (_: java.io.IOException) {
+                return
+            }
+        socket = server
+        Thread {
+                while (!server.isClosed) {
+                    try {
+                        server.accept().close()
+                    } catch (_: java.io.IOException) {
+                        return@Thread
+                    }
+                }
+            }
+            .apply {
+                isDaemon = true
+                name = "ozc-in-use-beacon"
+                start()
+            }
+        advertiser.register(deviceName, server.localPort, servedCameraHost, watchable = false)
+    }
+
+    fun stop() {
+        advertiser.unregister()
+        socket?.close()
+        socket = null
     }
 }

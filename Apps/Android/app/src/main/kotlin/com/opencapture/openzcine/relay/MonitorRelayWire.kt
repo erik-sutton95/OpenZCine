@@ -24,6 +24,13 @@ object MonitorRelayWire {
     /** Bonjour TXT key naming the camera host this broadcast serves. */
     const val SERVED_CAMERA_TXT_KEY: String = "ch"
 
+    /**
+     * TXT key distinguishing a joinable broadcast from a "camera in use" beacon. Absent or any
+     * value other than "0" means watchable (older builds advertise no key). The beacon exists
+     * so the `ch=` probe shield protects a held camera even when the operator is not sharing.
+     */
+    const val WATCHABLE_TXT_KEY: String = "w"
+
     const val MAXIMUM_PAYLOAD_BYTES: Int = 8 * 1024 * 1024
 
     object Kind {

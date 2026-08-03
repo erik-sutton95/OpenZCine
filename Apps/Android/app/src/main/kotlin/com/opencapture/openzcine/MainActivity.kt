@@ -589,7 +589,9 @@ class MainActivity : ComponentActivity() {
                                                 .show()
                                         }
                                     },
-                                    nearbyBroadcasts = nearbyBroadcasts,
+                                    // In-use beacons (w=0) shield their camera from probes but
+                                    // are not joinable — the list never shows them.
+                                    nearbyBroadcasts = nearbyBroadcasts.filter { it.isWatchable },
                                     onWatchBroadcast = { broadcast ->
                                         relayBroadcastController.stop(
                                             notifyReason = "The broadcast ended.")
@@ -741,6 +743,33 @@ class MainActivity : ComponentActivity() {
                             onDispose {
                                 liveViewGuide.onRealFrameUnavailable()
                                 diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED)
+                            }
+                        }
+                        // In-use beacon (iOS parity): while this session is held and NOT shared,
+                        // advertise the relay type with ch= + w=0 so no other device's camera
+                        // list PTP-probes the held body. The real broadcast's advertisement
+                        // carries the same shield, so only one runs at a time.
+                        val inUseBeaconHost =
+                            if (
+                                currentSessionState is CameraSessionState.Connected &&
+                                    !relayBroadcastEnabled
+                            ) {
+                                activeSavedCamera?.host?.takeIf(String::isNotBlank)
+                            } else {
+                                null
+                            }
+                        LaunchedEffect(inUseBeaconHost) {
+                            if (inUseBeaconHost == null) return@LaunchedEffect
+                            val beacon =
+                                com.opencapture.openzcine.relay.CameraInUseBeacon(
+                                    getSystemService(NsdManager::class.java),
+                                    relayDeviceName,
+                                )
+                            beacon.start(inUseBeaconHost)
+                            try {
+                                kotlinx.coroutines.awaitCancellation()
+                            } finally {
+                                beacon.stop()
                             }
                         }
                         val playbackExposureAssistCameraInput =

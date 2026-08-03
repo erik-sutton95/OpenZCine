@@ -15,6 +15,15 @@ import org.json.JSONObject
  */
 class MonitorRelayWireTest {
     @Test
+    fun `bonjour advertisement constants match the shared contract`() {
+        // The service type and TXT keys must match the Swift core byte-for-byte, or the probe
+        // shield (`ch`) and the in-use beacon flag (`w`) silently stop crossing platforms.
+        assertEquals("_openzcine-mon._tcp", MonitorRelayWire.SERVICE_TYPE)
+        assertEquals("ch", MonitorRelayWire.SERVED_CAMERA_TXT_KEY)
+        assertEquals("w", MonitorRelayWire.WATCHABLE_TXT_KEY)
+    }
+
+    @Test
     fun `framing bytes match the shared vector`() {
         val encoded = MonitorRelayWire.encodeFrame(MonitorRelayWire.Kind.HELLO, "{}".toByteArray())
         assertContentEquals(

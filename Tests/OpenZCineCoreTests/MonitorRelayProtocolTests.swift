@@ -151,4 +151,14 @@ struct MonitorRelayProtocolTests {
             .replacingOccurrences(of: "._tcp", with: "")
         #expect(name.count <= 15)
     }
+
+    /// Twin of the Kotlin `bonjour advertisement constants match the shared contract` pin: the
+    /// TXT keys must match Android byte-for-byte, or the probe shield (`ch`) and the in-use
+    /// beacon flag (`w`) silently stop crossing platforms.
+    @Test("Advertisement constants match the cross-platform contract")
+    func advertisementConstants() {
+        #expect(MonitorRelayProtocol.serviceType == "_openzcine-mon._tcp")
+        #expect(MonitorRelayProtocol.servedCameraTXTKey == "ch")
+        #expect(MonitorRelayProtocol.watchableTXTKey == "w")
+    }
 }
