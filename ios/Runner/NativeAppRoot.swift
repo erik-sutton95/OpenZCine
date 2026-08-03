@@ -19,10 +19,103 @@ func logConnection(_ message: String) {
     #if DEBUG
         // Rich camera diagnostics are developer-only; Release logs retain only a stable hash.
         connectionLogger.error("\(message, privacy: .public)")
+        ConnectionLogTap.shared.log(message)
     #else
         connectionLogger.error("\(message, privacy: .private(mask: .hash))")
     #endif
 }
+
+#if DEBUG
+    /// Streams every `logConnection` line to a developer machine on the LAN, so a live hardware
+    /// repro can be watched without the operator copying Console output between devices.
+    ///
+    /// Debug-only diagnostics, inert unless a sink is advertised: browses for
+    /// `_ozc-logtap._tcp` (advertise one with `dns-sd -R tap _ozc-logtap._tcp local 9099` and
+    /// listen on 9099), connects unicast TCP, and streams timestamped device-prefixed lines.
+    /// Attachment itself is evidence: finding the sink takes the same mDNS browse the relay
+    /// list uses, so a device that streams here but lists no broadcasts has a relay-specific
+    /// problem, while a device that never attaches cannot browse (or was denied Local Network
+    /// permission) at all.
+    // SAFETY: `@unchecked Sendable` — all mutable state is confined to `queue`, and every
+    // Network callback is delivered on `queue`.
+    private final class ConnectionLogTap: @unchecked Sendable {
+        static let shared = ConnectionLogTap()
+
+        private let queue = DispatchQueue(label: "com.opencapture.openzcine.log-tap")
+        private var browser: NWBrowser?
+        private var connection: NWConnection?
+        private var sinkEndpoint: NWEndpoint?
+        private var lastConnectAttempt: Date?
+        private var pending: [String] = []
+        private var started = false
+        private let devicePrefix = ProcessInfo.processInfo.hostName
+        private let timeFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm:ss.SSS"
+            return formatter
+        }()
+
+        func log(_ message: String) {
+            queue.async {
+                self.startIfNeeded()
+                let line =
+                    "[\(self.devicePrefix)] \(self.timeFormatter.string(from: Date())) \(message)\n"
+                self.pending.append(line)
+                // Bounded so an unattended session cannot grow without limit; diagnostics can
+                // afford to drop the oldest lines.
+                if self.pending.count > 400 { self.pending.removeFirst(self.pending.count - 400) }
+                self.reconnectIfNeeded()
+                self.flush()
+            }
+        }
+
+        private func startIfNeeded() {
+            guard !started else { return }
+            started = true
+            let browser = NWBrowser(
+                for: .bonjour(type: "_ozc-logtap._tcp", domain: nil), using: .tcp)
+            browser.browseResultsChangedHandler = { [weak self] results, _ in
+                guard let self else { return }
+                self.sinkEndpoint = results.first?.endpoint
+                self.reconnectIfNeeded()
+            }
+            browser.start(queue: queue)
+            self.browser = browser
+        }
+
+        private func reconnectIfNeeded() {
+            guard connection == nil, let endpoint = sinkEndpoint else { return }
+            if let last = lastConnectAttempt, Date().timeIntervalSince(last) < 5 { return }
+            lastConnectAttempt = Date()
+            let connection = NWConnection(to: endpoint, using: .tcp)
+            connection.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    let hello =
+                        "[\(self.devicePrefix)] log tap attached "
+                        + "os=\(ProcessInfo.processInfo.operatingSystemVersionString)\n"
+                    self.pending.insert(hello, at: 0)
+                    self.flush()
+                case .failed, .cancelled:
+                    self.connection = nil
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+            self.connection = connection
+        }
+
+        private func flush() {
+            guard let connection, connection.state == .ready, !pending.isEmpty else { return }
+            let payload = pending.joined()
+            pending.removeAll()
+            connection.send(
+                content: Data(payload.utf8), completion: .contentProcessed { _ in })
+        }
+    }
+#endif
 
 enum ScreenWakeController {
     @MainActor
