@@ -463,6 +463,20 @@ object SwiftCore {
     /** The shared automatic-attempt budget, for a truthful "attempt N of M". */
     external fun sessionMaxAutomaticAttempts(): Int
 
+    /**
+     * Records one session drop in the shared drop-storm ledger. `true` means
+     * automatic recovery must pause for the operator: reconnects that keep
+     * succeeding and dying young are churning the body's PTP stack toward its
+     * battery-pull wedge, and only a cross-run drop count can catch that.
+     */
+    external fun sessionNoteSessionDrop(): Boolean
+
+    /** Drops inside the storm window, for the operator-facing count. */
+    external fun sessionDropsInStormWindow(): Int
+
+    /** Operator action (retry, disconnect, fresh connect) starts a fresh ledger. */
+    external fun sessionResetDropStormGuard()
+
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 
     /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */

@@ -3566,6 +3566,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 // event payloads are skipped, while valid-but-unknown event
                 // codes still surface through PTPEvent.rawEventCode.
                 let packet = try event.readPacket()
+                if packet.type == .probeRequest {
+                    // Liveness ping (CIPA DC-005): the body treats a missing ProbeResponse
+                    // as a dead initiator and closes the whole session. Answer immediately;
+                    // a failed send means the link is genuinely gone and ends the drain.
+                    try event.send(PTPIPPacket(type: .probeResponse, payload: packet.payload))
+                    continue
+                }
                 guard let parsed = try? PTPEvent(from: packet) else { continue }
                 onEvent(parsed)
             } catch let error as PTPIPClientSessionError {

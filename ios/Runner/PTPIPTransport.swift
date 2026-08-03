@@ -239,6 +239,15 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
         // the benign idle `.timeout`) propagate to the caller's drain loop.
         while true {
             let packet = try await event.readPacket()
+            if packet.type == .probeRequest {
+                // Liveness ping (CIPA DC-005): the body treats a missing ProbeResponse as a
+                // dead initiator and closes the whole session — operator-visible as an
+                // "event channel ended" drop. This packet was silently swallowed until now.
+                // [verify-on-HW: the ZR probing cadence and whether answering ends the drops]
+                try await event.send(PTPIPPacket(type: .probeResponse, payload: packet.payload))
+                logConnection("event-channel liveness probe answered")
+                continue
+            }
             if let parsed = try? PTPEvent(from: packet) {
                 return parsed
             }

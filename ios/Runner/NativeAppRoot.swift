@@ -15,7 +15,7 @@ private let proactiveWiFiJoinLogger = Logger(
     category: "proactive-wifi-join"
 )
 
-private func logConnection(_ message: String) {
+func logConnection(_ message: String) {
     #if DEBUG
         // Rich camera diagnostics are developer-only; Release logs retain only a stable hash.
         connectionLogger.error("\(message, privacy: .public)")
@@ -2919,6 +2919,8 @@ final class NativeAppModel {
         // An auto-reconnect behind a preserved monitor keeps the operator on the frozen frame with
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
         if !preservingMonitorSurface {
+            // A fresh operator connect starts a fresh storm ledger (`SessionDropStormGuard`).
+            sessionDropStormGuard.reset()
             beginConnectionProgress(
                 host: host,
                 discoveredCamera: discoveredCamera
@@ -3449,6 +3451,8 @@ final class NativeAppModel {
             return
         }
         setRelayBroadcasting(false)
+        // Deliberate exit clears the storm ledger (`SessionDropStormGuard`) with the session.
+        sessionDropStormGuard.reset()
         disconnectCameraSession(resetConnection: true)
         startDiscoveryLoop(resetResults: false)
     }
@@ -3970,18 +3974,28 @@ final class NativeAppModel {
                 + "found=\(cameras.count) [\(listing)]")
     }
 
-    /// Camera hosts some visible broadcast is serving, in raw and normalized forms — the
-    /// addresses this device's discovery must not PTP-probe while those broadcasts stand.
+    /// Hosts a broadcast was seen serving, kept warm past the sighting: a browse blink, a TXT
+    /// update race, or the broadcaster's own recovery window must not unshield a camera that is
+    /// still someone's. Probing it is the drop mechanism.
+    @ObservationIgnored private var recentlyServedCameraHosts: [String: Date] = [:]
+    private static let servedHostShieldLinger: TimeInterval = 180
+
+    /// Camera hosts some visible broadcast is serving (raw and normalized forms), plus any host
+    /// a broadcast served within the linger window — the addresses this device's discovery must
+    /// not PTP-probe.
     private func hostsServedByVisibleBroadcasts() -> Set<String> {
-        var served: Set<String> = []
+        let now = Date()
         for discovery in discoveredRelayHosts {
             guard let host = discovery.servedCameraHost, !host.isEmpty else { continue }
-            served.insert(host)
+            recentlyServedCameraHosts[host] = now
             if let normalized = PTPIPPairedHosts.normalizedHost(host) {
-                served.insert(normalized)
+                recentlyServedCameraHosts[normalized] = now
             }
         }
-        return served
+        recentlyServedCameraHosts = recentlyServedCameraHosts.filter {
+            now.timeIntervalSince($0.value) < Self.servedHostShieldLinger
+        }
+        return Set(recentlyServedCameraHosts.keys)
     }
 
     private func startDiscoveryLoop(resetResults: Bool) {
@@ -5070,9 +5084,12 @@ final class NativeAppModel {
         continuation?.resume(returning: accepted)
     }
 
-    private func disconnectCameraSession(resetConnection: Bool) {
+    private func disconnectCameraSession(
+        resetConnection: Bool, preserveMonitorSurface: Bool = false
+    ) {
         let session = cameraSession
-        clearCameraSessionState(resetConnection: resetConnection)
+        clearCameraSessionState(
+            resetConnection: resetConnection, preserveMonitorSurface: preserveMonitorSurface)
         // Fire-and-forget the network teardown, but keep a handle: the next connectToCamera awaits
         // it before opening a new command channel (one PTP-IP command channel per initiator).
         let previousTeardown = sessionTeardownTask
@@ -5091,6 +5108,10 @@ final class NativeAppModel {
     /// Monotonic epoch for the recovery loop, so a cancelled run can't clear the handle of the run
     /// that replaced it.
     @ObservationIgnored private var sessionRecoveryGeneration = 0
+
+    /// Cross-run drop damping (see `SessionDropStormGuard`). Reset ONLY by operator action —
+    /// a reconnect that succeeds proves nothing during a storm, succeeding is what storms do.
+    @ObservationIgnored private var sessionDropStormGuard = SessionDropStormGuard()
 
     /// How long the operator's card waits behind attempt 1 (attempt 2+ shows it at once).
     private static let recoveryCardGrace: Duration = .seconds(2.5)
@@ -5112,14 +5133,45 @@ final class NativeAppModel {
     /// blind-probe a camera sitting on its pairing wizard (probing knocks the body out of pairing).
     private func beginSessionRecovery(host: String, reason: String) {
         guard !isDemoSession, isMonitorPresented, sessionRecoveryTask == nil else { return }
+        // A paused storm is already waiting on the operator; the same dead session's other loss
+        // reporters (event channel AND stall watchdog fire for one drop) must not re-count it.
+        if case .pausedAfterRepeatedDrops = sessionRecovery { return }
         let target = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return }
-        logConnection("session lost host=\(target) (\(reason)) → bounded recovery")
         connection = .reconnecting
         liveFPS = SessionRecoveryCopy.heldFrameBadge
         isStreamRecovering = true
         sessionRecoveryGeneration += 1
         let generation = sessionRecoveryGeneration
+        // Keep the watchers alive on the held frame: with no fresh camera frames, every
+        // viewer's stall watchdog would tear down and rejoin in a loop for the whole outage.
+        // A 2 s re-send of the frozen frame stays inside their 8 s stall threshold, so they
+        // keep the picture the broadcaster is holding — same as the broadcaster's own monitor.
+        relayRecoveryHeartbeatTask?.cancel()
+        relayRecoveryHeartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, !Task.isCancelled else { return }
+                guard self.sessionRecovery != .idle else { return }
+                if self.isRelayBroadcasting, let held = self.liveFrameImage {
+                    self.broadcastRelayFrame(image: held)
+                }
+            }
+        }
+        if sessionDropStormGuard.noteDrop(now: ProcessInfo.processInfo.systemUptime) {
+            // Reconnects keep succeeding and dying young — an external killer, not a blip.
+            // Retrying harder is what churns the body's PTP stack into its battery-pull wedge,
+            // so dispose the dead session gracefully and wait for the operator instead.
+            logConnection(
+                "session lost host=\(target) (\(reason)) → storm pause after "
+                    + "\(sessionDropStormGuard.dropsInWindow) drops")
+            disconnectCameraSession(resetConnection: false, preserveMonitorSurface: true)
+            sessionRecovery = .pausedAfterRepeatedDrops(drops: sessionDropStormGuard.dropsInWindow)
+            recoveryCardGraceTask?.cancel()
+            sessionRecoveryCardGraceElapsed = true
+            return
+        }
+        logConnection("session lost host=\(target) (\(reason)) → bounded recovery")
         sessionRecoveryTask = Task { [weak self] in
             await self?.runSessionRecovery(host: target)
             guard let self, self.sessionRecoveryGeneration == generation else { return }
@@ -5135,21 +5187,6 @@ final class NativeAppModel {
             guard let self, !Task.isCancelled else { return }
             guard self.sessionRecoveryGeneration == generation else { return }
             self.sessionRecoveryCardGraceElapsed = true
-        }
-        // Keep the watchers alive on the held frame: with no fresh camera frames, every
-        // viewer's stall watchdog would tear down and rejoin in a loop for the whole outage.
-        // A 2 s re-send of the frozen frame stays inside their 8 s stall threshold, so they
-        // keep the picture the broadcaster is holding — same as the broadcaster's own monitor.
-        relayRecoveryHeartbeatTask?.cancel()
-        relayRecoveryHeartbeatTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                guard let self, !Task.isCancelled else { return }
-                guard self.sessionRecovery != .idle else { return }
-                if self.isRelayBroadcasting, let held = self.liveFrameImage {
-                    self.broadcastRelayFrame(image: held)
-                }
-            }
         }
     }
 
@@ -5211,6 +5248,9 @@ final class NativeAppModel {
     func retrySessionRecovery() {
         let host = cameraHost
         cancelSessionRecovery()
+        // Operator intent clears the storm ledger: the retry itself is not a drop, and the next
+        // pause should take a fresh cluster of drops to earn.
+        sessionDropStormGuard.reset()
         clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
         beginSessionRecovery(host: host, reason: "operator retry")
     }

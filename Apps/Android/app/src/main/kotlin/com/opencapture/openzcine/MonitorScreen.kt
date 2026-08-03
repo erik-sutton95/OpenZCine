@@ -3123,7 +3123,12 @@ internal fun MonitorScreen(
         MonitorRecoveryOverlay(
             state = recoveryStateOverride ?: sessionRecoveryState,
             cameraName = recoveryStateOverride?.let { "Nikon ZR" } ?: lastConnectedCameraName,
-            onRetry = { sessionRecoveryRetryTicket += 1 },
+            onRetry = {
+                // Operator intent clears the storm ledger: the retry is not a drop, and the
+                // next pause should take a fresh cluster of drops to earn (iOS parity).
+                ProductionSessionRetryScheduleBridge.resetDropStormGuard()
+                sessionRecoveryRetryTicket += 1
+            },
             onBackToOperatorMenu = onBackToOperatorMenu,
         )
         // Registered HERE, not inside the options popup: launching the document picker pauses

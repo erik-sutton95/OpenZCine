@@ -631,13 +631,17 @@ enum DemoHarness {
                 }
                 if let raw = env["ZC_DEMO_SESSION_LOST"] {
                     // Demo/screenshot affordance: stage the dropped-session recovery affordance
-                    // over the held frame (`retrying` mid-loop, anything else = budget spent), so
-                    // the #253/#254 recovery UI can be captured without unplugging a real camera.
+                    // over the held frame (`retrying` mid-loop, `storm` = drop-storm pause,
+                    // anything else = budget spent), so the #253/#254 recovery UI can be
+                    // captured without unplugging a real camera.
                     model.connectionProgressDeviceName = "Nikon ZR"
-                    model.forceSessionRecoveryState(
-                        raw == "retrying"
-                            ? .retrying(attempt: 2, maxAttempts: 8)
-                            : .waitingForOperator(attemptsMade: 8))
+                    let staged: SessionRecoveryState =
+                        switch raw {
+                        case "retrying": .retrying(attempt: 2, maxAttempts: 8)
+                        case "storm": .pausedAfterRepeatedDrops(drops: 3)
+                        default: .waitingForOperator(attemptsMade: 8)
+                        }
+                    model.forceSessionRecoveryState(staged)
                 }
                 if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
                     // Demo/screenshot affordance: start in a specific display mode (live/clean/command).

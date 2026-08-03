@@ -95,6 +95,11 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         let candidateChunks =
             [priorityChunk].filter { !$0.isEmpty }
             + split.remaining.filter { !excluded.contains($0) }.chunked(into: 128)
+        // Sweep-pass witness (counts only — a /24 listing would drown the Console): correlates
+        // a blind-probe round with a broadcaster's drop timestamps.
+        logConnection(
+            "discovery sweep pass hosts=\(candidateChunks.reduce(0) { $0 + $1.count }) "
+                + "excluded=\(excluded.count)")
 
         if scanInterfaces.isEmpty {
             let bridgeAddresses = allLocalInterfaces.filter { $0.name.hasPrefix("bridge") }
@@ -157,6 +162,14 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         let split = CameraDiscovery.prioritizedScanHosts(
             priorityHosts: priorityHosts, localAddresses: localAddresses)
         let hosts = split.priority.filter { !excluded.contains($0) }
+        // The one-line witness for "who knocked the camera": every host this pass will Init,
+        // and every host the served-camera shield kept it away from. (An Init against a body
+        // another device holds a session with drops that session.)
+        if !hosts.isEmpty || !excluded.isEmpty {
+            logConnection(
+                "discovery probe pass trusted=[\(hosts.joined(separator: " "))] "
+                    + "excluded=[\(excluded.sorted().joined(separator: " "))]")
+        }
         guard !hosts.isEmpty else { return [] }
         return await withTaskGroup(of: DiscoveredCamera?.self) { group in
             for host in hosts {

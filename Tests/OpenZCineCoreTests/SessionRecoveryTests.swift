@@ -59,6 +59,56 @@ struct SessionRecoveryPolicyTests {
         #expect(SessionRecoveryState.idle.isRecovering == false)
         #expect(SessionRecoveryState.retrying(attempt: 1, maxAttempts: 8).isRecovering)
         #expect(SessionRecoveryState.waitingForOperator(attemptsMade: 8).isRecovering)
+        #expect(SessionRecoveryState.pausedAfterRepeatedDrops(drops: 3).isRecovering)
+    }
+}
+
+@Suite("Session drop storm guard")
+struct SessionDropStormGuardTests {
+    // Mutating calls stay OUTSIDE #expect — the macro captures operands immutably.
+
+    @Test("Isolated drops never pause automatic recovery")
+    func isolatedDropsPass() {
+        var guardState = SessionDropStormGuard()
+        let first = guardState.noteDrop(now: 0)
+        let second = guardState.noteDrop(now: 10)
+        #expect(first == false)
+        #expect(second == false)
+        #expect(guardState.dropsInWindow == 2)
+    }
+
+    @Test("Clustered drops pause recovery even when every reconnect succeeded")
+    func clusteredDropsPause() {
+        // The storm signature: connect → die young → reconnect cleanly → die again. Success
+        // resets the per-run failure budget, so only a cross-run drop count can catch it.
+        var guardState = SessionDropStormGuard()
+        _ = guardState.noteDrop(now: 0)
+        _ = guardState.noteDrop(now: 15)
+        let paused = guardState.noteDrop(now: 30)
+        #expect(paused)
+        #expect(guardState.dropsInWindow == SessionDropStormGuard.pauseAfterDrops)
+    }
+
+    @Test("Drops age out of the window, so a long-stable session starts clean")
+    func oldDropsAgeOut() {
+        var guardState = SessionDropStormGuard()
+        _ = guardState.noteDrop(now: 0)
+        _ = guardState.noteDrop(now: 10)
+        // Well past the window: the two early drops no longer count.
+        let paused = guardState.noteDrop(now: 10 + SessionDropStormGuard.windowSeconds + 1)
+        #expect(paused == false)
+        #expect(guardState.dropsInWindow == 1)
+    }
+
+    @Test("Operator action resets the ledger; the next pause takes a fresh cluster")
+    func resetClearsLedger() {
+        var guardState = SessionDropStormGuard()
+        _ = guardState.noteDrop(now: 0)
+        _ = guardState.noteDrop(now: 5)
+        guardState.reset()
+        #expect(guardState.dropsInWindow == 0)
+        let paused = guardState.noteDrop(now: 6)
+        #expect(paused == false)
     }
 }
 
@@ -79,6 +129,17 @@ struct SessionRecoveryCopyTests {
         #expect(SessionRecoveryCopy.title(state) == "Camera disconnected")
         let detail = SessionRecoveryCopy.detail(state, deviceName: "Nikon ZR")
         #expect(detail.contains("8 tries"))
+        #expect(detail.contains("held, not live"))
+    }
+
+    @Test("Storm-pause copy says why retries stopped and that the frame is held")
+    func stormPauseCopy() {
+        let state = SessionRecoveryState.pausedAfterRepeatedDrops(drops: 3)
+        #expect(SessionRecoveryCopy.title(state) == "Connection keeps dropping")
+        let detail = SessionRecoveryCopy.detail(state, deviceName: "Nikon ZR")
+        #expect(detail.contains("Nikon ZR"))
+        #expect(detail.contains("3 times"))
+        #expect(detail.contains("protect the camera"))
         #expect(detail.contains("held, not live"))
     }
 

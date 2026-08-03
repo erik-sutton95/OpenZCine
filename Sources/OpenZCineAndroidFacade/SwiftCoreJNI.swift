@@ -758,6 +758,35 @@
         jint(AndroidSessionRecoveryWire.maximumAutomaticAttempts)
     }
 
+    /// `SwiftCore.sessionNoteSessionDrop()` — records one session drop in the shared
+    /// drop-storm ledger; `true` means automatic recovery must pause for the operator
+    /// (reconnects that keep succeeding and dying young are churning the body's PTP
+    /// stack toward its battery-pull wedge).
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionNoteSessionDrop")
+    public func swiftCoreSessionNoteSessionDrop(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jboolean {
+        AndroidSessionRecoveryWire.noteSessionDrop() ? 1 : 0
+    }
+
+    /// `SwiftCore.sessionDropsInStormWindow()` — drops inside the storm window, for the
+    /// operator-facing count.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionDropsInStormWindow")
+    public func swiftCoreSessionDropsInStormWindow(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        jint(AndroidSessionRecoveryWire.dropsInStormWindow)
+    }
+
+    /// `SwiftCore.sessionResetDropStormGuard()` — operator action (retry, disconnect,
+    /// fresh connect) starts a fresh ledger.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResetDropStormGuard")
+    public func swiftCoreSessionResetDropStormGuard(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        AndroidSessionRecoveryWire.resetDropStormGuard()
+    }
+
     // MARK: - Callback / streaming shape
 
     /// Listener state that crosses to the pushing thread.

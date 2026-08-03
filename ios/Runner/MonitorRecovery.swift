@@ -101,7 +101,7 @@ struct MonitorRecoveryOverlay: View {
             ProgressView()
                 .controlSize(.small)
                 .tint(LiveDesign.accent)
-        case .waitingForOperator, .idle:
+        case .waitingForOperator, .pausedAfterRepeatedDrops, .idle:
             Image(systemName: "cable.connector.slash")
                 .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(LiveDesign.accent)

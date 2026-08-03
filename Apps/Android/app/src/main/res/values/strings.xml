@@ -594,6 +594,8 @@
         <item quantity="other">%d tries</item>
     </plurals>
     <string name="recovery_lost_detail">%1$s didn\'t come back after %2$s. The frame below is held, not live.</string>
+    <string name="recovery_storm_title">Connection keeps dropping</string>
+    <string name="recovery_storm_detail">%1$s reconnected but dropped %2$d times in quick succession. Automatic retries are paused to protect the camera — another device may be scanning for cameras. The frame below is held, not live.</string>
     <string name="recovery_retry">Retry connection</string>
     <string name="recovery_operator_menu">Operator menu</string>
     <string name="control_set_success">%1$s set to %2$s.</string>

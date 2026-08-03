@@ -68,6 +68,8 @@ internal fun MonitorRecoveryOverlay(
     val title =
         when (state) {
             is MonitorRecoveryState.Retrying -> stringResource(R.string.recovery_retrying_title)
+            is MonitorRecoveryState.PausedAfterRepeatedDrops ->
+                stringResource(R.string.recovery_storm_title)
             else -> stringResource(R.string.recovery_lost_title)
         }
     val detail =
@@ -89,6 +91,8 @@ internal fun MonitorRecoveryOverlay(
                         state.attemptsMade,
                     ),
                 )
+            is MonitorRecoveryState.PausedAfterRepeatedDrops ->
+                stringResource(R.string.recovery_storm_detail, camera, state.drops)
             MonitorRecoveryState.Idle -> ""
         }
 
