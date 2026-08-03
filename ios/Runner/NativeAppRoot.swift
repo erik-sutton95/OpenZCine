@@ -3756,6 +3756,11 @@ final class NativeAppModel {
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
     /// is itself a heat source — see `applyThermalStreamStepDownIfNeeded`).
     @ObservationIgnored private var lastAppliedStreamImageSize: UInt8?
+    /// Congestion adaptation for the live stream (see `LiveViewAdaptiveQuality`).
+    @ObservationIgnored private var liveViewAdaptiveQuality = LiveViewAdaptiveQuality()
+    /// Adaptive ceiling on `LiveViewImageSize`: congestion lowers it below the operator's
+    /// preset, sustained health raises it back. Reset per session.
+    @ObservationIgnored private var adaptiveStreamSizeCap: UInt8 = .max
     /// Wall-clock cadences gating the descriptor/storage refresh burst to slow timers — re-reading
     /// the rarely-changing enumeration descriptors every poll cycle keeps the camera radio busy
     /// for nothing. `nil` forces a refresh on the first cycle after connect.
@@ -5254,6 +5259,9 @@ final class NativeAppModel {
         isRecording = false
         resetPendingRecordCommand()
         lastAppliedStreamImageSize = nil
+        // Congestion knowledge belongs to a LINK, not the app: the next session measures fresh.
+        liveViewAdaptiveQuality = LiveViewAdaptiveQuality()
+        adaptiveStreamSizeCap = .max
         lastDescriptorRefreshAt = nil
         lastStorageRefreshAt = nil
         resetCameraPropertyState()
@@ -5774,7 +5782,32 @@ final class NativeAppModel {
         if streamsHeaderOnly || videoSource != .cameraLiveView {
             return OperatorPreferences.StreamPreset.fast.liveViewImageSize
         }
-        return preferences.streamPreset.liveViewImageSize
+        return min(preferences.streamPreset.liveViewImageSize, adaptiveStreamSizeCap)
+    }
+
+    /// Moves the adaptive size cap on a congestion verdict. Only the cap changes here — the
+    /// 1 s link-health tick notices `effectiveStreamImageSize` moved and restarts the stream
+    /// from outside the frame loop, exactly like a thermal step-down.
+    private func applyAdaptiveStreamVerdict(_ verdict: LiveViewAdaptiveQuality.Verdict) {
+        guard videoSource == .cameraLiveView, !streamsHeaderOnly else { return }
+        let floor = OperatorPreferences.StreamPreset.fast.liveViewImageSize
+        let ceiling = preferences.streamPreset.liveViewImageSize
+        switch verdict {
+        case .hold:
+            return
+        case .stepDown:
+            let current = effectiveStreamImageSize
+            guard current > floor else { return }
+            adaptiveStreamSizeCap = current - 1
+            logConnection("adaptive stream step-down → size \(adaptiveStreamSizeCap)")
+        case .stepUp:
+            guard adaptiveStreamSizeCap < ceiling else {
+                adaptiveStreamSizeCap = .max
+                return
+            }
+            adaptiveStreamSizeCap += 1
+            logConnection("adaptive stream step-up → size \(adaptiveStreamSizeCap)")
+        }
     }
 
     /// Restarts live view when `effectiveStreamImageSize` has moved since the last configure — e.g.
@@ -5980,8 +6013,11 @@ final class NativeAppModel {
         syncScreenWakePolicy()
         // Give the volume buttons (and the phone camera) back to the system while backgrounded.
         bluetoothShutter.stop()
-        discoveryLoopTask?.cancel()
-        discoveryLoopTask = nil
+        // The FULL stop, not a bare task cancel: the discovery loop owns a relay NWBrowser that
+        // browses over AWDL, and a bare cancel left that browser running through backgrounding —
+        // with nothing on foreground re-stopping it, it kept time-slicing the radio under a
+        // later resumed session.
+        stopDiscoveryLoop()
         guard let session = cameraSession else { return }
         liveViewTask?.cancel()
         liveViewTask = nil
@@ -6077,6 +6113,10 @@ final class NativeAppModel {
         var frameCounter = 0
         var frameRate = FrameRateSampler()
         var watchdog = LiveViewWatchdog()
+        // Each streaming attempt starts a fresh interval baseline: the first frame after a
+        // (re)start includes configure/start time and must not be scored as congestion.
+        var lastFrameArrival: Double = 0
+        liveViewAdaptiveQuality.noteStreamRestart()
         do {
             let requestedSize = effectiveStreamImageSize
             await session.configureLiveView(
@@ -6217,16 +6257,34 @@ final class NativeAppModel {
                     try? await Task.sleep(for: Self.commandHeaderPullInterval)
                     continue
                 }
-                // Bound in-flight frames to one JPEG + one decoded bitmap: finish decode and
-                // display before pulling the next camera frame; scope sampling overlaps the next
-                // fetch. Scopes must meter the clean frame, never the assist-composited bake
+                // Start the NEXT fetch before decoding this frame: the wire time of frame N+1
+                // overlaps decode + bake + publish of frame N, which is a straight 10-25% fps
+                // recovery on a router path where fetch RTT dominates. Peak in-flight cost is
+                // two JPEGs + one decoded bitmap (~200 KB over the old strictly-serial shape —
+                // the "one JPEG" bound this replaced was memory caution, not a protocol rule;
+                // the transaction gate still serializes the wire, so the camera never sees
+                // overlapped operations).
+                nextFrameTask = liveFrameTask(session)
+                // Scopes must meter the clean frame, never the assist-composited bake
                 // (`cleanFrame` is a second reference to a bitmap the render memo retains anyway).
                 let cleanFrame = await frameDecoder.decode(frame.jpeg)
                 let decoded = await displayReadyLiveFrame(from: cleanFrame)
                 guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
                 if let image = decoded, let cleanFrame {
                     frameCounter += 1
-                    frameRate.recordFrame(at: CACurrentMediaTime())
+                    let arrival = CACurrentMediaTime()
+                    frameRate.recordFrame(at: arrival)
+                    // Congestion adaptation: slow frames step the requested size down BEFORE
+                    // they can drift into the fetch deadline (whose breach closes the channel);
+                    // sustained health steps back toward the operator's preset. Only the cap
+                    // moves here — the link-health tick applies the change from OUTSIDE this
+                    // loop via the same seam thermal step-down uses.
+                    if lastFrameArrival > 0 {
+                        applyAdaptiveStreamVerdict(
+                            liveViewAdaptiveQuality.recordFrame(
+                                intervalSeconds: arrival - lastFrameArrival, now: arrival))
+                    }
+                    lastFrameArrival = arrival
                     // Signed with the payload, so a body that wedges into replaying one cached
                     // JPEG is read as the stall it is instead of a healthy stream (#283).
                     watchdog.recordGoodFrame(
@@ -6260,8 +6318,6 @@ final class NativeAppModel {
                         applying: watchEffects,
                         timecode: frame.timecode,
                         isRecording: frame.isRecording)
-                    // Overlap the next camera fetch with scope work — one JPEG in flight, not two.
-                    nextFrameTask = liveFrameTask(session)
                     sampleScopesIfDue(clean: cleanFrame) { [weak self] in
                         self?.cameraSession === session
                     }
@@ -6276,10 +6332,10 @@ final class NativeAppModel {
                     )
                 } else {
                     // Corrupt JPEG — count it so a streak forces a restart instead of freezing
-                    // silently with the last good frame on screen.
+                    // silently with the last good frame on screen. (The next fetch is already
+                    // in flight from before the decode.)
                     watchdog.recordBadFrame()
                     consecutiveBadLiveFrames = watchdog.consecutiveBadFrames
-                    nextFrameTask = liveFrameTask(session)
                 }
                 watchdog.check(at: Date())
                 lastGoodFrameAt = watchdog.lastGoodFrameAt
@@ -9635,7 +9691,7 @@ final class NativeAppModel {
 
     /// True when movie ISO auto is on (`MovISOAutoControl`) — not exposure program Auto.
     var isAutoISOActive: Bool {
-        ISOPickerPolicy.isAutoISOActive(isoAuto: commandISOAuto)
+        ISOPickerPolicy.isAutoISOActive(isoAuto: commandISOAuto, codec: cameraState.codec)
     }
 
     /// True when the ISO drum is camera-owned (Auto On, or non-R3D mode is not M).
@@ -12585,7 +12641,11 @@ extension NativeAppModel {
                 cameraID: bucket, filename: clip.filename)
             defer { try? fileHandle.close() }
             var offset = startOffset
-            let chunk: UInt32 = 4 << 20  // 4 MiB — fewer round-trips over PTP
+            // USB keeps the big chunk (fewer round-trips, and nothing shares that pipe). On
+            // Wi-Fi each chunk is ONE gate-held transaction the live feed queues behind — a
+            // 4 MiB read on a slow router exceeds the 6 s frame deadline and kills the session
+            // outright, so the wireless chunk stays ~a second of transfer, not several.
+            let chunk: UInt32 = session.transportKind == .usb ? 4 << 20 : 1 << 20
             if total > 0, UInt64(offset) >= total {
                 mediaDownloadProgress[clip.id] = nil
                 return

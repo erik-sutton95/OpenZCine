@@ -52,9 +52,13 @@ public enum ISOPickerPolicy: Sendable {
     /// Whether movie ISO auto is active (`MovieISOAutoControl` / `MovISOAutoControl` 0xD0AD).
     ///
     /// This is independent of exposure-program Auto (P/A/S/M). Unpolled (`nil`) means manual until
-    /// the body reports otherwise so the drum is not falsely locked.
-    public static func isAutoISOActive(isoAuto: Bool?) -> Bool {
-        isoAuto == true
+    /// the body reports otherwise so the drum is not falsely locked. CODEC-GATED: auto ISO does
+    /// not exist under R3D NE — the body's flag simply keeps its last non-R3D value while inert,
+    /// so a raw `true` there is stale state, not Auto (it rendered "A800" readouts in a codec
+    /// that cannot auto). Every auto-ISO consumer routes through this answer.
+    public static func isAutoISOActive(isoAuto: Bool?, codec: String) -> Bool {
+        guard !isR3DNECodec(codec) else { return false }
+        return isoAuto == true
     }
 
     /// Whether the operator may write a manual movie ISO value for this codec / mode.
@@ -77,7 +81,7 @@ public enum ISOPickerPolicy: Sendable {
         exposureMode: String?
     ) -> Bool {
         if showsDualBaseCircuits(codec: codec) { return false }
-        return isAutoISOActive(isoAuto: isoAuto)
+        return isAutoISOActive(isoAuto: isoAuto, codec: codec)
             || !allowsManualISO(codec: codec, exposureMode: exposureMode)
     }
 
@@ -196,7 +200,7 @@ public enum ISOPickerPolicy: Sendable {
     ) -> Int {
         // Without Auto Off (non-M on non-R3D), stay on the only tab.
         guard allowsManualISO(codec: codec, exposureMode: exposureMode) else { return 0 }
-        return isAutoISOActive(isoAuto: isoAuto) ? 0 : 1
+        return isAutoISOActive(isoAuto: isoAuto, codec: codec) ? 0 : 1
     }
 }
 

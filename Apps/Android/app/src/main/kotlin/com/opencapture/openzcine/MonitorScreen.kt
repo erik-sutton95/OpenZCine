@@ -856,7 +856,7 @@ internal fun MonitorScreen(
             }
             if (
                 request.control == CameraControl.ISO &&
-                    IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto)
+                    IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto, codecForISO)
             ) {
                 desiredControlWrites[CameraControl.ISO_AUTO] =
                     CommandControlRequest(

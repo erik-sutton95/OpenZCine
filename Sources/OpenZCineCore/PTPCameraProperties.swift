@@ -487,7 +487,11 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
         }
         if control == .iso {
             var writes: [PTPCameraPropertyWrite] = []
-            if snapshot.isoAuto == true {
+            // Same codec gate as the readout: under R3D NE the stale flag would otherwise
+            // prepend a pointless (and refusable) auto-off write to every ISO change.
+            if ISOPickerPolicy.isAutoISOActive(
+                isoAuto: snapshot.isoAuto, codec: snapshot.fileType ?? "")
+            {
                 writes.append(movieISOAuto(enabled: false))
             }
             if let iso = isoWrite(
@@ -2326,7 +2330,10 @@ extension CameraDisplayState {
             // Movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto.
             // When auto is on, surface the body's effective ISO (ISOControlSensitivity)
             // so the drum/tile tracks Auto changes (e.g. A51200, not a stale dual-base base).
-            if properties.isoAuto == true {
+            // Codec-gated: under R3D NE the flag is inert leftover state, never Auto.
+            if ISOPickerPolicy.isAutoISOActive(
+                isoAuto: properties.isoAuto, codec: properties.fileType ?? "")
+            {
                 properties.iso.map { "A\($0)" } ?? "Auto"
             } else {
                 properties.iso.map(String.init) ?? existing
