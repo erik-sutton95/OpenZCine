@@ -662,8 +662,14 @@ final class MonitorRelayBrowser {
     }
 
     private func mergeResults(_ discoveries: [MonitorRelayDiscovery], from label: String) {
+        // The same service appears once per interface (infrastructure + AWDL under
+        // includePeerToPeer) — keep whichever copy carries the probe shield; a unique-keys
+        // dictionary here is a trap, not an invariant.
         rowsByDescriptor[label] = Dictionary(
-            uniqueKeysWithValues: discoveries.map { ($0.name, $0) })
+            discoveries.map { ($0.name, $0) },
+            uniquingKeysWith: { first, second in
+                first.servedCameraHost == nil ? second : first
+            })
         var merged: [String: MonitorRelayDiscovery] = [:]
         for rows in rowsByDescriptor.values {
             for (name, row) in rows {

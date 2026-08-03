@@ -179,6 +179,15 @@ class SwiftCoreLiveFrameSource(
 
     private val consecutivePumpEnds = AtomicLong(0L)
 
+    /**
+     * Fresh session, fresh stall budget. Without this the counter survives a reconnect at its
+     * escalation value, so a single early pump end on the NEW session immediately re-exhausts
+     * the stream — a positive-feedback teardown loop the storm guard would otherwise absorb.
+     */
+    internal fun noteSessionConnected() {
+        consecutivePumpEnds.set(0L)
+    }
+
     private val previewRequestLock = Any()
     private var requestedPreview = SwiftLiveViewRequest.DEFAULT
     private var requestedPreviewVersion = 0L

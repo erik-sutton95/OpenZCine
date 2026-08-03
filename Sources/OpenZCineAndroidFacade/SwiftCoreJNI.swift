@@ -1337,6 +1337,16 @@
                 session.refreshAndroidPropertySnapshot(refreshRequest)))
     }
 
+    /// `SwiftCore.sessionLiveViewPreviewReduced()` — whether the congestion ladder currently
+    /// holds the preview below the operator's preset (drives the link-details caption and the
+    /// maintenance-poll gate; congested links keep every frame slot).
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionLiveViewPreviewReduced")
+    public func swiftCoreSessionLiveViewPreviewReduced(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jboolean {
+        (ActiveSessionSlot.shared.current()?.liveViewPreviewReduced() ?? false) ? 1 : 0
+    }
+
     /// `SwiftCore.sessionConfigureLiveView(...)` — applies a shared-policy
     /// request before the Android live-view pump starts. The PTP writes are
     /// limited to preview size/compression and the interval only paces preview
@@ -1867,6 +1877,17 @@
     /// Delivers one JPEG frame to the Kotlin listener from the pump thread.
     /// Attaches the thread on every call (idempotent and cheap when already
     /// attached); the matching single detach happens in `finishLiveFrameStream`.
+    /// Clears any pending Java exception so the NEXT JNI call on this thread is legal. A failed
+    /// allocation (OOM) or a throwing Kotlin callback leaves the exception pending, and ART
+    /// aborts the whole process on the following JNI call ("JNI DETECTED ERROR IN APPLICATION")
+    /// — at 60 frames/second that turns one dropped frame into a crash.
+    private func clearPendingJavaException(_ env: UnsafeMutablePointer<JNIEnv?>) {
+        let fns = table(env)
+        if fns.ExceptionCheck!(env) != 0 {
+            fns.ExceptionClear!(env)
+        }
+    }
+
     private func pushLiveFrame(
         _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64,
         isRecording: Bool, audio: LiveAudioMeterWire, focus: LiveViewFocusWire,
@@ -1879,7 +1900,10 @@
             let env = envOut
         else { return }
         let fns = table(env)
-        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else { return }
+        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else {
+            clearPendingJavaException(env)
+            return
+        }
         jpeg.withUnsafeBytes { rawBuffer in
             guard let base = rawBuffer.baseAddress else { return }
             fns.SetByteArrayRegion!(
@@ -1897,6 +1921,7 @@
         ]
         guard case .legacy = handle.callback else {
             guard let boxes = javaIntArray(env, focus.boxes) else {
+                clearPendingJavaException(env)
                 fns.DeleteLocalRef!(env, array)
                 return
             }
@@ -1927,11 +1952,13 @@
                     ]
                 fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
             }
+            clearPendingJavaException(env)
             fns.DeleteLocalRef!(env, boxes)
             fns.DeleteLocalRef!(env, array)
             return
         }
         fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &legacyArgs)
+        clearPendingJavaException(env)
         fns.DeleteLocalRef!(env, array)
     }
 

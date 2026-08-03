@@ -500,6 +500,7 @@ class SwiftCoreCameraSession internal constructor(
                             _recordingState.value = CameraRecordingState.STANDBY
                             _cameraProperties.value = CameraPropertySnapshot()
                             _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
+                            (liveFrames as? SwiftCoreLiveFrameSource)?.noteSessionConnected()
                             updateRoundTripMeasurement()
                             startEventStream(attempt)
                             if (automaticallyRefreshProperties) {
@@ -963,7 +964,12 @@ class SwiftCoreCameraSession internal constructor(
      * remains responsible for recovery.
      */
     private fun reportEventChannelDegraded(attempt: Long, message: String) {
-        if (isCurrentAttempt(attempt)) phaseLogger("eventChannelEnded", message)
+        if (!isCurrentAttempt(attempt)) return
+        phaseLogger("eventChannelEnded", message)
+        // iOS parity (`recoverFromEndedEventChannel`): a dead event drain has no re-open path,
+        // and a session that stops answering the body's liveness probes gets CLOSED BY THE
+        // BODY 30-120 s later as an unexplained drop. One clean reconnect now beats that.
+        markLiveViewStreamExhausted()
     }
 
     /**
@@ -1199,6 +1205,12 @@ class SwiftCoreCameraSession internal constructor(
                         delay(propertyPollIntervalMillis.coerceAtLeast(1L))
                     }
                     if (!isActive || !ownsConnectedAttempt(attempt)) break
+                    // While the congestion ladder holds the preview below the preset, every
+                    // command-channel slot belongs to frames — maintenance rounds resume with
+                    // link health (iOS parity: the capped-stream maintenance skip).
+                    if (SwiftCore.isAvailable && SwiftCore.sessionLiveViewPreviewReduced()) {
+                        continue
+                    }
                     refreshCameraProperties(
                         attempt = attempt,
                         request = SwiftCore.PROPERTY_REFRESH_NEXT,

@@ -603,7 +603,11 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
-    fun `PTP-IP event channel end keeps the command session connected`() = runTest {
+    fun `PTP-IP event channel end tears the session down for one clean reconnect`() = runTest {
+        // The drain has no re-open path, and a session that stops answering the body's
+        // liveness probes gets CLOSED BY THE BODY 30-120 s later as an unexplained drop —
+        // so a dead event channel is link death now (iOS `recoverFromEndedEventChannel`
+        // parity), not a cosmetic degradation the session shrugs off.
         val bridge = FakeBridge()
         val phases = mutableListOf<Pair<String, String>>()
         val session =
@@ -618,18 +622,15 @@ class SwiftCoreCameraSessionTest {
         connecting.await()
 
         bridge.eventListeners.single().onEnded("The camera closed the connection.")
+        runCurrent()
 
+        // Teardown is asynchronous (Connecting while the owner unwinds, Disconnected after) —
+        // the contract is that the session LEAVES Connected so recovery reconnects.
+        assertTrue(session.state.value !is CameraSessionState.Connected)
         assertEquals(
-            CameraSessionState.Connected(CameraIdentity("ZR", "NIKON ZR", "6001234")),
-            session.state.value,
+            "eventChannelEnded" to "The camera closed the connection.",
+            phases.first(),
         )
-        assertEquals(listOf("eventChannelEnded" to "The camera closed the connection."), phases)
-
-        session.setRecording(true)
-        assertEquals(listOf(true), bridge.recordingRequests)
-
-        session.disconnect()
-        assertEquals(1, bridge.disconnects)
     }
 
     @Test

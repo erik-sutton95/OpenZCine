@@ -6107,6 +6107,11 @@ final class NativeAppModel {
             ? (linkHealth > 0 ? 4 : 0)
             : signalBarsFilter.update(score: linkHealth)
         if bars != liveSignalBars { liveSignalBars = bars }
+        // THE ladder applier: this tick is the only steady-state caller, and without it a
+        // step-down waited on the property round-robin's warningStatus visit — 10+ minutes on
+        // exactly the congested link that triggered it, with the fetch deadline killing the
+        // session first. (The audit's H3.)
+        applyThermalStreamStepDownIfNeeded()
     }
 
     private func currentLinkHealthInputs() -> CameraLinkHealthInputs {

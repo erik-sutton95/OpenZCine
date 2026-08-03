@@ -2477,6 +2477,23 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Android live-view configuration
 
+    /// Congestion adaptation for the live stream (`LiveViewAdaptiveQuality`, shared with iOS):
+    /// the frame fetch runs under a transaction deadline whose breach kills the session, so a
+    /// congested link must shed preview size before it sheds the connection. The ladder itself
+    /// is touched only on the pump thread; the cap and ceiling cross threads under
+    /// `liveViewCondition` beside the frame interval it already guards.
+    private var liveViewAdaptiveQuality = LiveViewAdaptiveQuality()
+    private var adaptiveLiveViewSizeCap: UInt8 = .max
+    private var configuredLiveViewImageSize: UInt8 = 3
+
+    /// Whether congestion adaptation currently holds the preview below the operator's preset
+    /// (drives the Kotlin link-details caption and its maintenance-poll gate).
+    public func liveViewPreviewReduced() -> Bool {
+        liveViewCondition.lock()
+        defer { liveViewCondition.unlock() }
+        return adaptiveLiveViewSizeCap < configuredLiveViewImageSize
+    }
+
     /// Applies one shared-policy preview request before the next live-view start.
     ///
     /// The two Nikon properties control only the monitor JPEG stream. They are
@@ -2513,9 +2530,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
             return false
         }
         configuredLiveViewFrameIntervalNanoseconds = frameIntervalNanoseconds
+        // The operator's preset is the ladder's CEILING: adaptation only ever degrades below
+        // it and recovers back to it. The cap survives Kotlin-driven stream restarts —
+        // congestion knowledge belongs to the link, and this instance IS one link.
+        configuredLiveViewImageSize = imageSize
+        let appliedSize = min(imageSize, adaptiveLiveViewSizeCap)
         liveViewCondition.unlock()
 
-        let sizeApplied = setLiveViewByte(.liveViewImageSize, value: imageSize)
+        let sizeApplied = setLiveViewByte(.liveViewImageSize, value: appliedSize)
         let compressionApplied = setLiveViewByte(.liveViewImageCompression, value: compression)
         return sizeApplied && compressionApplied
     }
@@ -4000,7 +4022,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(
             commandTransactionTimeout + 2)
         while liveViewPumpActive {
-            guard liveViewCondition.wait(until: deadline) else { return }
+            guard liveViewCondition.wait(until: deadline) else {
+                // The pump overran the bound (a trickling read can hold one transaction alive
+                // past any per-poll timeout). Un-latch the flag so the NEXT start can proceed —
+                // a permanently stuck `liveViewPumpActive` turned every later start into
+                // `liveViewAlreadyActive` and a full reconnect loop. The zombie pump still sees
+                // stopRequested and exits when its read finally returns; its transactions
+                // serialize behind the transaction lock, so the worst case is delay, not
+                // corruption.
+                liveViewPumpActive = false
+                return
+            }
         }
     }
 
@@ -4040,6 +4072,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let startNanos = Self.monotonicNanoseconds()
         var pollIndex: UInt64 = 0
         var framesSinceDeviceEventPoll = 0
+        // Congestion ladder bookkeeping (pump-thread-local): intervals between DELIVERED
+        // frames feed the shared policy; a restart voids the previous timestamp so the
+        // restart's own cost never reads as link congestion.
+        var lastFrameNanos: UInt64?
+        liveViewAdaptiveQuality.noteStreamRestart()
         while !liveViewStopIsRequested() {
             do {
                 let result = try transactExpectingOK(.getLiveViewImageEx, dataPhase: .dataIn)
@@ -4049,7 +4086,23 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 focusFrameGeneration &+= 1
                 focusFrameCondition.broadcast()
                 focusFrameCondition.unlock()
-                onFrame(frame, Int64(Self.monotonicNanoseconds()))
+                let deliveredNanos = Self.monotonicNanoseconds()
+                onFrame(frame, Int64(deliveredNanos))
+                var verdict = LiveViewAdaptiveQuality.Verdict.hold
+                if let last = lastFrameNanos {
+                    verdict = liveViewAdaptiveQuality.recordFrame(
+                        intervalSeconds: Double(deliveredNanos &- last) / 1_000_000_000,
+                        now: Double(deliveredNanos) / 1_000_000_000)
+                }
+                lastFrameNanos = deliveredNanos
+                // Never EndLiveView mid-take — it freezes the body's own monitor. The verdict
+                // re-fires once the take ends (the ladder keeps measuring throughout).
+                if verdict != .hold, !frame.isRecording {
+                    guard restartLiveViewStream(applying: verdict) else {
+                        break  // Restart failed: the stream is over; Kotlin recovery owns it.
+                    }
+                    lastFrameNanos = nil
+                }
                 // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) and a
                 // body-side setting change (DevicePropChanged) through the GetEventEx poll, NOT
                 // the PTP-IP event socket the drain reads — so poll the queue every Nth frame, in
@@ -4126,6 +4179,50 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return liveViewStopRequested
     }
 
+    /// Applies a congestion-ladder verdict by restarting the stream at the stepped size — the
+    /// preview-size property is read at `StartLiveView`, so a step is a stop/start, not a live
+    /// write. Runs ON the pump thread, whose serial ownership of the command channel makes the
+    /// end → set-size → start sequence race-free. Mirrors the iOS cap arithmetic
+    /// (`applyAdaptiveStreamVerdict`): down steps from the EFFECTIVE size with a floor of 1;
+    /// up walks toward the operator ceiling and collapses to no-cap past it. Returns false only
+    /// when the restart itself failed — the stream is then over and Kotlin recovery owns it.
+    private func restartLiveViewStream(applying verdict: LiveViewAdaptiveQuality.Verdict) -> Bool {
+        liveViewCondition.lock()
+        let ceiling = configuredLiveViewImageSize
+        let capBefore = adaptiveLiveViewSizeCap
+        liveViewCondition.unlock()
+        let effectiveBefore = min(ceiling, capBefore)
+        var cap = capBefore
+        switch verdict {
+        case .stepDown:
+            guard effectiveBefore > 1 else { return true }
+            cap = effectiveBefore - 1
+        case .stepUp:
+            if cap >= ceiling {
+                cap = .max
+            } else {
+                cap += 1
+            }
+        case .hold:
+            return true
+        }
+        liveViewCondition.lock()
+        adaptiveLiveViewSizeCap = cap
+        liveViewCondition.unlock()
+        let effectiveAfter = min(ceiling, cap)
+        guard effectiveAfter != effectiveBefore else { return true }
+        _ = try? transactExpectingOK(.endLiveView)
+        _ = setLiveViewByte(.liveViewImageSize, value: effectiveAfter)
+        do {
+            try transactExpectingOK(.startLiveView)
+            try waitForDeviceReady()
+        } catch {
+            return false
+        }
+        liveViewAdaptiveQuality.noteStreamRestart()
+        return true
+    }
+
     /// `CLOCK_MONOTONIC` in nanoseconds — frame timestamps that match the
     /// semantics of Kotlin's `System.nanoTime()`.
     static func monotonicNanoseconds() -> UInt64 {
@@ -4174,6 +4271,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         // Bound every remaining join before waiting: EndLiveView, media stop,
         // and CloseSession all inherit the shortened command timeout.
         command?.timeoutMilliseconds = 2_000
+        // The event socket gets the same shortened bound: the drain can be blocked in the
+        // liveness-probe answer's send against a stalled link, and teardown holds the
+        // command-lifecycle lock while it waits for the drain to exit.
+        event?.timeoutMilliseconds = 2_000
         #if os(Android)
             // USB shares the same 2 s teardown budget as Wi‑Fi CloseSession.
             // (executeTransactionSynchronously still takes an explicit deadline.)
@@ -4376,8 +4477,36 @@ final class PosixTCPSocket: @unchecked Sendable {
                 newDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
                 socklen_t(MemoryLayout<Int32>.size))
         #endif
-        // ponytail: the iOS twin's keepalive timer tuning arrives with the
-        // Android reconnect machinery — connect/read/disconnect doesn't idle.
+        // Match the iOS twin's socket tuning: keepalive detects a half-open link (an AP that
+        // dropped the association without a FIN) within ~30 s instead of never, and the
+        // enlarged receive window absorbs the ~100 KB per-frame JPEG bursts a lossy AP delivers
+        // in clumps — the default window turns transient congestion into stalled reads.
+        var keepAlive: Int32 = 1
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_KEEPALIVE, &keepAlive,
+            socklen_t(MemoryLayout<Int32>.size))
+        var keepIdle: Int32 = 10
+        var keepInterval: Int32 = 5
+        var keepCount: Int32 = 4
+        #if canImport(Darwin)
+            setsockopt(
+                newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPALIVE, &keepIdle,
+                socklen_t(MemoryLayout<Int32>.size))
+        #else
+            setsockopt(
+                newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPIDLE, &keepIdle,
+                socklen_t(MemoryLayout<Int32>.size))
+        #endif
+        setsockopt(
+            newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPINTVL, &keepInterval,
+            socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(
+            newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPCNT, &keepCount,
+            socklen_t(MemoryLayout<Int32>.size))
+        var receiveBuffer: Int32 = 512 * 1024
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_RCVBUF, &receiveBuffer,
+            socklen_t(MemoryLayout<Int32>.size))
 
         let flags = fcntl(newDescriptor, F_GETFL, 0)
         if flags >= 0 {
@@ -4434,7 +4563,6 @@ final class PosixTCPSocket: @unchecked Sendable {
 
     func send(_ packet: PTPIPPacket) throws {
         let data = Data(packet.serializedBytes)
-        let descriptor = try currentDescriptor()
         #if canImport(Darwin)
             let sendFlags: Int32 = 0
         #else
@@ -4444,6 +4572,8 @@ final class PosixTCPSocket: @unchecked Sendable {
         try data.withUnsafeBytes { rawBuffer in
             guard let base = rawBuffer.baseAddress else { return }
             while offset < data.count {
+                // Re-read per iteration — see readExact's fd-reuse note.
+                let descriptor = try currentDescriptor()
                 try waitForDescriptor(descriptor, events: Int16(POLLOUT), label: "\(label) send")
                 let sent = platformSend(
                     descriptor, base.advanced(by: offset), data.count - offset, sendFlags)
@@ -4478,8 +4608,11 @@ final class PosixTCPSocket: @unchecked Sendable {
     }
 
     private func readExact(byteCount: Int) throws -> Data {
-        let descriptor = try currentDescriptor()
         while readBuffer.availableCount < byteCount {
+            // Re-read per iteration: a close() from teardown recycles the fd number, and a
+            // stale cached descriptor would silently recv() off whatever socket the OS handed
+            // that number to next — a cross-connection PTP stream desync.
+            let descriptor = try currentDescriptor()
             try waitForDescriptor(descriptor, events: Int16(POLLIN), label: "\(label) receive")
             let remaining = byteCount - readBuffer.availableCount
             let maximumLength = min(max(remaining, 4096), 256 * 1024)
