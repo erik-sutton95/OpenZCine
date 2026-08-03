@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,6 +44,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -396,7 +399,14 @@ private fun SettingsHeader(
                 SettingsTitle()
                 Spacer(Modifier.weight(1f))
                 disconnect?.let {
-                    SettingsActionPill(stringResource(R.string.action_disconnect)) { it() }
+                    SettingsActionPill(
+                        stringResource(R.string.action_disconnect),
+                        icon = Icons.Filled.LinkOff,
+                        tint = LiveDesign.rec,
+                        background = LiveDesign.rec.copy(alpha = 0.16f),
+                    ) {
+                        it()
+                    }
                 }
             }
             SettingsLiveTile(session, linkHealth, Modifier.fillMaxWidth(), expanded = true)
@@ -408,11 +418,23 @@ private fun SettingsHeader(
         ) {
             SettingsTitle()
             Spacer(Modifier.weight(1f))
-            disconnect?.let {
-                SettingsActionPill(stringResource(R.string.action_disconnect)) { it() }
-                Spacer(Modifier.width(10.dp))
+            // The pill and the link tile share one intrinsic-height row (iOS `settingsTop`):
+            // destructive red, broken-link glyph, and the pill fills the tile's height.
+            Row(Modifier.height(IntrinsicSize.Min)) {
+                disconnect?.let {
+                    SettingsActionPill(
+                        stringResource(R.string.action_disconnect),
+                        icon = Icons.Filled.LinkOff,
+                        tint = LiveDesign.rec,
+                        background = LiveDesign.rec.copy(alpha = 0.16f),
+                        modifier = Modifier.fillMaxHeight(),
+                    ) {
+                        it()
+                    }
+                    Spacer(Modifier.width(10.dp))
+                }
+                SettingsLiveTile(session, linkHealth, expanded = false)
             }
-            SettingsLiveTile(session, linkHealth, expanded = false)
         }
     }
 }
@@ -2855,7 +2877,7 @@ internal fun SystemRows(
             ) { runAction(actions::openSupport) }
         }
         SettingsInlineRow(stringResource(R.string.system_report_problem)) {
-            SettingsActionPill(stringResource(R.string.action_report), onReportProblem)
+            SettingsActionPill(stringResource(R.string.action_report)) { onReportProblem() }
         }
         SettingsInlineRow(stringResource(R.string.system_request_feature)) {
             SettingsLinkAction(

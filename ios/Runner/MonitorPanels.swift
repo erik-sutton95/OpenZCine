@@ -3951,12 +3951,25 @@ struct OperatorSettingsPanel: View {
             Spacer()
             // Disconnect lives beside the link-health tile: session-level actions belong with
             // the session's status, not inside a settings tab (and a watcher leaves the same
-            // way — model.disconnect() routes a relay viewer through leaveRelay).
+            // way — model.disconnect() routes a relay viewer through leaveRelay). Destructive
+            // red, the app's broken-connector glyph, and sized to the tile it ends.
             if isConnected {
-                SettingsActionPill(title: "Disconnect") { model.disconnect() }
+                HStack(spacing: 10) {
+                    SettingsActionPill(
+                        title: "Disconnect",
+                        systemImage: "cable.connector.slash",
+                        tint: LiveDesign.rec,
+                        background: LiveDesign.rec.opacity(0.16),
+                        fillsHeight: true
+                    ) { model.disconnect() }
+                    SettingsLiveTile()
+                        .environment(model)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                SettingsLiveTile()
+                    .environment(model)
             }
-            SettingsLiveTile()
-                .environment(model)
         }
     }
 

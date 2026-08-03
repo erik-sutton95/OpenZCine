@@ -1048,18 +1048,31 @@ struct SettingsPercentSlider: View {
 /// Amber action pill (`settings-action`).
 struct SettingsActionPill: View {
     let title: String
+    /// Optional leading SF Symbol (e.g. the Disconnect pill's broken-connector glyph).
+    var systemImage: String? = nil
+    var tint: Color = LiveDesign.accent
+    var background: Color = LiveDesign.accentDim
+    /// Stretches the capsule to the height its row offers — used to match the link tile.
+    var fillsHeight = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                .kerning(0.6)
-                .foregroundStyle(LiveDesign.accent)
-                .lineLimit(1)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(LiveDesign.accentDim, in: Capsule())
-                .overlay(Capsule().stroke(LiveDesign.accent.opacity(0.5), lineWidth: 1))
+            HStack(spacing: 6) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                Text(title.uppercased())
+                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                    .kerning(0.6)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .frame(maxHeight: fillsHeight ? .infinity : nil)
+            .background(background, in: Capsule())
+            .overlay(Capsule().stroke(tint.opacity(0.5), lineWidth: 1))
         }
         .buttonStyle(.zcTapTarget)
     }
