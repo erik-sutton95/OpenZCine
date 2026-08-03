@@ -74,6 +74,12 @@ public enum MonitorRelayProtocol {
     /// session. Advertised (rather than sent in-session) so the exclusion protects the camera
     /// from devices that merely have the camera list open, not only from joined watchers.
     public static let servedCameraTXTKey = "ch"
+
+    /// Bonjour TXT key distinguishing a joinable broadcast from a "camera in use" beacon.
+    /// Absent or any value other than `"0"` means watchable (older builds advertise no key).
+    /// A beacon exists so the `ch=` probe shield protects a held camera even when the operator
+    /// is not sharing — the sharing-off knock storm.
+    public static let watchableTXTKey = "w"
 }
 
 /// Host → viewer introduction — and viewer → host, where it may carry the watcher passcode.

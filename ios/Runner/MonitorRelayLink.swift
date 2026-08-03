@@ -64,16 +64,64 @@ struct MonitorRelayDiscovery: Identifiable, Equatable {
     /// when a watcher comes or goes" failure — the watcher's own camera-list scan knocking the
     /// broadcaster's session over.
     let servedCameraHost: String?
+    /// False for a "camera in use" beacon: a device holding a session WITHOUT sharing. The row
+    /// stays out of the list — there is nothing to join — but the probe shield engages exactly
+    /// as for a broadcast.
+    let isWatchable: Bool
 
-    init(id: String, name: String, endpoint: NWEndpoint, servedCameraHost: String? = nil) {
+    init(
+        id: String, name: String, endpoint: NWEndpoint, servedCameraHost: String? = nil,
+        isWatchable: Bool = true
+    ) {
         self.id = id
         self.name = name
         self.endpoint = endpoint
         self.servedCameraHost = servedCameraHost
+        self.isWatchable = isWatchable
     }
 
     static func == (lhs: MonitorRelayDiscovery, rhs: MonitorRelayDiscovery) -> Bool {
         lhs.id == rhs.id && lhs.servedCameraHost == rhs.servedCameraHost
+            && lhs.isWatchable == rhs.isWatchable
+    }
+}
+
+/// Advertises "this camera is in use" while a device holds a session WITHOUT sharing.
+///
+/// Same service type and `ch=` key as the relay advertisement, flagged not-watchable — so every
+/// other device's probe exclusion engages exactly as it does for a broadcast, and no list shows
+/// a joinable row. This closes the sharing-off knock: a second device's open camera list was
+/// PTP-probing the held camera freely because the shield only keyed off broadcasts.
+@MainActor
+final class CameraInUseBeacon {
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "com.opencapture.openzcine.in-use-beacon")
+
+    func start(hostName: String, servedCameraHost: String) {
+        stop()
+        guard !servedCameraHost.isEmpty,
+            let listener = try? NWListener(using: relayParameters(includePeerToPeer: false))
+        else { return }
+        var txt = NWTXTRecord()
+        txt[MonitorRelayProtocol.servedCameraTXTKey] = servedCameraHost
+        txt[MonitorRelayProtocol.watchableTXTKey] = "0"
+        listener.service = NWListener.Service(
+            name: hostName, type: MonitorRelayProtocol.serviceType, txtRecord: txt)
+        // Advertise-only: the port exists because Bonjour needs one, not to serve anyone.
+        listener.newConnectionHandler = { connection in connection.cancel() }
+        listener.stateUpdateHandler = { state in
+            if case .failed(let error) = state {
+                logConnection("in-use beacon failed: \(error)")
+            }
+        }
+        listener.start(queue: queue)
+        self.listener = listener
+        logConnection("in-use beacon up ch=\(servedCameraHost)")
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
     }
 }
 
@@ -591,15 +639,19 @@ final class MonitorRelayBrowser {
             let discoveries = results.compactMap { result -> MonitorRelayDiscovery? in
                 guard case .service(let name, _, _, _) = result.endpoint else { return nil }
                 var servedCameraHost: String?
+                var isWatchable = true
                 if case .bonjour(let txt) = result.metadata {
                     servedCameraHost = txt[MonitorRelayProtocol.servedCameraTXTKey]
+                    isWatchable = txt[MonitorRelayProtocol.watchableTXTKey] != "0"
                 }
                 return MonitorRelayDiscovery(
                     id: name, name: name, endpoint: result.endpoint,
-                    servedCameraHost: servedCameraHost)
+                    servedCameraHost: servedCameraHost, isWatchable: isWatchable)
             }
-            let listing = discoveries.map { "\($0.name)(ch=\($0.servedCameraHost ?? "nil"))" }
-                .joined(separator: " ")
+            let listing = discoveries.map {
+                "\($0.name)(ch=\($0.servedCameraHost ?? "nil")\($0.isWatchable ? "" : " beacon"))"
+            }
+            .joined(separator: " ")
             logConnection("relay browse[\(label)] results=\(discoveries.count) [\(listing)]")
             Task { @MainActor in
                 self?.mergeResults(discoveries, from: label)

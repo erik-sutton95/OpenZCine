@@ -48,6 +48,10 @@ func logConnection(_ message: String) {
         private var lastConnectAttempt: Date?
         private var pending: [String] = []
         private var started = false
+        /// Latched on any browse failure: diagnostics must never destabilize the patient. The
+        /// undeclared-service NoAuth failure did exactly that — on device, the policy hit can
+        /// interrupt the app's OTHER local-network flows, including live camera sockets.
+        private var disabled = false
         private let devicePrefix = ProcessInfo.processInfo.hostName
         private let timeFormatter: DateFormatter = {
             let formatter = DateFormatter()
@@ -57,6 +61,7 @@ func logConnection(_ message: String) {
 
         func log(_ message: String) {
             queue.async {
+                guard !self.disabled else { return }
                 self.startIfNeeded()
                 let line =
                     "[\(self.devicePrefix)] \(self.timeFormatter.string(from: Date())) \(message)\n"
@@ -74,8 +79,21 @@ func logConnection(_ message: String) {
             started = true
             let browser = NWBrowser(
                 for: .bonjour(type: "_ozc-logtap._tcp", domain: nil), using: .tcp)
+            browser.stateUpdateHandler = { [weak self] state in
+                connectionLogger.error("log-tap browse state=\(String(describing: state))")
+                if case .failed = state {
+                    guard let self else { return }
+                    self.disabled = true
+                    self.browser?.cancel()
+                    self.browser = nil
+                    self.connection?.cancel()
+                    self.connection = nil
+                    self.pending.removeAll()
+                }
+            }
             browser.browseResultsChangedHandler = { [weak self] results, _ in
                 guard let self else { return }
+                connectionLogger.error("log-tap browse results=\(results.count)")
                 self.sinkEndpoint = results.first?.endpoint
                 self.reconnectIfNeeded()
             }
@@ -90,6 +108,7 @@ func logConnection(_ message: String) {
             let connection = NWConnection(to: endpoint, using: .tcp)
             connection.stateUpdateHandler = { [weak self] state in
                 guard let self else { return }
+                connectionLogger.error("log-tap connection state=\(String(describing: state))")
                 switch state {
                 case .ready:
                     let hello =
@@ -1050,6 +1069,30 @@ final class NativeAppModel {
         isRelayBroadcasting && relayControlHeldBy != nil && !applyingRelayCommand
     }
     var discoveredRelayHosts: [MonitorRelayDiscovery] = []
+
+    /// The rows the camera list shows: joinable broadcasts only. In-use beacons stay in
+    /// `discoveredRelayHosts` so the probe shield sees them, but there is nothing to join.
+    var visibleRelayBroadcasts: [MonitorRelayDiscovery] {
+        discoveredRelayHosts.filter(\.isWatchable)
+    }
+
+    /// Advertises the held camera while NOT sharing (see `CameraInUseBeacon`); the real
+    /// broadcast's advertisement carries the same shield, so only one runs at a time.
+    @ObservationIgnored private var cameraInUseBeacon: CameraInUseBeacon?
+
+    private func updateCameraInUseBeacon() {
+        let host = connectedIdentity?.host ?? ""
+        let shouldBeacon =
+            isCameraControlSession && !isRelayBroadcasting && !isDemoSession && !host.isEmpty
+        if shouldBeacon {
+            let beacon = cameraInUseBeacon ?? CameraInUseBeacon()
+            cameraInUseBeacon = beacon
+            beacon.start(hostName: UIDevice.current.name, servedCameraHost: host)
+        } else {
+            cameraInUseBeacon?.stop()
+            cameraInUseBeacon = nil
+        }
+    }
     var relayClientState: MonitorRelayClient.State = .idle
     /// The broadcast refused this device for want of a passcode; the waiting overlay asks.
     /// While true, the rejoin watchdog stands down — an auto-rejoin without the code is
@@ -1089,6 +1132,10 @@ final class NativeAppModel {
         // ex-broadcaster's watchers end up listed as phantom "nearby broadcasts".
         if broadcasting, videoSource == .relay { return }
         if broadcasting {
+            // The real advertisement carries the same shield; the beacon must release the
+            // service name before the host claims it.
+            cameraInUseBeacon?.stop()
+            cameraInUseBeacon = nil
             let host = MonitorRelayHost(profile: preferences.relayEncoderProfile)
             host.watcherPasscode = preferences.relayWatcherPasscode
             host.allowsControlRequests = preferences.relayAllowsControlRequests
@@ -1140,6 +1187,8 @@ final class NativeAppModel {
             relayVideoEncoder = nil
             relayPeerCount = 0
             isRelayBroadcasting = false
+            // Sharing ended but the session may live on — the in-use shield takes back over.
+            updateCameraInUseBeacon()
         }
     }
 
@@ -3254,6 +3303,7 @@ final class NativeAppModel {
                         cameraName: session.identity.displayName,
                         servedCameraHost: session.identity.host)
                 }
+                updateCameraInUseBeacon()
                 store.upsertSavedCamera(
                     host: session.identity.host,
                     displayName: session.identity.displayName,
@@ -5454,6 +5504,9 @@ final class NativeAppModel {
             // Leaving the monitor ends the session's *kind*, not just its transport — the next one
             // declares itself when it connects.
             isCameraControlSession = false
+            // The in-use shield ends with the session's kind, NOT with a recovery gap: a camera
+            // mid-recovery is exactly when a foreign probe must stay away.
+            updateCameraInUseBeacon()
             liveFrameImage = nil
             isMonitorPresented = false
             activePanel = nil

@@ -390,14 +390,14 @@ struct StartupSavedCamerasView: View {
         // A device with saved cameras only sees this section once a broadcast exists; a device
         // with none is here BECAUSE of broadcasts, so the section stays mounted with an honest
         // placeholder — browsing runs the whole time this screen is up.
-        if !model.discoveredRelayHosts.isEmpty || model.savedCameras.isEmpty {
+        if !model.visibleRelayBroadcasts.isEmpty || model.savedCameras.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("NEARBY BROADCASTS")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .tracking(1.4)
                     .foregroundStyle(StartupColors.muted)
                     .padding(.top, 6)
-                if model.discoveredRelayHosts.isEmpty {
+                if model.visibleRelayBroadcasts.isEmpty {
                     HStack(spacing: 8) {
                         Image(systemName: "dot.radiowaves.left.and.right")
                             .font(.system(size: 13, weight: .semibold))
@@ -416,7 +416,7 @@ struct StartupSavedCamerasView: View {
                         in: RoundedRectangle(cornerRadius: 14)
                     )
                 }
-                ForEach(model.discoveredRelayHosts) { host in
+                ForEach(model.visibleRelayBroadcasts) { host in
                     Button {
                         model.joinRelay(host)
                     } label: {
