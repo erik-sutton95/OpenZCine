@@ -152,9 +152,20 @@ final class WiFiJoinCoordinator {
     /// onto the camera AP after a pairing-triggered AP restart (the camera drops and re-raises its
     /// Wi‑Fi), when the credentials are already saved. No wait — discovery confirms the return, and
     /// re-applying a network this app already configured does not re-prompt the operator.
+    /// SSIDs whose re-apply the operator has declined. iOS shows a system "Wants to Join" alert
+    /// for every apply, so a re-apply loop that ignores a Cancel becomes the cancel-storm
+    /// ("cancel, cancel, cancel…"). One decline ends the chase for that network until an
+    /// explicit operator-initiated join clears it.
+    private var declinedReapplySSIDs: Set<String> = []
+
+    /// Clears the decline latch — call from a deliberate, operator-initiated join.
+    func clearReapplyDecline(ssid rawSSID: String) {
+        declinedReapplySSIDs.remove(rawSSID.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     func reapplyCameraNetwork(ssid rawSSID: String) {
         let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !ssid.isEmpty else { return }
+        guard !ssid.isEmpty, !declinedReapplySSIDs.contains(ssid) else { return }
         Task { [weak self] in await self?.performReapply(ssid: ssid) }
     }
 
@@ -172,8 +183,17 @@ final class WiFiJoinCoordinator {
             configuration = NEHotspotConfiguration(ssid: ssid)
         }
         configuration.joinOnce = false
-        NEHotspotConfigurationManager.shared.apply(configuration) { error in
+        NEHotspotConfigurationManager.shared.apply(configuration) { [weak self] error in
             guard let error else { return }
+            // An operator Cancel on the system alert is a decision, not a transient failure:
+            // latch it so the chase stops instead of re-prompting on the next tick.
+            if (error as NSError).code == NEHotspotConfigurationError.userDenied.rawValue {
+                Task { @MainActor in self?.declinedReapplySSIDs.insert(ssid) }
+                Self.hotspotLogger.info(
+                    "reapply declined by operator ssid=\(ssid, privacy: .private(mask: .hash)) — chase disarmed"
+                )
+                return
+            }
             // A best-effort reapply races the camera's pairing-triggered AP restart. iOS answers
             // `.alreadyAssociated` when the phone is already back on the network and `.internal`
             // (code 8) when the config can't be applied right now — also on the simulator, which

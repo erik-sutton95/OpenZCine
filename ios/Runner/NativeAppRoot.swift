@@ -2077,8 +2077,11 @@ final class NativeAppModel {
         connectionProgressShowsFailure = false
         connectionFailureDetail = ""
         connectionPhase = .discovering
+        // Says the thing the operator must actually do: a camera that has only ever met this
+        // phone over its own AP has no profile for this network, so it has to be put into its
+        // pairing wait here — "keep Connect to PC on" left them watching a spinner instead.
         connectionMessage =
-            "Looking for \(connectionProgressDeviceName) on this network. Keep Connect to PC on."
+            "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
         isConnectionProgressPresented = true
     }
 
@@ -3936,12 +3939,27 @@ final class NativeAppModel {
                 excludedHosts: { [weak self] in
                     self?.hostsServedByVisibleBroadcasts() ?? []
                 },
+                passiveOnly: expectsCameraInPairingMode,
                 status: { [weak self] message in
                     self?.connectionMessage = StartupConnectionCopy.friendly(message)
                 }
             )) ?? []
         applyDiscoveryResults(cameras)
         startDiscoveryLoop(resetResults: false)
+    }
+
+    /// Whether a camera is expected to be sitting in its "pairing computer and camera" wait right
+    /// now, so discovery must stay PASSIVE (Bonjour only — a probe is an Init, and an Init knocks
+    /// a pairing-mode ZR out of pairing). True while an infrastructure/hotspot setup watch is
+    /// armed (the operator was told to put the body into pairing on that network) and through the
+    /// post-confirm window.
+    /// Deliberately NOT armed by the post-confirm reconnect: there the body has FINISHED pairing
+    /// and is rebooting its network, so probing it is safe and is how the AP path finds it again.
+    private var expectsCameraInPairingMode: Bool {
+        switch pendingSetupIntent?.kind {
+        case .infrastructure, .phoneHotspot: return true
+        default: return false
+        }
     }
 
     /// Camera hosts some visible broadcast is serving, in raw and normalized forms — the
@@ -4023,6 +4041,7 @@ final class NativeAppModel {
                     excludedHosts: { [weak self] in
                         self?.hostsServedByVisibleBroadcasts() ?? []
                     },
+                    passiveOnly: expectsCameraInPairingMode,
                     status: { [weak self] message in
                         self?.connectionMessage = StartupConnectionCopy.friendly(message)
                     }
@@ -4053,7 +4072,17 @@ final class NativeAppModel {
 
     /// Resolves the camera's access-point SSID at pairing time: prefer the SSID the phone is on (the
     /// camera AP we paired over), else derive it from the camera's PTP name, else a saved record.
+    /// The camera-AP SSID to chase after a pairing, or `nil` when this pairing did not happen on
+    /// the camera's own network.
+    ///
+    /// PATH-ISOLATED, and this is the whole point: the SSID is derivable from the camera's NAME
+    /// (`ZR_6002199` → `NIKON_ZR_02199`), so the old unconditional derivation armed the AP-rejoin
+    /// machinery after a pairing completed over a ROUTER — and the re-apply loops then asked
+    /// "join NIKON_ZR_…?" over and over on a path that must never touch the camera AP. A pairing
+    /// only earns an AP chase with POSITIVE proof: this attempt applied the AP Wi-Fi config, or
+    /// the established session declared the camera-AP path.
     private func cameraAccessPointSSID(host: String, displayName: String?) -> String? {
+        guard sessionJoinedCameraAccessPoint || establishedSessionUsedCameraAP else { return nil }
         if let ssid = connectedWiFiSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
             CameraWiFiSSID.isNikonZAccessPoint(ssid)
         {

@@ -12,10 +12,16 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
     /// A provider rather than a set: the probe pass starts ~1.5 s into a scan, and a relay
     /// browser started alongside it has usually sighted the broadcasts by then — the freshest
     /// answer is the one that protects the camera.
+    /// `passiveOnly` restricts the pass to Bonjour + USB — no PTP probing at all. Used while a
+    /// camera is expected to be sitting in its "pairing computer and camera" wait: a probe is an
+    /// Init, and an Init against a body in pairing mode knocks it OUT of pairing ("Unable to
+    /// connect"). That is why an add-setup Router watch could hang forever with the camera in
+    /// plain sight — the watch's own scan was disarming the camera it was waiting for.
     func discover(
         guid: Data,
         priorityHosts: [String] = [],
         excludedHosts: @MainActor @escaping () -> Set<String> = { [] },
+        passiveOnly: Bool = false,
         status: @MainActor @escaping (String) -> Void = { _ in }
     ) async throws -> [DiscoveredCamera] {
         // USB-attached cameras are browser-driven and effectively instant; surface them without
@@ -36,14 +42,20 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         // not advertising yet — still gets its probe round, after the 1.4 s window.
         let bonjour = await BonjourPTPBrowser().discover(timeout: 1.4)
         let bonjourHosts = Set(bonjour.compactMap { PTPIPPairedHosts.normalizedHost($0.ip) })
-        let priority = await probeTrustedHosts(
-            guid: guid,
-            priorityHosts: priorityHosts,
-            excludedHosts: { excludedHosts().union(bonjourHosts) })
+        let priority =
+            passiveOnly
+            ? []
+            : await probeTrustedHosts(
+                guid: guid,
+                priorityHosts: priorityHosts,
+                excludedHosts: { excludedHosts().union(bonjourHosts) })
         let quickResults = CameraDiscovery.dedupeAndSort(usbCameras + bonjour + priority)
         if !quickResults.isEmpty {
             return quickResults
         }
+        // A pairing-mode body announces itself over Bonjour; the blind sweep below is all probes,
+        // so passive passes stop here rather than knocking it out of its pairing wait.
+        if passiveOnly { return CameraDiscovery.dedupeAndSort(usbCameras + bonjour) }
 
         await status("Still searching your network for cameras…")
         let probeResults = try await subnetProbe(
