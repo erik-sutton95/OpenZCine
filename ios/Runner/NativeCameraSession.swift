@@ -627,7 +627,9 @@ final class NativeCameraSession: @unchecked Sendable {
     }
 
     func liveViewFrameJPEG() async throws -> Data {
-        try await liveViewFrame().jpeg
+        // Always bounded: an unbounded fetch would hold the serial transaction gate forever if
+        // the body wedges mid-frame (audit finding #14 — this was the one nil-deadline caller).
+        try await liveViewFrame(deadline: .seconds(10)).jpeg
     }
 
     /// Fetches the next live-view frame. `deadline` bounds the fetch so a camera that accepts

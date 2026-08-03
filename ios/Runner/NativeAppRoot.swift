@@ -3766,6 +3766,8 @@ final class NativeAppModel {
     /// for nothing. `nil` forces a refresh on the first cycle after connect.
     @ObservationIgnored private var lastDescriptorRefreshAt: Date?
     @ObservationIgnored private var lastStorageRefreshAt: Date?
+    /// Round-robin position for the spread descriptor refresh (one group per pass, not five).
+    @ObservationIgnored private var descriptorRefreshCursor = 0
     @ObservationIgnored private var lastRecordingPropertyPollAt: Date?
     /// One-shot per property: first read outcome (bytes or rejection) logged this session, so a
     /// command tile reading "—" on hardware is diagnosable from Console without per-poll spam.
@@ -5836,7 +5838,15 @@ final class NativeAppModel {
     private func refreshLinkHealth() {
         let snapshot = CameraLinkHealthScorer.score(currentLinkHealthInputs())
         linkHealth = snapshot.linkHealthScore
-        linkHealthDetail = snapshot.detailCaption
+        // Field diagnosability: when the ladder has the preview stepped down, say so — softness
+        // should be attributable to the link, not mistaken for the lens or the preset.
+        if adaptiveStreamSizeCap < preferences.streamPreset.liveViewImageSize,
+            videoSource == .cameraLiveView, !streamsHeaderOnly
+        {
+            linkHealthDetail = snapshot.detailCaption + " · Preview reduced for link quality"
+        } else {
+            linkHealthDetail = snapshot.detailCaption
+        }
         // USB-C: frame timing isn't radio quality — show full bars whenever the link is alive.
         let bars =
             cameraSession?.transportKind == .usb
@@ -7360,7 +7370,13 @@ final class NativeAppModel {
     /// Refreshes slow-changing descriptors on a conservative cadence. The first non-recording poll
     /// after a new connection runs both groups; stream restarts preserve the timestamps so they do
     /// not create another descriptor burst. During a take, descriptor traffic is deferred entirely.
+    ///
+    /// Congestion-aware: while the adaptive ladder has the stream stepped down, every one of
+    /// these transactions is a frame slot stolen from a link already struggling — and the data
+    /// (lens ranges, screen modes, free space) changes on human timescales. Deferring costs
+    /// nothing; the refresh runs on the first healthy pass.
     private func refreshCameraMaintenanceIfDue(session: NativeCameraSession) async {
+        guard adaptiveStreamSizeCap >= preferences.streamPreset.liveViewImageSize else { return }
         let now = Date()
         if CameraMonitorPollPolicy.isDue(
             lastRefreshAt: lastStorageRefreshAt,
@@ -7371,17 +7387,24 @@ final class NativeAppModel {
             await refreshStorageInfo(session: session)
         }
         guard !isRecording else { return }
+        // ONE descriptor group per pass, at a fifth of the group interval — same per-group
+        // freshness as the old five-reads-in-a-row burst every full interval, but spread so
+        // no single pass steals more than one frame slot (audit finding: wall-clock bursts
+        // ignore the frame-relative pacing and landed as a visible periodic hitch on Wi-Fi).
         if CameraMonitorPollPolicy.isDue(
             lastRefreshAt: lastDescriptorRefreshAt,
             now: now,
-            interval: CameraMonitorPollPolicy.descriptorRefreshInterval)
+            interval: CameraMonitorPollPolicy.descriptorRefreshInterval / 5)
         {
             lastDescriptorRefreshAt = now
-            await refreshLensApertures(session: session)
-            await refreshStillShutterOptions(session: session)
-            await refreshScreenModes(session: session)
-            await refreshFileTypeModes(session: session)
-            await refreshControlOptions(session: session)
+            switch descriptorRefreshCursor % 5 {
+            case 0: await refreshLensApertures(session: session)
+            case 1: await refreshStillShutterOptions(session: session)
+            case 2: await refreshScreenModes(session: session)
+            case 3: await refreshFileTypeModes(session: session)
+            default: await refreshControlOptions(session: session)
+            }
+            descriptorRefreshCursor += 1
         }
     }
 

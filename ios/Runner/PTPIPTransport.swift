@@ -373,7 +373,13 @@ final class PTPIPSocket: @unchecked Sendable {
         }
         let payloadLength = Int(length) - 8
         let payload = payloadLength > 0 ? try await readExact(byteCount: payloadLength) : Data()
-        return try PTPIPPacket(serializedBytes: headerBytes + Array(payload))
+        // Build the packet directly from the parsed header + payload Data. The old
+        // serialize-then-reparse roundtrip (`headerBytes + Array(payload)` →
+        // `init(serializedBytes:)` → `Data(bytes[8..<length])`) copied the whole JPEG-sized
+        // payload three extra times per frame (audit finding: the copy chain).
+        let type =
+            PTPIPPacketType(rawValue: ByteCoding.readUInt32LE(headerBytes, at: 4)) ?? .unknown
+        return PTPIPPacket(type: type, payload: payload)
     }
 
     private func send(_ data: Data) async throws {
@@ -586,11 +592,19 @@ final class PTPIPSocket: @unchecked Sendable {
 
     private func waitForDescriptor(_ descriptor: Int32, events: Int16, label: String) throws {
         // Loop rather than recurse on EINTR (and on a wakeup that isn't yet readable): under a
-        // signal storm the old recursion grew the stack without bound. Each iteration re-polls
-        // with the same timeout, so a genuine stall still surfaces as `.timeout`.
+        // signal storm the old recursion grew the stack without bound. The bound is CUMULATIVE
+        // across retries — each re-poll used to get the full timeout again, so a stream of
+        // spurious wakeups could stretch one "10 s" wait indefinitely (audit finding #13).
+        let deadline = DispatchTime.now().advanced(
+            by: .milliseconds(Int(min(timeoutMilliseconds, 30_000))))
         while true {
+            let remainingMilliseconds =
+                (deadline.uptimeNanoseconds &- DispatchTime.now().uptimeNanoseconds) / 1_000_000
+            guard DispatchTime.now() < deadline, remainingMilliseconds > 0 else {
+                throw NativeCameraSessionError.timeout(label)
+            }
             var pollDescriptor = pollfd(fd: descriptor, events: events, revents: 0)
-            let result = Darwin.poll(&pollDescriptor, 1, Int32(min(timeoutMilliseconds, 30_000)))
+            let result = Darwin.poll(&pollDescriptor, 1, Int32(remainingMilliseconds))
             if result > 0 {
                 if (pollDescriptor.revents & events) != 0 {
                     return

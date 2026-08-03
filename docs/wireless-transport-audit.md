@@ -87,17 +87,35 @@ at all), and the RTT-from-frame-fetch pacing (5bddeb7) destabilised poll cadence
 deadline-closes-the-channel design predates both but only bites on genuinely weak links —
 the field router exposed it. The adaptive ladder is the structural answer.
 
+## Second pass (shipped after the first round)
+
+- **Cumulative socket-wait bound** (finding #13): `waitForDescriptor` restarted its full
+  timeout on every spurious wakeup; the bound is now a deadline across retries.
+- **The one unbounded frame fetch** (finding #14): `liveViewFrameJPEG()` now always passes
+  a deadline, so no future caller can wedge the transaction gate.
+- **Wall-clock property bursts spread and congestion-gated:** the descriptor refresh runs
+  ONE group per pass at a fifth of the old interval (same per-group freshness, no
+  five-read burst), and all maintenance refreshes defer entirely while the adaptive
+  ladder has the stream stepped down — a struggling link keeps every frame slot.
+- **Copy chain, the avoidable subset:** `readPacket` builds packets directly from the
+  parsed header + payload `Data` instead of the serialize-then-reparse roundtrip that
+  copied the JPEG-sized payload three extra times per frame. Remaining copies
+  (recv→Data, buffer take, data-phase append, JPEG extraction) are one structural copy
+  each.
+- **Adaptive state is visible:** the Link details append "Preview reduced for link
+  quality" while the ladder is below the operator's preset, so field softness is
+  attributable.
+
 ## Deferred, with reasons
 
 - **Pipelining two frame fetches on the wire.** PTP transaction semantics are strictly
   serial per session; bodies are not documented to accept overlapped operations, and a
   desync wedges the camera. Not worth the protocol risk for one RTT of gain. [verify-on-HW
   before ever revisiting]
-- **The JPEG copy chain (~6-8 copies/frame).** Real CPU savings, but a refactor across the
-  framing/buffer stack; the scratch-buffer fix removed the worst term. Follow-up.
-- **Wall-clock property bursts** (descriptor refresh = five back-to-back reads every 60 s,
-  storage every 15 s). Visible as a periodic hitch; candidates for spreading across safe
-  points and gating on stream health. Follow-up.
+- **Android facade ladder parity.** The Kotlin-facing pump (`runLiveViewPump`) is a
+  different architecture (fixed-interval schedule, its own error taxonomy); wiring
+  `LiveViewAdaptiveQuality` there is tracked as its own task and needs a real body to
+  verify.
 - **Watch mirroring A/B.** Per-frame WCSession traffic is backpressured and
   Bluetooth-side, but a with/without-watch fps comparison in the field would bound its
   real cost. [verify-on-HW]
