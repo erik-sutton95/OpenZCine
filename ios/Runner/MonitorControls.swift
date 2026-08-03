@@ -1048,8 +1048,11 @@ struct SettingsPercentSlider: View {
 /// Amber action pill (`settings-action`).
 struct SettingsActionPill: View {
     let title: String
-    /// Optional leading SF Symbol (e.g. the Disconnect pill's broken-connector glyph).
+    /// Optional leading SF Symbol (e.g. the Disconnect pill's broken-link glyph).
     var systemImage: String? = nil
+    /// Draws the standard SF slash treatment over the symbol — for glyphs the font ships no
+    /// slashed variant of (there is no `link.slash`; a slashed `link` reads as a cut chain).
+    var slashesIcon = false
     var tint: Color = LiveDesign.accent
     var background: Color = LiveDesign.accentDim
     /// Stretches the capsule to the height its row offers — used to match the link tile.
@@ -1061,6 +1064,22 @@ struct SettingsActionPill: View {
                 if let systemImage {
                     Image(systemName: systemImage)
                         .font(.system(size: 13, weight: .semibold))
+                        .overlay {
+                            if slashesIcon {
+                                // SF's slash runs top-left → bottom-right; the wider casing
+                                // stroke in the pill's background color separates the slash
+                                // from the glyph, matching the system slash idiom.
+                                ZStack {
+                                    Capsule()
+                                        .fill(background)
+                                        .frame(width: 4.2, height: 19)
+                                    Capsule()
+                                        .fill(tint)
+                                        .frame(width: 1.7, height: 19)
+                                }
+                                .rotationEffect(.degrees(-45))
+                            }
+                        }
                 }
                 Text(title.uppercased())
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))

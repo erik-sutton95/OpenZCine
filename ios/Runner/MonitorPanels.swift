@@ -3957,7 +3957,8 @@ struct OperatorSettingsPanel: View {
                 HStack(spacing: 10) {
                     SettingsActionPill(
                         title: "Disconnect",
-                        systemImage: "cable.connector.slash",
+                        systemImage: "link",
+                        slashesIcon: true,
                         tint: LiveDesign.rec,
                         background: LiveDesign.rec.opacity(0.16),
                         fillsHeight: true

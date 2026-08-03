@@ -12,11 +12,11 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
     /// A provider rather than a set: the probe pass starts ~1.5 s into a scan, and a relay
     /// browser started alongside it has usually sighted the broadcasts by then — the freshest
     /// answer is the one that protects the camera.
-    /// `passiveOnly` restricts the pass to Bonjour + USB — no PTP probing at all. Used while a
-    /// camera is expected to be sitting in its "pairing computer and camera" wait: a probe is an
-    /// Init, and an Init against a body in pairing mode knocks it OUT of pairing ("Unable to
-    /// connect"). That is why an add-setup Router watch could hang forever with the camera in
-    /// plain sight — the watch's own scan was disarming the camera it was waiting for.
+    /// `passiveOnly` restricts the pass to Bonjour + USB — no PTP probing at all. Currently
+    /// unused: hardware evidence (2026-08-03) settled that an infrastructure pairing-wait ZR
+    /// advertises nothing (only a probe finds it) AND survives being probed — so setup watches
+    /// scan actively. The mechanism stays for any future body state that genuinely cannot be
+    /// probed; the camera-AP pairing wizard context is where probe-sensitivity was once seen.
     func discover(
         guid: Data,
         priorityHosts: [String] = [],

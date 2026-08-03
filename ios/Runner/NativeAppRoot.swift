@@ -3932,7 +3932,6 @@ final class NativeAppModel {
         guard !isConnected, !isDemoSession else { return }
         stopDiscoveryLoop(keepRelayBrowsing: true)
         let guid = NativeCameraConnectionStore.shared.guid()
-        let passive = nextDiscoveryPassIsPassive()
         let cameras =
             (try? await discoveryService.discover(
                 guid: guid,
@@ -3940,12 +3939,11 @@ final class NativeAppModel {
                 excludedHosts: { [weak self] in
                     self?.hostsServedByVisibleBroadcasts() ?? []
                 },
-                passiveOnly: passive,
                 status: { [weak self] message in
                     self?.connectionMessage = StartupConnectionCopy.friendly(message)
                 }
             )) ?? []
-        logSetupWatchPass(passive: passive, cameras: cameras)
+        logSetupWatchPass(cameras: cameras)
         applyDiscoveryResults(cameras)
         startDiscoveryLoop(resetResults: false)
     }
@@ -3955,42 +3953,21 @@ final class NativeAppModel {
     /// a pairing-mode ZR out of pairing). True while an infrastructure/hotspot setup watch is
     /// armed (the operator was told to put the body into pairing on that network) and through the
     /// post-confirm window.
-    /// Deliberately NOT armed by the post-confirm reconnect: there the body has FINISHED pairing
-    /// and is rebooting its network, so probing it is safe and is how the AP path finds it again.
-    private var expectsCameraInPairingMode: Bool {
-        switch pendingSetupIntent?.kind {
-        case .infrastructure, .phoneHotspot: return true
-        default: return false
-        }
-    }
-
-    /// Empty PASSIVE passes since the watch armed (see `nextDiscoveryPassIsPassive`).
-    @ObservationIgnored private var setupWatchPassiveEmptyPasses = 0
-
-    /// Passive-first with an active hedge: two Bonjour-only passes protect a body sitting in its
-    /// pairing wait, then one ACTIVE pass runs anyway — a body that does not advertise while
-    /// waiting can only be found by probing, and the field evidence is that an active pass does
-    /// find and pair it. Alternating keeps both failure modes covered while the passive
-    /// assumption ([verify-on-HW]: does a pairing-wait ZR advertise _ptp._tcp?) settles.
-    private func nextDiscoveryPassIsPassive() -> Bool {
-        guard expectsCameraInPairingMode else { return false }
-        if setupWatchPassiveEmptyPasses >= 2 {
-            setupWatchPassiveEmptyPasses = 0
-            return false
-        }
-        return true
-    }
-
     /// One-line verdict per discovery pass while a setup watch is armed — the stuck-"Searching…"
     /// diagnosis line. Read in Console as `setup-watch`.
-    private func logSetupWatchPass(passive: Bool, cameras: [DiscoveredCamera]) {
+    ///
+    /// Watches scan ACTIVELY on every pass, settled by hardware evidence (2026-08-03): a ZR in
+    /// its "pairing computer and camera" wait advertises NOTHING over Bonjour — a probe is the
+    /// only thing that finds it — and the probe does not knock it out of pairing (it paired
+    /// cleanly right after, twice). The passive-first hedge this replaced burned ~4 wasted
+    /// passes before the first active one could fulfill.
+    private func logSetupWatchPass(cameras: [DiscoveredCamera]) {
         guard let intent = pendingSetupIntent else { return }
-        if expectsCameraInPairingMode, cameras.isEmpty { setupWatchPassiveEmptyPasses += 1 }
         let listing = cameras.map { "\($0.ip)/\($0.displayName)/\($0.source)" }
             .joined(separator: " ")
         logConnection(
             "setup-watch pass kind=\(intent.kind) anchor=\(intent.anchor.displayTitle) "
-                + "passive=\(passive) found=\(cameras.count) [\(listing)]")
+                + "found=\(cameras.count) [\(listing)]")
     }
 
     /// Camera hosts some visible broadcast is serving, in raw and normalized forms — the
@@ -4066,19 +4043,17 @@ final class NativeAppModel {
 
             let cameras: [DiscoveredCamera]
             do {
-                let passive = nextDiscoveryPassIsPassive()
                 cameras = try await discoveryService.discover(
                     guid: guid,
                     priorityHosts: savedCameras.map(\.host),
                     excludedHosts: { [weak self] in
                         self?.hostsServedByVisibleBroadcasts() ?? []
                     },
-                    passiveOnly: passive,
                     status: { [weak self] message in
                         self?.connectionMessage = StartupConnectionCopy.friendly(message)
                     }
                 )
-                logSetupWatchPass(passive: passive, cameras: cameras)
+                logSetupWatchPass(cameras: cameras)
             } catch {
                 cameras = []
                 connectionMessage =
