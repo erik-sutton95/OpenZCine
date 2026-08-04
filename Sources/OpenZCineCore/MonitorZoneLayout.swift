@@ -276,20 +276,14 @@ public enum MonitorZoneLayout {
         let record = slots.record
         let dispW = slots.disp.width
         let dispH = slots.disp.height
-        let stripFrame = map.assistStrip?.frame
-        // Midline-align with the strip only when the band actually has room for the button.
-        // Clean view collapses the band to a zero-height line at its bottom edge, and centring
-        // on THAT put DISP half below the screen (field report: DISP clipped in DISP 2). The
-        // record slot's bottom edge is the corner's constant baseline in every mode.
-        let dispY: Double
-        if let strip = stripFrame, strip.height >= dispH {
-            dispY = strip.y + (strip.height - dispH) / 2
-        } else {
-            dispY = record.y + record.height - dispH
-        }
+        // Bottom-align to the record slot's baseline in EVERY mode: the record slot does not
+        // move with the bar height, so DISP stays put across DISP 1↔2 (field report: it
+        // shifted between modes and clipped in clean, whose band collapses to a zero-height
+        // line). The record button was itself bottom-aligned with the bars, so this IS
+        // "inline with the bottom bars".
         let disp = MonitorModuleFrame(
             x: record.x + record.width - dispW,
-            y: dispY,
+            y: record.y + record.height - dispH,
             width: dispW,
             height: dispH
         )
@@ -325,8 +319,13 @@ public enum MonitorZoneLayout {
         }
 
         let feedTop = map.feed.y
+        // Top-band membership is "starts above the feed", not "fits entirely above it": on
+        // hardware the base chrome straddles the feed's top edge by a few points, and the
+        // stricter rule silently skipped the raise there (field report: top chrome still
+        // overlapping the feed with headroom above it). Full-bleed feeds (y = 0) still
+        // exclude everything.
         func raised(_ frame: MonitorModuleFrame) -> MonitorModuleFrame {
-            guard frame.y + frame.height <= feedTop, frame.y > minimumTopY else { return frame }
+            guard frame.y < feedTop, frame.y > minimumTopY else { return frame }
             return MonitorModuleFrame(
                 x: frame.x, y: minimumTopY, width: frame.width, height: frame.height)
         }

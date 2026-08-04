@@ -670,7 +670,10 @@ private enum PadMiniViewport {
     #expect(abs((disp.x + disp.width) - (record.x + record.width)) < 0.5, "disp=\(disp)")
     let baseStrip = try #require(base.assistStrip).frame
     let strip = try #require(refined.assistStrip).frame
-    #expect(abs(disp.midY - (strip.y + strip.height / 2)) < 0.5, "disp=\(disp) strip=\(strip)")
+    // Bottom-aligned to the record baseline — the one anchor that does not move across DISP
+    // modes (the strip midline shifted DISP between DISP 1 and 2; field report: "it should
+    // stay put").
+    #expect(abs((disp.y + disp.height) - (record.y + record.height)) < 0.5, "disp=\(disp)")
     // The strip recenters at its own width (a widened glass panel failed to render — see
     // `watcherRefined`), clearing DISP.
     #expect(abs(strip.midX - viewportWidth / 2) < 0.5, "strip=\(strip)")
