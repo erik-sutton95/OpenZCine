@@ -289,8 +289,18 @@ struct MetalLiveView: UIViewRepresentable {
             private var spatialScalerKey: SpatialScalerKey?
             /// Whether to try MetalFX at all: A13+ only (iOS 17 still runs on A12), and latched off
             /// after a creation failure so a device that refuses it does not retry every frame.
+            ///
+            /// HELD OFF pending a device abort: `MTLFXSpatialScaler.encode` raised SIGABRT inside
+            /// `_MFXSpatialScalingEffect` on hardware, after the scaler had been created
+            /// successfully — so `supportsDevice` and `makeSpatialScaler` both said yes and the
+            /// encode still asserted. That is a precondition on the textures or the descriptor that
+            /// only the device validates, and it cannot be caught (an ObjC assert aborts). Until the
+            /// assertion text names it, the feed upscales through Lanczos, which is where it was
+            /// before this path landed. Flip this back on with the fix, not before — a crashing
+            /// monitor is worse than a softer upscale. See `ZC_METALFX_FEED` to test a candidate.
             private lazy var spatialScalingSupported =
-                !DemoHarness.forceLanczosFeedScaler
+                ProcessInfo.processInfo.environment["ZC_METALFX_FEED"] == "1"
+                && !DemoHarness.forceLanczosFeedScaler
                 && MTLFXSpatialScalerDescriptor.supportsDevice(device)
 
             /// Encodes the bake→drawable upscale through MetalFX Spatial, or returns `false` when
