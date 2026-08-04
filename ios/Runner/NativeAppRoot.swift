@@ -6637,15 +6637,26 @@ final class NativeAppModel {
                     pausedForCommand = false
                     if liveViewSuspended {
                         // Feed came back — re-enter live view at the size the current thermal state
-                        // asks for. A start failure returns .stalled so the outer loop's backoff
-                        // rebuilds the stream cleanly.
+                        // asks for.
                         liveViewSuspended = false
                         let requestedSize = effectiveStreamImageSize
                         await session.configureLiveView(
                             size: requestedSize,
                             compression: preferences.qualityBias.liveViewImageCompression)
                         lastAppliedStreamImageSize = requestedSize
-                        try await session.startLiveView()
+                        do {
+                            try await session.startLiveView()
+                        } catch {
+                            // Right after EndLiveView the body can still be tearing the old
+                            // stream down and refuse the restart; one settle beat clears it.
+                            // Without this, every settings visit ended in the outer rebuild —
+                            // seconds of RECOV for a pause the app itself asked for. A second
+                            // failure is real and propagates to that rebuild.
+                            connectionLogger.info(
+                                "live view resume refused once; retrying after settle")
+                            try? await Task.sleep(for: .milliseconds(600))
+                            try await session.startLiveView()
+                        }
                     }
                     headerOnly = streamsHeaderOnly
                     watchdog.recordGoodFrame(at: Date())
@@ -6654,8 +6665,12 @@ final class NativeAppModel {
                     frameRate = FrameRateSampler()
                     lastLevelUpdateTime = 0
                     lastScopeSampleTime = 0
+                    // First-frame deadline, not the steady-state one: this is a cold restart —
+                    // StartLiveView plus the body's first encode — exactly like the DISP
+                    // transition below, and the tight RTT-scaled deadline read its normal
+                    // startup latency as a stall.
                     nextFrameTask = liveFrameTask(
-                        session, deadline: liveViewFrameDeadline(for: session))
+                        session, deadline: Self.firstLiveViewFrameDeadline)
                 }
                 // Entering or leaving Command: restart the stream at the size that mode wants.
                 // One stop/start per DISP transition — the same count the old pause/resume paid.

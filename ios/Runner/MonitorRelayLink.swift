@@ -151,11 +151,15 @@ final class RelayPresenceServer {
     /// Publishes the device's current presence, or stops answering with `nil`.
     func update(_ presence: RelayPresence?) {
         self.presence = presence
-        guard presence != nil else {
+        guard let presence else {
+            if listener != nil { logConnection("presence responder off") }
             listener?.cancel()
             listener = nil
             return
         }
+        logConnection(
+            "presence responder on (w=\(presence.w) ch=\(presence.ch ?? "nil")"
+                + " p=\(presence.p.map(String.init) ?? "nil"))")
         startIfNeeded()
     }
 

@@ -33,22 +33,37 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         usbBrowser.start()
         let usbCameras = usbBrowser.attachedCameras()
 
-        // Unicast presence rides every pass, concurrently and without blocking the return:
-        // it finds broadcasts and in-use beacons that filtered-multicast networks hide from
-        // Bonjour, and the model compares the two to warn the operator.
-        let presenceTask = Task { () -> [String: RelayPresence] in
-            let localAddresses = nativeLocalIPv4Interfaces()
-                .filter {
-                    CameraDiscovery.isSupportedScanInterface(name: $0.name, address: $0.address)
-                }
-                .map(\.address)
-            let split = CameraDiscovery.prioritizedScanHosts(
-                priorityHosts: priorityHosts, localAddresses: localAddresses)
-            return await Self.relayPresenceSweep(hosts: split.priority + split.remaining)
-        }
-        Task { @MainActor in
-            let hits = await presenceTask.value
-            if !hits.isEmpty { onRelayPresences(hits) }
+        // Unicast presence rides discovery, concurrently and without blocking the return: it
+        // finds broadcasts and in-use beacons that filtered-multicast networks hide from
+        // Bonjour, and the model compares the two to warn the operator. Rate-limited to one
+        // full-subnet sweep per 30 s — discovery passes run every few seconds, and 252 SYNs
+        // (plus the router's ARP for every absent host) per pass is airtime taken from the
+        // very camera link this feature protects. The model prunes hits at 90 s, so a 30 s
+        // refresh keeps live rows live with three chances before expiry.
+        if Self.claimPresenceSweepSlot() {
+            let presenceTask = Task { () -> [String: RelayPresence] in
+                let localAddresses = nativeLocalIPv4Interfaces()
+                    .filter {
+                        CameraDiscovery.isSupportedScanInterface(
+                            name: $0.name, address: $0.address)
+                    }
+                    .map(\.address)
+                let split = CameraDiscovery.prioritizedScanHosts(
+                    priorityHosts: priorityHosts, localAddresses: localAddresses)
+                return await Self.relayPresenceSweep(hosts: split.priority + split.remaining)
+            }
+            Task { @MainActor in
+                let hits = await presenceTask.value
+                let listing =
+                    hits
+                    .map { host, presence in
+                        "\(host)(\(presence.n) w=\(presence.w) ch=\(presence.ch ?? "nil")"
+                            + " p=\(presence.p.map(String.init) ?? "nil"))"
+                    }
+                    .joined(separator: " ")
+                logConnection("presence sweep hits=\(hits.count) [\(listing)]")
+                if !hits.isEmpty { onRelayPresences(hits) }
+            }
         }
 
         await status("Searching for cameras on Wi‑Fi and USB‑C…")
@@ -200,6 +215,19 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                 if let result { results.append(result) }
             }
             return results
+        }
+    }
+
+    /// Grants at most one full-subnet presence sweep per 30 s across every discovery entry
+    /// point. Thread-safe: discovery runs from more than one task.
+    private static let presenceSweepSlot = OSAllocatedUnfairLock(
+        initialState: Date.distantPast)
+    private static func claimPresenceSweepSlot() -> Bool {
+        presenceSweepSlot.withLock { last -> Bool in
+            let now = Date()
+            guard now.timeIntervalSince(last) >= 30 else { return false }
+            last = now
+            return true
         }
     }
 
