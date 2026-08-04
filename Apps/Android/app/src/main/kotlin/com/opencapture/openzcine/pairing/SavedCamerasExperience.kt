@@ -26,9 +26,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -161,6 +164,7 @@ public fun SavedCamerasExperience(
     onShareDiagnostics: (() -> Unit)? = null,
     nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast> = emptyList(),
     onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit = {},
+    networkFiltersDiscovery: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -861,6 +865,7 @@ public fun SavedCamerasExperience(
                             },
                             nearbyBroadcasts = nearbyBroadcasts,
                             onWatchBroadcast = gatedWatchBroadcast,
+                            networkFiltersDiscovery = networkFiltersDiscovery,
                             fillAvailableHeight = true,
                             scrollRows = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -902,6 +907,7 @@ public fun SavedCamerasExperience(
                                 },
                                 nearbyBroadcasts = nearbyBroadcasts,
                                 onWatchBroadcast = gatedWatchBroadcast,
+                                networkFiltersDiscovery = networkFiltersDiscovery,
                                 fillAvailableHeight = false,
                                 scrollRows = false,
                                 modifier = Modifier.fillMaxWidth(),
@@ -1140,6 +1146,7 @@ private fun SavedCameraList(
     onForgetSetup: (SavedCameraRecord) -> Unit,
     nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast>,
     onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit,
+    networkFiltersDiscovery: Boolean,
     fillAvailableHeight: Boolean,
     scrollRows: Boolean,
     modifier: Modifier,
@@ -1248,6 +1255,32 @@ private fun SavedCameraList(
                 letterSpacing = 1.4.sp,
             )
             Spacer(Modifier.height(6.dp))
+            if (networkFiltersDiscovery) {
+                // Proven, not guessed (iOS parity): a device answered the app's direct
+                // presence check while the network's own discovery never delivered it
+                // (multicast/mDNS filtered). Rows below were found directly, stay joinable.
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(StartupColors.accent.copy(alpha = 0.12f))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Warning,
+                        contentDescription = null,
+                        tint = StartupColors.accent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        stringResource(R.string.saved_network_filters_discovery),
+                        color = StartupColors.ink,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             if (nearbyBroadcasts.isEmpty()) {
                 Text(
                     stringResource(R.string.saved_nearby_broadcasts_empty),

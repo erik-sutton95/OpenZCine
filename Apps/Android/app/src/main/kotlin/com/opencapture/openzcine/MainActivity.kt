@@ -98,6 +98,11 @@ import com.opencapture.openzcine.pairing.SavedCamerasExperience
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
+import com.opencapture.openzcine.relay.RelayPresence
+import com.opencapture.openzcine.relay.RelayPresenceScanner
+import com.opencapture.openzcine.relay.mergedNearbyBroadcasts
+import com.opencapture.openzcine.relay.presenceProvesFiltering
+import com.opencapture.openzcine.relay.updatedPresenceHiddenSince
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
@@ -580,6 +585,37 @@ class MainActivity : ComponentActivity() {
                                 .broadcasts()
                         }
                             .collectAsState(initial = emptyList())
+                    // Unicast presence sweep (iOS parity): on networks whose routers filter
+                    // multicast, the NSD browse lists nothing — direct answers on the presence
+                    // port keep broadcasts joinable, and an answer NSD cannot see is the proof
+                    // the network filters discovery (the operator warning in the list).
+                    var relayPresences by
+                        remember { mutableStateOf(emptyMap<String, RelayPresence>()) }
+                    var networkFiltersDiscovery by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) {
+                        val scanner = RelayPresenceScanner()
+                        var hiddenSince = emptyMap<String, Long>()
+                        while (true) {
+                            // The scanner's own 30 s limiter makes most ticks no-ops. Each
+                            // completed sweep REPLACES the set — authoritative, so a host that
+                            // stopped answering leaves no ghost row — and the verdict
+                            // re-evaluates every tick so the 10 s hidden threshold trips
+                            // between sweeps.
+                            scanner.sweep()?.let { relayPresences = it }
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            hiddenSince =
+                                updatedPresenceHiddenSince(
+                                    presences = relayPresences,
+                                    nsdNames =
+                                        nearbyBroadcasts.mapTo(mutableSetOf()) { it.name },
+                                    selfName = relayDeviceName,
+                                    previous = hiddenSince,
+                                    nowMillis = now,
+                                )
+                            networkFiltersDiscovery = presenceProvesFiltering(hiddenSince, now)
+                            delay(10_000)
+                        }
+                    }
                     Box(Modifier.fillMaxSize()) {
                         when (startupSurface) {
                             StartupSurface.SAVED_CAMERAS ->
@@ -620,8 +656,16 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     // In-use beacons (w=0) shield their camera from probes but
-                                    // are not joinable — the list never shows them.
-                                    nearbyBroadcasts = nearbyBroadcasts.filter { it.isWatchable },
+                                    // are not joinable — the list never shows them. Presence
+                                    // answers NSD never delivered join as regular rows.
+                                    nearbyBroadcasts =
+                                        mergedNearbyBroadcasts(
+                                                nearbyBroadcasts,
+                                                relayPresences,
+                                                relayDeviceName,
+                                            )
+                                            .filter { it.isWatchable },
+                                    networkFiltersDiscovery = networkFiltersDiscovery,
                                     onWatchBroadcast = { broadcast ->
                                         relayBroadcastController.stop(
                                             notifyReason = "The broadcast ended.")

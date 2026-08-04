@@ -241,6 +241,7 @@
     <string name="saved_forget_setup">Forget %1$s setup</string>
     <string name="saved_nearby_broadcasts">Nearby broadcasts</string>
     <string name="saved_nearby_broadcasts_empty">Broadcasts from other devices appear here.</string>
+    <string name="saved_network_filters_discovery">This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router.</string>
     <string name="relay_watch">Watch</string>
     <string name="pairing_watcher_question">Watching another device?</string>
     <string name="pairing_watcher_action">Open the camera list</string>
