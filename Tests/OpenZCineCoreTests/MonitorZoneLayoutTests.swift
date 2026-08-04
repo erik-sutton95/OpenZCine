@@ -702,3 +702,23 @@ private enum PadMiniViewport {
     #expect(abs(strip.midX - viewportWidth / 2) < 0.5, "strip=\(strip)")
     #expect(strip.width > 0, "strip=\(strip)")
 }
+
+@Test func watcherRefinementKeepsDispOnScreenWhenCleanCollapsesTheBand() throws {
+    let viewportWidth = 1194.0
+    let viewportHeight = 834.0
+    let safeArea = MonitorEdgeInsets(top: 24, leading: 0, bottom: 20, trailing: 0)
+    let chromeInsets = MonitorChromeLayout.insets(feedSafeArea: safeArea)
+    // Clean view mounts no bottom bars: bottomBarHeight 0 collapses the assist band to a
+    // zero-height line, and DISP must fall back to the record corner's baseline instead of
+    // centring on that line (which clipped it off the bottom edge — field report, DISP 2).
+    let base = MonitorZoneLayout.map(
+        viewportWidth: viewportWidth, viewportHeight: viewportHeight, safeArea: safeArea,
+        chromeInsets: chromeInsets, mode: .clean, isPortrait: false, aspect: .fit16x9,
+        scopeCount: 0, horizontalDirection: .standard, bottomBarHeight: 0)
+    let refined = MonitorZoneLayout.watcherRefined(
+        base, viewportWidth: viewportWidth, minimumTopY: chromeInsets.top)
+    let record = base.systemSlots.record
+    let disp = refined.systemSlots.disp
+    #expect(abs((disp.y + disp.height) - (record.y + record.height)) < 0.5, "disp=\(disp)")
+    #expect(disp.y + disp.height <= viewportHeight, "disp=\(disp)")
+}

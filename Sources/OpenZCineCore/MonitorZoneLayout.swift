@@ -277,10 +277,19 @@ public enum MonitorZoneLayout {
         let dispW = slots.disp.width
         let dispH = slots.disp.height
         let stripFrame = map.assistStrip?.frame
+        // Midline-align with the strip only when the band actually has room for the button.
+        // Clean view collapses the band to a zero-height line at its bottom edge, and centring
+        // on THAT put DISP half below the screen (field report: DISP clipped in DISP 2). The
+        // record slot's bottom edge is the corner's constant baseline in every mode.
+        let dispY: Double
+        if let strip = stripFrame, strip.height >= dispH {
+            dispY = strip.y + (strip.height - dispH) / 2
+        } else {
+            dispY = record.y + record.height - dispH
+        }
         let disp = MonitorModuleFrame(
             x: record.x + record.width - dispW,
-            y: stripFrame.map { $0.y + ($0.height - dispH) / 2 }
-                ?? (record.y + record.height - dispH),
+            y: dispY,
             width: dispW,
             height: dispH
         )
