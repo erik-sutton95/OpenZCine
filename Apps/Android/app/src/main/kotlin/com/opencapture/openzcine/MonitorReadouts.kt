@@ -267,6 +267,23 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
     var media: MonitorMediaStatus by mutableStateOf(PREVIEW_MEDIA)
         private set
 
+    /**
+     * A watcher's readouts arrive over the relay already formatted by the host — apply them
+     * verbatim (iOS `applyRelayState`). Blank fields keep the last value, like [update].
+     */
+    fun applyRelayed(state: com.opencapture.openzcine.relay.MonitorRelayWire.State) {
+        resolution = state.resolutionFrameRate.monitorValueOrNull() ?: resolution
+        codec = state.codec.monitorValueOrNull() ?: codec
+        media =
+            state.mediaStatus?.let {
+                MonitorMediaStatus(
+                    gigabytesFree = it.gigabytesFree.toLong(),
+                    percentFree = it.percentFree.toLong(),
+                    minutesRemaining = it.minutesRemaining,
+                )
+            } ?: media
+    }
+
     fun update(snapshot: CameraPropertySnapshot) {
         // Camera is the source of truth: prefer the control presentation
         // (`resolutionFrameRate`, including ZR `[FX]`/`[DX]` tags) over held

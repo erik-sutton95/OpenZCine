@@ -49,6 +49,8 @@ class RelayWatchController(
     private val scope: CoroutineScope,
     private val deviceName: String,
     val broadcast: RelayBroadcast,
+    /** Fired once when this device latches jpeg-only — the shell persists the verdict. */
+    private val onJpegOnlyLatched: (() -> Unit)? = null,
 ) {
     private val mutableUi = MutableStateFlow(RelayWatchUiState())
     val ui: StateFlow<RelayWatchUiState> = mutableUi.asStateFlow()
@@ -59,8 +61,15 @@ class RelayWatchController(
      * Latched once this device's HEVC decoders have exhausted their attempts on the stream:
      * every later join declares `codecs=["jpeg"]` and the host serves JPEG instead — codec
      * negotiation for hardware the stream defeats (no Main10 decode on low-end chipsets).
+     * Process-wide, not per-join: the chipset does not change between joins, and re-probing
+     * costs ~45 s of black feed every time. A fresh launch re-probes, so a stream the
+     * hardware CAN decode is never locked out for good.
      */
-    private var jpegOnly = false
+    private var jpegOnly: Boolean
+        get() = processJpegOnly
+        set(value) {
+            processJpegOnly = value
+        }
     val session: RelayCameraSession = RelayCameraSession(this)
 
     private var client: MonitorRelayClient? = null
@@ -172,6 +181,7 @@ class RelayWatchController(
         frameSource.onHevcExhausted = {
             if (!jpegOnly) {
                 jpegOnly = true
+                onJpegOnlyLatched?.invoke()
                 android.util.Log.i(
                     "RelayHEVC", "decoders exhausted; rejoining for JPEG frames")
                 retry()
@@ -231,8 +241,20 @@ class RelayWatchController(
         session.close()
     }
 
-    private companion object {
-        const val REJOIN_INTERVAL_MILLIS = 3_000L
+    public companion object {
+        private const val REJOIN_INTERVAL_MILLIS = 3_000L
+
+        /** See [jpegOnly] — one probe per process, not per join. */
+        @Volatile private var processJpegOnly = false
+
+        /**
+         * Seeds the latch from a persisted verdict so a relaunch skips the ~45 s decode probe.
+         * The shell scopes what it persists to the app version — a new build may carry a
+         * stream profile the hardware CAN decode, and must re-probe.
+         */
+        public fun seedJpegOnly() {
+            processJpegOnly = true
+        }
     }
 }
 

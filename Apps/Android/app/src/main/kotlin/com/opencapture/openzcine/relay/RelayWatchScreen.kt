@@ -38,16 +38,15 @@ import com.opencapture.openzcine.R
 /**
  * The watcher's on-glass control key — iOS `WatcherControlKey`, word for word: one pill
  * reflecting the token so the control and its state cannot disagree, centred above the bottom
- * bars on the live view (never inside a settings sheet). While holding control a REC key joins
- * it — the injected-source monitor demo-gates its own record button, so the watcher's record
- * path lives here, routed over the relay.
+ * bars on the live view (never inside a settings sheet). Record is NOT a second pill: holding
+ * control mounts the monitor's own record button (availability-gated), routed over the relay
+ * through the watch session — the iOS shape exactly.
  */
 @Composable
 fun RelayWatchOverlay(
     ui: RelayWatchUiState,
     onAskForControl: () -> Unit,
     onGiveBackControl: () -> Unit,
-    onToggleRecord: () -> Unit,
     onSubmitPasscode: (String) -> Unit,
     onRetry: () -> Unit,
     onLeave: () -> Unit,
@@ -57,32 +56,22 @@ fun RelayWatchOverlay(
         when (ui.phase) {
             RelayWatchUiState.Phase.WATCHING ->
                 if (ui.holdsControl || ui.allowsControlRequests) {
-                    Row(
-                        Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        WatcherKey(
-                            text =
-                                stringResource(
-                                    if (ui.holdsControl) {
-                                        R.string.relay_give_back_control
-                                    } else {
-                                        R.string.relay_ask_for_control
-                                    }
-                                ),
-                            accented = ui.holdsControl,
-                            onClick =
-                                if (ui.holdsControl) onGiveBackControl else onAskForControl,
-                        )
-                        if (ui.holdsControl) {
-                            WatcherKey(
-                                text = stringResource(R.string.relay_record_toggle),
-                                accented = true,
-                                onClick = onToggleRecord,
-                            )
-                        }
-                    }
+                    // Above the assist toolbar's lane, like iOS — bottom-centre would land the
+                    // pill half-under the toolbar's tools.
+                    WatcherKey(
+                        text =
+                            stringResource(
+                                if (ui.holdsControl) {
+                                    R.string.relay_give_back_control
+                                } else {
+                                    R.string.relay_ask_for_control
+                                }
+                            ),
+                        accented = ui.holdsControl,
+                        onClick = if (ui.holdsControl) onGiveBackControl else onAskForControl,
+                        modifier =
+                            Modifier.align(Alignment.BottomCenter).padding(bottom = 84.dp),
+                    )
                 }
             RelayWatchUiState.Phase.CONNECTING ->
                 CenteredNotice(text = stringResource(R.string.relay_watch_connecting))
@@ -159,7 +148,12 @@ fun RelayWatchOverlay(
 }
 
 @Composable
-private fun WatcherKey(text: String, accented: Boolean, onClick: () -> Unit) {
+private fun WatcherKey(
+    text: String,
+    accented: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val accent = Color(0xFFE0A73A)
     Text(
         text,
@@ -168,7 +162,7 @@ private fun WatcherKey(text: String, accented: Boolean, onClick: () -> Unit) {
         fontWeight = FontWeight.Bold,
         letterSpacing = 0.8.sp,
         modifier =
-            Modifier.background(Color.Black.copy(alpha = 0.55f), CircleShape)
+            modifier.background(Color.Black.copy(alpha = 0.55f), CircleShape)
                 .border(
                     1.dp,
                     if (accented) accent else Color.White.copy(alpha = 0.25f),

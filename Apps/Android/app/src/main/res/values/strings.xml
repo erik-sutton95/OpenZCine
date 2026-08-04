@@ -246,7 +246,6 @@
     <string name="pairing_watcher_action">Open the camera list</string>
     <string name="relay_ask_for_control">ASK FOR CONTROL</string>
     <string name="relay_give_back_control">GIVE BACK CONTROL</string>
-    <string name="relay_record_toggle">REC</string>
     <string name="relay_watch_connecting">Joining the broadcast…</string>
     <string name="relay_watch_dropped">The broadcast dropped.</string>
     <string name="relay_try_again">Try again</string>

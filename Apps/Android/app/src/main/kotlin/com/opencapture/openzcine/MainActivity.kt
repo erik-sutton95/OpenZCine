@@ -232,6 +232,28 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 val relayBroadcastUi by relayBroadcastController.ui.collectAsState()
+                // The A12-class jpeg-only verdict survives relaunches so the first join skips
+                // the ~45 s HEVC decode probe. Scoped to this exact install (lastUpdateTime):
+                // any reinstall may carry a stream profile the hardware CAN decode and probes
+                // again — versionCode alone never changes between debug installs.
+                val relayCodecPrefs =
+                    remember {
+                        applicationContext.getSharedPreferences("relay_codec", MODE_PRIVATE)
+                    }
+                val installStamp =
+                    remember {
+                        packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+                    }
+                val persistJpegOnly: () -> Unit = remember {
+                    {
+                        relayCodecPrefs.edit().putLong("jpegOnlyInstall", installStamp).apply()
+                    }
+                }
+                LaunchedEffect(Unit) {
+                    if (relayCodecPrefs.getLong("jpegOnlyInstall", -1L) == installStamp) {
+                        com.opencapture.openzcine.relay.RelayWatchController.seedJpegOnly()
+                    }
+                }
                 LaunchedEffect(Unit) {
                     // Debug-only direct watch (adb reverse cross-platform verification).
                     DemoHarness.relayWatchEndpoint(intent)?.let { (host, port) ->
@@ -477,6 +499,13 @@ class MainActivity : ComponentActivity() {
                             isMonitorFront = true,
                             sessionRecoveryEnabled = false,
                             isDemoSession = false,
+                            // The watcher chrome: readings mount, controls only with the token
+                            // (iOS `monitorAvailability` on `videoSource == .relay`).
+                            availability =
+                                com.opencapture.openzcine.core.MonitorDataAvailability.watcher(
+                                    holdsControl = watchUi.holdsControl
+                                ),
+                            relayedState = watchUi.state,
                             onOpenSettings = {},
                             onOpenMedia = {},
                             onBackToOperatorMenu = leaveWatch,
@@ -485,12 +514,6 @@ class MainActivity : ComponentActivity() {
                             ui = watchUi,
                             onAskForControl = watching::requestControl,
                             onGiveBackControl = watching::releaseControl,
-                            onToggleRecord = {
-                                watching.sendCommand(
-                                    com.opencapture.openzcine.relay.MonitorRelayWire.Command
-                                        .ToggleRecording
-                                )
-                            },
                             onSubmitPasscode = watching::submitPasscode,
                             onRetry = watching::retry,
                             onLeave = leaveWatch,
@@ -602,6 +625,7 @@ class MainActivity : ComponentActivity() {
                                                     scope = connectionScope,
                                                     deviceName = relayDeviceName,
                                                     broadcast = broadcast,
+                                                    onJpegOnlyLatched = persistJpegOnly,
                                                 )
                                                 .also { it.start() }
                                     },

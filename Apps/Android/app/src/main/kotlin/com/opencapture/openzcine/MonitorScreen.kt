@@ -117,6 +117,8 @@ import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.openzcine.core.MonitorDataAvailability
+import com.opencapture.openzcine.relay.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.media.LiveAssistOptionsOverlay
 import com.opencapture.openzcine.media.retainLiveAssistOptions
@@ -310,6 +312,18 @@ internal fun MonitorScreen(
     linkHealth: AndroidLinkHealthMonitor? = null,
     activeTransportIsUsb: Boolean = false,
     isDemoSession: Boolean = false,
+    /**
+     * What the monitor can truthfully display given who owns the camera — the iOS
+     * `monitorAvailability` gate. A relay watcher passes `watcher(holdsControl)`: readings keep
+     * flowing, but record/media/pickers/batteries unmount until it holds the control token.
+     */
+    availability: MonitorDataAvailability = MonitorDataAvailability.OWNING,
+    /**
+     * A watcher's camera readouts, forwarded by the broadcasting host (iOS `applyRelayState`).
+     * Non-null only on the watch surface; feeds the top-bar pills so they never show the
+     * retention preview seeds as if a camera reported them.
+     */
+    relayedState: MonitorRelayWire.State? = null,
     liveViewGuideController: LiveViewGuideController? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
@@ -357,7 +371,15 @@ internal fun MonitorScreen(
     val initialMonitorPropertiesReady by session.initialMonitorPropertiesReady.collectAsState()
     val commandRoundTripMilliseconds by
         session.latestCommandRoundTripMilliseconds.collectAsState()
-    val cameraReadouts = remember(cameraProperties) { monitorCameraReadouts(cameraProperties) }
+    val cameraReadouts =
+        remember(cameraProperties, relayedState) {
+            monitorCameraReadouts(cameraProperties).let { readouts ->
+                // A watcher's camera battery arrives over the relay, not from a session of its
+                // own (iOS `applyRelayState`).
+                relayedState?.let { readouts.copy(batteryPercent = it.cameraBatteryPercent) }
+                    ?: readouts
+            }
+        }
     val phoneBatteryReadout = rememberPhoneBatteryReadout()
     val exposureAssistCameraInput =
         remember(
@@ -475,7 +497,11 @@ internal fun MonitorScreen(
     val displayModeOrder =
         photographyDisplayModeOrder(
             operatorSettings.enabledDisplayModeOrder,
-            photography = prefersPhotographyChrome(cameraProperties),
+            // Command is entirely a camera-control surface — a session with no camera behind it
+            // (a watcher without the control token) drops it from the cycle rather than offering
+            // an empty dashboard (iOS `displayOrder`).
+            hidesCommand =
+                prefersPhotographyChrome(cameraProperties) || !availability.cameraControls,
         )
     val effectiveDisplayMode =
         displayMode.takeIf(displayModeOrder::contains) ?: displayModeOrder.first()
@@ -1385,8 +1411,12 @@ internal fun MonitorScreen(
         val editingThisMode =
             chromeEditorMode != null && chromeEditorMode == effectiveDisplayMode
         val mounts: (ChromeSection) -> Boolean = { section ->
-            (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) ||
-                chrome[section].value
+            // A section with nothing feeding it hides whatever the operator set — a readout with
+            // no source still looks like an instrument (iOS `sectionHasASource`). The edit view's
+            // force-mount cannot override a missing source either.
+            availability.hasSource(section) &&
+                ((editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) ||
+                    chrome[section].value)
         }
         val statusBarVisible = mounts(ChromeSection.STATUS_BAR)
         val assistToolbarVisible = mounts(ChromeSection.ASSIST_TOOLBAR)
@@ -1591,6 +1621,9 @@ internal fun MonitorScreen(
         val readoutRetention =
             remember(session, timecodeOwner) { MonitorReadoutRetention(timecodeOwner) }
         LaunchedEffect(cameraProperties) { readoutRetention.update(cameraProperties) }
+        // A watcher's pills show what the host formatted, never the retention's preview seeds
+        // masquerading as a reporting camera (iOS `applyRelayState`).
+        LaunchedEffect(relayedState) { relayedState?.let(readoutRetention::applyRelayed) }
         val fpsSampler = remember(session, timecodeOwner) { MonitorFrameRateSampler() }
         var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
         val topBarMedia =
@@ -1765,19 +1798,23 @@ internal fun MonitorScreen(
                     recording || recordCommandPending || pendingRecordTarget != null,
             )
         val railMounts: (ChromeSection) -> Boolean = { section ->
-            if (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) {
-                true
-            } else {
-                when (section) {
-                    ChromeSection.LOCK_BUTTON -> railPlan.lock
-                    ChromeSection.BATTERY_INDICATORS -> railPlan.batteries
-                    ChromeSection.RAIL_DISP -> railPlan.disp
-                    ChromeSection.RAIL_RECORD -> railPlan.record
-                    ChromeSection.RAIL_MEDIA -> railPlan.media
-                    ChromeSection.RAIL_SETTINGS -> railPlan.settings
-                    else -> mounts(section)
+            // Availability outranks the rail plan's self-restore guarantees: a watcher without
+            // control must not get the record button forced back on by the broadcaster's own
+            // recording state riding in over the relay.
+            availability.hasSource(section) &&
+                if (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) {
+                    true
+                } else {
+                    when (section) {
+                        ChromeSection.LOCK_BUTTON -> railPlan.lock
+                        ChromeSection.BATTERY_INDICATORS -> railPlan.batteries
+                        ChromeSection.RAIL_DISP -> railPlan.disp
+                        ChromeSection.RAIL_RECORD -> railPlan.record
+                        ChromeSection.RAIL_MEDIA -> railPlan.media
+                        ChromeSection.RAIL_SETTINGS -> railPlan.settings
+                        else -> mounts(section)
+                    }
                 }
-            }
         }
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
         // Photography's landscape feed: the still image-area's shape centred in
@@ -2235,6 +2272,7 @@ internal fun MonitorScreen(
                     viewportHeight = viewportHeight,
                     isCommand = isCommand,
                     isFill = isPortraitFill,
+                    availability = availability,
                     locked = locked,
                     recording = recording,
                     timecodeRetention = timecodeRetention,
@@ -3535,6 +3573,7 @@ private fun PortraitChrome(
     isCommand: Boolean,
     /** Whether non-critical chrome mounts; clean view (DISP 2) strips it all (#256). */
     isFill: Boolean,
+    availability: MonitorDataAvailability,
     locked: Boolean,
     recording: Boolean,
     timecodeRetention: MonitorTimecodeRetention,
@@ -3589,9 +3628,12 @@ private fun PortraitChrome(
     val chrome = operatorSettings.chrome(displayMode, captureLayoutMode)
     val chromeEditorMode = operatorSettings.chromeEditorMode
     val mounts: (ChromeSection) -> Boolean = { section ->
-        (chromeEditorMode == displayMode &&
-            chromeEditorMode != null &&
-            section.isConfigurableIn(displayMode)) || chrome[section].value
+        // Same source gate as landscape: no feeding data, no instrument (iOS
+        // `sectionHasASource`).
+        availability.hasSource(section) &&
+            ((chromeEditorMode == displayMode &&
+                chromeEditorMode != null &&
+                section.isConfigurableIn(displayMode)) || chrome[section].value)
     }
     val railPlan =
         operatorSettings.sideRailPlan(
@@ -3696,7 +3738,9 @@ private fun PortraitChrome(
 
     // Controls zone: fit-mode live tiles, or a command dashboard that keeps
     // the system rail fixed while its primary and secondary settings scroll.
-    zones.controlsGrid?.takeIf { it.height > 0 }?.let { grid ->
+    // Every tile is a camera control — a watcher without the token gets the
+    // feed's dead space back instead of a grid of dashes.
+    zones.controlsGrid?.takeIf { it.height > 0 && availability.cameraControls }?.let { grid ->
         if (isCommand) {
             PortraitCommandDashboard(
                 presentation = commandPresentation,
@@ -3805,20 +3849,22 @@ private fun PortraitChrome(
     // switch; the opaque glass draws only when the band still carries one, because an empty band
     // over the letterbox is just a black stripe.
     val railMounts: (ChromeSection) -> Boolean = { section ->
-        if (chromeEditorMode == displayMode && chromeEditorMode != null &&
-            section.isConfigurableIn(displayMode)
-        ) {
-            true
-        } else {
-            when (section) {
-                ChromeSection.LOCK_BUTTON -> railPlan.lock
-                ChromeSection.RAIL_DISP -> railPlan.disp
-                ChromeSection.RAIL_RECORD -> railPlan.record
-                ChromeSection.RAIL_MEDIA -> railPlan.media
-                ChromeSection.RAIL_SETTINGS -> railPlan.settings
-                else -> mounts(section)
+        // Availability outranks the plan's guarantees, exactly like landscape.
+        availability.hasSource(section) &&
+            if (chromeEditorMode == displayMode && chromeEditorMode != null &&
+                section.isConfigurableIn(displayMode)
+            ) {
+                true
+            } else {
+                when (section) {
+                    ChromeSection.LOCK_BUTTON -> railPlan.lock
+                    ChromeSection.RAIL_DISP -> railPlan.disp
+                    ChromeSection.RAIL_RECORD -> railPlan.record
+                    ChromeSection.RAIL_MEDIA -> railPlan.media
+                    ChromeSection.RAIL_SETTINGS -> railPlan.settings
+                    else -> mounts(section)
+                }
             }
-        }
     }
     if (!railPlan.isEmpty || chromeEditorMode == displayMode) {
         // Opaque band behind the system controls through the physical bottom
@@ -4096,12 +4142,35 @@ internal fun batteryRowStackFrame(anchor: ZoneFrame, lock: ZoneFrame): ZoneFrame
  */
 internal fun photographyDisplayModeOrder(
     order: List<MonitorDisplayMode>,
-    photography: Boolean,
+    hidesCommand: Boolean,
 ): List<MonitorDisplayMode> {
-    if (!photography) return order
+    if (!hidesCommand) return order
     return order.filterNot { it == MonitorDisplayMode.COMMAND }
         .ifEmpty { listOf(MonitorDisplayMode.LIVE) }
 }
+
+/**
+ * Whether anything is actually feeding [section] right now — the Kotlin twin of iOS
+ * `sectionHasASource`. Chrome the operator switched on still hides when nothing can fill it:
+ * a readout with no source behind it still looks like an instrument, and the capture strip in
+ * particular offers pickers that would write to a camera that cannot hear them. Only readouts
+ * fed by the camera appear here; the assist toolbar, lock, FPS chip and rail utilities keep
+ * working on any picture source.
+ */
+internal fun MonitorDataAvailability.hasSource(section: ChromeSection): Boolean =
+    when (section) {
+        ChromeSection.CAMERA_VALUES,
+        ChromeSection.CODEC_READOUT,
+        ChromeSection.MEDIA_READOUT,
+        ChromeSection.RESOLUTION_READOUT,
+        ChromeSection.BATTERY_INDICATORS,
+        -> cameraControls
+        ChromeSection.REC_READOUT, ChromeSection.RAIL_RECORD -> recordControl
+        ChromeSection.RAIL_MEDIA -> mediaBrowser
+        ChromeSection.TIMECODE_READOUT -> cameraTimecode
+        ChromeSection.FOCUS_BOX -> focusBoxes
+        else -> true
+    }
 
 /** The next mode after [current] in the effective DISP order, wrapping. */
 internal fun nextDisplayModeInOrder(

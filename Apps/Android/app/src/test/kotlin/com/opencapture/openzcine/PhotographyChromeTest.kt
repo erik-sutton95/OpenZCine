@@ -147,17 +147,17 @@ class PhotographyChromeTest {
                 MonitorDisplayMode.COMMAND,
             )
 
-        assertEquals(order, photographyDisplayModeOrder(order, photography = false))
+        assertEquals(order, photographyDisplayModeOrder(order, hidesCommand = false))
         assertEquals(
             listOf(MonitorDisplayMode.LIVE, MonitorDisplayMode.CLEAN),
-            photographyDisplayModeOrder(order, photography = true),
+            photographyDisplayModeOrder(order, hidesCommand = true),
         )
         // A COMMAND-only preference recovers to the always-safe live mode.
         assertEquals(
             listOf(MonitorDisplayMode.LIVE),
             photographyDisplayModeOrder(
                 listOf(MonitorDisplayMode.COMMAND),
-                photography = true,
+                hidesCommand = true,
             ),
         )
     }
