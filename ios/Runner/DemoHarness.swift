@@ -40,6 +40,19 @@ enum DemoHarness {
     /// `ZC_DEMO_CPU_FEED=1` forces the old `UIImageView` feed path back, for an A/B against the
     /// default GPU-native renderer. See `FeedRenderMode`.
     static let forceCPUFeed = flag("ZC_DEMO_CPU_FEED")
+    /// `ZC_DEMO_FEED_SCALER=lanczos` forces the Lanczos fallback over MetalFX Spatial, for an A/B
+    /// of the feed upscaler on a device that supports both. See `MetalLiveView.Coordinator`.
+    static let forceLanczosFeedScaler = value("ZC_DEMO_FEED_SCALER") == "lanczos"
+    /// `ZC_DEMO_BLOCK_SMOOTH=<strength>` (0…1) enables variance-gated flat-region smoothing, and
+    /// `ZC_DEMO_BLOCK_GATE=<levels>` sets the flatness threshold it disengages at (default 5, in
+    /// levels out of 255). `ZC_DEMO_BLOCK_DITHER=<levels>` adds masking noise (try 2–4).
+    ///
+    /// Env rather than a setting because none of these have been calibrated against a real camera
+    /// frame — they exist to be swept on hardware and relaunched, and the winning numbers become a
+    /// real operator control (and a shared-core constant for the Android shells) afterwards.
+    static let blockSmoothStrength = value("ZC_DEMO_BLOCK_SMOOTH").flatMap(Double.init)
+    static let blockSmoothGateLevels = value("ZC_DEMO_BLOCK_GATE").flatMap(Double.init)
+    static let blockDitherLevels = value("ZC_DEMO_BLOCK_DITHER").flatMap(Double.init)
     /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
     /// rasterizer — the baseline for pixel-diff look-regression checks.
     static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")

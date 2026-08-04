@@ -280,9 +280,16 @@ public class LiveFeedEffectsPresentationState {
  *   decoded straight into an existing buffer. Sustains the 25 fps stream with
  *   ~2/3 of the frame budget idle on the test device.
  * - **Subsample via [maxLongSide]**: full 1080p texture upload every frame was
- *   janking the UI thread on A12-class (gfxinfo ~50 ms draw). Cap the long
- *   side near display resolution so Skia uploads ~¼ the pixels without
- *   visible quality loss on a phone monitor.
+ *   janking the UI thread on A12-class (gfxinfo ~50 ms draw), so the long side
+ *   is capped. That cap was 960 against a 1080p source; against the **1024**-wide
+ *   live-view frame it quietly cost a factor of four. `inSampleSize` is
+ *   power-of-two, so a source only 6.7% over the cap does not shrink by 6.7% —
+ *   it halves, and 1024×576 decoded to 512×288 then gets upscaled ~4.6× to the
+ *   panel, turning every 8×8 JPEG block into a ~37 px slab. That is most of the
+ *   "cheap JPEG" look on Android, and it applied to every device: the low-end
+ *   branch (720) and the default (960) both resolved to sample=2 at this width.
+ *   The cap now sits at the feed's own width so the common case decodes 1:1,
+ *   while anything genuinely larger is still bounded.
  * - **ImageDecoder**: allocates a fresh (often hardware) bitmap per frame —
  *   25 allocations/s of ~2.7 MB each is pure GC churn with no quality upside
  *   for a monitor feed.
@@ -340,10 +347,21 @@ class JpegFrameDecoder(
 
     companion object {
         /**
-         * Phone feed long side (≈540p after sample-2 of 1080p). Full 1080p
-         * uploads were ~50 ms UI-thread draw on SM-A127F (gfxinfo).
+         * Long-side cap for the decoded feed, set to the live-view frame's own
+         * width so the stream decodes 1:1 instead of falling to the next
+         * power-of-two step.
+         *
+         * `LiveViewImageSize` bounds the frame at XGA (≤1024×768), so 1024 is
+         * the widest the camera can send and this is a no-op guard in the normal
+         * case — it only engages if a body ever streams something larger. The
+         * previous 960 was carried over from a 1080p source and silently halved
+         * every frame (see the decode-path note on [JpegFrameDecoder]).
+         *
+         * Raising this raises per-frame texture upload 4×, back to ~0.59 MP —
+         * still well under the ~2.07 MP 1080p case that caused the original
+         * jank, but the low-RAM + effects path keeps its own tighter cap.
          */
-        const val DEFAULT_MAX_LONG_SIDE: Int = 960
+        const val DEFAULT_MAX_LONG_SIDE: Int = 1024
     }
 }
 
