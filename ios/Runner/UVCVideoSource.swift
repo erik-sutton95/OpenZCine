@@ -336,6 +336,14 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// own signal chain is to pick the format explicitly. [verify-on-HW]
     private static let preferredCaptureHeights = [2160, 1080, 720]
 
+    /// True for a 16:9 mode — the shape a camera's HDMI output actually is, as opposed to the
+    /// DCI (256:135) modes a 4K-capable link also advertises.
+    static func isBroadcastShaped(_ dimensions: CMVideoDimensions) -> Bool {
+        guard dimensions.width > 0, dimensions.height > 0 else { return false }
+        let aspect = Double(dimensions.width) / Double(dimensions.height)
+        return abs(aspect / (16.0 / 9.0) - 1) <= 0.02
+    }
+
     /// Picks the best format the device can actually feed, and returns a description of it.
     ///
     /// Three filters in order, because each one alone picks wrongly on real hardware:
@@ -378,8 +386,16 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             Self.preferredCaptureHeights.contains(Int($0.dimensions.height))
         }
         let pool = preferred.isEmpty ? candidates : preferred
+        // Then prefer a mode shaped like the signal. A camera's HDMI output is 16:9, while a DCI
+        // 4096×2160 mode is 256:135 — asking a link for that mode makes it fit a 16:9 signal into
+        // a shape the signal never had, and the cheap ones resolve that by cropping rather than
+        // padding. Ranking on pixels alone picks DCI over UHD (8.8M beats 8.3M), which is how a
+        // 4K60-capable link started cropping a feed the previous one showed whole (#115). DCI
+        // stays in the pool for a signal that really is 4096 wide.
+        let signalShaped = pool.filter { Self.isBroadcastShaped($0.dimensions) }
+        let shaped = signalShaped.isEmpty ? pool : signalShaped
         guard
-            let best = pool.max(by: { lhs, rhs in
+            let best = shaped.max(by: { lhs, rhs in
                 lhs.pixels == rhs.pixels ? lhs.fps < rhs.fps : lhs.pixels < rhs.pixels
             })
         else { return nil }
