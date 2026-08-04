@@ -85,6 +85,7 @@ import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.SettingsSwitchGraphic
+import com.opencapture.openzcine.relay.MonitorRelayWire
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -570,6 +571,41 @@ internal fun focusPickerPresentation(
         modes = modes,
         initialModeIndex = initialMode.coerceIn(0, modes.lastIndex),
     )
+}
+
+/**
+ * The host's strip labels on the wire (iOS `CameraDisplayState.values`) mapped to this shell's
+ * stable picker kinds. Kinds, not labels: the local labels are localized strings.
+ */
+private val relayValueKinds =
+    mapOf(
+        "ISO" to MonitorPickerKind.ISO,
+        "SHUTTER" to MonitorPickerKind.SHUTTER,
+        "IRIS" to MonitorPickerKind.IRIS,
+        "WB" to MonitorPickerKind.WHITE_BALANCE,
+        "FOCUS" to MonitorPickerKind.FOCUS,
+    )
+
+/**
+ * A watcher's capture strip shows the broadcaster's values, forwarded over the relay already
+ * formatted (iOS `applyRelayState`). Display only: the cells keep whatever picker the local
+ * presentation carried — for a watcher that is none, so the strip reads and never writes,
+ * exactly the iOS watcher's strip.
+ */
+internal fun relayCaptureSettings(
+    settings: List<MonitorCaptureSettingPresentation>,
+    relayedValues: List<MonitorRelayWire.StateValue>,
+): List<MonitorCaptureSettingPresentation> {
+    val byKind =
+        relayedValues
+            .mapNotNull { value -> relayValueKinds[value.label]?.let { it to value.value } }
+            .toMap()
+    return settings.map { setting ->
+        byKind[setting.kind]
+            ?.takeIf { it.isNotBlank() }
+            ?.let { setting.copy(value = captureBarDisplayValue(it)) }
+            ?: setting
+    }
 }
 
 /**

@@ -713,6 +713,7 @@ internal fun MonitorScreen(
             effectiveShutterLocked,
             cameraProperties.isoAuto,
             cameraProperties.exposureMode,
+            relayedState,
         ) {
             monitorCaptureSettings(
                 commandPresentation,
@@ -720,7 +721,11 @@ internal fun MonitorScreen(
                 shutterLockedOnCamera = effectiveShutterLocked,
                 isoAuto = cameraProperties.isoAuto,
                 exposureMode = cameraProperties.exposureMode,
-            )
+            ).let { settings ->
+                // A watcher's strip shows the broadcaster's values (iOS `applyRelayState`);
+                // no local session ever fills these cells.
+                relayedState?.let { relayCaptureSettings(settings, it.values) } ?: settings
+            }
         }
     val topPillPickers =
         remember(commandPresentation, stringResolver) {
