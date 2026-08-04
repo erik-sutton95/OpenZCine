@@ -88,6 +88,31 @@ class RelayPresenceScannerTest {
     }
 
     @Test
+    fun `sweep-refuted NSD rows hide, and a confirmed name survives refutation of others`() {
+        val nsd =
+            listOf(
+                RelayBroadcast("Live iPhone", "192.168.1.20", 50100, null),
+                // Stale record: the broadcaster quit but its multicast goodbye was eaten.
+                RelayBroadcast("Gone iPad", "192.168.1.30", 50200, null),
+            )
+        val presences = mapOf("192.168.1.20" to RelayPresence("Live iPhone", true, null, 50100))
+        assertEquals(
+            listOf(nsd[0]),
+            mergedNearbyBroadcasts(nsd, presences, "self", refutedNames = setOf("Gone iPad")),
+        )
+        // A refuted name that answers again lists via its presence row until NSD un-refutes.
+        assertEquals(
+            listOf(RelayBroadcast("Gone iPad", "192.168.1.30", 50200, null)),
+            mergedNearbyBroadcasts(
+                nsd.filter { it.name == "Gone iPad" },
+                mapOf("192.168.1.30" to RelayPresence("Gone iPad", true, null, 50200)),
+                "self",
+                refutedNames = setOf("Gone iPad"),
+            ),
+        )
+    }
+
+    @Test
     fun `filtering verdict needs ten continuous hidden seconds and clears on reappearance`() {
         val presences = mapOf("192.168.1.40" to RelayPresence("B-cam Galaxy", true, null, 50300))
         var hidden =

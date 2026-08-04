@@ -1093,13 +1093,21 @@ final class NativeAppModel {
     /// sees everything again — the operator fixing the router mid-session deserves the all-clear.
     var networkFiltersDiscovery = false
     @ObservationIgnored private let relayPresenceServer = RelayPresenceServer()
+    /// Bonjour-visible names the latest completed presence sweep did NOT confirm. On a network
+    /// that eats multicast, a stopped broadcaster's *goodbye* packet is eaten too — the record
+    /// sits in the browser until TTL, and the list shows a device that quit minutes ago (field
+    /// report: iPad listing the iPhone while the iPhone sat disconnected). The sweep dials the
+    /// whole subnet unicast, so a browsed name that gave no answer is provably stale.
+    @ObservationIgnored private var presenceRefutedRelayNames: Set<String> = []
 
     /// The rows the camera list shows: joinable broadcasts only. In-use beacons stay in
     /// `discoveredRelayHosts` so the probe shield sees them, but there is nothing to join.
     /// Presence-only rows (unicast answers Bonjour never delivered) append after the Bonjour
     /// rows — on a multicast-filtered network they are the only way a broadcast is joinable.
     var visibleRelayBroadcasts: [MonitorRelayDiscovery] {
-        let bonjour = discoveredRelayHosts.filter(\.isWatchable)
+        let bonjour = discoveredRelayHosts.filter {
+            $0.isWatchable && !presenceRefutedRelayNames.contains($0.name)
+        }
         let visibleNames = Set(discoveredRelayHosts.map(\.name))
         let presenceRows =
             relayPresences
@@ -1139,6 +1147,12 @@ final class NativeAppModel {
             relayPresenceSeenAt[host] = now
             relayPresences[host] = presence
         }
+        // Same authority, aimed at the browser: a browsed name with no presence answer is a
+        // stale mDNS record (lost goodbye), not a live broadcast — hide its row. Recomputed
+        // wholesale each sweep, so a broadcaster that comes back is un-refuted by the sweep
+        // that confirms it.
+        presenceRefutedRelayNames = Set(discoveredRelayHosts.map(\.name))
+            .subtracting(hits.values.map(\.n))
         let visibleNames = Set(discoveredRelayHosts.map(\.name))
         let selfName = UIDevice.current.name
         var anyProven = false

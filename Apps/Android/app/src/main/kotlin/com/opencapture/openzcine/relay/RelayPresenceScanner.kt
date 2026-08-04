@@ -51,13 +51,20 @@ fun parseRelayPresenceLine(line: String): RelayPresence? {
  * browse never delivered becomes a joinable row on the answering host — on a multicast-filtered
  * network it is the only way that broadcast is joinable (iOS `visibleRelayBroadcasts`). NSD
  * wins name collisions, and this device's own presence never lists itself.
+ *
+ * [refutedNames] hides NSD rows the latest completed sweep proved stale: a stopped
+ * broadcaster's mDNS *goodbye* is multicast too, so on a filtered network its record lingers
+ * in the browse until TTL while the whole-subnet unicast sweep hears nothing from it
+ * (iOS `presenceRefutedRelayNames`).
  */
 fun mergedNearbyBroadcasts(
     nsdRows: List<RelayBroadcast>,
     presences: Map<String, RelayPresence>,
     selfName: String,
+    refutedNames: Set<String> = emptySet(),
 ): List<RelayBroadcast> {
-    val nsdNames = nsdRows.mapTo(mutableSetOf(), RelayBroadcast::name)
+    val visibleNsdRows = nsdRows.filterNot { it.name in refutedNames }
+    val nsdNames = visibleNsdRows.mapTo(mutableSetOf(), RelayBroadcast::name)
     val presenceRows =
         presences
             .mapNotNull { (host, presence) ->
@@ -75,7 +82,7 @@ fun mergedNearbyBroadcasts(
                 )
             }
             .sortedBy(RelayBroadcast::name)
-    return nsdRows + presenceRows
+    return visibleNsdRows + presenceRows
 }
 
 /**
@@ -134,9 +141,13 @@ class RelayPresenceScanner(
             lastSweepAtNanos = now
         }
         return withContext(Dispatchers.IO) {
+            val hosts = candidateHosts()
+            // No interface = nothing was asked: null ("no verdict"), never an authoritative
+            // empty that would wrongly refute live rows.
+            if (hosts.isEmpty()) return@withContext null
             val found = LinkedHashMap<String, RelayPresence>()
             // Chunks of 64 = the iOS sweep's bounded parallelism (and Dispatchers.IO's floor).
-            candidateHosts().chunked(64).forEach { chunk ->
+            hosts.chunked(64).forEach { chunk ->
                 chunk
                     .map { host -> async { host to checkPresence(host) } }
                     .awaitAll()

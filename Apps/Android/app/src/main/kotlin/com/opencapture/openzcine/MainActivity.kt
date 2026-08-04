@@ -591,6 +591,8 @@ class MainActivity : ComponentActivity() {
                     // the network filters discovery (the operator warning in the list).
                     var relayPresences by
                         remember { mutableStateOf(emptyMap<String, RelayPresence>()) }
+                    var presenceRefutedNames by
+                        remember { mutableStateOf(emptySet<String>()) }
                     var networkFiltersDiscovery by remember { mutableStateOf(false) }
                     LaunchedEffect(Unit) {
                         val scanner = RelayPresenceScanner()
@@ -601,7 +603,15 @@ class MainActivity : ComponentActivity() {
                             // stopped answering leaves no ghost row — and the verdict
                             // re-evaluates every tick so the 10 s hidden threshold trips
                             // between sweeps.
-                            scanner.sweep()?.let { relayPresences = it }
+                            scanner.sweep()?.let { hits ->
+                                relayPresences = hits
+                                // A browsed name with no unicast answer is a stale NSD
+                                // record — the goodbye packet is multicast too, and this
+                                // network eats it (iOS presenceRefutedRelayNames).
+                                presenceRefutedNames =
+                                    nearbyBroadcasts.mapTo(mutableSetOf()) { it.name } -
+                                        hits.values.mapTo(mutableSetOf()) { it.name }
+                            }
                             val now = android.os.SystemClock.elapsedRealtime()
                             hiddenSince =
                                 updatedPresenceHiddenSince(
@@ -663,6 +673,7 @@ class MainActivity : ComponentActivity() {
                                                 nearbyBroadcasts,
                                                 relayPresences,
                                                 relayDeviceName,
+                                                presenceRefutedNames,
                                             )
                                             .filter { it.isWatchable },
                                     networkFiltersDiscovery = networkFiltersDiscovery,

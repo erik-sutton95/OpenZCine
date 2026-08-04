@@ -52,7 +52,8 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                 .map(\.address)
             let split = CameraDiscovery.prioritizedScanHosts(
                 priorityHosts: priorityHosts, localAddresses: localAddresses)
-            let hits = await Self.relayPresenceSweep(hosts: split.priority + split.remaining)
+            let sweptHosts = split.priority + split.remaining
+            let hits = await Self.relayPresenceSweep(hosts: sweptHosts)
             let listing =
                 hits
                 .map { host, presence in
@@ -62,7 +63,11 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                 .joined(separator: " ")
             await MainActor.run {
                 logConnection("presence sweep hits=\(hits.count) [\(listing)]")
-                if !hits.isEmpty { onRelayPresences(hits) }
+                // Zero hits is still a verdict: the sweep dialed the whole subnet, so the
+                // model must hear about it to prune ledger rows (and refute stale Bonjour
+                // rows) for broadcasts that stopped. Only an empty CANDIDATE list says
+                // nothing — no interface meant nothing was actually asked.
+                if !sweptHosts.isEmpty { onRelayPresences(hits) }
             }
             // An answering host is an OpenZCine device, never a camera — skip probing it — and
             // every camera it names is shielded even before the model's ledger round-trips.
@@ -78,6 +83,12 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                     }
                 }
             }
+            Self.storePresenceShield(presenceShieldedHosts)
+        } else {
+            // Throttled pass: reuse the last completed sweep's shield rather than probing
+            // naked. The 30 s slot exists to bound radio load, not to strip protection from
+            // the passes in between (pull-to-refresh runs a full pass every pull).
+            presenceShieldedHosts = Self.cachedPresenceShield()
         }
         let shielded = presenceShieldedHosts
 
@@ -235,20 +246,33 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
     }
 
     /// Grants at most one full-subnet presence sweep per 30 s across every discovery entry
-    /// point. Thread-safe: discovery runs from more than one task.
+    /// point, and remembers the last completed sweep's shield for the passes in between.
+    /// Thread-safe: discovery runs from more than one task.
     private static let presenceSweepSlot = OSAllocatedUnfairLock(
-        initialState: Date.distantPast)
+        initialState: (last: Date.distantPast, shield: Set<String>()))
     private static func claimPresenceSweepSlot() -> Bool {
-        presenceSweepSlot.withLock { last -> Bool in
+        presenceSweepSlot.withLock { state -> Bool in
             let now = Date()
-            guard now.timeIntervalSince(last) >= 30 else { return false }
-            last = now
+            guard now.timeIntervalSince(state.last) >= 30 else { return false }
+            state.last = now
             return true
         }
     }
 
+    private static func storePresenceShield(_ shield: Set<String>) {
+        presenceSweepSlot.withLock { $0.shield = shield }
+    }
+
+    private static func cachedPresenceShield() -> Set<String> {
+        presenceSweepSlot.withLock { $0.shield }
+    }
+
     /// One unicast presence read (`MonitorRelayProtocol.presenceTCPPort`), bounded. Nil for
     /// refused, timed out, or garbage — only a genuine OpenZCine presence line answers.
+    /// The deadline CANCELS the connection, not just the wait: an uncancelled NWConnection to
+    /// a dead host keeps its half-open flow alive until the OS gives up (~75 s), and a /24 of
+    /// those is a radio storm that stalls the very broadcaster feed presence exists to protect
+    /// (field log: hundreds of overlapping :15741 flows all dying at SO_ERROR 60).
     static func checkRelayPresence(
         host: String, timeoutMilliseconds: Int = 500
     ) async -> RelayPresence? {
@@ -257,46 +281,38 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         }
         let connection = NWConnection(
             host: NWEndpoint.Host(host), port: port, using: .tcp)
-        defer { connection.cancel() }
-        return await withTaskGroup(of: RelayPresence?.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    // One resume total: state failures and the receive race for it.
-                    let resumed = OSAllocatedUnfairLock(initialState: false)
-                    let finish: @Sendable (RelayPresence?) -> Void = { presence in
-                        let first = resumed.withLock { done -> Bool in
-                            if done { return false }
-                            done = true
-                            return true
-                        }
-                        if first { continuation.resume(returning: presence) }
+        let queue = DispatchQueue(label: "com.opencapture.openzcine.presence-check")
+        return await withCheckedContinuation { continuation in
+            // One resume total: the deadline, state failures, and the receive race for it.
+            let resumed = OSAllocatedUnfairLock(initialState: false)
+            let finish: @Sendable (RelayPresence?) -> Void = { presence in
+                let first = resumed.withLock { done -> Bool in
+                    if done { return false }
+                    done = true
+                    return true
+                }
+                guard first else { return }
+                connection.cancel()
+                continuation.resume(returning: presence)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    connection.receive(
+                        minimumIncompleteLength: 1, maximumLength: 1024
+                    ) { data, _, _, _ in
+                        finish(data.flatMap(RelayPresence.decode))
                     }
-                    connection.stateUpdateHandler = { state in
-                        switch state {
-                        case .ready:
-                            connection.receive(
-                                minimumIncompleteLength: 1, maximumLength: 1024
-                            ) { data, _, _, _ in
-                                finish(data.flatMap(RelayPresence.decode))
-                            }
-                        case .failed, .cancelled:
-                            finish(nil)
-                        default:
-                            break
-                        }
-                    }
-                    connection.start(
-                        queue: DispatchQueue(
-                            label: "com.opencapture.openzcine.presence-check"))
+                case .failed, .cancelled:
+                    finish(nil)
+                default:
+                    break
                 }
             }
-            group.addTask {
-                try? await Task.sleep(for: .milliseconds(timeoutMilliseconds))
-                return nil
+            queue.asyncAfter(deadline: .now() + .milliseconds(timeoutMilliseconds)) {
+                finish(nil)
             }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+            connection.start(queue: queue)
         }
     }
 
