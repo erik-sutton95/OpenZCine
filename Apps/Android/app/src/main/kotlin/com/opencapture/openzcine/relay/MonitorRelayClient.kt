@@ -47,12 +47,21 @@ class MonitorRelayClient(private val scope: CoroutineScope) {
     private val outbound = Channel<ByteArray>(Channel.UNLIMITED)
 
     /** Opens the connection and introduces this device. Safe to call once per instance. */
-    fun connect(host: String, port: Int, deviceName: String, passcode: String?) {
+    fun connect(
+        host: String,
+        port: Int,
+        deviceName: String,
+        passcode: String?,
+        codecs: List<String>? = null,
+    ) {
         readerJob =
             scope.launch(Dispatchers.IO) {
                 val socket = Socket()
                 try {
                     socket.tcpNoDelay = true
+                    // A vanished host must not pin this watcher for the TCP retransmission
+                    // eternity (iOS relay keepalive parity).
+                    socket.keepAlive = true
                     socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS)
                     this@MonitorRelayClient.socket = socket
                     writerJob =
@@ -70,6 +79,7 @@ class MonitorRelayClient(private val scope: CoroutineScope) {
                                 hostName = deviceName,
                                 cameraName = null,
                                 passcode = passcode,
+                                codecs = codecs,
                             )
                             .toJson()
                             .toString()

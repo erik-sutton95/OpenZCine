@@ -67,6 +67,16 @@ class MonitorRelayWireTest {
         assertEquals(MonitorRelayWire.Hello(2, "iPad", null, null), bare)
         // Round trip through this side's encoder.
         assertEquals(hello, MonitorRelayWire.Hello.fromJson(hello.toJson()))
+        // Twin of the Swift `helloCarriesCodecs` pin: the codec declaration a watcher sends when
+        // its hardware cannot decode the HEVC stream; absent means everything (legacy watchers
+        // keep HEVC).
+        val jpegOnly =
+            MonitorRelayWire.Hello.fromJson(
+                JSONObject("""{"version":2,"hostName":"Galaxy","codecs":["jpeg"]}""")
+            )
+        assertEquals(listOf("jpeg"), jpegOnly.codecs)
+        assertEquals(null, bare.codecs)
+        assertEquals(jpegOnly, MonitorRelayWire.Hello.fromJson(jpegOnly.toJson()))
     }
 
     @Test

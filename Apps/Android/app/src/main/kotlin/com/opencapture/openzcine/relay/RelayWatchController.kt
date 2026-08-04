@@ -54,6 +54,13 @@ class RelayWatchController(
     val ui: StateFlow<RelayWatchUiState> = mutableUi.asStateFlow()
 
     val frameSource = RelayLiveFrameSource()
+
+    /**
+     * Latched once this device's HEVC decoders have exhausted their attempts on the stream:
+     * every later join declares `codecs=["jpeg"]` and the host serves JPEG instead — codec
+     * negotiation for hardware the stream defeats (no Main10 decode on low-end chipsets).
+     */
+    private var jpegOnly = false
     val session: RelayCameraSession = RelayCameraSession(this)
 
     private var client: MonitorRelayClient? = null
@@ -162,7 +169,21 @@ class RelayWatchController(
                     }
                 }
             }
-        client.connect(broadcast.host, broadcast.port, deviceName, passcode)
+        frameSource.onHevcExhausted = {
+            if (!jpegOnly) {
+                jpegOnly = true
+                android.util.Log.i(
+                    "RelayHEVC", "decoders exhausted; rejoining for JPEG frames")
+                retry()
+            }
+        }
+        client.connect(
+            broadcast.host,
+            broadcast.port,
+            deviceName,
+            passcode,
+            codecs = if (jpegOnly) listOf("jpeg") else null,
+        )
     }
 
     fun submitPasscode(code: String) {

@@ -1351,17 +1351,31 @@ final class NativeAppModel {
                         isKeyframe: encoded.isKeyframe,
                         parameterSets: encoded.parameterSets),
                     image: encoded.data)
+                // Codec negotiation: peers whose hardware rejects the HEVC stream declared
+                // jpeg-only in their hello — they get the JPEG twin of this frame instead.
+                if relayHost.hasJPEGOnlyPeers {
+                    self.broadcastRelayFrameAsJPEG(
+                        image: image, metadata: metadata, host: relayHost,
+                        onlyJPEGPeers: true)
+                }
             }
         }
     }
 
     private func broadcastRelayFrameAsJPEG(
-        image: UIImage, metadata: MonitorRelayFrameMetadata, host: MonitorRelayHost
+        image: UIImage, metadata: MonitorRelayFrameMetadata, host: MonitorRelayHost,
+        onlyJPEGPeers: Bool = false
     ) {
         let handoff = UVCFrameHandoff(image: image)
         Task.detached(priority: .utility) {
             guard let jpeg = handoff.image.jpegData(compressionQuality: 0.6) else { return }
-            await MainActor.run { host.broadcast(frameMetadata: metadata, image: jpeg) }
+            await MainActor.run {
+                if onlyJPEGPeers {
+                    host.broadcastJPEGFallback(frameMetadata: metadata, image: jpeg)
+                } else {
+                    host.broadcast(frameMetadata: metadata, image: jpeg)
+                }
+            }
         }
     }
 
