@@ -133,11 +133,15 @@ public struct RelayPresence: Codable, Equatable, Sendable {
 
 /// Host → viewer introduction — and viewer → host, where it may carry the watcher passcode.
 public struct MonitorRelayHello: Codable, Equatable, Sendable {
-    public init(version: Int, hostName: String, cameraName: String?, passcode: String? = nil) {
+    public init(
+        version: Int, hostName: String, cameraName: String?, passcode: String? = nil,
+        codecs: [String]? = nil
+    ) {
         self.version = version
         self.hostName = hostName
         self.cameraName = cameraName
         self.passcode = passcode
+        self.codecs = codecs
     }
 
     public let version: Int
@@ -148,6 +152,15 @@ public struct MonitorRelayHello: Codable, Equatable, Sendable {
     /// Viewer → host only: the watcher passcode, when the broadcast requires one. Optional on
     /// the wire so payloads from before the field decode unchanged.
     public let passcode: String?
+    /// Viewer → host only: frame codecs this viewer can decode (`"hevc"`, `"jpeg"`). Absent —
+    /// including every payload from before the field — means everything, so old watchers keep
+    /// their HEVC stream. A device whose HEVC decoders reject the stream (low-end hardware
+    /// without Main10, software decoders that error on it) rejoins declaring `["jpeg"]` and
+    /// the host serves it JPEG instead: codec negotiation, not per-chipset whack-a-mole.
+    public let codecs: [String]?
+
+    /// Whether this viewer accepts HEVC frames (absent codec list = yes, legacy behavior).
+    public var acceptsHEVC: Bool { codecs?.contains("hevc") ?? true }
 }
 
 /// Host → viewer join refusal.

@@ -13,7 +13,6 @@ import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 
@@ -32,6 +31,10 @@ class RelayLiveFrameSource : LiveFrameSource {
     private var lastTimestampNanos: Long = 0
     private var measuredFPS: Double? = null
 
+    /** Fired at most once: the HEVC decoders exhausted their attempts on the current stream. */
+    var onHevcExhausted: (() -> Unit)? = null
+    private var hevcExhaustedReported = false
+
     /** Feeds one relayed frame; decodes off the caller's thread requirements (call on IO). */
     fun submit(metadata: MonitorRelayWire.FrameMetadata, image: ByteArray) {
         val jpeg =
@@ -39,7 +42,13 @@ class RelayLiveFrameSource : LiveFrameSource {
                 MonitorRelayWire.FrameCodec.JPEG -> image
                 MonitorRelayWire.FrameCodec.HEVC ->
                     hevc.decodeToJpeg(image, metadata.isKeyframe, metadata.parameterSets)
-                        ?: return
+                        ?: run {
+                            if (hevc.isPausedForStream && !hevcExhaustedReported) {
+                                hevcExhaustedReported = true
+                                onHevcExhausted?.invoke()
+                            }
+                            return
+                        }
                 else -> return
             }
         val now = System.nanoTime()
@@ -115,6 +124,10 @@ internal class HevcFrameDecoder {
     private var codec: MediaCodec? = null
     private var configuredCsd: ByteArray? = null
 
+    /** True once the rebuild bound tripped for the current stream parameters. */
+    val isPausedForStream: Boolean
+        get() = disabledForCsd != null
+
     fun decodeToJpeg(
         frame: ByteArray,
         isKeyframe: Boolean,
@@ -136,7 +149,17 @@ internal class HevcFrameDecoder {
             // Feed and drain are DECOUPLED: a hardware decoder holds several frames of
             // pipeline depth, so demanding output for the input just queued starves it —
             // the first outputs only appear a few frames in, then track the input rate.
-            val annexB = annexBFrame(frame)
+            // Parameter sets ride IN-BAND on keyframes: the c2 software decoder enters its
+            // error state the instant it starts with out-of-band csd-0 (first
+            // dequeueInputBuffer throws IllegalStateException), while inline VPS/SPS/PPS
+            // before the IDR is the pattern every MediaCodec implementation accepts.
+            val inBand = inBandParameterSets
+            val annexB =
+                if (isKeyframe && inBand != null) {
+                    inBand + annexBFrame(frame)
+                } else {
+                    annexBFrame(frame)
+                }
             val inputIndex = active.dequeueInputBuffer(INPUT_TIMEOUT_MICROS)
             if (inputIndex >= 0) {
                 fed += 1
@@ -155,6 +178,7 @@ internal class HevcFrameDecoder {
             if (jpeg != null) {
                 decoded += 1
                 fedSinceOutput = 0
+                consecutiveRebuilds = 0
             } else {
                 fedSinceOutput += 1
                 // A hardware decoder that consumes valid frames without EVER producing output
@@ -185,8 +209,21 @@ internal class HevcFrameDecoder {
         } catch (error: Exception) {
             // The reference chain broke (skip, resize, mid-stream join): rebuild on the next
             // keyframe's parameter sets rather than smearing. Logged like the iOS decoder's
-            // failure path — a silent black feed is undiagnosable in the field.
-            android.util.Log.w("RelayHEVC", "decode failed; rebuilding on next keyframe", error)
+            // failure path — a silent black feed is undiagnosable in the field. BOUNDED: a
+            // stream this device simply cannot decode must not rebuild-loop forever.
+            consecutiveRebuilds += 1
+            if (usingSoftwareDecoder && consecutiveRebuilds >= MAX_CONSECUTIVE_REBUILDS) {
+                android.util.Log.w(
+                    "RelayHEVC",
+                    "decode failed $consecutiveRebuilds times on the software decoder; " +
+                        "pausing until the stream's parameters change",
+                    error,
+                )
+                disabledForCsd = configuredCsd
+            } else {
+                android.util.Log.w(
+                    "RelayHEVC", "decode failed; rebuilding on next keyframe", error)
+            }
             release()
             null
         }
@@ -199,21 +236,32 @@ internal class HevcFrameDecoder {
     private var fedSinceOutput = 0
     private var usingSoftwareDecoder = false
     private var decoded = 0
+    private var consecutiveRebuilds = 0
+    private var inBandParameterSets: ByteArray? = null
+    private var disabledForCsd: ByteArray? = null
 
     private fun ensureCodec(csd: ByteArray?): MediaCodec? {
         val current = codec
         if (current != null && (csd == null || csd.contentEquals(configuredCsd))) {
             return current
         }
+        // Past the rebuild bound: stay quiet until the broadcaster's stream actually changes
+        // (a new profile or resolution ships new parameter sets, which earn a fresh attempt).
+        val disabled = disabledForCsd
+        if (disabled != null) {
+            if (csd == null || csd.contentEquals(disabled)) return null
+            disabledForCsd = null
+            consecutiveRebuilds = 0
+        }
         release()
         val newCsd = csd ?: return null
         val format =
-            MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, 1920, 1080).apply {
-                setByteBuffer("csd-0", ByteBuffer.wrap(newCsd))
-                // No forced color format: a Main10 stream decodes to P010 on the software
-                // path, and requesting 8-bit flexible put the codec straight into the error
-                // state. The plane converter below handles both sample widths.
-            }
+            // No csd-0: parameter sets ride in-band on keyframes (see `decodeToJpeg`) — the
+            // out-of-band form put the c2 software decoder straight into its error state.
+            // No forced color format either: a Main10 stream decodes to P010 on the software
+            // path, and requesting 8-bit flexible had the same effect. The plane converter
+            // below handles both sample widths.
+            MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, 1920, 1080)
         val created =
             if (usingSoftwareDecoder) {
                 MediaCodec.createByCodecName(SOFTWARE_DECODER_NAME)
@@ -228,6 +276,7 @@ internal class HevcFrameDecoder {
         )
         codec = created
         configuredCsd = newCsd
+        inBandParameterSets = newCsd
         awaitingKeyframe = true
         return created
     }
@@ -279,6 +328,7 @@ internal class HevcFrameDecoder {
         const val FRAME_STEP_MICROS = 40_000L
         const val SOFTWARE_FALLBACK_FED_FRAMES = 75
         const val SOFTWARE_DECODER_NAME = "c2.android.hevc.decoder"
+        const val MAX_CONSECUTIVE_REBUILDS = 3
         const val JPEG_QUALITY = 88
 
         val START_CODE = byteArrayOf(0x00, 0x00, 0x00, 0x01)

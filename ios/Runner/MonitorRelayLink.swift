@@ -222,6 +222,9 @@ final class MonitorRelayHost {
         /// backpressure cannot resume on a predicted frame — it would decode into smearing.
         /// True until this peer has been sent a keyframe.
         var needsKeyframe = true
+        /// From the hello's codec declaration (absent = true, legacy). A jpeg-only peer —
+        /// hardware whose decoders reject the HEVC stream — gets the JPEG twin of each frame.
+        var acceptsHEVC = true
     }
 
     /// Fired when some peer is waiting on a keyframe the current stream position cannot give it.
@@ -478,6 +481,7 @@ final class MonitorRelayHost {
                     MonitorRelayHello.self, from: message.payload)
             else { return }
             peers[key]?.name = hello.hostName
+            peers[key]?.acceptsHEVC = hello.acceptsHEVC
             if controlHolder == key { controlHolderName = hello.hostName }
             if peers[key]?.authorized == false {
                 if hello.passcode == watcherPasscode {
@@ -597,15 +601,25 @@ final class MonitorRelayHost {
         peers.values.contains { $0.authorized && $0.inFlightFrames < maxInFlightFramesPerPeer }
     }
 
+    /// Whether any authorized peer declared it cannot decode HEVC — those peers get the JPEG
+    /// twin of each frame (`broadcastJPEGFallback`) instead of the encoded stream.
+    var hasJPEGOnlyPeers: Bool {
+        peers.values.contains { $0.authorized && !$0.acceptsHEVC }
+    }
+
     func broadcast(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
         guard !peers.isEmpty else { return }
         guard
             let payload = try? MonitorRelayFramePayload.encode(
                 metadata: frameMetadata, image: image)
         else { return }
+        let isHEVC = frameMetadata.codec == MonitorRelayProtocol.FrameCodec.hevc
         let framed = MonitorRelayFraming.encode(kind: .frame, payload: payload)
         var keyframeWanted = false
         for (key, peer) in peers where peer.authorized {
+            // Codec negotiation: a peer that declared jpeg-only never receives HEVC — its
+            // frames arrive via `broadcastJPEGFallback` instead.
+            if isHEVC && !peer.acceptsHEVC { continue }
             // A monitor shows the newest frame or it is not a monitor. A peer that has not
             // drained is SKIPPED, never queued for: fire-and-forget sends buffer without bound,
             // so a link slower than the source accumulates minutes of latency that presents as
@@ -632,6 +646,27 @@ final class MonitorRelayHost {
                 })
         }
         if keyframeWanted { onKeyframeNeeded?() }
+    }
+
+    /// The JPEG twin of an HEVC frame, for peers that declared jpeg-only. Same backpressure
+    /// discipline; JPEG frames are all keyframes, so a resuming peer never waits.
+    func broadcastJPEGFallback(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
+        guard hasJPEGOnlyPeers else { return }
+        guard
+            let payload = try? MonitorRelayFramePayload.encode(
+                metadata: frameMetadata, image: image)
+        else { return }
+        let framed = MonitorRelayFraming.encode(kind: .frame, payload: payload)
+        for (key, peer) in peers where peer.authorized && !peer.acceptsHEVC {
+            guard peer.inFlightFrames < maxInFlightFramesPerPeer else { continue }
+            peers[key]?.needsKeyframe = false
+            peers[key]?.inFlightFrames += 1
+            peer.connection.send(
+                content: framed,
+                completion: .contentProcessed { [weak self] _ in
+                    Task { @MainActor in self?.peers[key]?.inFlightFrames -= 1 }
+                })
+        }
     }
 
     private func broadcast(kind: MonitorRelayProtocol.Kind, payload: Data) {

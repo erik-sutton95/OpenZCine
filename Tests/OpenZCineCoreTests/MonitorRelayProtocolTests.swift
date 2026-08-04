@@ -139,6 +139,21 @@ struct MonitorRelayProtocolTests {
         #expect(decoded.cameraName == "Nikon ZR")
     }
 
+    /// Twin of the Kotlin hello vector: the `codecs` key is how a watcher whose hardware cannot
+    /// decode the HEVC stream asks for JPEG. Absent must mean "everything" — that is what keeps
+    /// every pre-negotiation watcher on its HEVC stream.
+    @Test("The hello codec declaration decodes the shared vector; absent means all")
+    func helloCarriesCodecs() throws {
+        let jpegOnly = try JSONDecoder().decode(
+            MonitorRelayHello.self,
+            from: Data(#"{"version":2,"hostName":"Galaxy","codecs":["jpeg"]}"#.utf8))
+        #expect(jpegOnly.codecs == ["jpeg"])
+        #expect(!jpegOnly.acceptsHEVC)
+        let legacy = try JSONDecoder().decode(MonitorRelayHello.self, from: hello())
+        #expect(legacy.codecs == nil)
+        #expect(legacy.acceptsHEVC)
+    }
+
     /// The service type has to match `NSBonjourServices` in the app's Info.plist exactly, or the
     /// browser is denied with no error the operator can act on.
     @Test("The Bonjour service type is a well-formed TCP service")

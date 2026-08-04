@@ -124,6 +124,14 @@ object MonitorRelayWire {
         val hostName: String,
         val cameraName: String?,
         val passcode: String? = null,
+        /**
+         * Viewer → host: frame codecs this viewer can decode ("hevc", "jpeg"). Null — including
+         * every payload from before the field — means everything. A device whose HEVC decoders
+         * reject the stream (the A12's hardware has no Main10; its software c2 errors on it)
+         * rejoins declaring ["jpeg"] and the host serves it JPEG: codec negotiation, not
+         * per-chipset whack-a-mole.
+         */
+        val codecs: List<String>? = null,
     ) {
         fun toJson(): JSONObject =
             JSONObject().apply {
@@ -131,6 +139,7 @@ object MonitorRelayWire {
                 put("hostName", hostName)
                 cameraName?.let { put("cameraName", it) }
                 passcode?.let { put("passcode", it) }
+                codecs?.let { put("codecs", org.json.JSONArray(it)) }
             }
 
         companion object {
@@ -140,6 +149,10 @@ object MonitorRelayWire {
                     hostName = json.getString("hostName"),
                     cameraName = json.optStringOrNull("cameraName"),
                     passcode = json.optStringOrNull("passcode"),
+                    codecs =
+                        json.optJSONArray("codecs")?.let { array ->
+                            (0 until array.length()).map(array::getString)
+                        },
                 )
         }
     }
