@@ -387,6 +387,73 @@ class SwiftCoreLiveFrameSource(
                             )
                         }
 
+                        override fun onFrameWithRotation(
+                            jpeg: ByteArray,
+                            timestampNanos: Long,
+                            isRecording: Boolean,
+                            leftLevelDb: Double,
+                            leftPeakDb: Double,
+                            rightLevelDb: Double,
+                            rightPeakDb: Double,
+                            hasAudioLevels: Boolean,
+                            hasFocus: Boolean,
+                            focusCoordinateWidth: Int,
+                            focusCoordinateHeight: Int,
+                            focusResult: Int,
+                            subjectDetectionActive: Boolean,
+                            trackingAFActive: Boolean,
+                            selectedBoxIndex: Int,
+                            focusBoxes: IntArray,
+                            hasLevel: Boolean,
+                            levelRollDegrees: Double,
+                            levelPitchDegrees: Double,
+                            levelYawDegrees: Double,
+                            timecodeOn: Boolean,
+                            timecodeHour: Int,
+                            timecodeMinute: Int,
+                            timecodeSecond: Int,
+                            timecodeFrame: Int,
+                            rotation: Int,
+                        ) {
+                            emitFrame(
+                                jpeg = jpeg,
+                                timestampNanos = timestampNanos,
+                                isRecording = isRecording,
+                                leftLevelDb = leftLevelDb,
+                                leftPeakDb = leftPeakDb,
+                                rightLevelDb = rightLevelDb,
+                                rightPeakDb = rightPeakDb,
+                                hasAudioLevels = hasAudioLevels,
+                                focus =
+                                    liveFocusInfoFromWire(
+                                        hasFocus = hasFocus,
+                                        coordinateWidth = focusCoordinateWidth,
+                                        coordinateHeight = focusCoordinateHeight,
+                                        focusResult = focusResult,
+                                        subjectDetectionActive = subjectDetectionActive,
+                                        trackingAFActive = trackingAFActive,
+                                        selectedBoxIndex = selectedBoxIndex,
+                                        flattenedBoxes = focusBoxes,
+                                    ),
+                                level =
+                                    liveCameraLevelFromWire(
+                                        hasLevel = hasLevel,
+                                        rollDegrees = levelRollDegrees,
+                                        pitchDegrees = levelPitchDegrees,
+                                        yawDegrees = levelYawDegrees,
+                                    ),
+                                timecode =
+                                    LiveFrameTimecode(
+                                        on = timecodeOn,
+                                        hour = timecodeHour,
+                                        minute = timecodeMinute,
+                                        second = timecodeSecond,
+                                        frame = timecodeFrame,
+                                    ),
+                                rotation = liveFeedRotationFromWire(rotation),
+                            )
+                        }
+
                         private fun emitFrame(
                             jpeg: ByteArray,
                             timestampNanos: Long,
@@ -399,6 +466,8 @@ class SwiftCoreLiveFrameSource(
                             focus: com.opencapture.openzcine.core.LiveFocusInfo? = null,
                             level: com.opencapture.openzcine.core.LiveCameraLevel? = null,
                             timecode: LiveFrameTimecode? = null,
+                            rotation: com.opencapture.openzcine.core.LiveFeedRotation =
+                                com.opencapture.openzcine.core.LiveFeedRotation.LANDSCAPE,
                         ) {
                             // A sustained stream resets the stall ladder so
                             // brief glitches still get the three free restarts.
@@ -428,6 +497,7 @@ class SwiftCoreLiveFrameSource(
                                             timecode = timecode,
                                             measuredFramesPerSecond =
                                                 frameRateEstimator.record(timestampNanos),
+                                            rotation = rotation,
                                         ),
                                 ),
                             )

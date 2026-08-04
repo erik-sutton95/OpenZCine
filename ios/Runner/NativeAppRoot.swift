@@ -1801,6 +1801,10 @@ final class NativeAppModel {
     /// Camera-reported audio levels from the live-view header's sound indicator (bytes 824–827),
     /// mapped onto the meter's dBFS scale for the audio-levels panel. Silent until frames carry it.
     var liveAudioLevels: AudioMeterLevels = .silent
+    /// How the body is held, from the live-view header's rotation byte (839). Drives vertical
+    /// mode: the feed rotates upright and its displayed aspect inverts while the camera is on
+    /// its side. Only the camera's own stream ever sets this; HDMI capture stays `.landscape`.
+    var liveFeedRotation: PTPLiveViewRotation = .landscape
     /// Latest scope sample plus derived traffic-light readings — one publish per throttle tick.
     var scopeAssist: ScopeAssistBundle = .empty
     /// Convenience accessor for scope panels that only need bins / points.
@@ -5986,6 +5990,7 @@ final class NativeAppModel {
         liveTimecode = Timecode(on: false, hour: 0, minute: 0, second: 0, frame: 0)
         cameraLevelRoll = nil
         cameraLevelPitch = nil
+        liveFeedRotation = .landscape
     }
 
     /// Keeps an idle command channel warm: a quiet TCP session is exactly what a Wi-Fi/hotspot NAT
@@ -7230,6 +7235,9 @@ final class NativeAppModel {
     /// source of truth for each (no property polling, no extra traffic; all decoded from the
     /// header the app already reads).
     private func applyLiveViewHeaderState(_ frame: PTPLiveViewFrame) {
+        // Body rotation (byte 839) → vertical mode. Guarded write: this runs per frame and an
+        // unconditional set would invalidate the whole feed layout 30×/s.
+        if liveFeedRotation != frame.rotation { liveFeedRotation = frame.rotation }
         if levelAssistActive {
             let now = CFAbsoluteTimeGetCurrent()
             if now - lastLevelUpdateTime >= Self.levelAngleMinInterval, let level = frame.level {

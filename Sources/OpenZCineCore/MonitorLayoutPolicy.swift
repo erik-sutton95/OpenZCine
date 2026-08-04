@@ -233,6 +233,15 @@ public enum MonitorFeedLayout {
         if viewportHeight > viewportWidth {
             let width = viewportWidth
             let height = width / aspectRatio
+            // Vertical (rotated) feeds are taller than the tall viewport itself: bind to the
+            // height and pillarbox-centre. Gated to aspect < 1 so every landscape-or-wider
+            // aspect keeps its historical full-width portrait frame untouched.
+            if aspectRatio < 1, height > viewportHeight + 0.5 {
+                let boundWidth = viewportHeight * aspectRatio
+                return MonitorFeedFrame(
+                    x: (viewportWidth - boundWidth) / 2, y: 0,
+                    width: boundWidth, height: viewportHeight)
+            }
             return MonitorFeedFrame(x: 0, y: 0, width: width, height: height)
         }
 

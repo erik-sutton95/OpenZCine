@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -82,6 +83,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.WindowInsets
@@ -115,6 +117,7 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
+import com.opencapture.openzcine.core.LiveFeedRotation
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
@@ -197,6 +200,36 @@ internal fun LandscapeSettingsRecoveryButton(
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
 internal fun Modifier.zone(frame: ZoneFrame): Modifier =
     offset(frame.x.dp, frame.y.dp).size(frame.width.dp, frame.height.dp)
+
+/**
+ * Lays the feed stack out in the camera's own frame — sides swapped when the body is vertical —
+ * and rotates it upright into the container (the Android half of iOS `rotatedFeedImage`).
+ * Compose maps pointer input back through the layer, so gestures, AF overlays, and punch-in
+ * anchors inside keep operating in the camera's pre-rotation space with no coordinate changes.
+ */
+internal fun Modifier.liveFeedBodyRotation(rotation: LiveFeedRotation): Modifier =
+    if (rotation == LiveFeedRotation.LANDSCAPE) {
+        this
+    } else {
+        layout { measurable, constraints ->
+                val swap = rotation.isVertical
+                val placeable =
+                    measurable.measure(
+                        if (swap && constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+                            Constraints.fixed(constraints.maxHeight, constraints.maxWidth)
+                        } else {
+                            constraints
+                        },
+                    )
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.place(
+                        (constraints.maxWidth - placeable.width) / 2,
+                        (constraints.maxHeight - placeable.height) / 2,
+                    )
+                }
+            }
+            .graphicsLayer { rotationZ = rotation.displayDegreesClockwise }
+    }
 
 /**
  * The iPhone Dynamic Island's landscape leading safe-area inset, in points/dp —
@@ -1395,9 +1428,21 @@ internal fun MonitorScreen(
         // Photography always lays out as fit too — its feed is the still image
         // area (3:2/1:1/16:9), and a 16:9 centre-crop "fill" of a still makes no
         // sense (iOS `isFill = persistedAspect == .fill && !isPhotography`).
+        // Body rotation from the live-view header (vertical mode). Screen-scoped state because
+        // zone layout reads it well before the frame collectors are declared; the timecode
+        // collector (open in every DISP mode) writes it, and a source change resets it.
+        var liveFeedRotation by remember { mutableStateOf(LiveFeedRotation.LANDSCAPE) }
+        val isVerticalFeed = liveFeedRotation.isVertical
         val portraitAspect = operatorSettings.portraitFeedAspect
+        // Zone/chrome layout: vertical mode always lays out as FILL, matching iOS — the fill
+        // zones are exactly the vertical viewer (feed spanning the bands, floating assist rail,
+        // capture bar over the feed bottom); fit's stacked bands would strand the controls.
         val isPortraitFill =
-            isPortrait && !isCommand && !isPhotographyMode && portraitAspect.fillsViewport
+            isPortrait && !isCommand && !isPhotographyMode &&
+                (isVerticalFeed || portraitAspect.fillsViewport)
+        // Raster/overlay fit: the rotated 9:16 picture pillarboxes inside the fill frame —
+        // aspect-filling it would centre-crop the top and bottom of the vertical shot.
+        val portraitRasterFill = isPortraitFill && !isVerticalFeed
 
         // One authoritative mode filter, mirroring core `MonitorChromePolicy`: clean (DISP 2) is a
         // bare image unless the operator pinned a tool to it, and it strips the deck/rails/bands
@@ -1518,8 +1563,11 @@ internal fun MonitorScreen(
         val scopeCount = portraitScopes.size
         // Photography passes its still image-area ratio (3:2/1:1/16:9) so the
         // portrait fit feed renders whole under the top bar; video keeps 16:9.
+        // A vertically held body inverts the displayed ratio (shared core clamps
+        // the resulting tall feed above the stacked bands).
         val portraitFeedAspectRatio =
-            if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f
+            (if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f)
+                .let { if (isVerticalFeed) 1f / it else it }
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
@@ -1710,12 +1758,20 @@ internal fun MonitorScreen(
         // the stream open in every DISP mode while decode/scopes/audio still stand down.
         val timecodeFrameSource = monitorTimecodeFrameSource(activeFrameSource)
         LaunchedEffect(timecodeFrameSource, timecodeRetention) {
-            val source = timecodeFrameSource ?: return@LaunchedEffect
+            val source = timecodeFrameSource
+            if (source == null) {
+                // No stream, no body rotation: never leave a stale vertical layout up.
+                liveFeedRotation = LiveFeedRotation.LANDSCAPE
+                return@LaunchedEffect
+            }
             source.frames
                 .conflate()
                 .collect { frame ->
                     withContext(Dispatchers.Main.immediate) {
                         timecodeRetention.accept(frame.timecode)
+                        if (liveFeedRotation != frame.rotation) {
+                            liveFeedRotation = frame.rotation
+                        }
                     }
                 }
         }
@@ -1918,7 +1974,7 @@ internal fun MonitorScreen(
                 containerHeight = feedPointerSize.height.toFloat(),
                 sourceWidth = liveFeedPresentation.sourceWidth,
                 sourceHeight = liveFeedPresentation.sourceHeight,
-                aspectFill = isPortraitFill,
+                aspectFill = portraitRasterFill,
             )
         val focusMetadataAvailable =
             sessionState is CameraSessionState.Connected &&
@@ -2099,18 +2155,6 @@ internal fun MonitorScreen(
                         },
                     )
                     .clipToBounds()
-                    // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
-                    // AF box and focus ring are siblings of it, so scaling the raster alone would
-                    // leave them behind at unmagnified positions over a magnified picture. Inside
-                    // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
-                    // of the gestures so Compose maps a touch back through the scale and
-                    // tap-to-focus still lands on the pixel under the finger.
-                    .graphicsLayer {
-                        scaleX = punchIn
-                        scaleY = punchIn
-                        transformOrigin = TransformOrigin(punchInAnchor.first, punchInAnchor.second)
-                    }
-                    .onSizeChanged { feedPointerSize = it }
                     // Canvas content is not exposed as an accessibility node
                     // by every Android view bridge. The feed container is the
                     // stable, descriptive region for TalkBack and UI tests.
@@ -2126,7 +2170,26 @@ internal fun MonitorScreen(
                             }
                         }
                     }
-                    .testTag("monitor_live_feed")
+                    .testTag("monitor_live_feed"),
+                contentAlignment = Alignment.Center,
+            ) {
+            Box(
+                // Vertical mode first: the whole feed stack — raster, AF boxes, punch-in,
+                // gestures — lays out in the camera's own frame and rotates upright as one,
+                // inside the zone clip.
+                Modifier.liveFeedBodyRotation(liveFeedRotation)
+                    // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
+                    // AF box and focus ring are siblings of it, so scaling the raster alone would
+                    // leave them behind at unmagnified positions over a magnified picture. Inside
+                    // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
+                    // of the gestures so Compose maps a touch back through the scale and
+                    // tap-to-focus still lands on the pixel under the finger.
+                    .graphicsLayer {
+                        scaleX = punchIn
+                        scaleY = punchIn
+                        transformOrigin = TransformOrigin(punchInAnchor.first, punchInAnchor.second)
+                    }
+                    .onSizeChanged { feedPointerSize = it }
                     .focusFeedGestures(
                         geometry = feedGestureGeometry,
                         context = focusGestureContext,
@@ -2209,16 +2272,20 @@ internal fun MonitorScreen(
                         cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
                         effectsPresentationState = liveFeedEffectsPresentation,
-                        aspectFill = isPortraitFill,
+                        aspectFill = portraitRasterFill,
                         // SurfaceView graded feed is invisible to Kyant
-                        // layerBackdrop — FULL glass must present via Compose.
-                        preferComposablePresentation = glass.tier == GlassTier.FULL,
+                        // layerBackdrop — FULL glass must present via Compose. A rotated
+                        // (vertical) feed must too: SurfaceView buffers composite outside
+                        // the Compose layer and never rotate with it.
+                        preferComposablePresentation =
+                            glass.tier == GlassTier.FULL ||
+                                liveFeedRotation != LiveFeedRotation.LANDSCAPE,
                     )
                     // Presentation-only texture: after the camera frame/effect renderer, before
                     // every geometry-bearing assist. Scopes continue sampling monitorFrameSource.
                     FeedTextureOverlay(
                         presentationState = liveFeedPresentation,
-                        aspectFill = isPortraitFill,
+                        aspectFill = portraitRasterFill,
                         horizontalPresentationScale = localFraming.horizontalPresentationScale,
                         verticalPresentationScale = localFraming.verticalPresentationScale,
                     )
@@ -2231,7 +2298,7 @@ internal fun MonitorScreen(
                 LocalFramingAssistOverlay(
                     configuration = renderedFraming,
                     presentationState = liveFeedPresentation,
-                    aspectFill = isPortraitFill,
+                    aspectFill = portraitRasterFill,
                     splitComparison = renderedEffects.activeSplitComparison,
                 )
                 LiveFrameMetadataOverlay(
@@ -2239,7 +2306,7 @@ internal fun MonitorScreen(
                     configuration = renderedFraming,
                     cleanMode = isClean,
                     isPortrait = isPortrait,
-                    aspectFill = isPortraitFill,
+                    aspectFill = portraitRasterFill,
                     isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
@@ -2261,6 +2328,8 @@ internal fun MonitorScreen(
                     evIndicatorSixths = cameraProperties.evIndicatorSixths,
                     evIndicatorLit = cameraProperties.evIndicatorLit,
                 )
+            }
+                // Outside the rotated stack: reads as screen chrome, never sideways text.
                 LiveFeedColorModeNotice(
                     colorMode = liveFeedPresentation.colorMode,
                     effectsActive = !renderedEffects.isIdentity,

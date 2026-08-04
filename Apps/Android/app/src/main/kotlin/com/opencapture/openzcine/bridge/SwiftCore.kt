@@ -907,6 +907,70 @@ object SwiftCore {
         }
 
         /**
+         * Newest additive live-frame callback: full metadata plus the body
+         * rotation from the live-view header (0 landscape, 1 portrait grip
+         * up, 2 portrait grip down, 3 upside down — vertical mode). The
+         * facade falls back to [onFrameWithFullMetadata] and older
+         * descriptors when this one is absent.
+         */
+        fun onFrameWithRotation(
+            jpeg: ByteArray,
+            timestampNanos: Long,
+            isRecording: Boolean,
+            leftLevelDb: Double,
+            leftPeakDb: Double,
+            rightLevelDb: Double,
+            rightPeakDb: Double,
+            hasAudioLevels: Boolean,
+            hasFocus: Boolean,
+            focusCoordinateWidth: Int,
+            focusCoordinateHeight: Int,
+            focusResult: Int,
+            subjectDetectionActive: Boolean,
+            trackingAFActive: Boolean,
+            selectedBoxIndex: Int,
+            focusBoxes: IntArray,
+            hasLevel: Boolean,
+            levelRollDegrees: Double,
+            levelPitchDegrees: Double,
+            levelYawDegrees: Double,
+            timecodeOn: Boolean,
+            timecodeHour: Int,
+            timecodeMinute: Int,
+            timecodeSecond: Int,
+            timecodeFrame: Int,
+            rotation: Int,
+        ) {
+            onFrameWithFullMetadata(
+                jpeg = jpeg,
+                timestampNanos = timestampNanos,
+                isRecording = isRecording,
+                leftLevelDb = leftLevelDb,
+                leftPeakDb = leftPeakDb,
+                rightLevelDb = rightLevelDb,
+                rightPeakDb = rightPeakDb,
+                hasAudioLevels = hasAudioLevels,
+                hasFocus = hasFocus,
+                focusCoordinateWidth = focusCoordinateWidth,
+                focusCoordinateHeight = focusCoordinateHeight,
+                focusResult = focusResult,
+                subjectDetectionActive = subjectDetectionActive,
+                trackingAFActive = trackingAFActive,
+                selectedBoxIndex = selectedBoxIndex,
+                focusBoxes = focusBoxes,
+                hasLevel = hasLevel,
+                levelRollDegrees = levelRollDegrees,
+                levelPitchDegrees = levelPitchDegrees,
+                levelYawDegrees = levelYawDegrees,
+                timecodeOn = timecodeOn,
+                timecodeHour = timecodeHour,
+                timecodeMinute = timecodeMinute,
+                timecodeSecond = timecodeSecond,
+                timecodeFrame = timecodeFrame,
+            )
+        }
+
+        /**
          * The stream ended — stop, disconnect, a transport error, or an
          * immediately-failed start. Called exactly once per
          * [sessionStartLiveView].

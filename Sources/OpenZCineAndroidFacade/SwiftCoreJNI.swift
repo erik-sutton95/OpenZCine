@@ -1764,6 +1764,8 @@
         case legacy
         case metadata
         case fullMetadata
+        /// Full metadata plus the body-rotation byte (vertical mode).
+        case rotation
     }
 
     private struct LiveFrameListenerHandle: @unchecked Sendable {
@@ -1802,12 +1804,15 @@
         // Keep the established `onFrame([BJZDDDDZ)V` ABI alive. A newer
         // listener receives one richer callback per frame; an older one keeps
         // receiving its exact legacy payload rather than failing start-up.
+        let rotationFrame = optionalInstanceMethod(
+            env, cls, "onFrameWithRotation", "([BJZDDDDZZIIIZZI[IZDDDZIIIII)V")
         let fullMetadataFrame = optionalInstanceMethod(
             env, cls, "onFrameWithFullMetadata", "([BJZDDDDZZIIIZZI[IZDDDZIIII)V")
         let metadataFrame = optionalInstanceMethod(
             env, cls, "onFrameWithMetadata", "([BJZDDDDZZIIIZZI[IZDDD)V")
         guard
-            let onFrame = fullMetadataFrame
+            let onFrame = rotationFrame
+                ?? fullMetadataFrame
                 ?? metadataFrame
                 ?? optionalInstanceMethod(
                     env, cls, "onFrame", "([BJZDDDDZ)V")
@@ -1815,12 +1820,21 @@
             fns.DeleteGlobalRef!(env, global)
             return
         }
+        let callback: LiveFrameCallback =
+            if rotationFrame != nil {
+                .rotation
+            } else if fullMetadataFrame != nil {
+                .fullMetadata
+            } else if metadataFrame != nil {
+                .metadata
+            } else {
+                .legacy
+            }
         let handle = LiveFrameListenerHandle(
             vm: vm,
             listener: global,
             onFrame: onFrame,
-            callback: fullMetadataFrame != nil
-                ? .fullMetadata : (metadataFrame != nil ? .metadata : .legacy),
+            callback: callback,
             onEnded: onEnded)
 
         /// Terminal path on the CALLING (JVM-owned) thread: report the end and
@@ -1847,7 +1861,7 @@
                     pushLiveFrame(
                         handle, jpeg: frame.jpeg, timestampNanos: timestampNanos,
                         isRecording: frame.isRecording, audio: audio, focus: focus, level: level,
-                        timecode: frame.timecode)
+                        timecode: frame.timecode, rotation: jint(frame.rotation.rawValue))
                 },
                 onEnded: { finishLiveFrameStream(handle) })
         } catch {
@@ -1881,7 +1895,7 @@
     private func pushLiveFrame(
         _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64,
         isRecording: Bool, audio: LiveAudioMeterWire, focus: LiveViewFocusWire,
-        level: LiveViewLevelWire, timecode: Timecode
+        level: LiveViewLevelWire, timecode: Timecode, rotation: jint
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -1927,6 +1941,11 @@
                     jvalue(d: level.rollDegrees), jvalue(d: level.pitchDegrees),
                     jvalue(d: level.yawDegrees),
                 ]
+            let timecodeArgs = [
+                jvalue(z: timecode.on ? 1 : 0),
+                jvalue(i: jint(timecode.hour)), jvalue(i: jint(timecode.minute)),
+                jvalue(i: jint(timecode.second)), jvalue(i: jint(timecode.frame)),
+            ]
             switch handle.callback {
             case .legacy:
                 break
@@ -1934,12 +1953,10 @@
                 var arguments = metadataArgs
                 fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
             case .fullMetadata:
-                var arguments =
-                    metadataArgs + [
-                        jvalue(z: timecode.on ? 1 : 0),
-                        jvalue(i: jint(timecode.hour)), jvalue(i: jint(timecode.minute)),
-                        jvalue(i: jint(timecode.second)), jvalue(i: jint(timecode.frame)),
-                    ]
+                var arguments = metadataArgs + timecodeArgs
+                fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
+            case .rotation:
+                var arguments = metadataArgs + timecodeArgs + [jvalue(i: rotation)]
                 fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
             }
             clearPendingJavaException(env)

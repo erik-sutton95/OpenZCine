@@ -63,4 +63,38 @@ struct LiveViewHeaderTests {
         #expect(abs(PTPLevelAngles.signedDegrees(180) - 180) < 1e-9)
         #expect(abs(PTPLevelAngles.signedDegrees(270) - -90) < 1e-9)
     }
+
+    /// Header with just the rotation byte (839) set.
+    private func rotationHeader(_ value: UInt8, length: Int = 1024) -> Data {
+        var bytes = [UInt8](repeating: 0, count: length)
+        if bytes.count > 839 { bytes[839] = value }
+        return Data(bytes)
+    }
+
+    @Test func rotationByteDecodesAllDocumentedValues() {
+        #expect(PTPLiveViewObject.rotation(from: rotationHeader(0)) == .landscape)
+        #expect(PTPLiveViewObject.rotation(from: rotationHeader(1)) == .portraitGripUp)
+        #expect(PTPLiveViewObject.rotation(from: rotationHeader(2)) == .portraitGripDown)
+        #expect(PTPLiveViewObject.rotation(from: rotationHeader(3)) == .upsideDown)
+    }
+
+    @Test func rotationDefaultsToLandscapeOnUnknownOrShortHeader() {
+        // Undocumented value → landscape, never a sideways feed on a misreported byte.
+        #expect(PTPLiveViewObject.rotation(from: rotationHeader(7)) == .landscape)
+        // Header too short to carry byte 839 → landscape.
+        #expect(PTPLiveViewObject.rotation(from: rotationHeader(1, length: 512)) == .landscape)
+    }
+
+    @Test func rotationDisplayCorrectionMatchesBodyRotation() {
+        // Body rotated CCW (grip up) stores the scene's top at the image's right edge; the
+        // correction rotates the feed the same way the body went (positive = clockwise).
+        #expect(PTPLiveViewRotation.landscape.displayDegreesClockwise == 0)
+        #expect(PTPLiveViewRotation.portraitGripUp.displayDegreesClockwise == -90)
+        #expect(PTPLiveViewRotation.portraitGripDown.displayDegreesClockwise == 90)
+        #expect(PTPLiveViewRotation.upsideDown.displayDegreesClockwise == 180)
+        #expect(PTPLiveViewRotation.portraitGripUp.isVertical)
+        #expect(PTPLiveViewRotation.portraitGripDown.isVertical)
+        #expect(!PTPLiveViewRotation.landscape.isVertical)
+        #expect(!PTPLiveViewRotation.upsideDown.isVertical)
+    }
 }
