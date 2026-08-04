@@ -313,7 +313,10 @@ struct MetalLiveView: UIViewRepresentable {
                 let descriptor = MTLTextureDescriptor.texture2DDescriptor(
                     pixelFormat: target.pixelFormat, width: target.width, height: target.height,
                     mipmapped: false)
-                descriptor.usage = [.shaderRead, .shaderWrite]
+                // `.renderTarget` as well as the compute usages: the scaler attaches this as
+                // colorAttachment[0] of its own render pass internally, which validation rejects
+                // for a shaderRead|shaderWrite-only texture. `.shaderRead` is what the blit reads.
+                descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
                 descriptor.storageMode = .private
                 spatialOutput = device.makeTexture(descriptor: descriptor)
                 return spatialOutput
