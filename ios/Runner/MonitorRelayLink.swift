@@ -137,6 +137,58 @@ final class CameraInUseBeacon {
     }
 }
 
+/// Unicast twin of the Bonjour advertisement: answers one TCP connection on the fixed presence
+/// port with a single `RelayPresence` JSON line, then closes. Managed networks filter multicast
+/// between wireless clients — silently eating mDNS — and unicast survives; discovery's sweep
+/// reads this to keep the broadcast list and the probe shield alive there, and to PROVE the
+/// filtering when Bonjour lists nothing.
+@MainActor
+final class RelayPresenceServer {
+    private var listener: NWListener?
+    private var presence: RelayPresence?
+    private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-presence")
+
+    /// Publishes the device's current presence, or stops answering with `nil`.
+    func update(_ presence: RelayPresence?) {
+        self.presence = presence
+        guard presence != nil else {
+            listener?.cancel()
+            listener = nil
+            return
+        }
+        startIfNeeded()
+    }
+
+    private func startIfNeeded() {
+        guard listener == nil,
+            let port = NWEndpoint.Port(rawValue: MonitorRelayProtocol.presenceTCPPort),
+            let listener = try? NWListener(using: .tcp, on: port)
+        else {
+            if listener == nil { logConnection("presence server bind failed") }
+            return
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            connection.start(queue: self?.queue ?? .global())
+            Task { @MainActor [weak self] in
+                guard let line = self?.presence?.encodedLine() else {
+                    connection.cancel()
+                    return
+                }
+                connection.send(
+                    content: line,
+                    completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        listener.stateUpdateHandler = { state in
+            if case .failed(let error) = state {
+                logConnection("presence server failed: \(error)")
+            }
+        }
+        listener.start(queue: queue)
+        self.listener = listener
+    }
+}
+
 // MARK: - Host
 
 /// Serves the picture and the camera's readings to viewer devices.

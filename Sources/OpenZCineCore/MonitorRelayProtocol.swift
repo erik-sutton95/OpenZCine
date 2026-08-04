@@ -80,6 +80,55 @@ public enum MonitorRelayProtocol {
     /// A beacon exists so the `ch=` probe shield protects a held camera even when the operator
     /// is not sharing — the sharing-off knock storm.
     public static let watchableTXTKey = "w"
+
+    /// Fixed unicast presence port: any device holding or sharing a camera answers one TCP
+    /// connection here with a single ``RelayPresence`` JSON line and closes. Discovery's
+    /// subnet sweep checks it beside the camera probe — unicast survives the multicast
+    /// filtering managed networks apply between wireless clients (which silently eats mDNS),
+    /// so presence keeps the broadcast list and the probe shield alive there. It is also the
+    /// detector: a presence answer from a device Bonjour never reported is PROOF the network
+    /// filters discovery, and the operator is told.
+    public static let presenceTCPPort: UInt16 = 15741
+}
+
+/// One-line unicast answer from a device holding or sharing a camera (see
+/// `MonitorRelayProtocol.presenceTCPPort`). Keys are deliberately terse and contract-pinned on
+/// both platforms: `v` version, `n` device name, `w` 1 = joinable broadcast / 0 = in-use
+/// beacon, `ch` served camera host, `p` relay listener port when joinable.
+public struct RelayPresence: Codable, Equatable, Sendable {
+    public var v: Int
+    public var n: String
+    public var w: Int
+    public var ch: String?
+    public var p: Int?
+
+    public init(name: String, watchable: Bool, servedCameraHost: String?, relayPort: Int?) {
+        self.v = 1
+        self.n = name
+        self.w = watchable ? 1 : 0
+        self.ch = servedCameraHost
+        self.p = relayPort
+    }
+
+    public var isWatchable: Bool { w != 0 }
+
+    /// Encodes the single wire line, newline-terminated.
+    public func encodedLine() -> Data {
+        // Codable JSON of this flat struct cannot fail; the newline is the frame delimiter.
+        var data = (try? JSONEncoder().encode(self)) ?? Data()
+        data.append(0x0A)
+        return data
+    }
+
+    /// Decodes a received line (with or without the trailing newline); nil for garbage or a
+    /// version this build does not speak.
+    public static func decode(_ data: Data) -> RelayPresence? {
+        let trimmed = data.last == 0x0A ? data.dropFirst(0).dropLast() : data[...]
+        guard let presence = try? JSONDecoder().decode(RelayPresence.self, from: Data(trimmed)),
+            presence.v == 1, !presence.n.isEmpty
+        else { return nil }
+        return presence
+    }
 }
 
 /// Host → viewer introduction — and viewer → host, where it may carry the watcher passcode.

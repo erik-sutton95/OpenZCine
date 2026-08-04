@@ -160,5 +160,28 @@ struct MonitorRelayProtocolTests {
         #expect(MonitorRelayProtocol.serviceType == "_openzcine-mon._tcp")
         #expect(MonitorRelayProtocol.servedCameraTXTKey == "ch")
         #expect(MonitorRelayProtocol.watchableTXTKey == "w")
+        #expect(MonitorRelayProtocol.presenceTCPPort == 15741)
+    }
+
+    @Test("Presence line round-trips and rejects foreign versions")
+    func presenceLine() {
+        let broadcast = RelayPresence(
+            name: "A-cam iPhone", watchable: true, servedCameraHost: "192.168.1.246",
+            relayPort: 51234)
+        let decoded = RelayPresence.decode(broadcast.encodedLine())
+        #expect(decoded == broadcast)
+        #expect(decoded?.isWatchable == true)
+
+        let beacon = RelayPresence(
+            name: "iPhone", watchable: false, servedCameraHost: "192.168.1.246", relayPort: nil)
+        #expect(RelayPresence.decode(beacon.encodedLine())?.isWatchable == false)
+
+        #expect(RelayPresence.decode(Data("{\"v\":9,\"n\":\"x\",\"w\":1}".utf8)) == nil)
+        #expect(RelayPresence.decode(Data("garbage".utf8)) == nil)
+        // The wire keys are the cross-platform contract (Kotlin twin pins the same literals).
+        let json = String(decoding: broadcast.encodedLine(), as: UTF8.self)
+        for key in ["\"v\"", "\"n\"", "\"w\"", "\"ch\"", "\"p\""] {
+            #expect(json.contains(key))
+        }
     }
 }

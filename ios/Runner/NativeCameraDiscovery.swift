@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import NetworkExtension
+import os
 
 // SAFETY: `@unchecked Sendable` — holds no mutable stored state; all work runs in local async scopes.
 final class NativeCameraDiscoveryService: @unchecked Sendable {
@@ -22,7 +23,8 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         priorityHosts: [String] = [],
         excludedHosts: @MainActor @escaping () -> Set<String> = { [] },
         passiveOnly: Bool = false,
-        status: @MainActor @escaping (String) -> Void = { _ in }
+        status: @MainActor @escaping (String) -> Void = { _ in },
+        onRelayPresences: @MainActor @escaping ([String: RelayPresence]) -> Void = { _ in }
     ) async throws -> [DiscoveredCamera] {
         // USB-attached cameras are browser-driven and effectively instant; surface them without
         // waiting for the network passes. Starting the browser here is safe — discovery only runs
@@ -30,6 +32,24 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         let usbBrowser = USBCameraDeviceBrowser.shared
         usbBrowser.start()
         let usbCameras = usbBrowser.attachedCameras()
+
+        // Unicast presence rides every pass, concurrently and without blocking the return:
+        // it finds broadcasts and in-use beacons that filtered-multicast networks hide from
+        // Bonjour, and the model compares the two to warn the operator.
+        let presenceTask = Task { () -> [String: RelayPresence] in
+            let localAddresses = nativeLocalIPv4Interfaces()
+                .filter {
+                    CameraDiscovery.isSupportedScanInterface(name: $0.name, address: $0.address)
+                }
+                .map(\.address)
+            let split = CameraDiscovery.prioritizedScanHosts(
+                priorityHosts: priorityHosts, localAddresses: localAddresses)
+            return await Self.relayPresenceSweep(hosts: split.priority + split.remaining)
+        }
+        Task { @MainActor in
+            let hits = await presenceTask.value
+            if !hits.isEmpty { onRelayPresences(hits) }
+        }
 
         await status("Searching for cameras on Wi‑Fi and USB‑C…")
         // Bonjour FIRST, and the trusted-host probe only covers what Bonjour did not report.
@@ -181,6 +201,80 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             }
             return results
         }
+    }
+
+    /// One unicast presence read (`MonitorRelayProtocol.presenceTCPPort`), bounded. Nil for
+    /// refused, timed out, or garbage — only a genuine OpenZCine presence line answers.
+    static func checkRelayPresence(
+        host: String, timeoutMilliseconds: Int = 500
+    ) async -> RelayPresence? {
+        guard let port = NWEndpoint.Port(rawValue: MonitorRelayProtocol.presenceTCPPort) else {
+            return nil
+        }
+        let connection = NWConnection(
+            host: NWEndpoint.Host(host), port: port, using: .tcp)
+        defer { connection.cancel() }
+        return await withTaskGroup(of: RelayPresence?.self) { group in
+            group.addTask {
+                await withCheckedContinuation { continuation in
+                    // One resume total: state failures and the receive race for it.
+                    let resumed = OSAllocatedUnfairLock(initialState: false)
+                    let finish: @Sendable (RelayPresence?) -> Void = { presence in
+                        let first = resumed.withLock { done -> Bool in
+                            if done { return false }
+                            done = true
+                            return true
+                        }
+                        if first { continuation.resume(returning: presence) }
+                    }
+                    connection.stateUpdateHandler = { state in
+                        switch state {
+                        case .ready:
+                            connection.receive(
+                                minimumIncompleteLength: 1, maximumLength: 1024
+                            ) { data, _, _, _ in
+                                finish(data.flatMap(RelayPresence.decode))
+                            }
+                        case .failed, .cancelled:
+                            finish(nil)
+                        default:
+                            break
+                        }
+                    }
+                    connection.start(
+                        queue: DispatchQueue(
+                            label: "com.opencapture.openzcine.presence-check"))
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(timeoutMilliseconds))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// Sweeps `hosts` for presence answers concurrently (bounded chunks, own timeouts).
+    static func relayPresenceSweep(hosts: [String]) async -> [String: RelayPresence] {
+        var found: [String: RelayPresence] = [:]
+        for chunk in hosts.chunked(into: 64) {
+            let chunkHits = await withTaskGroup(
+                of: (String, RelayPresence?).self
+            ) { group in
+                for host in chunk {
+                    group.addTask { (host, await checkRelayPresence(host: host)) }
+                }
+                var hits: [String: RelayPresence] = [:]
+                for await (host, presence) in group {
+                    if let presence { hits[host] = presence }
+                }
+                return hits
+            }
+            found.merge(chunkHits) { _, new in new }
+        }
+        return found
     }
 
     private func probe(host: String, guid: Data) async throws -> DiscoveredCamera? {
