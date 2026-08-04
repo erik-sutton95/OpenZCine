@@ -1403,11 +1403,15 @@ internal fun MonitorScreen(
         var liveFeedRotation by remember { mutableStateOf(LiveFeedRotation.LANDSCAPE) }
         val isVerticalFeed = liveFeedRotation.isVertical
         val portraitAspect = operatorSettings.portraitFeedAspect
-        // A vertical feed always lays out as fit, matching iOS: "fill" of a taller-than-viewport
-        // frame degenerates to nearly the same rect with crop for no gain.
+        // Zone/chrome layout: vertical mode always lays out as FILL, matching iOS — the fill
+        // zones are exactly the vertical viewer (feed spanning the bands, floating assist rail,
+        // capture bar over the feed bottom); fit's stacked bands would strand the controls.
         val isPortraitFill =
-            isPortrait && !isCommand && !isPhotographyMode && !isVerticalFeed &&
-                portraitAspect.fillsViewport
+            isPortrait && !isCommand && !isPhotographyMode &&
+                (isVerticalFeed || portraitAspect.fillsViewport)
+        // Raster/overlay fit: the rotated 9:16 picture pillarboxes inside the fill frame —
+        // aspect-filling it would centre-crop the top and bottom of the vertical shot.
+        val portraitRasterFill = isPortraitFill && !isVerticalFeed
 
         // One authoritative mode filter, mirroring core `MonitorChromePolicy`: clean (DISP 2) is a
         // bare image unless the operator pinned a tool to it, and it strips the deck/rails/bands
@@ -1928,7 +1932,7 @@ internal fun MonitorScreen(
                 containerHeight = feedPointerSize.height.toFloat(),
                 sourceWidth = liveFeedPresentation.sourceWidth,
                 sourceHeight = liveFeedPresentation.sourceHeight,
-                aspectFill = isPortraitFill,
+                aspectFill = portraitRasterFill,
             )
         val focusMetadataAvailable =
             sessionState is CameraSessionState.Connected &&
@@ -2226,7 +2230,7 @@ internal fun MonitorScreen(
                         cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
                         effectsPresentationState = liveFeedEffectsPresentation,
-                        aspectFill = isPortraitFill,
+                        aspectFill = portraitRasterFill,
                         // SurfaceView graded feed is invisible to Kyant
                         // layerBackdrop — FULL glass must present via Compose. A rotated
                         // (vertical) feed must too: SurfaceView buffers composite outside
@@ -2239,7 +2243,7 @@ internal fun MonitorScreen(
                     // every geometry-bearing assist. Scopes continue sampling monitorFrameSource.
                     FeedTextureOverlay(
                         presentationState = liveFeedPresentation,
-                        aspectFill = isPortraitFill,
+                        aspectFill = portraitRasterFill,
                         horizontalPresentationScale = localFraming.horizontalPresentationScale,
                         verticalPresentationScale = localFraming.verticalPresentationScale,
                     )
@@ -2252,7 +2256,7 @@ internal fun MonitorScreen(
                 LocalFramingAssistOverlay(
                     configuration = renderedFraming,
                     presentationState = liveFeedPresentation,
-                    aspectFill = isPortraitFill,
+                    aspectFill = portraitRasterFill,
                     splitComparison = renderedEffects.activeSplitComparison,
                 )
                 LiveFrameMetadataOverlay(
@@ -2260,7 +2264,7 @@ internal fun MonitorScreen(
                     configuration = renderedFraming,
                     cleanMode = isClean,
                     isPortrait = isPortrait,
-                    aspectFill = isPortraitFill,
+                    aspectFill = portraitRasterFill,
                     isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,

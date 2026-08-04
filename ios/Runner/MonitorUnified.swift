@@ -1724,12 +1724,14 @@ struct MonitorShell: View {
         // Photography always lays out as fit: the stills frame is 3:2/1:1/16:9 per image area
         // (passed as the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
         let isPhotography = model.isPhotographyMode
-        // Vertical mode (body on its side) also forces fit: the rotated feed is taller than the
-        // viewport is wide, so "fill" degenerates to nearly the same frame with crop for no gain.
+        // Vertical mode (body on its side) always lays out as FILL: the fill zones are exactly
+        // the vertical viewer — feed spanning topBar→systemBar (the 9:16 picture pillarboxes
+        // inside), the floating vertical assist rail, and the capture bar over the feed's
+        // bottom edge — where fit's stacked toolbar/tile bands would strand the controls.
         let isVerticalFeed = model.liveFeedRotation.isVertical
         let zoneAspect: PortraitFeedAspect =
-            model.displayMode == .command || isPhotography || isVerticalFeed
-            ? .fit16x9 : persistedAspect
+            model.displayMode == .command || isPhotography
+            ? .fit16x9 : isVerticalFeed ? .fill : persistedAspect
         // The stacked-scopes zone must bill only what `PortraitScopesStack` will actually render
         // (photography drops cinema-only scopes; clean drops everything unpinned) — a zone sized
         // to the unfiltered count leaves a dead band between the feed and the toolbar.
@@ -1755,11 +1757,13 @@ struct MonitorShell: View {
             }()
         )
         let feed = map.feed
-        let isFill = persistedAspect == .fill && !isPhotography && !isVerticalFeed
+        let isFill = (persistedAspect == .fill || isVerticalFeed) && !isPhotography
         // The zone map hands us the feed FRAME; the content aspect-fills within it: over-widen to
         // the source's 16:9 at the frame's height, center via the outer frame, clip to the frame.
         // Fit passes the frame width straight through (16:9 frame == 16:9 content, no crop).
-        let feedContentWidth = isFill ? feed.height * 16 / 9 : feed.width
+        // A vertical feed never over-widens — its 9:16 picture pillarboxes inside the fill frame.
+        let feedContentWidth =
+            isFill && !isVerticalFeed ? feed.height * 16 / 9 : feed.width
 
         ZStack(alignment: .topLeading) {
             // Sized to the FULL physical height explicitly: this ZStack is the safe-area frame
