@@ -67,6 +67,19 @@ class MonitorRelayWireTest {
         assertEquals(MonitorRelayWire.Hello(2, "iPad", null, null), bare)
         // Round trip through this side's encoder.
         assertEquals(hello, MonitorRelayWire.Hello.fromJson(hello.toJson()))
+        // Twin of the Swift presence pins: the fixed unicast port and the one-line payload other
+        // devices sweep for on multicast-filtered networks.
+        assertEquals(15741, MonitorRelayWire.PRESENCE_TCP_PORT)
+        val presence =
+            JSONObject(
+                MonitorRelayWire.relayPresenceLine(
+                    "A-cam iPhone", true, "192.168.1.246", 51234)
+            )
+        assertEquals(1, presence.getInt("v"))
+        assertEquals("A-cam iPhone", presence.getString("n"))
+        assertEquals(1, presence.getInt("w"))
+        assertEquals("192.168.1.246", presence.getString("ch"))
+        assertEquals(51234, presence.getInt("p"))
         // Twin of the Swift `helloCarriesCodecs` pin: the codec declaration a watcher sends when
         // its hardware cannot decode the HEVC stream; absent means everything (legacy watchers
         // keep HEVC).

@@ -108,13 +108,77 @@ class RelayAdvertiser(private val nsdManager: NsdManager) {
 }
 
 /**
+ * Answers the unicast presence check (TCP [MonitorRelayWire.PRESENCE_TCP_PORT]) with one JSON
+ * line — the Android twin of the iOS `RelayPresenceServer`. On networks whose routers filter
+ * multicast, this line is the only sighting other devices get of this one: their discovery
+ * sweeps the subnet on this port when the advertisement never arrives.
+ */
+class RelayPresenceResponder {
+    private var server: java.net.ServerSocket? = null
+    @Volatile private var line: ByteArray? = null
+
+    /** Publishes the device's current presence, or stops answering with a `null` name. */
+    fun update(
+        name: String?,
+        watchable: Boolean = false,
+        servedCameraHost: String? = null,
+        relayPort: Int? = null,
+    ) {
+        if (name == null) {
+            stop()
+            return
+        }
+        line =
+            MonitorRelayWire.relayPresenceLine(name, watchable, servedCameraHost, relayPort)
+                .toByteArray(Charsets.UTF_8)
+        startIfNeeded()
+    }
+
+    private fun startIfNeeded() {
+        if (server != null) return
+        val bound =
+            try {
+                java.net.ServerSocket(MonitorRelayWire.PRESENCE_TCP_PORT)
+            } catch (_: java.io.IOException) {
+                android.util.Log.w("RelayHost", "presence responder bind failed")
+                return
+            }
+        server = bound
+        Thread {
+                while (!bound.isClosed) {
+                    try {
+                        bound.accept().use { socket ->
+                            line?.let { socket.getOutputStream().write(it) }
+                        }
+                    } catch (_: java.io.IOException) {
+                        return@Thread
+                    }
+                }
+            }
+            .apply {
+                isDaemon = true
+                name = "ozc-relay-presence"
+                start()
+            }
+    }
+
+    fun stop() {
+        server?.close()
+        server = null
+        line = null
+    }
+}
+
+/**
  * Advertises "this camera is in use" while this device holds a session WITHOUT sharing — the
  * Android twin of the iOS `CameraInUseBeacon`. Same service type and `ch=` key, flagged `w=0`:
  * every other device's probe exclusion engages exactly as for a broadcast, no list shows a
- * joinable row, and the bound port only closes whatever connects (nothing is served).
+ * joinable row, and the bound port only closes whatever connects (nothing is served). The
+ * unicast presence twin answers beside it for multicast-filtered networks.
  */
 class CameraInUseBeacon(nsdManager: NsdManager, private val deviceName: String) {
     private val advertiser = RelayAdvertiser(nsdManager)
+    private val presence = RelayPresenceResponder()
     private var socket: java.net.ServerSocket? = null
 
     fun start(servedCameraHost: String) {
@@ -142,10 +206,12 @@ class CameraInUseBeacon(nsdManager: NsdManager, private val deviceName: String) 
                 start()
             }
         advertiser.register(deviceName, server.localPort, servedCameraHost, watchable = false)
+        presence.update(deviceName, watchable = false, servedCameraHost = servedCameraHost)
     }
 
     fun stop() {
         advertiser.unregister()
+        presence.update(null)
         socket?.close()
         socket = null
     }

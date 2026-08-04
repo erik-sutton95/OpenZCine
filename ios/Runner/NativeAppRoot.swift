@@ -1070,10 +1070,105 @@ final class NativeAppModel {
     }
     var discoveredRelayHosts: [MonitorRelayDiscovery] = []
 
+    /// Unicast presence answers (TCP 15741) from the discovery sweep, by responding host — the
+    /// fallback for networks whose routers filter multicast. Broadcasts and in-use shields that
+    /// Bonjour cannot deliver still surface here, and the two lists disagreeing is the proof of
+    /// filtering the operator warning stands on.
+    var relayPresences: [String: RelayPresence] = [:]
+    @ObservationIgnored private var relayPresenceSeenAt: [String: Date] = [:]
+    @ObservationIgnored private var relayPresenceHiddenSince: [String: Date] = [:]
+    /// True once a presence has answered for ≥10 s on a host Bonjour cannot see: this network
+    /// is eating multicast (mDNS), and rows may be missing or unstable. Clears when Bonjour
+    /// sees everything again — the operator fixing the router mid-session deserves the all-clear.
+    var networkFiltersDiscovery = false
+    @ObservationIgnored private let relayPresenceServer = RelayPresenceServer()
+
     /// The rows the camera list shows: joinable broadcasts only. In-use beacons stay in
     /// `discoveredRelayHosts` so the probe shield sees them, but there is nothing to join.
+    /// Presence-only rows (unicast answers Bonjour never delivered) append after the Bonjour
+    /// rows — on a multicast-filtered network they are the only way a broadcast is joinable.
     var visibleRelayBroadcasts: [MonitorRelayDiscovery] {
-        discoveredRelayHosts.filter(\.isWatchable)
+        let bonjour = discoveredRelayHosts.filter(\.isWatchable)
+        let visibleNames = Set(discoveredRelayHosts.map(\.name))
+        let presenceRows =
+            relayPresences
+            .compactMap { host, presence -> MonitorRelayDiscovery? in
+                guard presence.isWatchable,
+                    presence.n != UIDevice.current.name,
+                    !visibleNames.contains(presence.n),
+                    let rawPort = presence.p,
+                    let port = NWEndpoint.Port(rawValue: UInt16(clamping: rawPort))
+                else { return nil }
+                return MonitorRelayDiscovery(
+                    id: "presence:\(host)",
+                    name: presence.n,
+                    endpoint: .hostPort(host: NWEndpoint.Host(host), port: port),
+                    servedCameraHost: presence.ch,
+                    isWatchable: true)
+            }
+            .sorted { $0.name < $1.name }
+        return bonjour + presenceRows
+    }
+
+    /// Folds one presence sweep into the ledger: refreshes rows, prunes what stopped
+    /// answering, and keeps the filtered-network verdict current. A host counts as hidden only
+    /// after 10 s of presence-without-Bonjour, so a sweep racing the browse never flashes the
+    /// warning; the verdict clears symmetrically when Bonjour catches back up.
+    func applyRelayPresences(_ hits: [String: RelayPresence]) {
+        let now = Date()
+        for (host, presence) in hits {
+            relayPresenceSeenAt[host] = now
+            relayPresences[host] = presence
+        }
+        let expiry = now.addingTimeInterval(-90)
+        for (host, seenAt) in relayPresenceSeenAt where seenAt < expiry {
+            relayPresenceSeenAt.removeValue(forKey: host)
+            relayPresences.removeValue(forKey: host)
+            relayPresenceHiddenSince.removeValue(forKey: host)
+        }
+        let visibleNames = Set(discoveredRelayHosts.map(\.name))
+        let selfName = UIDevice.current.name
+        var anyProven = false
+        for (host, presence) in relayPresences {
+            guard presence.n != selfName, !visibleNames.contains(presence.n) else {
+                relayPresenceHiddenSince.removeValue(forKey: host)
+                continue
+            }
+            let since = relayPresenceHiddenSince[host] ?? now
+            relayPresenceHiddenSince[host] = since
+            if now.timeIntervalSince(since) >= 10 { anyProven = true }
+        }
+        if anyProven != networkFiltersDiscovery {
+            networkFiltersDiscovery = anyProven
+            logConnection(
+                anyProven
+                    ? "presence answers where Bonjour is blind — multicast filtering detected"
+                    : "Bonjour sees every presence again — multicast filtering cleared")
+        }
+    }
+
+    /// Publishes (or stops) this device's own unicast presence line, mirroring exactly what its
+    /// Bonjour advertisement would say — a broadcast with its port, or a bare in-use shield.
+    /// On a multicast-filtered network this line is the only reason other devices can see it.
+    private func updateRelayPresence() {
+        if isRelayBroadcasting {
+            relayPresenceServer.update(
+                RelayPresence(
+                    name: UIDevice.current.name,
+                    watchable: true,
+                    servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                    relayPort: relayHost?.boundPort.map(Int.init)
+                        ?? relayListenerPreferredPort.map(Int.init)))
+        } else if isCameraControlSession, !isDemoSession,
+            let host = connectedIdentity?.host, !host.isEmpty
+        {
+            relayPresenceServer.update(
+                RelayPresence(
+                    name: UIDevice.current.name, watchable: false,
+                    servedCameraHost: host, relayPort: nil))
+        } else {
+            relayPresenceServer.update(nil)
+        }
     }
 
     /// Advertises the held camera while NOT sharing (see `CameraInUseBeacon`); the real
@@ -1092,6 +1187,9 @@ final class NativeAppModel {
             cameraInUseBeacon?.stop()
             cameraInUseBeacon = nil
         }
+        // The unicast twin follows every beacon/broadcast transition — same truth, reachable
+        // on networks that eat the multicast advertisement.
+        updateRelayPresence()
     }
     var relayClientState: MonitorRelayClient.State = .idle
     /// The broadcast refused this device for want of a passcode; the waiting overlay asks.
@@ -1169,6 +1267,8 @@ final class NativeAppModel {
                 isConnected ? establishedSessionUsedCameraAP : cameraAccessPointEvidence == true
             host.onListening = { [weak self] port in
                 if let port { self?.relayListenerPreferredPort = port }
+                // The presence line carries the relay port; refresh it now that it is bound.
+                self?.updateRelayPresence()
             }
             host.start(
                 hostName: UIDevice.current.name,
@@ -1180,6 +1280,7 @@ final class NativeAppModel {
             relayHostAdvertisesPeerToPeer = advertisesPeerToPeer
             isRelayBroadcasting = true
             broadcastRelayState()
+            updateRelayPresence()
         } else {
             relayHost?.stop(notifyingViewers: "The broadcast ended.")
             relayHost = nil
@@ -4113,7 +4214,8 @@ final class NativeAppModel {
                 },
                 status: { [weak self] message in
                     self?.connectionMessage = StartupConnectionCopy.friendly(message)
-                }
+                },
+                onRelayPresences: { [weak self] hits in self?.applyRelayPresences(hits) }
             )) ?? []
         logSetupWatchPass(cameras: cameras)
         applyDiscoveryResults(cameras)
@@ -4169,6 +4271,16 @@ final class NativeAppModel {
                 }
                 continue
             }
+            recentlyServedCameraHosts[host] = now
+            if let normalized = PTPIPPairedHosts.normalizedHost(host) {
+                recentlyServedCameraHosts[normalized] = now
+            }
+        }
+        // Unicast presences shield exactly like advertisements: on a multicast-filtered network
+        // they are the ONLY sighting of a served camera, and probing it is still the drop
+        // mechanism.
+        for presence in relayPresences.values {
+            guard let host = presence.ch, !host.isEmpty else { continue }
             recentlyServedCameraHosts[host] = now
             if let normalized = PTPIPPairedHosts.normalizedHost(host) {
                 recentlyServedCameraHosts[normalized] = now
@@ -4247,7 +4359,8 @@ final class NativeAppModel {
                     },
                     status: { [weak self] message in
                         self?.connectionMessage = StartupConnectionCopy.friendly(message)
-                    }
+                    },
+                    onRelayPresences: { [weak self] hits in self?.applyRelayPresences(hits) }
                 )
                 logSetupWatchPass(cameras: cameras)
             } catch {

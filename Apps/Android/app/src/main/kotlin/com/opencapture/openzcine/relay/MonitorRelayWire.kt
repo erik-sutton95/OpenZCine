@@ -31,7 +31,33 @@ object MonitorRelayWire {
      */
     const val WATCHABLE_TXT_KEY: String = "w"
 
+    /**
+     * Fixed TCP port of the unicast presence check (core `presenceTCPPort`). On networks whose
+     * routers filter multicast, a device answering here is the only sighting others get of it.
+     */
+    const val PRESENCE_TCP_PORT: Int = 15741
+
     const val MAXIMUM_PAYLOAD_BYTES: Int = 8 * 1024 * 1024
+
+    /**
+     * The one-line unicast presence payload (core `RelayPresence.encodedLine`), newline
+     * terminated: `{v:1, n:name, w:0|1, ch:servedCameraHost?, p:relayPort?}`.
+     */
+    fun relayPresenceLine(
+        name: String,
+        watchable: Boolean,
+        servedCameraHost: String? = null,
+        relayPort: Int? = null,
+    ): String =
+        org.json.JSONObject()
+            .apply {
+                put("v", 1)
+                put("n", name)
+                put("w", if (watchable) 1 else 0)
+                servedCameraHost?.takeIf(String::isNotBlank)?.let { put("ch", it) }
+                relayPort?.let { put("p", it) }
+            }
+            .toString() + "\n"
 
     object Kind {
         const val HELLO: Int = 0x01

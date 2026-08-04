@@ -397,6 +397,29 @@ struct StartupSavedCamerasView: View {
                     .tracking(1.4)
                     .foregroundStyle(StartupColors.muted)
                     .padding(.top, 6)
+                if model.networkFiltersDiscovery {
+                    // Proven, not guessed: a device answered the app's direct check while the
+                    // network's own discovery never delivered it (multicast/mDNS filtered —
+                    // UniFi "Multicast Filtering" and multicast minimum-rate settings are the
+                    // field examples). Devices below were found directly and stay joinable.
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(StartupColors.accent)
+                        Text(
+                            "This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router."
+                        )
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(StartupColors.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        StartupColors.accent.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+                }
                 if model.visibleRelayBroadcasts.isEmpty {
                     HStack(spacing: 8) {
                         Image(systemName: "dot.radiowaves.left.and.right")

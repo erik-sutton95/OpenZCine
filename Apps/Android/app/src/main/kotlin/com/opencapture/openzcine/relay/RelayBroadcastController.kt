@@ -39,6 +39,7 @@ class RelayBroadcastController(
 
     private var host: MonitorRelayHost? = null
     private var advertiser: RelayAdvertiser? = null
+    private val presence = RelayPresenceResponder()
     private var framePump: Job? = null
     private var statePump: Job? = null
 
@@ -93,6 +94,14 @@ class RelayBroadcastController(
         val advertiser = RelayAdvertiser(nsdManager)
         advertiser.register(deviceName, host.boundPort, servedCameraHost)
         this.advertiser = advertiser
+        // The unicast presence twin: on multicast-filtered networks this line is the only way
+        // watchers can list this broadcast (iOS `updateRelayPresence`).
+        presence.update(
+            deviceName,
+            watchable = true,
+            servedCameraHost = servedCameraHost,
+            relayPort = host.boundPort,
+        )
         framePump =
             scope.launch(Dispatchers.IO) {
                 frames.frames.collect { frame ->
@@ -223,6 +232,7 @@ class RelayBroadcastController(
         statePump?.cancel()
         advertiser?.unregister()
         advertiser = null
+        presence.update(null)
         val stopping = host
         host = null
         scope.launch { stopping?.stop(notifyingViewers = notifyReason) }
