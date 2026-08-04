@@ -142,7 +142,6 @@
 		UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = UVCV00000000000000000001 /* UVCVideoSource.swift */; };
 		VSRC00000000000000000002 /* VideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = VSRC00000000000000000001 /* VideoSource.swift */; };
 		LVPP00000000000000000002 /* LiveViewPollPacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVPP00000000000000000001 /* LiveViewPollPacing.swift */; };
-		LVAQ00000000000000000002 /* LiveViewAdaptiveQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVAQ00000000000000000001 /* LiveViewAdaptiveQuality.swift */; };
 		RBAD00000000000000000002 /* RelayBitrateAdaptation.swift in Sources */ = {isa = PBXBuildFile; fileRef = RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */; };
 		CPAT00000000000000000002 /* CameraPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPAT00000000000000000001 /* CameraPath.swift */; };
 		SCPG00000000000000000002 /* SavedCameraPathGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCPG00000000000000000001 /* SavedCameraPathGroups.swift */; };
@@ -343,7 +342,6 @@
 		UVCV00000000000000000001 /* UVCVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UVCVideoSource.swift; sourceTree = "<group>"; };
 		VSRC00000000000000000001 /* VideoSource.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = VideoSource.swift; path = ../Sources/OpenZCineCore/VideoSource.swift; sourceTree = SOURCE_ROOT; };
 		LVPP00000000000000000001 /* LiveViewPollPacing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveViewPollPacing.swift; path = ../Sources/OpenZCineCore/LiveViewPollPacing.swift; sourceTree = SOURCE_ROOT; };
-		LVAQ00000000000000000001 /* LiveViewAdaptiveQuality.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveViewAdaptiveQuality.swift; path = ../Sources/OpenZCineCore/LiveViewAdaptiveQuality.swift; sourceTree = SOURCE_ROOT; };
 		RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RelayBitrateAdaptation.swift; path = ../Sources/OpenZCineCore/RelayBitrateAdaptation.swift; sourceTree = SOURCE_ROOT; };
 		CPAT00000000000000000001 /* CameraPath.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CameraPath.swift; path = ../Sources/OpenZCineCore/CameraPath.swift; sourceTree = SOURCE_ROOT; };
 		SCPG00000000000000000001 /* SavedCameraPathGroups.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SavedCameraPathGroups.swift; path = ../Sources/OpenZCineCore/SavedCameraPathGroups.swift; sourceTree = SOURCE_ROOT; };
@@ -543,7 +541,6 @@
 				B0757000000000000000FE21 /* Magnification.swift */,
 				VSRC00000000000000000001 /* VideoSource.swift */,
 				LVPP00000000000000000001 /* LiveViewPollPacing.swift */,
-				LVAQ00000000000000000001 /* LiveViewAdaptiveQuality.swift */,
 				RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */,
 				CPAT00000000000000000001 /* CameraPath.swift */,
 				SCPG00000000000000000001 /* SavedCameraPathGroups.swift */,
@@ -820,7 +817,6 @@
 				B0757000000000000000FE22 /* Magnification.swift in Sources */,
 				VSRC00000000000000000002 /* VideoSource.swift in Sources */,
 				LVPP00000000000000000002 /* LiveViewPollPacing.swift in Sources */,
-				LVAQ00000000000000000002 /* LiveViewAdaptiveQuality.swift in Sources */,
 				RBAD00000000000000000002 /* RelayBitrateAdaptation.swift in Sources */,
 				CPAT00000000000000000002 /* CameraPath.swift in Sources */,
 				SCPG00000000000000000002 /* SavedCameraPathGroups.swift in Sources */,

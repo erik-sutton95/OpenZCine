@@ -182,14 +182,7 @@ internal object ProductionLinkHealthBridge : LinkHealthBridge {
                 isUsbTransport = input.isUsbTransport,
                 resetSignalBars = input.resetSignalBars,
             ) ?: return null
-        val presentation = parseLinkHealthPresentation(payload) ?: return null
-        // iOS parity: while the congestion ladder holds the preview below the operator's
-        // preset, the link caption says so.
-        return if (SwiftCore.sessionLiveViewPreviewReduced()) {
-            presentation.copy(detail = presentation.detail + " · Preview reduced for link quality")
-        } else {
-            presentation
-        }
+        return parseLinkHealthPresentation(payload)
     }
 }
 

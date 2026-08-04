@@ -31,6 +31,15 @@ reason. Line numbers are as of the audit pass and drift with edits.
 
 ## SHIPPED tonight (audit rounds, commits `98ac43d` + the iOS batch)
 
+> **2026-08-04 morning update — the adaptive ladder was REMOVED at Erik's request** ("not a
+> very nice experience"): automatic preview softening read as instability, and in the morning's
+> knock-storm it degraded the picture without being able to help. The RTT-scaled fetch deadline
+> is now the stall-survival mechanism; quality stays pinned to the operator's preset (the
+> stream-preset picker is the manual control). A starved link shows honest low fps instead of
+> secretly changing the picture. If the field wants adaptation back, it returns as an explicit
+> opt-in. The ladder entries below are kept for the record; the policy, its tests, and all
+> wiring were deleted on both platforms.
+
 ### Cross-platform ladder + congestion
 - **iOS H3 — the adaptive ladder was inert.** `refreshLinkHealth()` (the 1 s tick) never called
   `applyThermalStreamStepDownIfNeeded()`; the only steady-state applier was a property

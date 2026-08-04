@@ -477,12 +477,6 @@ object SwiftCore {
     /** Operator action (retry, disconnect, fresh connect) starts a fresh ledger. */
     external fun sessionResetDropStormGuard()
 
-    /**
-     * Whether the congestion ladder currently holds the live preview below the operator's
-     * preset. Drives the link-details caption and gates maintenance property polling —
-     * a congested link keeps every frame slot.
-     */
-    external fun sessionLiveViewPreviewReduced(): Boolean
 
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 

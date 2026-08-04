@@ -1205,12 +1205,6 @@ class SwiftCoreCameraSession internal constructor(
                         delay(propertyPollIntervalMillis.coerceAtLeast(1L))
                     }
                     if (!isActive || !ownsConnectedAttempt(attempt)) break
-                    // While the congestion ladder holds the preview below the preset, every
-                    // command-channel slot belongs to frames — maintenance rounds resume with
-                    // link health (iOS parity: the capped-stream maintenance skip).
-                    if (SwiftCore.isAvailable && SwiftCore.sessionLiveViewPreviewReduced()) {
-                        continue
-                    }
                     refreshCameraProperties(
                         attempt = attempt,
                         request = SwiftCore.PROPERTY_REFRESH_NEXT,

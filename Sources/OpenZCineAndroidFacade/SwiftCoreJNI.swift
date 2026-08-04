@@ -1337,16 +1337,6 @@
                 session.refreshAndroidPropertySnapshot(refreshRequest)))
     }
 
-    /// `SwiftCore.sessionLiveViewPreviewReduced()` — whether the congestion ladder currently
-    /// holds the preview below the operator's preset (drives the link-details caption and the
-    /// maintenance-poll gate; congested links keep every frame slot).
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionLiveViewPreviewReduced")
-    public func swiftCoreSessionLiveViewPreviewReduced(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
-    ) -> jboolean {
-        (ActiveSessionSlot.shared.current()?.liveViewPreviewReduced() ?? false) ? 1 : 0
-    }
-
     /// `SwiftCore.sessionConfigureLiveView(...)` — applies a shared-policy
     /// request before the Android live-view pump starts. The PTP writes are
     /// limited to preview size/compression and the interval only paces preview

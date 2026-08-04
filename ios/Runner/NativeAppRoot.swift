@@ -3916,11 +3916,8 @@ final class NativeAppModel {
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
     /// is itself a heat source — see `applyThermalStreamStepDownIfNeeded`).
     @ObservationIgnored private var lastAppliedStreamImageSize: UInt8?
-    /// Congestion adaptation for the live stream (see `LiveViewAdaptiveQuality`).
-    @ObservationIgnored private var liveViewAdaptiveQuality = LiveViewAdaptiveQuality()
     /// Adaptive ceiling on `LiveViewImageSize`: congestion lowers it below the operator's
     /// preset, sustained health raises it back. Reset per session.
-    @ObservationIgnored private var adaptiveStreamSizeCap: UInt8 = .max
     /// Wall-clock cadences gating the descriptor/storage refresh burst to slow timers — re-reading
     /// the rarely-changing enumeration descriptors every poll cycle keeps the camera radio busy
     /// for nothing. `nil` forces a refresh on the first cycle after connect.
@@ -5548,9 +5545,6 @@ final class NativeAppModel {
         isRecording = false
         resetPendingRecordCommand()
         lastAppliedStreamImageSize = nil
-        // Congestion knowledge belongs to a LINK, not the app: the next session measures fresh.
-        liveViewAdaptiveQuality = LiveViewAdaptiveQuality()
-        adaptiveStreamSizeCap = .max
         lastDescriptorRefreshAt = nil
         lastStorageRefreshAt = nil
         resetCameraPropertyState()
@@ -6071,32 +6065,7 @@ final class NativeAppModel {
         if streamsHeaderOnly || videoSource != .cameraLiveView {
             return OperatorPreferences.StreamPreset.fast.liveViewImageSize
         }
-        return min(preferences.streamPreset.liveViewImageSize, adaptiveStreamSizeCap)
-    }
-
-    /// Moves the adaptive size cap on a congestion verdict. Only the cap changes here — the
-    /// 1 s link-health tick notices `effectiveStreamImageSize` moved and restarts the stream
-    /// from outside the frame loop, exactly like a thermal step-down.
-    private func applyAdaptiveStreamVerdict(_ verdict: LiveViewAdaptiveQuality.Verdict) {
-        guard videoSource == .cameraLiveView, !streamsHeaderOnly else { return }
-        let floor = OperatorPreferences.StreamPreset.fast.liveViewImageSize
-        let ceiling = preferences.streamPreset.liveViewImageSize
-        switch verdict {
-        case .hold:
-            return
-        case .stepDown:
-            let current = effectiveStreamImageSize
-            guard current > floor else { return }
-            adaptiveStreamSizeCap = current - 1
-            logConnection("adaptive stream step-down → size \(adaptiveStreamSizeCap)")
-        case .stepUp:
-            guard adaptiveStreamSizeCap < ceiling else {
-                adaptiveStreamSizeCap = .max
-                return
-            }
-            adaptiveStreamSizeCap += 1
-            logConnection("adaptive stream step-up → size \(adaptiveStreamSizeCap)")
-        }
+        return preferences.streamPreset.liveViewImageSize
     }
 
     /// Restarts live view when `effectiveStreamImageSize` has moved since the last configure — e.g.
@@ -6125,15 +6094,7 @@ final class NativeAppModel {
     private func refreshLinkHealth() {
         let snapshot = CameraLinkHealthScorer.score(currentLinkHealthInputs())
         linkHealth = snapshot.linkHealthScore
-        // Field diagnosability: when the ladder has the preview stepped down, say so — softness
-        // should be attributable to the link, not mistaken for the lens or the preset.
-        if adaptiveStreamSizeCap < preferences.streamPreset.liveViewImageSize,
-            videoSource == .cameraLiveView, !streamsHeaderOnly
-        {
-            linkHealthDetail = snapshot.detailCaption + " · Preview reduced for link quality"
-        } else {
-            linkHealthDetail = snapshot.detailCaption
-        }
+        linkHealthDetail = snapshot.detailCaption
         // USB-C: frame timing isn't radio quality — show full bars whenever the link is alive.
         let bars =
             cameraSession?.transportKind == .usb
@@ -6445,8 +6406,6 @@ final class NativeAppModel {
         var watchdog = LiveViewWatchdog()
         // Each streaming attempt starts a fresh interval baseline: the first frame after a
         // (re)start includes configure/start time and must not be scored as congestion.
-        var lastFrameArrival: Double = 0
-        liveViewAdaptiveQuality.noteStreamRestart()
         do {
             let requestedSize = effectiveStreamImageSize
             await session.configureLiveView(
@@ -6607,17 +6566,6 @@ final class NativeAppModel {
                     frameCounter += 1
                     let arrival = CACurrentMediaTime()
                     frameRate.recordFrame(at: arrival)
-                    // Congestion adaptation: slow frames step the requested size down BEFORE
-                    // they can drift into the fetch deadline (whose breach closes the channel);
-                    // sustained health steps back toward the operator's preset. Only the cap
-                    // moves here — the link-health tick applies the change from OUTSIDE this
-                    // loop via the same seam thermal step-down uses.
-                    if lastFrameArrival > 0 {
-                        applyAdaptiveStreamVerdict(
-                            liveViewAdaptiveQuality.recordFrame(
-                                intervalSeconds: arrival - lastFrameArrival, now: arrival))
-                    }
-                    lastFrameArrival = arrival
                     // Signed with the payload, so a body that wedges into replaying one cached
                     // JPEG is read as the stall it is instead of a healthy stream (#283).
                     watchdog.recordGoodFrame(
@@ -7693,13 +7641,7 @@ final class NativeAppModel {
     /// Refreshes slow-changing descriptors on a conservative cadence. The first non-recording poll
     /// after a new connection runs both groups; stream restarts preserve the timestamps so they do
     /// not create another descriptor burst. During a take, descriptor traffic is deferred entirely.
-    ///
-    /// Congestion-aware: while the adaptive ladder has the stream stepped down, every one of
-    /// these transactions is a frame slot stolen from a link already struggling — and the data
-    /// (lens ranges, screen modes, free space) changes on human timescales. Deferring costs
-    /// nothing; the refresh runs on the first healthy pass.
     private func refreshCameraMaintenanceIfDue(session: NativeCameraSession) async {
-        guard adaptiveStreamSizeCap >= preferences.streamPreset.liveViewImageSize else { return }
         let now = Date()
         if CameraMonitorPollPolicy.isDue(
             lastRefreshAt: lastStorageRefreshAt,
