@@ -614,6 +614,8 @@
     <string name="focus_reset_moving">Reset focus point unavailable while moving focus</string>
     <string name="focus_reset">Reset focus point to center</string>
     <string name="split_comparison_key">Show or hide the 50/50 Log and LUT comparison</string>
+    <string name="portrait_aspect_fill">Fill the screen with the picture</string>
+    <string name="portrait_aspect_fit">Fit the whole picture</string>
     <string name="magnification_key_enter">Magnify %1$s</string>
     <string name="magnification_key_exit">Exit %1$s magnification</string>
     <string name="record_start_title">Start recording?</string>

@@ -890,21 +890,56 @@ internal fun PortraitFillAssistRail(
                 stateDescription = expandedDescription
             },
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(scroll)
-                .padding(horizontal = 4.dp)
-                // The last row must be able to scroll fully clear of the
-                // bottom fade — without this it parks half-faded against the
-                // rail's rounded end (iOS bottomFadeHeight + 10 padding).
-                .padding(top = 6.dp, bottom = ASSIST_RAIL_BOTTOM_FADE_DP.dp + 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(horizontal = 4.dp)
+                        // The last row must be able to scroll fully clear of the
+                        // bottom fade — without this it parks half-faded against
+                        // the collapse footer (iOS bottomFadeHeight + 10 padding).
+                        .padding(top = 6.dp, bottom = ASSIST_RAIL_BOTTOM_FADE_DP.dp + 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    AssistRailToolCells(
+                        supportedTools = supportedTools,
+                        state = state,
+                        framingConfiguration = framingConfiguration,
+                        onToggleFramingTool = onToggleFramingTool,
+                        hapticsEnabled = hapticsEnabled,
+                        enabled = enabled,
+                        onLongPressTool = onLongPressTool,
+                        onLongPressToolAnchored = onLongPressToolAnchored,
+                    )
+                }
+                // Rows scroll UNDER a bottom gradient so the last tool never
+                // hard-clips mid-glyph — the fade itself is the scroll
+                // affordance, reaching near-opaque well before the scroller
+                // meets the footer (iOS bottom fade).
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(ASSIST_RAIL_BOTTOM_FADE_DP.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                0f to LiveDesign.background.copy(alpha = 0f),
+                                0.55f to LiveDesign.background.copy(alpha = 0.85f),
+                                1f to LiveDesign.background.copy(alpha = 0.98f),
+                            ),
+                        ),
+                )
+            }
+            // The collapse chevron is a fixed footer below the scroller: always
+            // visible at the rail's bottom end, never scrolled away with the
+            // tools (iOS collapseHandle footer).
             Box(
                 Modifier
                     .fillMaxWidth()
                     .height(38.dp)
+                    .padding(bottom = 4.dp)
                     .chromeClickable(enabled) { onExpandedChange(false) }
                     .semantics { contentDescription = closeDescription },
                 contentAlignment = Alignment.Center,
@@ -912,34 +947,7 @@ internal fun PortraitFillAssistRail(
                 // iOS collapse handle is a chevron, not a text label.
                 ChevronCollapseGlyph(LiveDesign.accent, Modifier.size(13.dp))
             }
-            AssistRailToolCells(
-                supportedTools = supportedTools,
-                state = state,
-                framingConfiguration = framingConfiguration,
-                onToggleFramingTool = onToggleFramingTool,
-                hapticsEnabled = hapticsEnabled,
-                enabled = enabled,
-                onLongPressTool = onLongPressTool,
-                onLongPressToolAnchored = onLongPressToolAnchored,
-            )
         }
-        // Rows scroll UNDER a bottom gradient so the last tool never
-        // hard-clips mid-glyph against the rail's rounded edge — the fade
-        // itself is the scroll affordance, reaching near-opaque well before
-        // the rail's end (iOS bottom fade).
-        Box(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(ASSIST_RAIL_BOTTOM_FADE_DP.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to LiveDesign.background.copy(alpha = 0f),
-                        0.55f to LiveDesign.background.copy(alpha = 0.85f),
-                        1f to LiveDesign.background.copy(alpha = 0.98f),
-                    ),
-                ),
-        )
     }
 }
 

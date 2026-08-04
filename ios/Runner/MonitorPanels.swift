@@ -4434,23 +4434,13 @@ struct OperatorSettingsPanel: View {
     /// control reads at a glance and leaves the three sections exactly as they were.
     @ViewBuilder private var displayRows: some View {
         SettingsRowCard {
-            SettingsInlineRow(
-                title: "Portrait Feed",
-                help:
-                    "How the portrait monitor frames the picture: Fit shows the whole 16:9 frame, Fill crops into it edge to edge. (This used to be a pinch on the feed; the pinch zooms now.)",
-                showTopDivider: false
-            ) {
-                SettingsSegmented(
-                    options: ["Fit", "Fill"],
-                    selected: model.preferences.portraitFeedAspect == .fill ? "Fill" : "Fit"
-                ) { value in
-                    model.preferences.portraitFeedAspect = value == "Fill" ? .fill : .fit16x9
-                }
-            }
+            // Portrait Fit/Fill lives on the feed itself now — the bottom-right corner key on the
+            // portrait monitor — not as a settings row.
             SettingsInlineRow(
                 title: "Layout For",
                 help:
-                    "Video and photo keep their own monitor layouts, so a cinema rig and a stills body do not fight over the same chrome. This picks which one the DISP sections below are setting up; the camera's own mode dial picks which one the monitor renders."
+                    "Video and photo keep their own monitor layouts, so a cinema rig and a stills body do not fight over the same chrome. This picks which one the DISP sections below are setting up; the camera's own mode dial picks which one the monitor renders.",
+                showTopDivider: false
             ) {
                 SettingsSegmented(
                     options: CaptureLayoutMode.allCases.map(\.title),

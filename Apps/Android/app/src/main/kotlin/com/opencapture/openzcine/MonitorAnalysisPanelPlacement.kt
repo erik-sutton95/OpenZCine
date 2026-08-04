@@ -9,8 +9,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 private const val PANEL_CONTROL_CLEARANCE_DP = 8f
-private const val FOCUS_RESET_BUTTON_SIZE_DP = 40f
-private const val FOCUS_RESET_PANEL_GAP_DP = 10f
+// Internal: MonitorScreen's portrait aspect toggle shares the reset lane's slot metrics.
+internal const val FOCUS_RESET_BUTTON_SIZE_DP = 40f
+internal const val FOCUS_RESET_PANEL_GAP_DP = 10f
 private const val FOCUS_RESET_MAX_CLEARANCE_PASSES = 8
 
 /** Stable identities for the movable live-monitor analysis panels. */
