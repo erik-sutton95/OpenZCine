@@ -3957,39 +3957,95 @@ private fun PortraitChrome(
             ).background(LiveDesign.glass),
         )
     }
-    Row(
+    // Record anchors DEAD-CENTRE as an overlay; the side clusters spread through their own
+    // weighted halves. The old single equal-gap flow re-centred the whole row whenever a
+    // neighbour unmounted -- clean view drops the lock, and record walked visibly
+    // off-centre (iOS `portraitBody` carries the same rule).
+    Box(
         Modifier.zone(zones.systemCluster),
-        verticalAlignment = Alignment.CenterVertically,
+        contentAlignment = Alignment.Center,
     ) {
-        Spacer(Modifier.weight(1f))
-        if (railMounts(ChromeSection.LOCK_BUTTON)) {
-            LockButton(
-                locked,
-                Modifier.size(40.dp).chromeEditable(
-                    ChromeSection.LOCK_BUTTON,
-                    chromeEditorMode,
-                    operatorSettings,
-                    onChromeEditBounds,
-                ),
-                onClick = onLock,
-            )
-            Spacer(Modifier.weight(1f))
-        }
-        if (railMounts(ChromeSection.RAIL_DISP)) {
-            DispButton(
-                activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
-                modeCount = enabledDisplayModeOrder.size,
-                isLiveActive = displayMode == MonitorDisplayMode.LIVE,
-                modifier =
-                    Modifier.size(width = 74.dp, height = 44.dp).chromeEditable(
-                        ChromeSection.RAIL_DISP,
-                        chromeEditorMode,
-                        operatorSettings,
-                        onChromeEditBounds,
-                    ),
-                onClick = onDisp,
-            )
-            Spacer(Modifier.weight(1f))
+        Row(
+            Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spacer(Modifier.weight(1f))
+                if (railMounts(ChromeSection.LOCK_BUTTON)) {
+                    LockButton(
+                        locked,
+                        Modifier.size(40.dp).chromeEditable(
+                            ChromeSection.LOCK_BUTTON,
+                            chromeEditorMode,
+                            operatorSettings,
+                            onChromeEditBounds,
+                        ),
+                        onClick = onLock,
+                    )
+                    Spacer(Modifier.weight(1f))
+                }
+                if (railMounts(ChromeSection.RAIL_DISP)) {
+                    DispButton(
+                        activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
+                        modeCount = enabledDisplayModeOrder.size,
+                        isLiveActive = displayMode == MonitorDisplayMode.LIVE,
+                        modifier =
+                            Modifier.size(width = 74.dp, height = 44.dp).chromeEditable(
+                                ChromeSection.RAIL_DISP,
+                                chromeEditorMode,
+                                operatorSettings,
+                                onChromeEditBounds,
+                            ),
+                        onClick = onDisp,
+                    )
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+            if (railMounts(ChromeSection.RAIL_RECORD)) {
+                // Centre lane kept clear under the overlaid record button.
+                Spacer(Modifier.width(83.dp))
+            }
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spacer(Modifier.weight(1f))
+                if (railMounts(ChromeSection.RAIL_MEDIA)) {
+                    AuxCircleButton(
+                        Modifier.size(63.dp).chromeEditable(
+                            ChromeSection.RAIL_MEDIA,
+                            chromeEditorMode,
+                            operatorSettings,
+                            onChromeEditBounds,
+                        ),
+                        onClick = onOpenMedia,
+                    ) { glyphModifier, tint ->
+                        if (isPhotography) {
+                            PhotoGlyph(tint, glyphModifier)
+                        } else {
+                            MediaStackGlyph(tint, glyphModifier)
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                }
+                if (railMounts(ChromeSection.RAIL_SETTINGS)) {
+                    AuxCircleButton(
+                        Modifier.size(63.dp).chromeEditable(
+                            ChromeSection.RAIL_SETTINGS,
+                            chromeEditorMode,
+                            operatorSettings,
+                            onChromeEditBounds,
+                        ),
+                        onClick = onOpenSettings,
+                    ) { glyphModifier, tint ->
+                        GearGlyph(tint, glyphModifier)
+                    }
+                    Spacer(Modifier.weight(1f))
+                }
+            }
         }
         if (railMounts(ChromeSection.RAIL_RECORD)) {
             val recordModifier =
@@ -4016,39 +4072,6 @@ private fun PortraitChrome(
                     onClick = onRecord,
                 )
             }
-            Spacer(Modifier.weight(1f))
-        }
-        if (railMounts(ChromeSection.RAIL_MEDIA)) {
-            AuxCircleButton(
-                Modifier.size(63.dp).chromeEditable(
-                    ChromeSection.RAIL_MEDIA,
-                    chromeEditorMode,
-                    operatorSettings,
-                    onChromeEditBounds,
-                ),
-                onClick = onOpenMedia,
-            ) { glyphModifier, tint ->
-                if (isPhotography) {
-                    PhotoGlyph(tint, glyphModifier)
-                } else {
-                    MediaStackGlyph(tint, glyphModifier)
-                }
-            }
-            Spacer(Modifier.weight(1f))
-        }
-        if (railMounts(ChromeSection.RAIL_SETTINGS)) {
-            AuxCircleButton(
-                Modifier.size(63.dp).chromeEditable(
-                    ChromeSection.RAIL_SETTINGS,
-                    chromeEditorMode,
-                    operatorSettings,
-                    onChromeEditBounds,
-                ),
-                onClick = onOpenSettings,
-            ) { glyphModifier, tint ->
-                GearGlyph(tint, glyphModifier)
-            }
-            Spacer(Modifier.weight(1f))
         }
     }
 }

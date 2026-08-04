@@ -983,38 +983,54 @@ struct MonitorSystemCluster: View {
     // MARK: - .axisHorizontal (former `PortraitSystemBar`)
 
     private var portraitBody: some View {
-        // Equal GAPS via equal spacers, not equal columns: the wide record button in an equal
-        // column left DISP nearly touching record while far from lock.
+        // Record anchors DEAD-CENTRE as an overlay; the side clusters spread through their own
+        // equal-flex halves with the same 14pt-breathing spacers. The old single equal-gap flow
+        // re-centred the whole row whenever a neighbour unmounted — clean view drops the lock,
+        // and record walked visibly off-centre (field report: "record should always be in the
+        // center"). With no record mounted (a watcher), the halves join into one flow again.
         let editing = model.chromeEditorMode
-        return HStack(spacing: 0) {
-            Spacer(minLength: 14)
-            if mounts(.lockButton) {
-                lockButton
-                    .chromeEditable(.lockButton, editing: editing)
-                Spacer(minLength: 14)
-            }
-            if mounts(.railDisp) {
-                PortraitDisplayButton()
-                    .accessibilityLabel("Change display mode")
-                    .accessibilityIdentifier("monitor.system.display")
-                    .liveViewGuideAnchor(.display)
-                    .chromeEditable(.railDisp, editing: editing)
-                Spacer(minLength: 14)
+        return ZStack {
+            HStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 14)
+                    if mounts(.lockButton) {
+                        lockButton
+                            .chromeEditable(.lockButton, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                    if mounts(.railDisp) {
+                        PortraitDisplayButton()
+                            .accessibilityLabel("Change display mode")
+                            .accessibilityIdentifier("monitor.system.display")
+                            .liveViewGuideAnchor(.display)
+                            .chromeEditable(.railDisp, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                if mounts(.railRecord) {
+                    // Keeps the centre lane clear under the overlaid record button.
+                    Color.clear
+                        .frame(width: CGFloat(MonitorSideRailControlLayout.recordButtonSize))
+                }
+                HStack(spacing: 0) {
+                    Spacer(minLength: 14)
+                    if mounts(.railMedia) {
+                        mediaButton
+                            .chromeEditable(.railMedia, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                    if mounts(.railSettings) {
+                        settingsButton
+                            .chromeEditable(.railSettings, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
             if mounts(.railRecord) {
                 recordButton
                     .chromeEditable(.railRecord, editing: editing)
-                Spacer(minLength: 14)
-            }
-            if mounts(.railMedia) {
-                mediaButton
-                    .chromeEditable(.railMedia, editing: editing)
-                Spacer(minLength: 14)
-            }
-            if mounts(.railSettings) {
-                settingsButton
-                    .chromeEditable(.railSettings, editing: editing)
-                Spacer(minLength: 14)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
