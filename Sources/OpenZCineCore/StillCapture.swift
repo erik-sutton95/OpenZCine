@@ -173,6 +173,35 @@ public enum StillCapturePolicy: Sendable {
         selector == .photo
     }
 
+    /// Whether a tap that moved the AF area must also fire a one-shot autofocus (#272).
+    ///
+    /// Moving the area is not focusing. A continuous mode (AF-C/AF-F) hides that: the body's own
+    /// AF loop chases the box the moment it lands, so the tap looks like it focused. A single-servo
+    /// mode has no such loop — without an explicit drive the box moves and nothing else happens,
+    /// which is exactly the AF-S report ("switching to AF-F makes touch focus work").
+    ///
+    /// Photography drives in every AF mode: a stills live view does not run continuous AF until the
+    /// body is half-pressed, so even AF-C needs the trigger there. Manual focus never drives — there
+    /// is nothing to acquire and the body would only refuse it. An unknown mode keeps the old
+    /// photography-only behaviour rather than guessing.
+    public static func focusPointNeedsAutofocusDrive(
+        focusMode: String?, photography: Bool
+    ) -> Bool {
+        guard let focusMode, !focusMode.isEmpty else { return photography }
+        guard !isManualFocusMode(focusMode) else { return false }
+        return photography || !isContinuousFocusMode(focusMode)
+    }
+
+    /// True for a body focus mode that keeps refocusing on its own (AF-C / AF-F).
+    public static func isContinuousFocusMode(_ focusMode: String) -> Bool {
+        focusMode == "AF-C" || focusMode == "AF-F"
+    }
+
+    /// True for a manual-focus mode, where no autofocus acquisition exists to trigger.
+    public static func isManualFocusMode(_ focusMode: String) -> Bool {
+        focusMode == "MF"
+    }
+
     /// The object star-rating property's step table: index == stars
     /// (0/1/25/50/75/100 == Off…★★★★★). Off-step values round down.
     private static let ratingSteps: [UInt16] = [0, 1, 25, 50, 75, 100]

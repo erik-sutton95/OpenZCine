@@ -3206,14 +3206,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 Thread.sleep(forTimeInterval: 0.12)
             }
         }
-        // Photography: moving the point alone never focuses (video's
-        // continuous AF does that part) — drive AF like a half-press, with a
-        // short DeviceReady drain so the body isn't left mid-drive. Subject
-        // tracking latches through the same area change, exactly as in video.
-        // Out-of-focus or a still-busy timeout stays silent; the AF box state
-        // in the header tells the story. [verify-on-HW]
-        if StillCapturePolicy.prefersPhotographyChrome(
-            selector: androidPropertySnapshot.captureSelector)
+        // Moving the point alone never focuses — drive AF like a half-press, with
+        // a short DeviceReady drain so the body isn't left mid-drive. Subject
+        // tracking latches through the same area change. Out-of-focus or a
+        // still-busy timeout stays silent; the AF box state in the header tells
+        // the story.
+        //
+        // This used to key on photography alone, on the assumption that video
+        // always runs continuous AF. A video AF-S body has no such loop, so the
+        // tap moved the box and focused nothing — #272, where AF-F "worked" only
+        // because the camera's own loop chased the box. [verify-on-HW]
+        if StillCapturePolicy.focusPointNeedsAutofocusDrive(
+            focusMode: androidPropertySnapshot.focusMode,
+            photography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector))
         {
             _ = try? transactExpectingOK(.afDrive)
             for _ in 0..<4 {

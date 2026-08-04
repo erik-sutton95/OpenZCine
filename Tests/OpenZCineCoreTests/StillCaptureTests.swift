@@ -207,4 +207,40 @@ struct StillCaptureTests {
         #expect(StillCapturePolicy.stars(fromRatingValue: 60) == 3)
         #expect(StillCapturePolicy.stars(fromRatingValue: 24) == 1)
     }
+
+    @Test func afSVideoTapDrivesAutofocusButContinuousDoesNot() {
+        // #272: a video AF-S body has no continuous loop, so moving the box must be followed by
+        // a one-shot drive. AF-C/AF-F chase the box themselves and must not be driven.
+        #expect(
+            StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                focusMode: "AF-S", photography: false))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                focusMode: "AF-C", photography: false))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                focusMode: "AF-F", photography: false))
+    }
+
+    @Test func photographyDrivesEveryAutofocusModeAndManualDrivesNone() {
+        // A stills live view runs no continuous AF until half-press, so even AF-C needs the drive.
+        for mode in ["AF-S", "AF-C", "AF-A", "AF-F"] {
+            #expect(
+                StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                    focusMode: mode, photography: true))
+        }
+        // Manual focus has nothing to acquire, in either chrome.
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: "MF", photography: true))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: "MF", photography: false))
+    }
+
+    @Test func unknownFocusModeKeepsThePhotographyOnlyBehaviour() {
+        #expect(StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: nil, photography: true))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: nil, photography: false))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: "", photography: false))
+    }
 }

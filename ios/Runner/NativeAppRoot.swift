@@ -7010,14 +7010,19 @@ final class NativeAppModel {
             focusManuallyDialed = false
             do {
                 try await session.changeAfArea(x: point.x, y: point.y)
-                // Photography: moving the point alone never focuses (video's continuous AF
-                // does that part) — drive AF like a half-press, with a short DeviceReady
-                // drain so the body isn't left mid-drive. Subject tracking latches through
-                // the same area change, exactly as in video. Out-of-focus or a still-busy
-                // timeout stays silent; the AF box state in the header tells the story.
-                // [verify-on-HW]
-                if StillCapturePolicy.prefersPhotographyChrome(
-                    selector: cameraPropertySnapshot.captureSelector)
+                // Moving the point alone never focuses — drive AF like a half-press, with a
+                // short DeviceReady drain so the body isn't left mid-drive. Subject tracking
+                // latches through the same area change. Out-of-focus or a still-busy timeout
+                // stays silent; the AF box state in the header tells the story.
+                //
+                // This used to key on photography alone, on the assumption that video always
+                // runs continuous AF. A video AF-S body has no such loop, so the tap moved the
+                // box and focused nothing — #272, where AF-F "worked" only because the camera's
+                // own loop chased the box. The policy keys on the focus mode now. [verify-on-HW]
+                if StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                    focusMode: cameraPropertySnapshot.focusMode ?? cameraValue(for: .focus),
+                    photography: StillCapturePolicy.prefersPhotographyChrome(
+                        selector: cameraPropertySnapshot.captureSelector))
                 {
                     try await session.afDrive()
                     // Drain readiness one poll per safe point instead of sleeping ~0.5 s inline:
