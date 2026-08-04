@@ -10,6 +10,14 @@ struct WatchMonitorView: View {
     private var state: WatchRelayState? { controller.state }
     private var isRecording: Bool { state?.isRecording ?? false }
 
+    /// Crown-driven magnification of the preview, 1 = the whole frame.
+    @State private var zoom: Double = 1
+    /// Live pan offset while a drag is in flight, and where the last drag left it.
+    @State private var pan: CGSize = .zero
+    @State private var panAnchor: CGSize = .zero
+    /// The rendered feed box, needed to bound the pan when a drag ends.
+    @State private var feedSize: CGSize = .zero
+
     var body: some View {
         // Stacked, not overlaid: the feed takes exactly the height left over by the two bars, so
         // the bars can never sit on the image. On the Ultra the leftover fits the full-width 16:9
@@ -78,9 +86,19 @@ struct WatchMonitorView: View {
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
             .overlay {
                 if let image = controller.feedImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
+                    GeometryReader { proxy in
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            // Zoom about the box centre, then translate — the pan is already
+                            // clamped to the magnified overhang, so the picture can never be
+                            // dragged off its own frame.
+                            .scaleEffect(zoom)
+                            .offset(clampedPan(in: proxy.size))
+                            .onAppear { feedSize = proxy.size }
+                            .onChange(of: proxy.size) { _, size in feedSize = size }
+                    }
                 }
             }
             .clipped()
@@ -93,6 +111,53 @@ struct WatchMonitorView: View {
             }
             // Last, so the image/border stay pinned to the 16:9 box and this only centers it.
             .frame(maxWidth: .infinity)
+            // Critical-focus check on the wrist: the crown magnifies, a drag moves the magnified
+            // window. The crown is the only precise input a watch has, which is why zoom rides it
+            // and pan rides the finger rather than the other way round.
+            .focusable()
+            .digitalCrownRotation(
+                $zoom,
+                from: 1,
+                through: Self.maximumZoom,
+                by: 0.05,
+                sensitivity: .medium,
+                isContinuous: false,
+                isHapticFeedbackEnabled: true
+            )
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        // Unzoomed the feed has no overhang to explore, so the drag stays out of
+                        // the way of any system edge gesture.
+                        guard zoom > 1 else { return }
+                        pan = CGSize(
+                            width: panAnchor.width + value.translation.width,
+                            height: panAnchor.height + value.translation.height)
+                    }
+                    .onEnded { _ in panAnchor = clampedPan(in: feedSize) }
+            )
+            // Backing all the way out re-centres, so the next zoom starts from the whole frame
+            // instead of wherever the last inspection left the window.
+            .onChange(of: zoom) { _, level in
+                if level <= 1 {
+                    pan = .zero
+                    panAnchor = .zero
+                }
+            }
+    }
+
+    /// Furthest the crown can magnify — enough to judge critical focus, short of the point where
+    /// the relayed preview is only showing its own compression.
+    private static let maximumZoom: Double = 4
+
+    /// The pan, bounded to the overhang the current zoom actually creates: at 1× there is none, so
+    /// this pins to centre no matter what the finger did.
+    private func clampedPan(in size: CGSize) -> CGSize {
+        let limitX = max(0, (size.width * zoom - size.width) / 2)
+        let limitY = max(0, (size.height * zoom - size.height) / 2)
+        return CGSize(
+            width: min(max(pan.width, -limitX), limitX),
+            height: min(max(pan.height, -limitY), limitY))
     }
 
     @ViewBuilder private var overlay: some View {
