@@ -628,22 +628,29 @@ final class MonitorRelayBrowser {
     /// list, and the camera keeps dropping" went undiagnosable.
     func start(includePeerToPeer: Bool = true) {
         stop()
+        // The LIST browser runs the plainest possible recipe (bare `.tcp`, no peer-to-peer, no
+        // service class) — live hardware showed a device whose relay browse returned NOTHING
+        // under the tuned parameters while a plain browse on the same device delivered
+        // instantly. Listing and the probe shield must ride the recipe that provably works
+        // everywhere; the TXT browser keeps peer-to-peer so a camera-AP session's broadcast
+        // (reachable only over AWDL) still surfaces through the merge.
         listBrowser = makeBrowser(
             label: "list",
             descriptor: .bonjour(type: MonitorRelayProtocol.serviceType, domain: nil),
-            includePeerToPeer: includePeerToPeer)
+            parameters: .tcp)
         txtBrowser = makeBrowser(
             label: "txt",
             descriptor: .bonjourWithTXTRecord(type: MonitorRelayProtocol.serviceType, domain: nil),
-            includePeerToPeer: includePeerToPeer)
+            parameters: relayParameters(includePeerToPeer: includePeerToPeer))
     }
 
     private func makeBrowser(
-        label: String, descriptor: NWBrowser.Descriptor, includePeerToPeer: Bool
+        label: String, descriptor: NWBrowser.Descriptor, parameters: NWParameters
     ) -> NWBrowser {
+        logConnection("relay browse[\(label)] starting")
         let browser = NWBrowser(
             for: descriptor,
-            using: relayParameters(includePeerToPeer: includePeerToPeer))
+            using: parameters)
         browser.stateUpdateHandler = { state in
             // `.failed`/`.waiting` carry the network's own reason — PolicyDenied here is the
             // Local Network permission signal (TN3179: there is no query API, only this).
