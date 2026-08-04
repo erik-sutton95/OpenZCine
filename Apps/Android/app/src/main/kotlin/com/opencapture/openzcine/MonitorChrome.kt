@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -161,6 +162,12 @@ fun CameraTimecodeReadout(
     modifier: Modifier = Modifier,
 ) {
     val available = authoritativeTimecode(timecode)
+    // Timecode is the one readout that must survive a squeezed deck intact — on set a truncated TC
+    // is worse than no TC, and `maxLines = 1` otherwise clips digits off the end. Measuring
+    // unbounded makes it take its full intrinsic width first (iOS `.fixedSize(horizontal:)` +
+    // `.layoutPriority(1)`), so the softer readouts beside it give way instead.
+    val uncompressed =
+        modifier.wrapContentWidth(align = Alignment.Start, unbounded = true)
     if (available == null) {
         val description = stringResource(R.string.timecode_unavailable_description)
         Text(
@@ -168,7 +175,7 @@ fun CameraTimecodeReadout(
             style = chromeStyle(sizeSp, weight, mono = true),
             color = LiveDesign.muted,
             maxLines = 1,
-            modifier = modifier.semantics { contentDescription = description },
+            modifier = uncompressed.semantics { contentDescription = description },
         )
     } else {
         val label = cameraTimecodeLabel(available)
@@ -177,7 +184,7 @@ fun CameraTimecodeReadout(
             timecodeAnnotated(available),
             style = chromeStyle(sizeSp, weight, mono = true),
             maxLines = 1,
-            modifier = modifier.semantics { contentDescription = description },
+            modifier = uncompressed.semantics { contentDescription = description },
         )
     }
 }

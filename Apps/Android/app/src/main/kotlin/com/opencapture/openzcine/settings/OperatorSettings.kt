@@ -455,7 +455,7 @@ public data class ScopeGuideLines(
 @Immutable
 public data class ScopeAssistConfiguration(
     public val waveformScale: Float = DEFAULT_SCALE,
-    public val waveformMode: ScopeWaveformMode = ScopeWaveformMode.LUMA,
+    public val waveformMode: ScopeWaveformMode = ScopeWaveformMode.RGB,
     public val waveformGuides: ScopeGuideLines = ScopeGuideLines(),
     public val waveformBrightness: Int = DEFAULT_BRIGHTNESS,
     public val paradeScale: Float = DEFAULT_SCALE,
@@ -1800,7 +1800,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         fun waveformMode(): ScopeWaveformMode =
             preferences.getString(SCOPE_WAVEFORM_MODE_KEY, null)
                 ?.let { stored -> ScopeWaveformMode.entries.firstOrNull { it.name == stored } }
-                ?: ScopeWaveformMode.LUMA
+                ?: ScopeWaveformMode.RGB
         fun paradeMode(): ScopeParadeMode =
             preferences.getString(SCOPE_PARADE_MODE_KEY, null)
                 ?.let { stored -> ScopeParadeMode.entries.firstOrNull { it.name == stored } }
