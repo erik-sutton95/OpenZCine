@@ -225,10 +225,17 @@ class MainActivity : ComponentActivity() {
                     }
                 val relayBroadcastController =
                     remember {
+                        val portPrefs =
+                            applicationContext.getSharedPreferences(
+                                "relay_broadcast", MODE_PRIVATE)
                         com.opencapture.openzcine.relay.RelayBroadcastController(
                             scope = connectionScope,
                             nsdManager = getSystemService(NsdManager::class.java),
                             deviceName = relayDeviceName,
+                            loadPreferredPort = { portPrefs.getInt("listenerPort", 0) },
+                            savePreferredPort = { port ->
+                                portPrefs.edit().putInt("listenerPort", port).apply()
+                            },
                         )
                     }
                 val relayBroadcastUi by relayBroadcastController.ui.collectAsState()

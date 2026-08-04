@@ -63,9 +63,25 @@ class MonitorRelayHost(
     var boundPort: Int = 0
         private set
 
-    fun start(): Boolean {
+    /**
+     * Binds [preferredPort] when it is still free, so NSD records that outlive a listener —
+     * including across an app relaunch, where a killed process never withdrew its record and
+     * the new registration renames itself under the conflict rules — still dial into a LIVE
+     * listener (iOS twin: `relayListenerPreferredPort`, persisted). Falls back to an ephemeral
+     * port rather than failing the broadcast over a squatter.
+     */
+    fun start(preferredPort: Int = 0): Boolean {
         return try {
-            val server = ServerSocket(0)
+            val server =
+                if (preferredPort > 0) {
+                    try {
+                        ServerSocket(preferredPort)
+                    } catch (_: Exception) {
+                        ServerSocket(0)
+                    }
+                } else {
+                    ServerSocket(0)
+                }
             serverSocket = server
             boundPort = server.localPort
             acceptJob =

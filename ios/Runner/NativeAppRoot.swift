@@ -1020,10 +1020,21 @@ final class NativeAppModel {
     /// Whether the running advertisement includes peer-to-peer, so a session that later proves
     /// its topology can re-advertise to match.
     @ObservationIgnored private var relayHostAdvertisesPeerToPeer = false
-    /// The port the last listener bound, asked for again on every restart. Watchers resolve this
-    /// device through Bonjour SRV records that outlive a listener by their TTL; a restart that
-    /// moves the port strands them dialing the dead one (the RST storm in the field report).
-    @ObservationIgnored private var relayListenerPreferredPort: UInt16?
+    /// The port the last listener bound, asked for again on every restart — PERSISTED, because
+    /// the failure it prevents spans relaunches: a killed process never withdraws its Bonjour
+    /// record, the relaunched app's registration renames itself under the conflict rules, and
+    /// watchers keep resolving the stale-named record for its full TTL. With the port stable,
+    /// even a stale record dials into the LIVE listener (the field report's RST storm on the
+    /// old port, "I can enter it but there's no feed").
+    @ObservationIgnored private var relayListenerPreferredPort: UInt16? =
+        (UserDefaults.standard.object(forKey: "relayListenerPreferredPort") as? Int)
+        .flatMap { UInt16(exactly: $0) }
+    {
+        didSet {
+            guard let port = relayListenerPreferredPort else { return }
+            UserDefaults.standard.set(Int(port), forKey: "relayListenerPreferredPort")
+        }
+    }
     /// Hardware HEVC for an incoming stream; created with a viewer session.
     @ObservationIgnored private var relayVideoDecoder: MonitorRelayVideoDecoder?
 

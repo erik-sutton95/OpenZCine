@@ -33,6 +33,9 @@ class RelayBroadcastController(
     private val scope: CoroutineScope,
     private val nsdManager: NsdManager,
     private val deviceName: String,
+    /** Persisted preferred listener port — stale NSD records keep dialing a live listener. */
+    private val loadPreferredPort: () -> Int = { 0 },
+    private val savePreferredPort: (Int) -> Unit = {},
 ) {
     private val mutableUi = MutableStateFlow(RelayBroadcastUiState())
     val ui: StateFlow<RelayBroadcastUiState> = mutableUi.asStateFlow()
@@ -88,7 +91,8 @@ class RelayBroadcastController(
                 )
         }
         host.onCommand = ::execute
-        if (!host.start()) return false
+        if (!host.start(preferredPort = loadPreferredPort())) return false
+        savePreferredPort(host.boundPort)
         android.util.Log.i("RelayHost", "listening on ${host.boundPort}")
         this.host = host
         val advertiser = RelayAdvertiser(nsdManager)
