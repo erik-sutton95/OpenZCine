@@ -23,15 +23,20 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         priorityHosts: [String] = [],
         excludedHosts: @MainActor @escaping () -> Set<String> = { [] },
         passiveOnly: Bool = false,
+        probesCameras: Bool = true,
+        browsesUSB: Bool = true,
         status: @MainActor @escaping (String) -> Void = { _ in },
         onRelayPresences: @MainActor @escaping ([String: RelayPresence]) -> Void = { _ in }
     ) async throws -> [DiscoveredCamera] {
         // USB-attached cameras are browser-driven and effectively instant; surface them without
         // waiting for the network passes. Starting the browser here is safe — discovery only runs
-        // after first render, past the known too-early ICC authorization hang.
+        // after first render, past the known too-early ICC authorization hang. Gated: exercising
+        // ICC camera control makes the OS show its "Using Camera Access to Control Connected
+        // Cameras" disclosure on every launch, so a device with no cable in play (no saved
+        // USB-C setup, not on the pairing surface) must never start the browser.
         let usbBrowser = USBCameraDeviceBrowser.shared
-        usbBrowser.start()
-        let usbCameras = usbBrowser.attachedCameras()
+        if browsesUSB { usbBrowser.start() }
+        let usbCameras = browsesUSB ? usbBrowser.attachedCameras() : []
 
         // Unicast presence runs FIRST and is AWAITED before anything probes: on a network where
         // Bonjour never delivers (filtered multicast, odd interface topology), the presence
@@ -103,6 +108,35 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         // not advertising yet — still gets its probe round, after the 1.4 s window.
         let bonjour = await BonjourPTPBrowser().discover(timeout: 1.4)
         let bonjourHosts = Set(bonjour.compactMap { PTPIPPairedHosts.normalizedHost($0.ip) })
+        // The camera LIST never speaks PTP (probesCameras == false): with multiple devices on
+        // one network, any idle device's Init drops the body's live session — the single-
+        // initiator drop mechanism this file's shields only ever mitigated. A saved host's
+        // readiness comes from a kernel-level liveness dial instead (`checkHostAlive`): RST on
+        // the presence port proves the address is occupied, and the PTP layer never hears it.
+        // Probing remains the PAIRING surface's tool — a pairing-wait body advertises nothing
+        // (HW-established), so an operator deliberately standing one up still needs it.
+        if !probesCameras {
+            let livenessHosts = Set(
+                priorityHosts
+                    .filter { !$0.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) }
+                    .compactMap(PTPIPPairedHosts.normalizedHost)
+            ).subtracting(bonjourHosts)
+            var aliveRows: [DiscoveredCamera] = []
+            if !livenessHosts.isEmpty {
+                aliveRows = await withTaskGroup(of: (String, Bool).self) { group in
+                    for host in livenessHosts {
+                        group.addTask { (host, await Self.checkHostAlive(host: host)) }
+                    }
+                    var rows: [DiscoveredCamera] = []
+                    for await (host, alive) in group where alive {
+                        rows.append(DiscoveredCamera(ip: host, name: nil, source: .liveness))
+                    }
+                    return rows
+                }
+            }
+            return CameraDiscovery.dedupeAndSort(
+                (browsesUSB ? usbBrowser.attachedCameras() : []) + bonjour + aliveRows)
+        }
         let priority =
             passiveOnly
             ? []
@@ -280,11 +314,31 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
     ) async -> RelayPresence? {
         await withCheckedContinuation { continuation in
             presenceProbeQueue.async {
-                let line = rawPresenceLine(
+                let probe = rawPresenceProbe(
                     host: host,
                     port: MonitorRelayProtocol.presenceTCPPort,
                     timeoutMilliseconds: Int32(clamping: timeoutMilliseconds))
-                continuation.resume(returning: line.flatMap(RelayPresence.decode))
+                continuation.resume(returning: probe.line.flatMap(RelayPresence.decode))
+            }
+        }
+    }
+
+    /// Whether SOMETHING lives at `host`, without one byte reaching any application service:
+    /// a dial to the presence port that a non-OpenZCine host answers with a kernel RST
+    /// ("refused") proves the address is occupied. This is the camera list's ONLY wireless
+    /// readiness signal — a PTP Init from an idle device drops another device's live session,
+    /// so the list never sends one. HW-measured 2026-08-04: the body RSTs in ~1.0–1.2 s
+    /// (Wi-Fi power-save cadence), hence the longer default deadline than the /24 sweep's.
+    static func checkHostAlive(
+        host: String, timeoutMilliseconds: Int = 1500
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            presenceProbeQueue.async {
+                let probe = rawPresenceProbe(
+                    host: host,
+                    port: MonitorRelayProtocol.presenceTCPPort,
+                    timeoutMilliseconds: Int32(clamping: timeoutMilliseconds))
+                continuation.resume(returning: probe.reachedHost)
             }
         }
     }
@@ -294,16 +348,19 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
     private static let presenceProbeQueue = DispatchQueue(
         label: "com.opencapture.openzcine.presence-probe", attributes: .concurrent)
 
-    /// Bounded connect + single read, nil on any failure. Blocking by design (see caller).
-    private static func rawPresenceLine(
+    /// Bounded connect + single read. Blocking by design (see callers).
+    /// `reachedHost` is true when the address is provably occupied — the connect succeeded OR
+    /// something refused it (a kernel RST needs a live host). `line` carries the presence
+    /// answer when the port was actually served. Timeout / no route / no ARP answer → neither.
+    private static func rawPresenceProbe(
         host: String, port: UInt16, timeoutMilliseconds: Int32
-    ) -> Data? {
+    ) -> (reachedHost: Bool, line: Data?) {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else { return nil }
+        guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else { return (false, nil) }
         let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else { return (false, nil) }
         defer { close(fd) }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK)
         var noSigpipe: Int32 = 1
@@ -315,20 +372,24 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             }
         }
         if connectResult != 0 {
-            guard errno == EINPROGRESS else { return nil }
+            guard errno == EINPROGRESS else {
+                return (errno == ECONNREFUSED, nil)
+            }
             var writable = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-            guard poll(&writable, 1, timeoutMilliseconds) == 1 else { return nil }
+            guard poll(&writable, 1, timeoutMilliseconds) == 1 else { return (false, nil) }
             var socketError: Int32 = 0
             var length = socklen_t(MemoryLayout<Int32>.size)
             getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length)
-            guard socketError == 0 else { return nil }
+            guard socketError == 0 else {
+                return (socketError == ECONNREFUSED, nil)
+            }
         }
         var readable = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        guard poll(&readable, 1, timeoutMilliseconds) == 1 else { return nil }
+        guard poll(&readable, 1, timeoutMilliseconds) == 1 else { return (true, nil) }
         var buffer = [UInt8](repeating: 0, count: 1024)
         let received = recv(fd, &buffer, buffer.count, 0)
-        guard received > 0 else { return nil }
-        return Data(buffer.prefix(received))
+        guard received > 0 else { return (true, nil) }
+        return (true, Data(buffer.prefix(received)))
     }
 
     /// Sweeps `hosts` for presence answers concurrently (bounded chunks, own timeouts).

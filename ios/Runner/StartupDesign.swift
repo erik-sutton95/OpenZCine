@@ -2869,7 +2869,7 @@ struct StartupDiscoveredCameraCard: View {
 
     private func sourceLabel(_ source: DiscoverySource) -> String {
         switch source {
-        case .bonjour, .subnetProbe: "Wi-Fi"
+        case .bonjour, .subnetProbe, .liveness: "Wi-Fi"
         case .manual: "Manual"
         case .usb: "USB-C"
         }

@@ -59,6 +59,7 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.core.CameraConnectionPhase
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.relay.probeHostAlive
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -1191,6 +1192,30 @@ private fun SavedCameraList(
                 // One ROW per body: records stay one-per-setup on disk; the assigned name
                 // groups them here (Android's identity axis -- see SavedCameraGroups).
                 val onCameraApNetwork = isOnCameraAccessPointNetwork(LocalContext.current)
+                // The list never speaks PTP: a saved wireless host's readiness comes from the
+                // kernel-level liveness dial (refused = occupied address), the same rule as
+                // the iOS list. NSD stays the richer signal when it works; this lights rows
+                // where multicast never delivers. Scoped here so leaving the list stops it.
+                var aliveHosts by remember { mutableStateOf(emptySet<String>()) }
+                val wirelessSavedHosts =
+                    cameras
+                        .filter {
+                            it.transport == SavedCameraTransport.INFRASTRUCTURE ||
+                                it.transport == SavedCameraTransport.PHONE_HOTSPOT
+                        }
+                        .map(SavedCameraRecord::host)
+                        .filter(String::isNotBlank)
+                        .toSet()
+                LaunchedEffect(wirelessSavedHosts) {
+                    if (wirelessSavedHosts.isEmpty()) {
+                        aliveHosts = emptySet()
+                        return@LaunchedEffect
+                    }
+                    while (true) {
+                        aliveHosts = wirelessSavedHosts.filter { probeHostAlive(it) }.toSet()
+                        delay(10_000)
+                    }
+                }
                 val isDiscovered = { record: SavedCameraRecord ->
                     if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT &&
                         !onCameraApNetwork
@@ -1204,6 +1229,10 @@ private fun SavedCameraList(
                         usbCameras.any {
                             it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
                         }
+                    } else if (record.host in aliveHosts) {
+                        // Liveness lit it: the saved address is provably occupied, and the
+                        // dial only ever covered this record's own wireless kind.
+                        true
                     } else {
                         discoveredCameras.any { camera ->
                             if (camera.host == record.host) return@any true

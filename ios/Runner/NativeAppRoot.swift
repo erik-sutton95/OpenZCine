@@ -4256,6 +4256,19 @@ final class NativeAppModel {
         startDiscoveryLoop(resetResults: resetResults)
     }
 
+    /// The camera LIST never sends a PTP Init: with multiple devices on one network, an idle
+    /// device's probe drops the body's live session (single-initiator). Saved rows light from
+    /// the kernel-level liveness dial instead. Probes belong to the PAIRING surface only —
+    /// a pairing-wait body advertises nothing, so the operator standing one up needs them.
+    private var discoveryProbesCameras: Bool { startupMode == .discovery }
+
+    /// Exercising ICC camera control makes the OS show its "Using Camera Access to Control
+    /// Connected Cameras" disclosure on every launch — so USB browsing runs only where a
+    /// cable is actually in play: a saved USB-C setup, or the pairing surface.
+    private var discoveryBrowsesUSB: Bool {
+        startupMode == .discovery || savedCameras.contains(where: \.isUSBTransport)
+    }
+
     /// Pull-to-refresh on the camera list: one immediate, awaited scan — without blanking the
     /// current rows — then the background loop resumes its own cadence. The spinner stays up
     /// exactly as long as the scan actually runs.
@@ -4270,6 +4283,8 @@ final class NativeAppModel {
                 excludedHosts: { [weak self] in
                     self?.hostsServedByVisibleBroadcasts() ?? []
                 },
+                probesCameras: discoveryProbesCameras,
+                browsesUSB: discoveryBrowsesUSB,
                 status: { [weak self] message in
                     self?.connectionMessage = StartupConnectionCopy.friendly(message)
                 },
@@ -4415,6 +4430,8 @@ final class NativeAppModel {
                     excludedHosts: { [weak self] in
                         self?.hostsServedByVisibleBroadcasts() ?? []
                     },
+                    probesCameras: discoveryProbesCameras,
+                    browsesUSB: discoveryBrowsesUSB,
                     status: { [weak self] message in
                         self?.connectionMessage = StartupConnectionCopy.friendly(message)
                     },
@@ -5109,7 +5126,7 @@ final class NativeAppModel {
 
     private func transportLabel(for source: DiscoverySource?, fallback: String?) -> String {
         switch source {
-        case .bonjour, .subnetProbe:
+        case .bonjour, .subnetProbe, .liveness:
             return "Wi-Fi"
         case .manual:
             return "Manual IP"
@@ -6628,12 +6645,17 @@ final class NativeAppModel {
                 compression: preferences.qualityBias.liveViewImageCompression)
             lastAppliedStreamImageSize = requestedSize
             try await session.startLiveView()
+            // NEVER cancel the in-flight fetch on a session this loop intends to keep: task
+            // cancellation inside a blocked socket read fires `PTPIPSocket.interrupt()` (the
+            // abandoned-establishment teardown, audit H4) and LATCHES the command channel
+            // dead. The keep-warm pulls behind a settings cover then fail silently (`try?`),
+            // and the exit discovers a corpse and pays a full reconnect — the "RECOV on every
+            // settings exit" that outlived the deadline and warm-cover fixes. Routine
+            // boundaries (cover entry, DISP flips) DRAIN the pull instead; an exit that
+            // leaves it orphaned is bounded by the pull's own deadline, merely queueing a
+            // same-session restart behind the transaction gate, and a genuine teardown
+            // unblocks it instantly through the session's own socket shutdown.
             var nextFrameTask = liveFrameTask(session, deadline: Self.firstLiveViewFrameDeadline)
-            // Every exit (stall return, thrown error, cancellation) must cancel the in-flight
-            // fetch: an unstructured task is not auto-cancelled with its parent, and an orphaned
-            // fetch keeps the transaction gate held or queued — starving the restarted stream's
-            // first commands (operator-visible as "Stop does nothing" during recovery).
-            defer { nextFrameTask.cancel() }
             let firstFrame = try await nextFrameTask.value
             guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
             // Decode off the main actor (FrameDecoder forces the JPEG decode via
@@ -6689,7 +6711,9 @@ final class NativeAppModel {
                     // deadline fixes). Only a cover that PERSISTS ends live view: sensor
                     // readout + JPEG encode heat matters over minutes, not seconds.
                     pausedForCommand = true
-                    nextFrameTask.cancel()
+                    // Drain, don't cancel (see the note at `nextFrameTask`'s creation): the
+                    // discarded frame costs at most one deadline; a cancel costs the socket.
+                    _ = try? await nextFrameTask.value
                     if coverStartedAt == nil { coverStartedAt = Date() }
                     if !liveViewSuspended,
                         Date().timeIntervalSince(coverStartedAt ?? Date())
@@ -6755,7 +6779,8 @@ final class NativeAppModel {
                 // One stop/start per DISP transition — the same count the old pause/resume paid.
                 if streamsHeaderOnly != headerOnly {
                     headerOnly = streamsHeaderOnly
-                    nextFrameTask.cancel()
+                    // Drain, don't cancel (see the note at `nextFrameTask`'s creation).
+                    _ = try? await nextFrameTask.value
                     await session.stopLiveView()
                     let requestedSize = effectiveStreamImageSize
                     await session.configureLiveView(

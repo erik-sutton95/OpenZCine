@@ -6,6 +6,11 @@ public enum DiscoverySource: String, Codable, Equatable, Sendable {
     case subnetProbe
     case manual  // entered by the user
     case usb  // USB-C (ImageCaptureCore device enumeration)
+    /// A saved camera's host answered a kernel-level liveness dial (TCP RST on a port the
+    /// camera does not serve) — proof something lives at the saved address without one byte
+    /// reaching the PTP layer. The camera list runs on this instead of PTP probes: an Init
+    /// from an idle device is what drops another device's live session.
+    case liveness
 }
 
 /// A camera discovered on the network or attached over USB.

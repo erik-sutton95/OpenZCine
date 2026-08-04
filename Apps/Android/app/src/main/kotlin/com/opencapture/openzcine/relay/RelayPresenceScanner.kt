@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.relay
 
 import java.io.IOException
+import java.net.ConnectException
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
@@ -209,3 +210,29 @@ class RelayPresenceScanner(
             null
         }
 }
+
+/**
+ * Whether SOMETHING lives at [host], without one byte reaching any application service: a
+ * dial to the presence port that a non-OpenZCine host answers with a kernel RST ("refused")
+ * proves the address is occupied (iOS `checkHostAlive`). This is the camera list's ONLY
+ * wireless readiness signal — an idle device's PTP Init drops another device's live session,
+ * so the list never sends one. HW-measured 2026-08-04: the body RSTs in ~1.0–1.2 s (Wi-Fi
+ * power-save cadence), hence the longer deadline than the /24 sweep's 500 ms.
+ */
+suspend fun probeHostAlive(host: String, timeoutMillis: Int = 1_500): Boolean =
+    withContext(Dispatchers.IO) {
+        try {
+            Socket().use { socket ->
+                socket.connect(
+                    InetSocketAddress(host, MonitorRelayWire.PRESENCE_TCP_PORT),
+                    timeoutMillis,
+                )
+            }
+            true
+        } catch (_: ConnectException) {
+            // Refused: only a live host's kernel sends the RST.
+            true
+        } catch (_: IOException) {
+            false
+        }
+    }
