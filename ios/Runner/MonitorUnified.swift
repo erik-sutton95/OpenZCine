@@ -1724,8 +1724,12 @@ struct MonitorShell: View {
         // Photography always lays out as fit: the stills frame is 3:2/1:1/16:9 per image area
         // (passed as the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
         let isPhotography = model.isPhotographyMode
+        // Vertical mode (body on its side) also forces fit: the rotated feed is taller than the
+        // viewport is wide, so "fill" degenerates to nearly the same frame with crop for no gain.
+        let isVerticalFeed = model.liveFeedRotation.isVertical
         let zoneAspect: PortraitFeedAspect =
-            model.displayMode == .command || isPhotography ? .fit16x9 : persistedAspect
+            model.displayMode == .command || isPhotography || isVerticalFeed
+            ? .fit16x9 : persistedAspect
         // The stacked-scopes zone must bill only what `PortraitScopesStack` will actually render
         // (photography drops cinema-only scopes; clean drops everything unpinned) — a zone sized
         // to the unfiltered count leaves a dead band between the feed and the toolbar.
@@ -1743,11 +1747,15 @@ struct MonitorShell: View {
             // non-zero (and only for fit + live). Fill/clean/command collapse it to nothing.
             bottomBarHeight: model.chromeSectionMounts(.assistToolbar)
                 ? MonitorPortraitLayout.assistToolbarHeight : 0,
-            portraitFeedAspectRatio: isPhotography
-                ? model.cameraPropertySnapshot.photographyFeedAspect : 16.0 / 9.0
+            portraitFeedAspectRatio: {
+                let source =
+                    isPhotography
+                    ? model.cameraPropertySnapshot.photographyFeedAspect : 16.0 / 9.0
+                return isVerticalFeed ? 1 / source : source
+            }()
         )
         let feed = map.feed
-        let isFill = persistedAspect == .fill && !isPhotography
+        let isFill = persistedAspect == .fill && !isPhotography && !isVerticalFeed
         // The zone map hands us the feed FRAME; the content aspect-fills within it: over-widen to
         // the source's 16:9 at the frame's height, center via the outer frame, clip to the frame.
         // Fit passes the frame width straight through (16:9 frame == 16:9 content, no crop).

@@ -155,3 +155,32 @@ func assistToolbarIsZeroHeightInCleanAndCommand(mode: DispMode) {
         aspect: .fit16x9, scopeCount: 0)
     #expect(abs(z.feed.height - 390 * 9 / 16) < 0.5)
 }
+
+// Vertical camera (rotated feed, aspect < 1): the fit feed binds to the space above the
+// scopes/toolbar/system bands instead of running under them. Landscape-or-wider ratios keep
+// their historical unclamped frames (covered by the 16:9 and photography tests above).
+@Test func verticalAspectClampsLiveFitFeedAboveTheBands() {
+    let sa = MonitorEdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0)
+    let z = MonitorPortraitLayout.zones(
+        viewportWidth: 390, viewportHeight: 844, safeArea: sa, mode: .live,
+        aspect: .fit16x9, scopeCount: 1, assistToolbarHeight: 58,
+        feedAspectRatio: 9.0 / 16.0)
+    // Natural height would be 390 × 16/9 ≈ 693 — far past the bands. Span 629 − (96 + 58) = 475.
+    #expect(abs(z.feed.height - 475) < 0.5)
+    #expect(z.feed.y == z.topBar.maxY)
+    #expect(z.scopes.y == z.feed.y + z.feed.height)
+    #expect(z.scopes.height == 96)
+    #expect(z.assistToolbar.y == z.scopes.maxY)
+    #expect(abs(z.assistToolbar.maxY - z.systemBar.y) < 0.5)
+    #expect(z.controls.height == 0)
+}
+
+@Test func verticalAspectCleanFeedFillsTheSpanExactly() {
+    let sa = MonitorEdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0)
+    let z = MonitorPortraitLayout.zones(
+        viewportWidth: 390, viewportHeight: 844, safeArea: sa, mode: .clean,
+        aspect: .fit16x9, scopeCount: 0, feedAspectRatio: 9.0 / 16.0)
+    // Clean centres in the topBar→systemBar span (629): the clamp lands it exactly on the span.
+    #expect(z.feed.y == z.topBar.maxY)
+    #expect(abs((z.feed.y + z.feed.height) - z.systemBar.y) < 0.5)
+}

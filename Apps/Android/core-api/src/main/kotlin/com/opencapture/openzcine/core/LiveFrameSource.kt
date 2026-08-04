@@ -108,6 +108,34 @@ public data class LiveCameraLevel(
     public val isDebugFixture: Boolean = false,
 )
 
+/**
+ * How the camera body is held, from the live-view header's rotation byte —
+ * already decoded by the portable Swift core (unknown values arrive as
+ * [LANDSCAPE]). Drives vertical mode: the displayed feed rotates by
+ * [displayDegreesClockwise] and swaps its aspect when [isVertical].
+ *
+ * A body rotated 90° CCW (grip up) stores the scene's top at the image's
+ * right edge, so the display correction rotates the same way the body did.
+ */
+public enum class LiveFeedRotation(public val displayDegreesClockwise: Float) {
+    /** Landscape, or the body reports no rotation. */
+    LANDSCAPE(0f),
+
+    /** Portrait, grip side up — body rotated 90° counter-clockwise. */
+    PORTRAIT_GRIP_UP(-90f),
+
+    /** Portrait, grip side down — body rotated 90° clockwise. */
+    PORTRAIT_GRIP_DOWN(90f),
+
+    /** Landscape upside down. */
+    UPSIDE_DOWN(180f),
+    ;
+
+    /** True when the frame presents tall — layout swaps the feed's sides. */
+    public val isVertical: Boolean
+        get() = this == PORTRAIT_GRIP_UP || this == PORTRAIT_GRIP_DOWN
+}
+
 /** Camera-owned timecode parsed from the same live-view header as [LiveFrame]. */
 public data class LiveFrameTimecode(
     /** Whether the camera says the timecode readout is enabled. */
@@ -146,6 +174,8 @@ public data class LiveFrameTimecode(
  * @property timecode Camera-derived timecode from this frame's header.
  * @property measuredFramesPerSecond Measured delivery cadence calculated from
  *   consecutive monotonic frame timestamps, or `null` before it is known.
+ * @property rotation How the body is held (vertical mode), from this frame's
+ *   live-view header.
  */
 public open class LiveFrame(
     public val timestampNanos: Long,
@@ -156,6 +186,7 @@ public open class LiveFrame(
     public val level: LiveCameraLevel? = null,
     public val timecode: LiveFrameTimecode? = null,
     public val measuredFramesPerSecond: Double? = null,
+    public val rotation: LiveFeedRotation = LiveFeedRotation.LANDSCAPE,
 )
 
 /**

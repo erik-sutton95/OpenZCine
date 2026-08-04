@@ -415,22 +415,31 @@ struct LiveFeedModule: View {
                     else { return nil }
                     return Double(size.width / size.height)
                 }()
+                // Vertical mode: the body is on its side (header byte 839), so the DISPLAYED
+                // frame is the source frame's inverse aspect and the picture rotates upright
+                // inside it. The rotation wraps the whole feed stack — raster, AF boxes, zoom,
+                // gestures — so every existing coordinate mapping keeps operating in the
+                // camera's own (pre-rotation) space.
+                let feedRotation = model.liveFeedRotation
+                let sourceAspect =
+                    hdmiAspect
+                    ?? (isPhotography
+                        ? model.cameraPropertySnapshot.photographyFeedAspect
+                        : MonitorFeedLayout.aspectRatio)
                 let feedFrame = MonitorFeedLayout.fullBleedFrame(
                     viewportWidth: viewportWidth,
                     viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
                     safeArea: safeArea,
                     horizontalDirection: horizontalDirection,
-                    aspect: hdmiAspect
-                        ?? (isPhotography
-                            ? model.cameraPropertySnapshot.photographyFeedAspect
-                            : MonitorFeedLayout.aspectRatio),
-                    centered: isPhotography
+                    aspect: feedRotation.isVertical ? 1 / sourceAspect : sourceAspect,
+                    centered: isPhotography || feedRotation.isVertical
                 )
                 let imageWidth = CGFloat(feedFrame.width)
                 let imageHeight = CGFloat(feedFrame.height)
                 ZStack(alignment: .leading) {
                     Color.black
-                    feedImage(width: imageWidth, height: imageHeight)
+                    rotatedFeedImage(
+                        width: imageWidth, height: imageHeight, rotation: feedRotation)
                     FeedVignette()
                     FeedGrain()
                 }
@@ -450,6 +459,22 @@ struct LiveFeedModule: View {
         // The safe-area escape belongs to the landscape full-bleed mount only; with a fixed
         // content height (portrait), it would re-expand the proposal and shift the box up.
         .modifier(FullBleedWhenMeasured(active: fixedContentHeight == nil))
+    }
+
+    /// Lays the feed stack out in the camera's own frame (width/height swapped when the body is
+    /// vertical), then rotates it upright into the displayed footprint. Gesture locations report
+    /// in the pre-rotation space, so tap-to-focus and the AF overlay need no coordinate changes.
+    @ViewBuilder private func rotatedFeedImage(
+        width: CGFloat, height: CGFloat, rotation: PTPLiveViewRotation
+    ) -> some View {
+        if rotation == .landscape {
+            feedImage(width: width, height: height)
+        } else {
+            let swap = rotation.isVertical
+            feedImage(width: swap ? height : width, height: swap ? width : height)
+                .rotationEffect(.degrees(rotation.displayDegreesClockwise))
+                .frame(width: width, height: height)
+        }
     }
 
     @ViewBuilder private func feedImage(width: CGFloat, height: CGFloat) -> some View {

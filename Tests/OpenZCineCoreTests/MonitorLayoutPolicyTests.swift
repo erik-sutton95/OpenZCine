@@ -1117,3 +1117,26 @@ import Testing
     #expect(geometry.sweepDiameter == 184)
     #expect(geometry.sweepDiameter <= 190)
 }
+
+// Vertical camera: a rotated (9:16) feed pillarboxes centred in a landscape viewport, and in a
+// tall (portrait-zone) viewport it binds to the height instead of overflowing it.
+@Test func verticalAspectPillarboxesCenteredInLandscape() {
+    let frame = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 852, viewportHeight: 393,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 59),
+        aspect: 9.0 / 16.0, centered: true)
+    #expect(frame.height == 393)
+    #expect(abs(frame.width - 393 * 9 / 16) < 0.5)
+    #expect(abs(frame.x - (852 - 393 * 9.0 / 16) / 2) < 1)
+}
+
+@Test func verticalAspectBindsToHeightInTallViewport() {
+    let frame = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 390, viewportHeight: 629,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0),
+        aspect: 9.0 / 16.0, centered: true)
+    #expect(frame.height == 629)
+    #expect(abs(frame.width - 629 * 9 / 16) < 0.5)
+    #expect(abs(frame.x - (390 - 629 * 9.0 / 16) / 2) < 0.5)
+    #expect(frame.y == 0)
+}

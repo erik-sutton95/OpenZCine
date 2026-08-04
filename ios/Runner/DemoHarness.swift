@@ -232,6 +232,15 @@ enum DemoHarness {
                 if model.liveFrameImage == nil {
                     model.demoSelectFeedImage(1)
                 }
+                if let raw = env["ZC_DEMO_FEED_ROTATION"].flatMap(UInt8.init),
+                    let rotation = PTPLiveViewRotation(rawValue: raw)
+                {
+                    // Vertical-mode capture: stage the body-rotation byte (1 grip up, 2 grip
+                    // down, 3 upside down) so the rotated feed layout can be screenshot
+                    // without a camera. The demo still is landscape, so its content reads
+                    // sideways — exactly what a vertically held body sends before rotation.
+                    model.liveFeedRotation = rotation
+                }
                 if env["ZC_DEMO_CODEC_DESCRIPTOR"] == "1" {
                     // Demo/screenshot affordance: stage a Z6III-shaped `MovFileType` descriptor
                     // (H.264 8-bit, plus H.265 at BOTH depths) and put the body on H.265 10-bit,
