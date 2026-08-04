@@ -723,7 +723,10 @@ public fun SettingsCrushClipSegmented(
                         selected = active,
                         role = Role.RadioButton,
                         onClick = { if (!active) onSelect(label) },
-                    ),
+                    )
+                    // The segment shows a fraction glyph; the full stop value is what a screen
+                    // reader has to say, so it announces the label rather than "¼".
+                    .semantics { contentDescription = label },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(

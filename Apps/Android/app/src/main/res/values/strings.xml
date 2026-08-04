@@ -887,16 +887,6 @@
     <string name="framing_accessibility_level_on">Camera level %1$s.</string>
     <string name="framing_accessibility_level_off">Camera level off.</string>
     <string name="framing_accessibility_summary">Local framing assists. %1$s %2$s %3$s %4$s %5$s %6$s Camera Grid Display is unchanged.</string>
-    <string name="crush_clip_description">%1$s stops crush/clip compensation</string>
-    <string name="crush_clip_zero">0</string>
-    <string name="crush_clip_quarter">0.25</string>
-    <string name="crush_clip_half">0.5</string>
-    <string name="crush_clip_three_quarter">0.75</string>
-    <string name="crush_clip_one">1.0</string>
-    <string name="crush_clip_quarter_compact">¼</string>
-    <string name="crush_clip_half_compact">½</string>
-    <string name="crush_clip_three_quarter_compact">¾</string>
-    <string name="crush_clip_one_compact">1</string>
 
     <!-- Controls and display settings. -->
     <string name="settings_record_confirmation">Record Confirmation</string>
