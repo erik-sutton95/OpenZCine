@@ -1433,6 +1433,14 @@ internal fun MonitorScreen(
         // zone layout reads it well before the frame collectors are declared; the timecode
         // collector (open in every DISP mode) writes it, and a source change resets it.
         var liveFeedRotation by remember { mutableStateOf(LiveFeedRotation.LANDSCAPE) }
+        // Whether the body runs timecode at all — the live-view header's own status byte, held
+        // apart from the retained counter on purpose. Chrome that only asks "is there a timecode"
+        // must not observe the counter: that ticks every frame and would re-render the whole top
+        // bar at feed rate (the reason `MonitorTimecodeRetention` is leaf-observed). Bodies with
+        // no timecode hardware pin the status byte to zero forever, and that is exactly the signal
+        // that hides the readout instead of parking a frozen 00:00:00:00 on set. The same collector
+        // that owns `liveFeedRotation` latches it, and a source change resets it.
+        var cameraReportsTimecode by remember { mutableStateOf(false) }
         val isVerticalFeed = liveFeedRotation.isVertical
         val portraitAspect = operatorSettings.portraitFeedAspect
         // Zone/chrome layout: vertical mode always lays out as FILL, matching iOS — the fill
@@ -1465,7 +1473,7 @@ internal fun MonitorScreen(
             // A section with nothing feeding it hides whatever the operator set — a readout with
             // no source still looks like an instrument (iOS `sectionHasASource`). The edit view's
             // force-mount cannot override a missing source either.
-            availability.hasSource(section) &&
+            availability.hasSource(section, cameraReportsTimecode, isPhotographyMode) &&
                 ((editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) ||
                     chrome[section].value)
         }
@@ -1761,8 +1769,10 @@ internal fun MonitorScreen(
         LaunchedEffect(timecodeFrameSource, timecodeRetention) {
             val source = timecodeFrameSource
             if (source == null) {
-                // No stream, no body rotation: never leave a stale vertical layout up.
+                // No stream, no body rotation, no timecode status: never leave a stale vertical
+                // layout — or a stale "this body runs TC" claim — up.
                 liveFeedRotation = LiveFeedRotation.LANDSCAPE
+                cameraReportsTimecode = false
                 return@LaunchedEffect
             }
             source.frames
@@ -1770,6 +1780,12 @@ internal fun MonitorScreen(
                 .collect { frame ->
                     withContext(Dispatchers.Main.immediate) {
                         timecodeRetention.accept(frame.timecode)
+                        // Only the status bit, and only on a change: the counter beside it ticks
+                        // every frame and must never reach the chrome that reads this.
+                        val reportsTimecode = frame.timecode?.on == true
+                        if (cameraReportsTimecode != reportsTimecode) {
+                            cameraReportsTimecode = reportsTimecode
+                        }
                         if (liveFeedRotation != frame.rotation) {
                             liveFeedRotation = frame.rotation
                         }
@@ -1863,7 +1879,7 @@ internal fun MonitorScreen(
             // Availability outranks the rail plan's self-restore guarantees: a watcher without
             // control must not get the record button forced back on by the broadcaster's own
             // recording state riding in over the relay.
-            availability.hasSource(section) &&
+            availability.hasSource(section, cameraReportsTimecode, isPhotographyMode) &&
                 if (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) {
                     true
                 } else {
@@ -2354,6 +2370,7 @@ internal fun MonitorScreen(
                     locked = locked,
                     recording = recording,
                     timecodeRetention = timecodeRetention,
+                    cameraReportsTimecode = cameraReportsTimecode,
                     sessionState = sessionState,
                     // iOS portrait centers the same toggle-aware, retention-held
                     // media readout the landscape pill shows.
@@ -2431,6 +2448,7 @@ internal fun MonitorScreen(
                     CommandDashboard(
                         recording = recording,
                         timecodeRetention = timecodeRetention,
+                        showsTimecode = cameraReportsTimecode,
                         sessionState = sessionState,
                         presentation = commandPresentation,
                         controlsEnabled = commandControlsEnabled,
@@ -3711,6 +3729,8 @@ private fun PortraitChrome(
     locked: Boolean,
     recording: Boolean,
     timecodeRetention: MonitorTimecodeRetention,
+    /** Live-view header timecode status; a body that runs none gets no readout and no hero band. */
+    cameraReportsTimecode: Boolean,
     sessionState: CameraSessionState,
     cameraReadouts: MonitorCameraReadouts,
     assist: AssistState,
@@ -3764,7 +3784,7 @@ private fun PortraitChrome(
     val mounts: (ChromeSection) -> Boolean = { section ->
         // Same source gate as landscape: no feeding data, no instrument (iOS
         // `sectionHasASource`).
-        availability.hasSource(section) &&
+        availability.hasSource(section, cameraReportsTimecode, isPhotography) &&
             ((chromeEditorMode == displayMode &&
                 chromeEditorMode != null &&
                 section.isConfigurableIn(displayMode)) || chrome[section].value)
@@ -3879,6 +3899,7 @@ private fun PortraitChrome(
             PortraitCommandDashboard(
                 presentation = commandPresentation,
                 timecodeRetention = timecodeRetention,
+                showsTimecode = cameraReportsTimecode,
                 sessionState = sessionState,
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
@@ -3984,7 +4005,7 @@ private fun PortraitChrome(
     // over the letterbox is just a black stripe.
     val railMounts: (ChromeSection) -> Boolean = { section ->
         // Availability outranks the plan's guarantees, exactly like landscape.
-        availability.hasSource(section) &&
+        availability.hasSource(section, cameraReportsTimecode, isPhotography) &&
             if (chromeEditorMode == displayMode && chromeEditorMode != null &&
                 section.isConfigurableIn(displayMode)
             ) {
@@ -4360,7 +4381,16 @@ internal fun photographyDisplayModeOrder(
  * fed by the camera appear here; the assist toolbar, lock, FPS chip and rail utilities keep
  * working on any picture source.
  */
-internal fun MonitorDataAvailability.hasSource(section: ChromeSection): Boolean =
+internal fun MonitorDataAvailability.hasSource(
+    section: ChromeSection,
+    /**
+     * The live-view header's timecode status bit. Bodies with no timecode hardware pin it to zero
+     * forever, and the readout hides rather than showing a frozen 00:00:00:00. Defaulted for
+     * callers asking about a section that has nothing to do with the timecode slot.
+     */
+    cameraReportsTimecode: Boolean = true,
+    isPhotographyMode: Boolean = false,
+): Boolean =
     when (section) {
         ChromeSection.CAMERA_VALUES,
         ChromeSection.CODEC_READOUT,
@@ -4370,7 +4400,10 @@ internal fun MonitorDataAvailability.hasSource(section: ChromeSection): Boolean 
         -> cameraControls
         ChromeSection.REC_READOUT, ChromeSection.RAIL_RECORD -> recordControl
         ChromeSection.RAIL_MEDIA -> mediaBrowser
-        ChromeSection.TIMECODE_READOUT -> cameraTimecode
+        // Photography rents this slot for the SHOTS counter, which has nothing to do with
+        // timecode — gate that on the camera link, not on the body's timecode status.
+        ChromeSection.TIMECODE_READOUT ->
+            if (isPhotographyMode) cameraControls else cameraTimecode && cameraReportsTimecode
         ChromeSection.FOCUS_BOX -> focusBoxes
         else -> true
     }

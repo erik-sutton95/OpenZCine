@@ -1168,6 +1168,12 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
 internal fun CommandDashboard(
     recording: Boolean,
     timecodeRetention: MonitorTimecodeRetention,
+    /**
+     * The live-view header's timecode status bit. A body that runs no timecode gets no hero
+     * readout — the record chip takes the row back rather than heading the dashboard with a
+     * frozen 00:00:00:00.
+     */
+    showsTimecode: Boolean = true,
     sessionState: CameraSessionState,
     presentation: CommandDashboardPresentation,
     controlsEnabled: Boolean,
@@ -1196,13 +1202,15 @@ internal fun CommandDashboard(
                 // chip leaves (`minimumScaleFactor(0.78)`) — the hero timecode is a hair too
                 // wide for the column on a 16:9 landscape deck, where the dashboard narrows to
                 // clear the side rail.
-                BoxWithConstraints(Modifier.weight(1f)) {
-                    FitScale(maxWidth) {
-                        RetainedCameraTimecodeReadout(
-                            retention = timecodeRetention,
-                            sessionState = sessionState,
-                            sizeSp = 60f,
-                        )
+                if (showsTimecode) {
+                    BoxWithConstraints(Modifier.weight(1f)) {
+                        FitScale(maxWidth) {
+                            RetainedCameraTimecodeReadout(
+                                retention = timecodeRetention,
+                                sessionState = sessionState,
+                                sizeSp = 60f,
+                            )
+                        }
                     }
                 }
             }
@@ -1240,6 +1248,8 @@ internal fun CommandDashboard(
 internal fun PortraitCommandDashboard(
     presentation: CommandDashboardPresentation,
     timecodeRetention: MonitorTimecodeRetention,
+    /** As [CommandDashboard]: no body timecode, no hero band — the grid takes the space back. */
+    showsTimecode: Boolean = true,
     sessionState: CameraSessionState,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
@@ -1258,16 +1268,18 @@ internal fun PortraitCommandDashboard(
                 .padding(start = 12.dp, end = 12.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            BoxWithConstraints(
-                Modifier.fillMaxWidth().height(80.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                FitScale(maxWidth) {
-                    RetainedCameraTimecodeReadout(
-                        retention = timecodeRetention,
-                        sessionState = sessionState,
-                        sizeSp = 52f,
-                    )
+            if (showsTimecode) {
+                BoxWithConstraints(
+                    Modifier.fillMaxWidth().height(80.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    FitScale(maxWidth) {
+                        RetainedCameraTimecodeReadout(
+                            retention = timecodeRetention,
+                            sessionState = sessionState,
+                            sizeSp = 52f,
+                        )
+                    }
                 }
             }
             CommandGrid(
