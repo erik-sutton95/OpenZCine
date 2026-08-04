@@ -1127,15 +1127,17 @@ final class NativeAppModel {
     /// warning; the verdict clears symmetrically when Bonjour catches back up.
     func applyRelayPresences(_ hits: [String: RelayPresence]) {
         let now = Date()
+        // Each sweep dialed the whole subnet, so it is AUTHORITATIVE: a ledger host that did
+        // not answer is gone — holding it for a grace period is how a stopped broadcast kept a
+        // ghost "Nearby Broadcasts" row for a minute after Share This Feed went off.
+        for host in relayPresences.keys where hits[host] == nil {
+            relayPresences.removeValue(forKey: host)
+            relayPresenceSeenAt.removeValue(forKey: host)
+            relayPresenceHiddenSince.removeValue(forKey: host)
+        }
         for (host, presence) in hits {
             relayPresenceSeenAt[host] = now
             relayPresences[host] = presence
-        }
-        let expiry = now.addingTimeInterval(-90)
-        for (host, seenAt) in relayPresenceSeenAt where seenAt < expiry {
-            relayPresenceSeenAt.removeValue(forKey: host)
-            relayPresences.removeValue(forKey: host)
-            relayPresenceHiddenSince.removeValue(forKey: host)
         }
         let visibleNames = Set(discoveredRelayHosts.map(\.name))
         let selfName = UIDevice.current.name
@@ -1326,6 +1328,9 @@ final class NativeAppModel {
                 cameraX: x, cameraY: y, coordinateWidth: width, coordinateHeight: height)
         case .pickerValue(let picker, let value):
             guard let picker = CameraPicker(rawValue: picker) else { return }
+            // Exposure-helper vocabulary (base ISO, ISO auto, shutter mode, WB tint) dispatches
+            // to its helper; everything else is a plain value write.
+            if routeRelayHelperValue(value, for: picker) { return }
             applyPickerValue(value, for: picker)
         }
     }
@@ -1496,10 +1501,31 @@ final class NativeAppModel {
     func startRelayBrowsing(includePeerToPeer: Bool = true) {
         guard relayBrowser == nil else { return }
         let browser = MonitorRelayBrowser()
-        browser.onResults = { [weak self] results in self?.discoveredRelayHosts = results }
+        browser.onResults = { [weak self] results in
+            guard let self else { return }
+            // A name Bonjour ACTIVELY removed (graceful unregister — Share This Feed off) takes
+            // its remembered presence with it immediately, instead of surviving to the next
+            // sweep as a ghost row. Names Bonjour never saw are untouched: on a filtered
+            // network the presence is the only sighting, which is its entire purpose.
+            let currentNames = Set(results.map(\.name))
+            let removed = self.lastBonjourRelayNames.subtracting(currentNames)
+            if !removed.isEmpty {
+                for (host, presence) in self.relayPresences
+                where removed.contains(presence.n) {
+                    self.relayPresences.removeValue(forKey: host)
+                    self.relayPresenceSeenAt.removeValue(forKey: host)
+                    self.relayPresenceHiddenSince.removeValue(forKey: host)
+                }
+            }
+            self.lastBonjourRelayNames = currentNames
+            self.discoveredRelayHosts = results
+        }
         browser.start(includePeerToPeer: includePeerToPeer)
         relayBrowser = browser
     }
+
+    /// Names the relay browse reported last round, for the removed-name presence pruning above.
+    @ObservationIgnored private var lastBonjourRelayNames: Set<String> = []
 
     func stopRelayBrowsing() {
         relayBrowser?.stop()
@@ -10544,6 +10570,11 @@ final class NativeAppModel {
     /// Queues the WB fine-tune write for the current WB mode at the pad's position. Called on
     /// drag end / arrow tap — deduped against the last commit.
     func commitWhiteBalanceTint() {
+        if forwardExposureHelperOverRelay(
+            picker: .whiteBalance, value: "tint \(whiteBalanceTintAB) \(whiteBalanceTintGM)")
+        {
+            return
+        }
         guard !isDemoSession else { return }
         let ab = whiteBalanceTintAB
         let gm = whiteBalanceTintGM
@@ -10589,9 +10620,54 @@ final class NativeAppModel {
         }
     }
 
+    /// Relay fork shared by the exposure-cell helpers (base ISO, shutter mode, ISO auto, WB
+    /// tint): a control-holding watcher forwards the change as a picker command in the same
+    /// vocabulary the helpers already stamp on their pending writes, and the host routes it
+    /// back to the helper (`routeRelayHelperValue`). Without this every helper either no-oped
+    /// on its descriptor guard (empty watcher snapshot — the field "Base ISO HIGH does
+    /// nothing") or queued a write no session would ever drain. Returns true when forwarded.
+    private func forwardExposureHelperOverRelay(picker: CameraPicker, value: String) -> Bool {
+        guard videoSource == .relay else { return false }
+        guard relayHoldsControl else { return true }
+        relayClient?.send(command: .pickerValue(picker: picker.rawValue, value: value))
+        return true
+    }
+
+    /// Host-side twin of `forwardExposureHelperOverRelay`: recognizes the helper vocabulary
+    /// inside a relayed picker command and dispatches to the helper instead of the generic
+    /// value write. Both ends pin the same wire version, so the vocabulary cannot drift.
+    /// Returns true when the value was a helper's.
+    private func routeRelayHelperValue(_ value: String, for picker: CameraPicker) -> Bool {
+        switch (picker, value) {
+        case (.iso, "High base"), (.iso, "Low base"):
+            switchBaseISO(highBase: value == "High base")
+            return true
+        case (.iso, "Auto on"), (.iso, "Auto off"):
+            switchAutoISO(enabled: value == "Auto on")
+            return true
+        case (.shutter, "Speed"), (.shutter, "Angle"):
+            switchShutterMode(speedMode: value == "Speed")
+            return true
+        case (.whiteBalance, let tint) where tint.hasPrefix("tint "):
+            let cells = tint.dropFirst(5).split(separator: " ").compactMap { Int($0) }
+            guard cells.count == 2 else { return true }
+            whiteBalanceTintAB = cells[0]
+            whiteBalanceTintGM = cells[1]
+            commitWhiteBalanceTint()
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Switches the camera's dual-base ISO circuit (Low ↔ High) by writing `movieBaseISO`
     /// (1 = Low, 2 = High). Queued before the new ISO value so the base is set first.
     func switchBaseISO(highBase: Bool) {
+        if forwardExposureHelperOverRelay(
+            picker: .iso, value: highBase ? "High base" : "Low base")
+        {
+            return
+        }
         guard showsDualBaseISOPicker, !isISORecordingLocked else { return }
         let raw: UInt8 = highBase ? 2 : 1
         let write = PTPCameraPropertyWrite(property: .movieBaseISO, data: Data([raw]))
@@ -10665,6 +10741,9 @@ final class NativeAppModel {
     }
 
     func switchAutoISO(enabled: Bool) {
+        if forwardExposureHelperOverRelay(picker: .iso, value: enabled ? "Auto on" : "Auto off") {
+            return
+        }
         guard showsAutoISOPicker, !isISORecordingLocked else { return }
         // Auto Off / manual only in M; ignore attempts from non-M modes.
         if !enabled, !allowsManualISO { return }
@@ -10692,6 +10771,9 @@ final class NativeAppModel {
     }
 
     func switchShutterMode(speedMode: Bool) {
+        if forwardExposureHelperOverRelay(picker: .shutter, value: speedMode ? "Speed" : "Angle") {
+            return
+        }
         guard !lockedControls.contains(.shutter) else { return }
         let mode: ShutterDisplayMode = speedMode ? .speed : .angle
         let reported = pendingShutterMode ?? cameraPropertySnapshot.shutterMode
