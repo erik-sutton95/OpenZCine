@@ -3816,12 +3816,12 @@ struct OperatorSettingsPanel: View {
                         // the row below, entirely clear of the button's corner.
                         VStack(alignment: .leading, spacing: 8) {
                             settingsTabStrip
-                            settingsTop
+                            settingsTop(width: proxy.size.width)
                             settingsContent(portrait: portrait)
                         }
                     } else {
                         VStack(spacing: 8) {
-                            settingsTop
+                            settingsTop(width: proxy.size.width)
                                 // The floating CloseButton overlays this row's leading corner
                                 // whenever no Dynamic Island lane pushes the content past it
                                 // (iPad, non-notched devices); inset the title to clear it. On
@@ -3932,45 +3932,60 @@ struct OperatorSettingsPanel: View {
         max(0, (16 + 37 + 8) - max(CGFloat(safeArea.leading) + 6, 16))
     }
 
-    private var settingsTop: some View {
-        // Close floats in the very top-left corner (see `body`); the title leads this row, lined up
-        // with the tab rail below, and the live tile stays pinned top-right.
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("OpenZCine")
-                    .font(.system(size: 9.5, weight: .bold, design: .default))
-                    .kerning(0.8)
-                    .foregroundStyle(LiveDesign.accent)
-                    .textCase(.uppercase)
-                Text("Operator Setup")
-                    .font(.system(size: 24, weight: .semibold, design: .default))
-                    .foregroundStyle(LiveDesign.text)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
-            Spacer()
-            // Disconnect lives beside the link-health tile: session-level actions belong with
-            // the session's status, not inside a settings tab (and a watcher leaves the same
-            // way — model.disconnect() routes a relay viewer through leaveRelay). Destructive
-            // red, the app's broken-connector glyph, and sized to the tile it ends.
-            if isConnected {
-                HStack(spacing: 10) {
-                    SettingsActionPill(
-                        title: "Disconnect",
-                        systemImage: "link",
-                        slashesIcon: true,
-                        tint: LiveDesign.rec,
-                        background: LiveDesign.rec.opacity(0.16),
-                        fillsHeight: true
-                    ) { model.disconnect() }
-                    SettingsLiveTile()
-                        .environment(model)
+    /// Below this width the title and the session controls stop sharing a row: squeezed into
+    /// one, the pill truncates to "DISCON…" and the tile's texts letter-wrap — unreadable is
+    /// worse than a second row. iPhone portrait sits well under this; every landscape and iPad
+    /// width sits above it.
+    private static let settingsTopStackWidth: CGFloat = 560
+
+    private func settingsTop(width: CGFloat) -> some View {
+        // Close floats in the very top-left corner (see `body`); the title leads this row, lined
+        // up with the tab rail below, and the live tile stays pinned top-right — or, when the
+        // row cannot hold both readably, on its own row beneath the title.
+        let stacked = width < Self.settingsTopStackWidth
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("OpenZCine")
+                        .font(.system(size: 9.5, weight: .bold, design: .default))
+                        .kerning(0.8)
+                        .foregroundStyle(LiveDesign.accent)
+                        .textCase(.uppercase)
+                    Text("Operator Setup")
+                        .font(.system(size: 24, weight: .semibold, design: .default))
+                        .foregroundStyle(LiveDesign.text)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-            } else {
+                Spacer()
+                if !stacked { sessionControls }
+            }
+            if stacked { sessionControls }
+        }
+    }
+
+    /// Disconnect lives beside the link-health tile: session-level actions belong with the
+    /// session's status, not inside a settings tab (and a watcher leaves the same way —
+    /// model.disconnect() routes a relay viewer through leaveRelay). Destructive red, the
+    /// app's broken-connector glyph, and sized to the tile it ends.
+    @ViewBuilder private var sessionControls: some View {
+        if isConnected {
+            HStack(spacing: 10) {
+                SettingsActionPill(
+                    title: "Disconnect",
+                    systemImage: "link",
+                    slashesIcon: true,
+                    tint: LiveDesign.rec,
+                    background: LiveDesign.rec.opacity(0.16),
+                    fillsHeight: true
+                ) { model.disconnect() }
                 SettingsLiveTile()
                     .environment(model)
             }
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            SettingsLiveTile()
+                .environment(model)
         }
     }
 
@@ -6020,6 +6035,10 @@ struct SettingsLiveTile: View {
                 Text(isLinked ? "Active Link" : "No Link")
                     .font(.system(size: 12, weight: .semibold, design: .default))
                     .foregroundStyle(LiveDesign.text)
+                    // Squeezed, this label letter-wrapped ("Activ / e / Link"); a status
+                    // readout is one line or it is noise.
+                    .lineLimit(1)
+                    .fixedSize()
                 Text(isLinked ? detail : model.linkHealthDetail)
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(LiveDesign.muted)
