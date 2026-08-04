@@ -8638,6 +8638,11 @@ final class NativeAppModel {
     /// follows the finger.
     func setFocusPoint(at point: CGPoint, feedSize: CGSize) {
         guard !interfaceLocked, !focusPointLocked else { return }
+        // A watcher without the control token cannot move focus — its tap is fully inert
+        // (`applyFocusPoint` drops it), so the confirming haptic must not fire either (field
+        // report: the buzz promised a move the relay never sent). With the token the tap
+        // forwards and the haptic stands.
+        if videoSource == .relay, !relayHoldsControl { return }
         guard feedSize.width > 0, feedSize.height > 0 else { return }
         // Light tap confirming the AF point moved; after the guards so locked taps stay silent.
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -11288,8 +11293,13 @@ final class NativeAppModel {
     }
 
     /// True only in portrait-fit with ≥2 scopes already active — the state that refuses a 3rd scope.
+    /// Keys on the EFFECTIVE layout, not the persisted preference: a vertical camera forces the
+    /// fill layout (floating scopes, no stacked zone to protect), so the cap must stand down
+    /// there even while the stored aspect still says fit (field report: iPad portrait +
+    /// vertical body refused extra scopes for a zone that wasn't even mounted).
     var scopeCapActive: Bool {
-        monitorIsPortrait && preferences.portraitFeedAspect == .fit16x9 && activeScopeCount >= 2
+        monitorIsPortrait && preferences.portraitFeedAspect == .fit16x9
+            && !liveFeedRotation.isVertical && activeScopeCount >= 2
     }
 
     /// Whether activating `tool` is blocked by the fit-mode cap (a scope not yet active while the
