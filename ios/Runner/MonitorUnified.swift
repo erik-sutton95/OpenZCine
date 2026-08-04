@@ -750,35 +750,39 @@ struct MonitorAssistStrip: View {
     }
 
     private var expandedRail: some View {
-        ZStack(alignment: .bottom) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 4) {
-                    collapseHandle
-                    ForEach(tools) { tool in
-                        AssistToolButtonRow(tool: tool)
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 4) {
+                        ForEach(tools) { tool in
+                            AssistToolButtonRow(tool: tool)
+                        }
                     }
+                    .padding(.top, 10)
+                    // The last row must be able to scroll fully clear of the bottom fade —
+                    // without this it parks half-faded against the collapse footer.
+                    .padding(.bottom, Self.bottomFadeHeight + 10)
+                    .padding(.horizontal, 6)
                 }
-                .padding(.top, 10)
-                // The last row must be able to scroll fully clear of the bottom fade —
-                // without this it parks half-faded against the rail's rounded end.
-                .padding(.bottom, Self.bottomFadeHeight + 10)
-                .padding(.horizontal, 6)
+                // Mirrors MediaBrowser's `portraitGridControlsBand` fade shape: rows scroll UNDER
+                // a bottom gradient so the last tool never hard-clips mid-glyph — the fade itself
+                // is the scroll affordance. The gradient reaches near-opaque well before the
+                // scroller's end so a row is fully swallowed by the time it meets the footer.
+                LinearGradient(
+                    stops: [
+                        .init(color: LiveDesign.background.opacity(0), location: 0),
+                        .init(color: LiveDesign.background.opacity(0.85), location: 0.55),
+                        .init(color: LiveDesign.background.opacity(0.98), location: 1),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: Self.bottomFadeHeight)
+                .allowsHitTesting(false)
             }
-            // Mirrors MediaBrowser's `portraitGridControlsBand` fade shape: rows scroll UNDER a
-            // bottom gradient so the last tool never hard-clips mid-glyph against the rail's
-            // rounded edge — the fade itself is the scroll affordance. The gradient reaches
-            // near-opaque well before the rail's end so a row is fully swallowed by the time
-            // it meets the rounded corner.
-            LinearGradient(
-                stops: [
-                    .init(color: LiveDesign.background.opacity(0), location: 0),
-                    .init(color: LiveDesign.background.opacity(0.85), location: 0.55),
-                    .init(color: LiveDesign.background.opacity(0.98), location: 1),
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: Self.bottomFadeHeight)
-            .allowsHitTesting(false)
+            // The collapse chevron is a fixed footer below the scroller: always visible at the
+            // rail's bottom end, never scrolled away with the tools.
+            collapseHandle
+                .padding(.bottom, 6)
         }
         .frame(width: Self.expandedWidth, height: feedHeight)
         // Rows must never draw outside the rail's rounded silhouette — the scroll view clips
@@ -1813,6 +1817,12 @@ struct MonitorShell: View {
         // the per-DISP Camera Values switch decides the mount — and, through this one binding, the
         // clearances every key that stacks above the bar derives from it.
         let captureStrip = model.chromeSectionMounts(.cameraValues) ? map.captureStrip : nil
+        // The Fit/Fill quick key mounts only where the choice is real: photography forces fit, a
+        // vertical camera feed forces fill, command has no feed — and lock or the Edit view hides
+        // every on-feed affordance.
+        let aspectToggleMounts =
+            model.displayMode != .command && !isPhotography && !isVerticalFeed
+            && !model.interfaceLocked && model.chromeEditorMode == nil
         // The zone map hands us the feed FRAME; the content aspect-fills within it: over-widen to
         // the source's 16:9 at the frame's height, center via the outer frame, clip to the frame.
         // Fit passes the frame width straight through (16:9 frame == 16:9 content, no crop).
@@ -2005,9 +2015,12 @@ struct MonitorShell: View {
                 let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 // The bar no longer overlays the feed, so the expanded rail spans the feed from
-                // a plain margin rather than clearing the info bar's height.
+                // a plain margin rather than clearing the info bar's height — and it ends above
+                // the capture strip when that chrome mounts, never over it (the same rule as
+                // Android's portraitFillAssistRailFrame).
                 let railTop = feed.y + 10
-                let railHeight = feed.height - 10
+                let railBottom = captureStrip.map(\.frame.y) ?? (feed.y + feed.height)
+                let railHeight = max(0, railBottom - railTop - 10)
                 MonitorAssistStrip(
                     axis: .vertical, collapsible: true, feedHeight: railHeight,
                     expanded: $railExpanded
@@ -2063,6 +2076,36 @@ struct MonitorShell: View {
                     .offset(x: feed.x, y: laneTop - keyHeight - 8)
             }
 
+            // Fit/Fill quick key — the feed frame's own bottom-right corner control, replacing
+            // the old Display-tab picker row. The recenter and 50/50 keys stack above it in the
+            // same trailing lane while it shows.
+            if aspectToggleMounts {
+                let size: CGFloat = 40
+                let controlsHeight = captureStrip?.frame.height ?? 0
+                let bottomClearance = isFill ? controlsHeight + 10 : 10
+                Button {
+                    model.preferences.portraitFeedAspect =
+                        persistedAspect == .fill ? .fit16x9 : .fill
+                } label: {
+                    Image(
+                        systemName: persistedAspect == .fill
+                            ? "arrow.down.right.and.arrow.up.left"
+                            : "arrow.up.left.and.arrow.down.right"
+                    )
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                    .frame(width: size, height: size)
+                    .background(.black.opacity(0.55), in: Circle())
+                    .overlay(Circle().strokeBorder(LiveDesign.hairline, lineWidth: 1))
+                }
+                .buttonStyle(.zcTapTarget)
+                .offset(
+                    x: feed.x + feed.width - size - 10,
+                    y: feed.y + feed.height - size - bottomClearance
+                )
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+
             // Recenter-focus affordance, bottom-right of the feed — the portrait counterpart of
             // the landscape `focusResetButton`. In fill the capture strip overlays the feed
             // bottom, so lift it clear (same clearance as the assist rail); in fit the feed
@@ -2075,7 +2118,9 @@ struct MonitorShell: View {
                 let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 let x = feed.x + feed.width - size - 10
-                let y = feed.y + feed.height - size - bottomClearance
+                let y =
+                    feed.y + feed.height - size - bottomClearance
+                    - (aspectToggleMounts ? size + 10 : 0)
                 Button {
                     model.resetFocusPoint()
                 } label: {
@@ -2106,6 +2151,7 @@ struct MonitorShell: View {
                     .offset(
                         x: feed.x + feed.width - size - 10,
                         y: feed.y + feed.height - size - bottomClearance
+                            - (aspectToggleMounts ? size + 10 : 0)
                             - (recenterMounted ? size + 10 : 0)
                     )
                     .transition(.scale(scale: 0.6).combined(with: .opacity))

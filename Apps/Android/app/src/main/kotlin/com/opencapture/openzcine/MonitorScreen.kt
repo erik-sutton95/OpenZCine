@@ -136,6 +136,7 @@ import com.opencapture.openzcine.settings.labelResource
 import com.opencapture.openzcine.settings.magnificationAnchor
 import com.opencapture.openzcine.settings.magnificationAnchorBoxIndex
 import com.opencapture.openzcine.settings.OperatorSettings
+import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
 import com.opencapture.openzcine.wear.WearRecordCommandSafety
 import com.opencapture.openzcine.wear.androidWatchRelayState
@@ -2979,12 +2980,70 @@ internal fun MonitorScreen(
             }
         }
 
+        // Fit/Fill quick key (iOS parity): the feed frame's own bottom-right corner control — the
+        // explicit aspect toggle beside the pinch, replacing any settings-row picker. Mounted only
+        // where the choice is real: photography forces fit, a vertical feed forces fill, command
+        // has no feed; lock and the Edit view hide every on-feed affordance. The reset/50-50
+        // stack seats one slot higher while it shows, through the shared lane inset below.
+        val aspectToggleVisible =
+            isPortrait && !isCommand && !isPhotographyMode && !isVerticalFeed &&
+                !locked && chromeEditorMode == null
+        val bottomChromeInsetDp = with(density) { levelGaugeBottomChromeInset.toDp().value }
+        val onFeedLaneInset =
+            bottomChromeInsetDp +
+                (
+                    if (aspectToggleVisible) {
+                        FOCUS_RESET_BUTTON_SIZE_DP + FOCUS_RESET_PANEL_GAP_DP
+                    } else {
+                        0f
+                    }
+                )
+        if (aspectToggleVisible) {
+            val fillsViewport = operatorSettings.portraitFeedAspect.fillsViewport
+            val toggleFrame =
+                focusResetButtonBaseFrame(
+                    feed = zones.feed,
+                    isPortrait = true,
+                    bottomChromeInset = bottomChromeInsetDp,
+                )
+            val toggleDescription =
+                stringResource(
+                    if (fillsViewport) {
+                        R.string.portrait_aspect_fit
+                    } else {
+                        R.string.portrait_aspect_fill
+                    },
+                )
+            Box(
+                Modifier
+                    .zone(toggleFrame)
+                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    .border(1.dp, LiveDesign.hairline, CircleShape)
+                    .chromeClickable {
+                        operatorSettings.portraitFeedAspect =
+                            if (fillsViewport) {
+                                PortraitFeedAspect.FIT_16_9
+                            } else {
+                                PortraitFeedAspect.FILL
+                            }
+                    }
+                    .testTag("portrait_aspect_toggle")
+                    .semantics { contentDescription = toggleDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                // iOS full-screen arrows in a 40pt black circle.
+                FullScreenArrowsGlyph(
+                    LiveDesign.text,
+                    expand = !fillsViewport,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+
         // Keep the reset affordance above every movable scope/reference panel. The pure placement
         // policy mirrors iOS and this later composition order remains reachable even if a viewport
         // is too crowded to provide a geometrically clear slot.
         if (focusResetVisible) {
-            val bottomChromeInset =
-                with(density) { levelGaugeBottomChromeInset.toDp().value }
             // Photography's letterboxed feed frame (not the zone map's full-bleed rect):
             // its leading edge clears the vertical assist rail's lane by construction, so
             // the affordance seats beside the rail like iOS instead of under it.
@@ -2992,7 +3051,7 @@ internal fun MonitorScreen(
                 focusResetButtonBaseFrame(
                     feed = effectiveFeed,
                     isPortrait = isPortrait,
-                    bottomChromeInset = bottomChromeInset,
+                    bottomChromeInset = onFeedLaneInset,
                 )
             val resetFrame =
                 focusResetButtonClearFrame(
@@ -3046,13 +3105,11 @@ internal fun MonitorScreen(
             !locked &&
             chromeEditorMode == null
         ) {
-            val bottomChromeInset =
-                with(density) { levelGaugeBottomChromeInset.toDp().value }
             val keyFrame =
                 splitComparisonKeyFrame(
                     feed = effectiveFeed,
                     isPortrait = isPortrait,
-                    bottomChromeInset = bottomChromeInset,
+                    bottomChromeInset = onFeedLaneInset,
                     focusResetMounted = focusResetVisible,
                     widthDp = SPLIT_KEY_WIDTH_DP,
                     heightDp = SPLIT_KEY_HEIGHT_DP,
@@ -4177,6 +4234,52 @@ private fun DotViewfinderGlyph(
         cornerPath(w - corner, 0f, w, 0f, w, corner)
         cornerPath(w, h - corner, w, h, w - corner, h)
         cornerPath(corner, h, 0f, h, 0f, h - corner)
+    }
+}
+
+/**
+ * The portrait Fit/Fill key's glyph: iOS `arrow.up.left.and.arrow.down.right` when [expand] is
+ * true (fit, tapping fills), `arrow.down.right.and.arrow.up.left` otherwise.
+ */
+@Composable
+private fun FullScreenArrowsGlyph(
+    tint: androidx.compose.ui.graphics.Color,
+    expand: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val stroke = size.minDimension * 0.11f
+        val head = size.minDimension * 0.26f
+        val inset = size.minDimension * 0.06f
+        val mid = size.minDimension * 0.42f
+        fun arrow(tipX: Float, tipY: Float, tailX: Float, tailY: Float) {
+            val path = androidx.compose.ui.graphics.Path().apply {
+                moveTo(tailX, tailY)
+                lineTo(tipX, tipY)
+                // L-shaped barbs run back toward the tail along each axis.
+                moveTo(tipX + (if (tailX > tipX) head else -head), tipY)
+                lineTo(tipX, tipY)
+                lineTo(tipX, tipY + (if (tailY > tipY) head else -head))
+            }
+            drawPath(
+                path,
+                tint,
+                style =
+                    androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = stroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    ),
+            )
+        }
+        val w = size.width
+        val h = size.height
+        if (expand) {
+            arrow(inset, inset, mid, mid)
+            arrow(w - inset, h - inset, w - mid, h - mid)
+        } else {
+            arrow(mid, mid, inset, inset)
+            arrow(w - mid, h - mid, w - inset, h - inset)
+        }
     }
 }
 
