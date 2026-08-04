@@ -5080,6 +5080,26 @@ final class NativeAppModel {
                     onEstablishmentDiagnostic: onEstablishmentDiagnostic
                 )
             } catch let error
+                where NativeCameraSession.isBusyEstablishFailure(error) && !requestPairing
+            {
+                // "Another initiator holds me." The one case this clears by itself is the
+                // handoff: the other device just disconnected and the body is still tearing its
+                // session down. One retry after a settle long enough for any teardown — never
+                // the 1 s hammer, which lands mid-teardown and wedges the body's network stack
+                // (audit M5; two-device handoff brick). A second busy answer means the other
+                // device is genuinely still connected: surface it, with its own copy.
+                connectionLogger.info(
+                    "Body answered busy; retrying once after a handoff settle")
+                connectionStageDetail = "Camera is in use — waiting for it to free up…"
+                try await Task.sleep(for: .seconds(5))
+                return try await NativeCameraSession.establish(
+                    host: host,
+                    guid: guid,
+                    requestPairing: requestPairing,
+                    onPairingChallenge: onPairingChallenge,
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                )
+            } catch let error
                 where NativeCameraSession.isRetryableEstablishFailure(
                     error, requestPairing: requestPairing)
             {

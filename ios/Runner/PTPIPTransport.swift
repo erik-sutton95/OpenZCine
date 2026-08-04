@@ -349,6 +349,10 @@ final class PTPIPSocket: @unchecked Sendable {
     private let queue = DispatchQueue(label: "camera.ptpip.socket")
     private let descriptorLock = NSLock()
     private var descriptor: Int32 = -1
+    /// Latched by `interrupt()` so a descriptor created AFTER the interrupt (cancellation racing
+    /// `connectOnQueue`'s socket() call) is shut down the moment it is stored — the abandoned
+    /// attempt can never proceed to a live init on a channel nobody owns.
+    private var interruptRequested = false
     private var readBuffer = PTPIPReadBuffer()
     /// Reused `recv` scratch (serial-queue-owned) — see `receiveOnQueue` for why.
     private var receiveScratch: [UInt8] = []
@@ -359,6 +363,23 @@ final class PTPIPSocket: @unchecked Sendable {
 
     func close() {
         closeDescriptor()
+    }
+
+    /// Unblocks any in-flight poll/recv/connect NOW, without freeing the descriptor: shutdown
+    /// makes the fd poll readable-at-EOF, so the serial-queue call returns and throws through
+    /// its own error path, which closes. Closing here instead would race descriptor reuse with
+    /// the blocked call (audit M1); shutdown cannot. This is what makes an ABANDONED
+    /// establishment attempt tear down immediately instead of holding a half-open init channel
+    /// at a one-initiator body while the next attempt opens a second one (audit H4 — the
+    /// two-command-channels wedge behind the two-device handoff brick).
+    func interrupt() {
+        descriptorLock.lock()
+        interruptRequested = true
+        let live = descriptor
+        descriptorLock.unlock()
+        if live >= 0 {
+            Darwin.shutdown(live, SHUT_RDWR)
+        }
     }
 
     func send(_ packet: PTPIPPacket) async throws {
@@ -411,14 +432,23 @@ final class PTPIPSocket: @unchecked Sendable {
     }
 
     private func performOnQueue<T>(_ work: @Sendable @escaping () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                do {
-                    continuation.resume(returning: try work())
-                } catch {
-                    continuation.resume(throwing: error)
+        // Task cancellation interrupts the blocked syscall instead of letting it run out its
+        // own deadline — see `interrupt()`. Without this, cancellation was invisible here and
+        // an abandoned attempt kept its socket (and its half-open init at the body) alive for
+        // the full poll timeout.
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    do {
+                        continuation.resume(returning: try work())
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
+        } onCancel: {
+            interrupt()
         }
     }
 
@@ -638,7 +668,14 @@ final class PTPIPSocket: @unchecked Sendable {
     private func storeDescriptor(_ descriptor: Int32) {
         descriptorLock.lock()
         self.descriptor = descriptor
+        let alreadyInterrupted = interruptRequested
         descriptorLock.unlock()
+        // Cancellation raced descriptor creation: kill the fresh socket immediately, exactly as
+        // if it had existed when `interrupt()` ran. The latch is terminal per socket — a
+        // cancelled attempt stays cancelled.
+        if alreadyInterrupted {
+            Darwin.shutdown(descriptor, SHUT_RDWR)
+        }
     }
 
     private func currentDescriptor() throws -> Int32 {

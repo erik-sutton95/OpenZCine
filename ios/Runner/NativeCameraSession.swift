@@ -68,6 +68,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
             return "\(label) timed out."
         case .unexpectedPacket(let expected, let actual):
             return "Expected \(expected), got PTP-IP packet \(actual.rawValue)."
+        case .initFailed(.busy):
+            return
+                "Another device is connected to this camera. Disconnect it there, then try again."
         case .initFailed(let reason):
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
@@ -467,6 +470,9 @@ final class NativeCameraSession: @unchecked Sendable {
     /// - failures with their own fallback or recovery copy (`savedProfileRequired` → re-pair
     ///   flow, `rejectedInitiator` → "create a Connect to PC profile", Local Network permission,
     ///   pairing errors);
+    /// - `initFailed(.busy)` — the body TOLD us another initiator holds it; a 1 s retry cannot
+    ///   succeed and doubles the init load on a session slot mid-handoff (audit M5, the
+    ///   two-device wedge). The busy path gets its own slower single retry in the connect flow;
     /// - cancellation (the operator already abandoned the attempt).
     ///
     /// Errors outside `NativeCameraSessionError` are raw socket/NW failures — transient.
@@ -477,12 +483,19 @@ final class NativeCameraSession: @unchecked Sendable {
         switch sessionError {
         case .noHost, .localNetworkPermissionDenied, .pairingRejected,
             .pairingChallengeUnavailable, .savedProfileRequired,
-            .initFailed(.rejectedInitiator):
+            .initFailed(.rejectedInitiator), .initFailed(.busy):
             return false
         case .connectionFailed, .connectionClosed, .timeout, .unexpectedPacket,
             .invalidPacketLength, .operationRejected, .objectRatingRejected, .initFailed:
             return true
         }
+    }
+
+    /// Whether an establish failure is the body answering "another initiator holds me."
+    static func isBusyEstablishFailure(_ error: Error) -> Bool {
+        guard let sessionError = error as? NativeCameraSessionError else { return false }
+        if case .initFailed(.busy) = sessionError { return true }
+        return false
     }
 
     func close() {

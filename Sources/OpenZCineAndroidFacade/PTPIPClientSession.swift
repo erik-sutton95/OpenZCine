@@ -91,6 +91,9 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "\(label) timed out."
         case .unexpectedPacket(let expected, let actual):
             return "Expected \(expected), got PTP-IP packet \(actual.rawValue)."
+        case .initFailed(.busy):
+            return
+                "Another device is connected to this camera. Disconnect it there, then try again."
         case .initFailed(let reason):
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
@@ -745,7 +748,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase(.handshaking, "")
         switch strategy {
         case .savedProfile:
-            return try connectSavedProfile(
+            return try connectSavedProfileSettlingHandoff(
                 host: host,
                 port: port,
                 guid: guid,
@@ -764,7 +767,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             )
         case .restoreProfileThenPairing:
             do {
-                return try connectSavedProfile(
+                return try connectSavedProfileSettlingHandoff(
                     host: host,
                     port: port,
                     guid: guid,
@@ -787,6 +790,43 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     onPhase: onPhase
                 )
             }
+        }
+    }
+
+    /// "Another initiator holds me." The one case this clears by itself is the handoff: the
+    /// other device just disconnected and the body is still tearing its session down. One retry
+    /// after a settle long enough for any teardown — never a fast hammer, which lands
+    /// mid-teardown and wedges the body's network stack (iOS twin: `establishSession`'s busy
+    /// arm). A second busy answer means the other device is genuinely still connected; its
+    /// dedicated copy surfaces. Pairing attempts never come through here — a body on its
+    /// pairing wizard must not be re-probed.
+    private static func connectSavedProfileSettlingHandoff(
+        host: String,
+        port: UInt16,
+        guid: Data,
+        friendlyName: String,
+        timeoutMilliseconds: Int32,
+        onPhase: (CameraConnectionPhase, String) -> Void
+    ) throws -> PTPIPClientSession {
+        do {
+            return try connectSavedProfile(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
+        } catch PTPIPClientSessionError.initFailed(.busy) {
+            Thread.sleep(forTimeInterval: 5)
+            return try connectSavedProfile(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
         }
     }
 
