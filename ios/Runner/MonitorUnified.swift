@@ -1274,7 +1274,10 @@ struct MonitorShell: View {
         return MonitorZoneLayout.watcherRefined(
             map,
             viewportWidth: context.viewportWidth,
-            minimumTopY: context.chromeInsets.top
+            // A bare breathing margin, NOT the chrome inset: the freed band's headroom is dead
+            // black and the monitor runs status-bar-less, so the watcher chrome hugs the top
+            // edge (field report: "can still be moved up further").
+            minimumTopY: 10
         )
     }
 

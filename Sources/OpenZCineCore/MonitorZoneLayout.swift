@@ -276,14 +276,17 @@ public enum MonitorZoneLayout {
         let record = slots.record
         let dispW = slots.disp.width
         let dispH = slots.disp.height
-        // Bottom-align to the record slot's baseline in EVERY mode: the record slot does not
-        // move with the bar height, so DISP stays put across DISP 1↔2 (field report: it
-        // shifted between modes and clipped in clean, whose band collapses to a zero-height
-        // line). The record button was itself bottom-aligned with the bars, so this IS
-        // "inline with the bottom bars".
+        // Bottom-right corner, bottom-aligned to the assist BAND's bottom line — the one line
+        // that sits at the same y in every DISP mode on every form factor: fit's strip bottom,
+        // clean's collapsed zero-height band, and the record baseline on corner layouts all
+        // coincide there. Anchoring to the record slot instead left DISP floating mid-screen
+        // on rail layouts, where record sits mid-rail (field report: iPhone watcher).
+        let bandBottom =
+            map.assistStrip.map { $0.frame.y + $0.frame.height }
+            ?? (record.y + record.height)
         let disp = MonitorModuleFrame(
             x: record.x + record.width - dispW,
-            y: record.y + record.height - dispH,
+            y: bandBottom - dispH,
             width: dispW,
             height: dispH
         )
