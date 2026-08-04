@@ -12,7 +12,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Everything the watch surface renders, in one observable bundle. */
 data class RelayWatchUiState(
@@ -51,6 +53,10 @@ class RelayWatchController(
     val broadcast: RelayBroadcast,
     /** Fired once when this device latches jpeg-only — the shell persists the verdict. */
     private val onJpegOnlyLatched: (() -> Unit)? = null,
+    /** Wall-clock budget for the first decoded HEVC frame; injectable for tests. */
+    private val hevcDecodeDeadlineMillis: Long = HEVC_DECODE_DEADLINE_MILLIS,
+    /** Log seam so JVM unit tests can run the latch paths (android.util.Log is a stub there). */
+    private val log: (String) -> Unit = { android.util.Log.i("RelayHEVC", it) },
 ) {
     private val mutableUi = MutableStateFlow(RelayWatchUiState())
     val ui: StateFlow<RelayWatchUiState> = mutableUi.asStateFlow()
@@ -75,6 +81,7 @@ class RelayWatchController(
     private var client: MonitorRelayClient? = null
     private var eventsJob: Job? = null
     private var rejoinJob: Job? = null
+    private var hevcDeadlineJob: Job? = null
     private var passcode: String? = null
     /** Latest frame's camera coordinate space, for focus commands. */
     internal var focusCoordinateSpace: Pair<Int, Int>? = null
@@ -121,6 +128,9 @@ class RelayWatchController(
                                 focusCoordinateSpace = it.coordinateWidth to it.coordinateHeight
                             }
                             frameSource.submit(event.metadata, event.image)
+                            if (event.metadata.codec == MonitorRelayWire.FrameCodec.HEVC) {
+                                armHevcDecodeDeadline()
+                            }
                         }
                         is MonitorRelayClient.Event.ControlChanged -> {
                             mutableUi.value =
@@ -182,8 +192,7 @@ class RelayWatchController(
             if (!jpegOnly) {
                 jpegOnly = true
                 onJpegOnlyLatched?.invoke()
-                android.util.Log.i(
-                    "RelayHEVC", "decoders exhausted; rejoining for JPEG frames")
+                log("decoders exhausted; rejoining for JPEG frames")
                 retry()
             }
         }
@@ -207,6 +216,36 @@ class RelayWatchController(
             client?.stop()
             join()
         }
+    }
+
+    /**
+     * Bounds the first-watch HEVC probe by wall clock. The decoder's own exhaustion path
+     * (hardware fed-frame threshold, then the software rebuild bound, each gated on keyframe
+     * arrivals) is evidence-complete but costs tens of seconds of black feed — longer than any
+     * operator waits before backing out, and backing out discards the per-watch decoder state,
+     * so across impatient retries the jpeg-only latch never got the chance to stick. HEVC
+     * frames arriving with nothing decoded for [hevcDecodeDeadlineMillis] is already the
+     * verdict: latch, persist, rejoin declaring `codecs=["jpeg"]`.
+     *
+     * Armed once, on the first received HEVC frame — the host only starts a joiner on a
+     * keyframe, so the clock never starts mid-GOP. The frames flow replays its newest
+     * emission, so a source that EVER decoded satisfies the wait instantly and a mid-stream
+     * stall can never demote a working decoder.
+     */
+    private fun armHevcDecodeDeadline() {
+        if (jpegOnly || hevcDeadlineJob != null) return
+        hevcDeadlineJob =
+            scope.launch {
+                val decoded =
+                    withTimeoutOrNull(hevcDecodeDeadlineMillis) { frameSource.frames.first() }
+                if (decoded != null || jpegOnly) return@launch
+                jpegOnly = true
+                onJpegOnlyLatched?.invoke()
+                log(
+                    "no decoded frame within ${hevcDecodeDeadlineMillis} ms; " +
+                        "rejoining for JPEG frames")
+                retry()
+            }
     }
 
     fun requestControl() = client?.requestControl() ?: Unit
@@ -235,6 +274,7 @@ class RelayWatchController(
 
     suspend fun stop() {
         rejoinJob?.cancel()
+        hevcDeadlineJob?.cancel()
         eventsJob?.cancel()
         client?.stop()
         frameSource.release()
@@ -244,16 +284,28 @@ class RelayWatchController(
     public companion object {
         private const val REJOIN_INTERVAL_MILLIS = 3_000L
 
+        /**
+         * Comfortably above a healthy first decode (the first received frame is a keyframe and
+         * hardware pipelines emit within a handful of frames), far below the exhaustion path's
+         * tens of seconds.
+         */
+        private const val HEVC_DECODE_DEADLINE_MILLIS = 6_000L
+
         /** See [jpegOnly] — one probe per process, not per join. */
         @Volatile private var processJpegOnly = false
 
         /**
-         * Seeds the latch from a persisted verdict so a relaunch skips the ~45 s decode probe.
-         * The shell scopes what it persists to the app version — a new build may carry a
-         * stream profile the hardware CAN decode, and must re-probe.
+         * Seeds the latch from a persisted verdict so a relaunch skips the decode probe
+         * entirely. The shell scopes what it persists to the exact install — a new build may
+         * carry a stream profile the hardware CAN decode, and must re-probe.
          */
         public fun seedJpegOnly() {
             processJpegOnly = true
+        }
+
+        /** Test-only: clears the process-wide latch so latch tests are order-independent. */
+        internal fun resetJpegOnlyForTesting() {
+            processJpegOnly = false
         }
     }
 }

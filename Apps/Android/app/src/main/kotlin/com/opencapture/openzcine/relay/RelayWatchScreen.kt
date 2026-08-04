@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.relay
 
+import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -52,12 +54,23 @@ fun RelayWatchOverlay(
     onLeave: () -> Unit,
 ) {
     BackHandler(onBack = onLeave)
+    // The root Box deliberately carries NO pointer handling: only the pill (and the failure
+    // keys) hit-test, so the monitor chrome underneath stays tappable everywhere else.
     Box(Modifier.fillMaxSize()) {
         when (ui.phase) {
             RelayWatchUiState.Phase.WATCHING ->
                 if (ui.holdsControl || ui.allowsControlRequests) {
-                    // Above the assist toolbar's lane, like iOS — bottom-centre would land the
-                    // pill half-under the toolbar's tools.
+                    // Above the bottom chrome's lane, like iOS (`laneTop - keyHeight - 8`).
+                    // Landscape: the bottom bars run 14dp inset + 58dp tall and DISP/settings
+                    // live on the right rail, so 84dp floats the pill 12dp above the bars.
+                    // Portrait: the system bar (lock/DISP/record/media/settings, 100dp, 14dp
+                    // lift) plus the 58dp assist toolbar own the bottom — 84dp sat the pill
+                    // ON the system keys. 192 = 100 + 14 + 58 + 12 gap + 8 lane gap.
+                    // ponytail: fixed lane clearances; anchoring to the live zone map needs
+                    // the monitor shell to export it.
+                    val portrait =
+                        LocalConfiguration.current.orientation ==
+                            Configuration.ORIENTATION_PORTRAIT
                     WatcherKey(
                         text =
                             stringResource(
@@ -70,7 +83,8 @@ fun RelayWatchOverlay(
                         accented = ui.holdsControl,
                         onClick = if (ui.holdsControl) onGiveBackControl else onAskForControl,
                         modifier =
-                            Modifier.align(Alignment.BottomCenter).padding(bottom = 84.dp),
+                            Modifier.align(Alignment.BottomCenter)
+                                .padding(bottom = if (portrait) 192.dp else 84.dp),
                     )
                 }
             RelayWatchUiState.Phase.CONNECTING ->
