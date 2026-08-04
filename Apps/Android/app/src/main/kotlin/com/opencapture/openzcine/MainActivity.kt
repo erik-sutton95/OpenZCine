@@ -500,6 +500,12 @@ class MainActivity : ComponentActivity() {
                         watchController = null
                         connectionScope.launch { leaving.stop() }
                     }
+                    // The watcher's Operator Setup (iOS: the same settings panel over the
+                    // monitor with `videoSource == .relay`; its Disconnect routes through
+                    // leaveRelay). Media stays unwired — iOS `mediaBrowser` needs an owned
+                    // camera session, which a watcher never has.
+                    var watchSettingsPresented by
+                        remember(watching) { mutableStateOf(false) }
                     Box(Modifier.fillMaxSize()) {
                         MonitorScreen(
                             watching.session,
@@ -507,8 +513,11 @@ class MainActivity : ComponentActivity() {
                             assist = watchAssist,
                             operatorSettings = operatorSettings,
                             lutLibrary = lutLibrary,
-                            liveViewEnabled = true,
-                            isMonitorFront = true,
+                            // Same stand-down as the connected monitor: the full-screen
+                            // settings surface must not fight the feed decode for CPU/GPU
+                            // on lower-tier phones.
+                            liveViewEnabled = !watchSettingsPresented,
+                            isMonitorFront = !watchSettingsPresented,
                             sessionRecoveryEnabled = false,
                             isDemoSession = false,
                             // The watcher chrome: readings mount, controls only with the token
@@ -518,18 +527,46 @@ class MainActivity : ComponentActivity() {
                                     holdsControl = watchUi.holdsControl
                                 ),
                             relayedState = watchUi.state,
-                            onOpenSettings = {},
+                            onOpenSettings = { watchSettingsPresented = true },
                             onOpenMedia = {},
                             onBackToOperatorMenu = leaveWatch,
                         )
-                        com.opencapture.openzcine.relay.RelayWatchOverlay(
-                            ui = watchUi,
-                            onAskForControl = watching::requestControl,
-                            onGiveBackControl = watching::releaseControl,
-                            onSubmitPasscode = watching::submitPasscode,
-                            onRetry = watching::retry,
-                            onLeave = leaveWatch,
-                        )
+                        if (!watchSettingsPresented) {
+                            // Gated, not layered: composing the watch overlay under the
+                            // settings surface would float its pill (and passcode dialog, a
+                            // separate window) over the settings — iOS suppresses the
+                            // on-glass key under the settings cover the same way.
+                            com.opencapture.openzcine.relay.RelayWatchOverlay(
+                                ui = watchUi,
+                                onAskForControl = watching::requestControl,
+                                onGiveBackControl = watching::releaseControl,
+                                onSubmitPasscode = watching::submitPasscode,
+                                onRetry = watching::retry,
+                                onLeave = leaveWatch,
+                            )
+                        } else {
+                            OperatorSettingsScreen(
+                                session = watching.session,
+                                assistState = watchAssist,
+                                settings = operatorSettings,
+                                mediaCacheStore = mediaCacheStore,
+                                frameioController = frameioController,
+                                systemSettingsActions = systemSettingsActions,
+                                bugReportSubmitter = bugReportSubmitter,
+                                bugReportActivityLogProvider =
+                                    diagnostics::privacyFilteredActivityLog,
+                                liveViewGuideController = liveViewGuide,
+                                onShowGuideOnNextRealFrame =
+                                    liveViewGuide::replayOnNextRealFrame,
+                                onCompletedMediaCacheCleared = { mediaCacheRevision += 1 },
+                                // The watcher leaves from the session controls, exactly like
+                                // iOS (`model.disconnect()` routes a relay viewer through
+                                // leaveRelay).
+                                onDisconnect = leaveWatch,
+                                onClose = { watchSettingsPresented = false },
+                            )
+                            BackHandler { watchSettingsPresented = false }
+                        }
                     }
                 } else if (active == null && offlineBuckets != null) {
                     val primary = offlineBuckets.firstOrNull()
