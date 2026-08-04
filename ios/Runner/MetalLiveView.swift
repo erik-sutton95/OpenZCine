@@ -336,7 +336,11 @@ struct MetalLiveView: UIViewRepresentable {
             private func encodeSpatialUpscale(
                 from source: MTLTexture, to target: MTLTexture, commandBuffer: MTLCommandBuffer
             ) -> Bool {
-                guard spatialScalingSupported else { return false }
+                // Read per frame, not latched: the debug switch is an A/B control and has to take
+                // effect on the next frame while the operator is looking at the picture.
+                guard FeedUpscaleSwitch.rendererReadsSpatialUpscaler, spatialScalingSupported else {
+                    return false
+                }
                 // MetalFX only upscales. `bakeSize` clamps a source that out-resolves the panel
                 // down to the drawable, which is the demo-stills case — Lanczos takes that one.
                 guard target.width > source.width, target.height > source.height else {
@@ -421,4 +425,29 @@ struct MetalLiveView: UIViewRepresentable {
                 })
         }
     }
+}
+
+/// Runtime A/B switch for the feed upscaler, flipped from the Display settings row.
+///
+/// MetalFX only exists on hardware, so the difference it makes can only be judged on a device with
+/// a live feed — which makes a relaunch-free toggle the only honest way to compare it against the
+/// Lanczos floor on the same shot. Read once per encode rather than latched at construction, so the
+/// next frame carries the change.
+@MainActor
+@Observable
+final class FeedUpscaleSwitch {
+    static let shared = FeedUpscaleSwitch()
+
+    /// `false` drops the feed to the Lanczos floor, the same path a pre-A13 device takes.
+    var usesSpatialUpscaler = true {
+        didSet { Self.rendererReadsSpatialUpscaler = usesSpatialUpscaler }
+    }
+
+    /// What the renderer actually reads. `encodeSpatialUpscale` is nonisolated — it runs from the
+    /// draw callback, not an actor — so it cannot touch the main-actor property above. A lone `Bool`
+    /// mirrored on every toggle is enough for a debug A/B: the worst a torn read could do is carry
+    /// the old upscaler for one more frame, which is the very thing being compared.
+    nonisolated(unsafe) static var rendererReadsSpatialUpscaler = true
+
+    private init() {}
 }

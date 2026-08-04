@@ -2025,6 +2025,19 @@ struct AssistQuickSettingsContent: View {
                     model.assistConfiguration.instantReviewSeconds = Self.reviewSeconds(for: $0)
                 }
             }
+            #if DEBUG
+                // Debug builds only: MetalFX exists on hardware alone, so the only way to judge what
+                // it buys is to flip it off against the Lanczos floor on the same live shot.
+                SettingsSwitchInlineRow(
+                    title: "Feed Upscaler (MetalFX)",
+                    help:
+                        "Debug: off drops the feed to the Lanczos floor for an A/B on the same shot.",
+                    stacked: compact,
+                    isOn: FeedUpscaleSwitch.shared.usesSpatialUpscaler
+                ) {
+                    FeedUpscaleSwitch.shared.usesSpatialUpscaler.toggle()
+                }
+            #endif
             SettingsSwitchInlineRow(
                 title: "Focus Point",
                 help: "Overlay the AF box the shot focused with on the review.",
