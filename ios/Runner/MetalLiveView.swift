@@ -290,18 +290,34 @@ struct MetalLiveView: UIViewRepresentable {
             /// Whether to try MetalFX at all: A13+ only (iOS 17 still runs on A12), and latched off
             /// after a creation failure so a device that refuses it does not retry every frame.
             ///
-            /// HELD OFF pending a device abort: `MTLFXSpatialScaler.encode` raised SIGABRT inside
-            /// `_MFXSpatialScalingEffect` on hardware, after the scaler had been created
-            /// successfully — so `supportsDevice` and `makeSpatialScaler` both said yes and the
-            /// encode still asserted. That is a precondition on the textures or the descriptor that
-            /// only the device validates, and it cannot be caught (an ObjC assert aborts). Until the
-            /// assertion text names it, the feed upscales through Lanczos, which is where it was
-            /// before this path landed. Flip this back on with the fix, not before — a crashing
-            /// monitor is worse than a softer upscale. See `ZC_METALFX_FEED` to test a candidate.
             private lazy var spatialScalingSupported =
-                ProcessInfo.processInfo.environment["ZC_METALFX_FEED"] == "1"
-                && !DemoHarness.forceLanczosFeedScaler
+                !DemoHarness.forceLanczosFeedScaler
                 && MTLFXSpatialScalerDescriptor.supportsDevice(device)
+
+            /// Private-storage scratch the scaler writes into, blitted to the drawable after.
+            ///
+            /// MetalFX asserts `outputTexture must have private storage mode`, and a
+            /// `CAMetalLayer` drawable is not private on this hardware — encoding straight into it
+            /// aborted the process on device even though `supportsDevice` and `makeSpatialScaler`
+            /// both succeeded. The scaler only ever runs when the fit fills the drawable, so this
+            /// is drawable-sized and the follow-up blit is a straight full-surface copy.
+            private var spatialOutput: MTLTexture?
+
+            /// Drawable-sized private scratch for the scaler, rebuilt when the drawable changes.
+            private func spatialOutputTexture(matching target: MTLTexture) -> MTLTexture? {
+                if let existing = spatialOutput, existing.width == target.width,
+                    existing.height == target.height, existing.pixelFormat == target.pixelFormat
+                {
+                    return existing
+                }
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: target.pixelFormat, width: target.width, height: target.height,
+                    mipmapped: false)
+                descriptor.usage = [.shaderRead, .shaderWrite]
+                descriptor.storageMode = .private
+                spatialOutput = device.makeTexture(descriptor: descriptor)
+                return spatialOutput
+            }
 
             /// Encodes the bake→drawable upscale through MetalFX Spatial, or returns `false` when
             /// the device or the scale direction rules it out and Lanczos should run instead.
@@ -360,10 +376,23 @@ struct MetalLiveView: UIViewRepresentable {
                         \(target.width, privacy: .public)×\(target.height, privacy: .public)
                         """)
                 }
-                guard let spatialScaler else { return false }
+                guard let spatialScaler, let output = spatialOutputTexture(matching: target)
+                else { return false }
                 spatialScaler.colorTexture = source
-                spatialScaler.outputTexture = target
+                spatialScaler.outputTexture = output
                 spatialScaler.encode(commandBuffer: commandBuffer)
+                guard let blit = commandBuffer.makeBlitCommandEncoder() else { return false }
+                blit.copy(
+                    from: output,
+                    sourceSlice: 0,
+                    sourceLevel: 0,
+                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                    sourceSize: MTLSize(width: output.width, height: output.height, depth: 1),
+                    to: target,
+                    destinationSlice: 0,
+                    destinationLevel: 0,
+                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                blit.endEncoding()
                 return true
             }
         #else
