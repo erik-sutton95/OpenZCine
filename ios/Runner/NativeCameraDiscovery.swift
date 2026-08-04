@@ -269,51 +269,66 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
 
     /// One unicast presence read (`MonitorRelayProtocol.presenceTCPPort`), bounded. Nil for
     /// refused, timed out, or garbage — only a genuine OpenZCine presence line answers.
-    /// The deadline CANCELS the connection, not just the wait: an uncancelled NWConnection to
-    /// a dead host keeps its half-open flow alive until the OS gives up (~75 s), and a /24 of
-    /// those is a radio storm that stalls the very broadcaster feed presence exists to protect
-    /// (field log: hundreds of overlapping :15741 flows all dying at SO_ERROR 60).
+    /// Raw POSIX socket on purpose: an NWConnection version, even one whose deadline called
+    /// `cancel()`, still left flows retransmitting SYNs on device until the kernel's ~75 s
+    /// connect timeout (field log: :15741 flows dying at SO_ERROR 60 long after their 500 ms
+    /// deadline) — and a /24 of those every 30 s stalls the very broadcaster feed presence
+    /// exists to protect. `close(fd)` ends retransmission unconditionally; the PTP subnet
+    /// probe has swept on this pattern for weeks without one lingering-flow console line.
     static func checkRelayPresence(
         host: String, timeoutMilliseconds: Int = 500
     ) async -> RelayPresence? {
-        guard let port = NWEndpoint.Port(rawValue: MonitorRelayProtocol.presenceTCPPort) else {
-            return nil
+        await withCheckedContinuation { continuation in
+            presenceProbeQueue.async {
+                let line = rawPresenceLine(
+                    host: host,
+                    port: MonitorRelayProtocol.presenceTCPPort,
+                    timeoutMilliseconds: Int32(clamping: timeoutMilliseconds))
+                continuation.resume(returning: line.flatMap(RelayPresence.decode))
+            }
         }
-        let connection = NWConnection(
-            host: NWEndpoint.Host(host), port: port, using: .tcp)
-        let queue = DispatchQueue(label: "com.opencapture.openzcine.presence-check")
-        return await withCheckedContinuation { continuation in
-            // One resume total: the deadline, state failures, and the receive race for it.
-            let resumed = OSAllocatedUnfairLock(initialState: false)
-            let finish: @Sendable (RelayPresence?) -> Void = { presence in
-                let first = resumed.withLock { done -> Bool in
-                    if done { return false }
-                    done = true
-                    return true
-                }
-                guard first else { return }
-                connection.cancel()
-                continuation.resume(returning: presence)
+    }
+
+    /// Probes block a worker in `poll` for ≤2× the timeout, so they run on their own concurrent
+    /// GCD queue — never the cooperative pool, which a 64-wide sweep chunk would starve.
+    private static let presenceProbeQueue = DispatchQueue(
+        label: "com.opencapture.openzcine.presence-probe", attributes: .concurrent)
+
+    /// Bounded connect + single read, nil on any failure. Blocking by design (see caller).
+    private static func rawPresenceLine(
+        host: String, port: UInt16, timeoutMilliseconds: Int32
+    ) -> Data? {
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else { return nil }
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK)
+        var noSigpipe: Int32 = 1
+        setsockopt(
+            fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe, socklen_t(MemoryLayout<Int32>.size))
+        let connectResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    connection.receive(
-                        minimumIncompleteLength: 1, maximumLength: 1024
-                    ) { data, _, _, _ in
-                        finish(data.flatMap(RelayPresence.decode))
-                    }
-                case .failed, .cancelled:
-                    finish(nil)
-                default:
-                    break
-                }
-            }
-            queue.asyncAfter(deadline: .now() + .milliseconds(timeoutMilliseconds)) {
-                finish(nil)
-            }
-            connection.start(queue: queue)
         }
+        if connectResult != 0 {
+            guard errno == EINPROGRESS else { return nil }
+            var writable = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            guard poll(&writable, 1, timeoutMilliseconds) == 1 else { return nil }
+            var socketError: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length)
+            guard socketError == 0 else { return nil }
+        }
+        var readable = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        guard poll(&readable, 1, timeoutMilliseconds) == 1 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let received = recv(fd, &buffer, buffer.count, 0)
+        guard received > 0 else { return nil }
+        return Data(buffer.prefix(received))
     }
 
     /// Sweeps `hosts` for presence answers concurrently (bounded chunks, own timeouts).
