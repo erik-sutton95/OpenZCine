@@ -198,16 +198,39 @@ extension MonitorEdgeInsets {
 /// Top band reserved for the iPadOS 26 window-control pill (see `clearingWindowControls`).
 @MainActor
 enum MonitorWindowControlsClearance {
-    /// 40pt clears the ~26pt-tall (screen points) pill across the canvas scales the system
-    /// actually uses for this app's window (~0.65–1.0, measured). The scale is not observable
-    /// in-process, so a user-shrunk tiny window can still graze the pill — the same ceiling
-    /// Apple's own 32pt status-bar-band placement has.
-    static let top: Double = {
-        guard #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .pad else {
-            return 0
-        }
+    /// 40pt clears the ~26pt-tall (screen points) pill — but only a WINDOWED scene needs it.
+    ///
+    /// This used to reserve the band unconditionally, costing the top chrome ~26pt of headroom on
+    /// every iPadOS 26 iPad. The number was sized before `9dc2523`: back then `UIRequiresFullScreen`
+    /// put the app in a SCALED compatibility canvas (~0.65–1.0 measured), and that scale inflated a
+    /// 26pt pill to 40pt of layout space. Adopting the windowing model retired the scaled canvas —
+    /// the app runs at native scale now — but the constant outlived its reason.
+    ///
+    /// Full screen reserves nothing: iPadOS 26 keeps the window controls hidden until the operator
+    /// reveals them, the same deal every full-screen app makes with the status bar (no pill
+    /// composites over the band — verified on the iPadOS 26.2 simulator and in a device capture).
+    /// A resized window shows them persistently, so the band still stands there, where the lock
+    /// button would otherwise sit under the capsule.
+    static var top: Double {
+        guard #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .pad,
+            !sceneFillsDisplay
+        else { return 0 }
         return 40
-    }()
+    }
+
+    /// True while the scene fills the display. A windowed scene reports smaller bounds than its
+    /// screen; the scaled compatibility canvas this replaces reported them equal, which is why
+    /// scene geometry was no help before the app adopted windowing.
+    private static var sceneFillsDisplay: Bool {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard
+            let scene = scenes.first(where: { $0.activationState == .foregroundActive })
+                ?? scenes.first
+        else { return true }
+        let bounds = scene.coordinateSpace.bounds.size
+        let screen = scene.screen.bounds.size
+        return abs(bounds.width - screen.width) <= 1 && abs(bounds.height - screen.height) <= 1
+    }
 }
 
 extension OperatorPreferences.StreamPreset {
