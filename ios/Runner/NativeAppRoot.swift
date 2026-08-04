@@ -908,10 +908,11 @@ final class NativeAppModel {
     var displayMode: DispMode = .live {
         didSet {
             guard displayMode != oldValue else { return }
-            // Clean view defers transient pop-ups (#256): a picker or assist drawer opened in
-            // DISP 1 must not ride into the bare image. Full-screen destinations the operator
-            // navigated to deliberately (Settings, Media) are not pop-ups and stay put.
-            if !MonitorChromePolicy.allowsPopups(in: displayMode),
+            // Entering clean sweeps in-flight pop-ups (#256): a picker or assist drawer opened in
+            // DISP 1 must not ride into the bare image. Controls clean itself mounts still open
+            // theirs — presentation follows the tapped control, never the mode. Full-screen
+            // destinations the operator navigated to (Settings, Media) are not pop-ups and stay put.
+            if MonitorChromePolicy.dismissesPopupsOnEntry(to: displayMode),
                 activePanel?.coversFullScreen == false
             {
                 dismissActivePanel()
@@ -10910,9 +10911,9 @@ final class NativeAppModel {
 
     func showPicker(_ picker: CameraPicker, mode: Int = 0) {
         guard !interfaceLocked else { return }
-        // Clean view stays bare — the controls that open pickers are hidden there anyway, so this
-        // only catches a stray hardware/remote route (#256).
-        guard MonitorChromePolicy.allowsPopups(in: displayMode) else { return }
+        // No DISP-mode gate: every route here is a tapped control, and any control the operator's
+        // configuration mounts — clean's REC options key, an enabled readout — must open its
+        // picker. Entering clean still sweeps in-flight popups (see `displayMode.didSet`).
         // Open only from a clean slate; tapping a setting while a picker is already up blends
         // instead (see CaptureSettingButton / handleBackdropTap).
         guard activePanel == nil else { return }
@@ -11143,7 +11144,6 @@ final class NativeAppModel {
 
     func showAssist(_ tool: MonitorAssistTool) {
         guard !interfaceLocked else { return }
-        guard MonitorChromePolicy.allowsPopups(in: displayMode) else { return }
         if isScopeCapBlocked(tool) {
             scopeCapNotice += 1
             return
