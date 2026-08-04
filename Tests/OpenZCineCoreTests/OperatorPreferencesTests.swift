@@ -1038,11 +1038,12 @@ private func splitEraConfiguration(
             .histogram, mode: .live, context: .playback, preferences: prefs))
 }
 
-@Test func cleanViewDefersPopups() {
-    #expect(MonitorChromePolicy.allowsPopups(in: .live))
-    #expect(!MonitorChromePolicy.allowsPopups(in: .clean))
-    // Command's dashboard tiles open the value pickers, so pop-ups stay allowed there.
-    #expect(MonitorChromePolicy.allowsPopups(in: .command))
+@Test func enteringCleanSweepsInFlightPopups() {
+    #expect(!MonitorChromePolicy.dismissesPopupsOnEntry(to: .live))
+    // The sweep is entry-only: controls clean itself mounts still present their pop-ups.
+    #expect(MonitorChromePolicy.dismissesPopupsOnEntry(to: .clean))
+    // Command's dashboard tiles keep their value pickers; nothing is swept entering it.
+    #expect(!MonitorChromePolicy.dismissesPopupsOnEntry(to: .command))
 }
 
 @Test func commandKeepsTheHeaderStreamUpForLiveTimecode() {

@@ -1806,6 +1806,10 @@ struct MonitorShell: View {
         )
         let feed = map.feed
         let isFill = (persistedAspect == .fill || isVerticalFeed) && !isPhotography
+        // Fill's capture bar is chrome like the landscape strip: the zone is only a layout frame,
+        // the per-DISP Camera Values switch decides the mount — and, through this one binding, the
+        // clearances every key that stacks above the bar derives from it.
+        let captureStrip = model.chromeSectionMounts(.cameraValues) ? map.captureStrip : nil
         // The zone map hands us the feed FRAME; the content aspect-fills within it: over-widen to
         // the source's 16:9 at the frame's height, center via the outer frame, clip to the frame.
         // Fit passes the frame width straight through (16:9 frame == 16:9 content, no crop).
@@ -1877,7 +1881,9 @@ struct MonitorShell: View {
             // scope/false-colour panels, so it duplicates nothing from the suppressed inner
             // overlay above (that one renders no panels; it survives as the rail-collapse tap
             // catcher).
-            if isFill, model.displayMode == .live {
+            // Not live-only: clean mounts it too, where the policy funnel inside renders exactly
+            // the pinned tools — same as the landscape floating scopes (#256's one-rule contract).
+            if isFill, model.displayMode != .command {
                 // No `.clipped()` here (G2): MovablePanel already clamps panels inside its
                 // bounds, so clipping only ever manifests as a sliced panel edge when a panel
                 // straddles the frame boundary (WAVE/PARADE cut mid-panel on device).
@@ -1930,10 +1936,11 @@ struct MonitorShell: View {
             // The core adapter emits a non-nil `controlsGrid` for every fit-aspect pass, including
             // clean mode where the region collapses to zero height — guard on the frame height so
             // clean shows no grid.
-            if let capture = map.captureStrip {
+            if let capture = captureStrip {
                 MonitorCaptureStrip(fitsWidth: false)
                     .environment(model)
                     .liveViewGuideAnchor(.cameraControls)
+                    .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
                     .opacity(model.interfaceLocked ? 0.4 : 1)
                     .frame(width: capture.frame.width, height: capture.frame.height)
                     .offset(x: capture.frame.x, y: capture.frame.y)
@@ -1959,6 +1966,8 @@ struct MonitorShell: View {
                 )
                 .environment(model)
                 .liveViewGuideAnchor(.cameraControls)
+                // A no-op in command, where the tiles are the mode itself, not configurable chrome.
+                .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
                 .padding(.horizontal, 12)
                 .opacity(model.interfaceLocked || model.relayControlSurrendered ? 0.4 : 1)
                 .allowsHitTesting(!model.relayControlSurrendered)
@@ -1973,6 +1982,7 @@ struct MonitorShell: View {
                 MonitorAssistStrip(axis: .horizontal, collapsible: false)
                     .environment(model)
                     .liveViewGuideAnchor(.viewAssist)
+                    .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
                     .opacity(model.interfaceLocked ? 0.4 : 1)
                     .frame(width: assist.frame.width - 24, height: assist.frame.height - 8)
                     .offset(x: assist.frame.x + 12, y: assist.frame.y + 4)
@@ -1986,8 +1996,10 @@ struct MonitorShell: View {
             // Assist rail (fill only): collapsed pill on the feed's bottom-left; expanded spans the
             // feed height. Fit mode uses the horizontal toolbar above instead.
             // `axis: .vertical, collapsible: true` renders the collapse pill.
-            if model.displayMode != .command, isFill {
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+            if model.displayMode != .command, isFill,
+                model.chromeSectionMounts(.assistToolbar)
+            {
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 // The bar no longer overlays the feed, so the expanded rail spans the feed from
                 // a plain margin rather than clearing the info bar's height.
@@ -1999,6 +2011,7 @@ struct MonitorShell: View {
                 )
                 .environment(model)
                 .liveViewGuideAnchor(.viewAssist)
+                .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .frame(
                     width: railExpanded ? MonitorAssistStrip.expandedWidth : 44,
@@ -2024,7 +2037,7 @@ struct MonitorShell: View {
                 model.relayHoldsControl || model.relayAllowsControlRequests
             {
                 let keyHeight: CGFloat = 40
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let laneTop =
                     map.assistStrip?.frame.y
                     ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
@@ -2037,7 +2050,7 @@ struct MonitorShell: View {
                 model.chromeEditorMode == nil
             {
                 let keyHeight: CGFloat = 40
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let laneTop =
                     map.assistStrip?.frame.y
                     ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
@@ -2056,7 +2069,7 @@ struct MonitorShell: View {
                 model.chromeEditorMode == nil
             {
                 let size: CGFloat = 40
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 let x = feed.x + feed.width - size - 10
                 let y = feed.y + feed.height - size - bottomClearance
@@ -2080,7 +2093,7 @@ struct MonitorShell: View {
             // bottom-left: the collapsed assist rail already owns that corner in portrait.
             if model.displayMode != .command, splitComparisonKeyMounts {
                 let size: CGFloat = 40
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 let recenterMounted =
                     model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
