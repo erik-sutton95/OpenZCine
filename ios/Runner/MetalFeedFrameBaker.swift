@@ -139,14 +139,15 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
                 return
             }
 
-            // Crop, do not scale. The pre-scale that used to sit here is what made every Core Image
-            // kernel evaluate at drawable resolution; see `bakeSize`.
+            // Fit, never crop (see `bakeSize`): the bake keeps the source's own aspect, at the
+            // source's own resolution unless the drawable is smaller. In the matched-aspect
+            // common case the scale below is 1 and this is exactly the old crop-free path —
+            // Core Image kernels still evaluate at source resolution.
             let extent = source.extent
             let bakeSize = Self.bakeSize(source: extent.size, drawable: drawableSize)
-            // #115 witness: this crop is a NO-OP when the hosting view was framed at the
-            // source's aspect. If it ever bites more than ~2%, the layout upstream lied about
-            // the aspect and the operator is losing frame edges — one line per signature says
-            // exactly how much and against which drawable.
+            // #115 witness: with fit semantics an aspect disagreement now shows as bars in the
+            // present rather than lost frame edges, but it still means a layout upstream lied
+            // about the aspect — one line per signature says which numbers disagree.
             if extent.height > 0, drawableSize.height > 0 {
                 let sourceAspect = extent.width / extent.height
                 let drawableAspect = drawableSize.width / drawableSize.height
@@ -159,19 +160,23 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
                     lastCropSignature = signature
                     Logger(subsystem: "com.opencapture.openzcine", category: "metal-feed")
                         .warning(
-                            "metal feed cropping \(signature, privacy: .public): source aspect \(String(format: "%.3f", sourceAspect), privacy: .public) vs drawable \(String(format: "%.3f", drawableAspect), privacy: .public)"
+                            "metal feed letterboxing \(signature, privacy: .public): source aspect \(String(format: "%.3f", sourceAspect), privacy: .public) vs drawable \(String(format: "%.3f", drawableAspect), privacy: .public)"
                         )
                 }
             }
             let width = max(1, Int(bakeSize.width.rounded()))
             let height = max(1, Int(bakeSize.height.rounded()))
-            // Centre the visible window on the source and put it at the texture origin, then flip:
-            // Core Image's origin is bottom-left, a Metal texture's is top-left.
-            let cropX = extent.origin.x + (extent.width - CGFloat(width)) / 2
-            let cropY = extent.origin.y + (extent.height - CGFloat(height)) / 2
+            // Normalize the origin, scale to the bake size, then flip: Core Image's origin is
+            // bottom-left, a Metal texture's is top-left.
+            let scaleX = CGFloat(width) / extent.width
+            let scaleY = CGFloat(height) / extent.height
             let flipped =
                 source
-                .transformed(by: CGAffineTransform(translationX: -cropX, y: -cropY))
+                .transformed(
+                    by: CGAffineTransform(
+                        translationX: -extent.origin.x, y: -extent.origin.y)
+                )
+                .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
                 .transformed(by: CGAffineTransform(scaleX: 1, y: -1))
                 .transformed(by: CGAffineTransform(translationX: 0, y: CGFloat(height)))
             let bounds = CGRect(x: 0, y: 0, width: width, height: height)
@@ -235,15 +240,24 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     /// bakes at panel size — rendering more pixels than can be shown would make this slower than the
     /// path it replaces (the demo stills are the case that does this).
     static func bakeSize(source: CGSize, drawable: CGSize) -> CGSize {
+        // The upper bound is Metal's own maximum texture dimension: a wider "source" is a CI
+        // generator's unbounded extent (CGRect.infinite's size is greatestFiniteMagnitude —
+        // FINITE, so `isFinite` alone misses it), not a picture.
         guard source.width.isFinite, source.height.isFinite,
             source.width > 0, source.height > 0,
+            source.width <= 16_384, source.height <= 16_384,
             drawable.width > 0, drawable.height > 0
         else { return drawable }
-        let drawableAspect = drawable.width / drawable.height
-        let cropped =
-            source.width / source.height > drawableAspect
-            ? CGSize(width: source.height * drawableAspect, height: source.height)
-            : CGSize(width: source.width, height: source.width / drawableAspect)
-        return cropped.width > drawable.width ? drawable : cropped
+        // FIT, never crop: the bake keeps the source's OWN aspect, downscale-bounded by the
+        // drawable so an out-resolving source stays as cheap as the crop it replaces. The
+        // present letterboxes the result into the drawable — so a frame/aspect disagreement
+        // anywhere upstream shows as bars, never as lost frame edges (#115: the operator is
+        // judging framing, and the old crop-to-drawable silently ate a DCI-4K signal's sides).
+        let scale = min(drawable.width / source.width, drawable.height / source.height, 1)
+        let fitted = CGSize(width: source.width * scale, height: source.height * scale)
+        // A source so degenerate it fits below a pixel (CGRect.infinite's size is
+        // greatestFiniteMagnitude — FINITE, so the guard above misses it) falls back too.
+        guard fitted.width >= 1, fitted.height >= 1 else { return drawable }
+        return fitted
     }
 }

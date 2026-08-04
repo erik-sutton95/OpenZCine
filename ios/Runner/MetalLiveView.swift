@@ -87,7 +87,9 @@ struct MetalLiveView: UIViewRepresentable {
         view.isPaused = true  // Push model: redraw only when a new frame arrives (setNeedsDisplay).
         view.enableSetNeedsDisplay = true
         view.colorPixelFormat = .bgra8Unorm
-        view.contentMode = .scaleAspectFill
+        // Fit, never fill: a frame/picture aspect mismatch must letterbox, not crop —
+        // the operator loses exactly the frame edges they are checking (#115).
+        view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
         context.coordinator.update(image: image, effects: effects)
         context.coordinator.attach(view: view)
@@ -203,12 +205,35 @@ struct MetalLiveView: UIViewRepresentable {
                         blit.endEncoding()
                     }
                 } else {
-                    // The bake already carries the drawable's aspect, so a full-source-to-full-
-                    // destination scale is uniform — no `scaleTransform` and no letterbox needed.
-                    scaler.encode(
-                        commandBuffer: commandBuffer, sourceTexture: baked,
-                        destinationTexture: target
+                    // The bake carries the SOURCE's aspect (fit, never crop — see `bakeSize`),
+                    // so the present letterboxes: uniform scale, centered, over a cleared
+                    // drawable. When the aspects match this fills the drawable exactly and the
+                    // clear is invisible; when they don't, the operator gets bars instead of
+                    // lost frame edges (#115).
+                    let clearPass = MTLRenderPassDescriptor()
+                    clearPass.colorAttachments[0].texture = target
+                    clearPass.colorAttachments[0].loadAction = .clear
+                    clearPass.colorAttachments[0].storeAction = .store
+                    clearPass.colorAttachments[0].clearColor = MTLClearColor(
+                        red: 0, green: 0, blue: 0, alpha: 1)
+                    commandBuffer.makeRenderCommandEncoder(descriptor: clearPass)?
+                        .endEncoding()
+                    let scale = min(
+                        Double(target.width) / Double(baked.width),
+                        Double(target.height) / Double(baked.height))
+                    var transform = MPSScaleTransform(
+                        scaleX: scale, scaleY: scale,
+                        translateX: (Double(target.width) - Double(baked.width) * scale) / 2,
+                        translateY: (Double(target.height) - Double(baked.height) * scale) / 2
                     )
+                    withUnsafePointer(to: &transform) { pointer in
+                        scaler.scaleTransform = pointer
+                        scaler.encode(
+                            commandBuffer: commandBuffer, sourceTexture: baked,
+                            destinationTexture: target
+                        )
+                        scaler.scaleTransform = nil
+                    }
                 }
                 commandBuffer.present(drawable)
                 commandBuffer.commit()

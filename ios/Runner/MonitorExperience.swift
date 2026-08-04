@@ -672,7 +672,8 @@ private struct DemoProcessedLiveFrameView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
-        view.contentMode = .scaleAspectFill
+        // Fit, never fill: an aspect mismatch letterboxes instead of cropping (#115).
+        view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
         // Match `LiveFrameView`: the 4K still's intrinsic size must not expand this representable
         // beyond SwiftUI's feed frame and turn the outer clip into an accidental digital zoom.
@@ -1199,13 +1200,14 @@ private struct RelayJoinPasscodeEntry: View {
 
 /// Renders the live-view feed through a single long-lived `UIImageView`: the streaming loop swaps
 /// `model.liveFrameImage` ~30×/sec with a display-ready bitmap, and reusing one view keeps
-/// live-view memory flat over long sessions. `.scaleAspectFill` + clipping mirrors `.scaledToFill()`.
+/// live-view memory flat over long sessions. `.scaleAspectFit` + clipping keeps a mismatched picture whole (#115).
 private struct LiveFrameView: UIViewRepresentable {
     let image: UIImage
 
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
-        view.contentMode = .scaleAspectFill
+        // Fit, never fill: an aspect mismatch letterboxes instead of cropping (#115).
+        view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
         // Let SwiftUI's frame drive the size rather than the image's intrinsic size.
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)

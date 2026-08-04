@@ -1314,29 +1314,25 @@ extension RunnerTests {
 
     // MARK: - Live-feed bake resolution
 
-    /// A 16:9 feed on a 2.17:1 panel keeps every source column and crops rows — at SOURCE
-    /// resolution, which is the whole point: the drawable-sized bake it replaced evaluated the
-    /// Core Image graph over 6× as many pixels.
-    func testFeedBakeKeepsSourceResolutionAndCropsToDrawableAspect() {
+    /// A 16:9 feed on a 2.17:1 panel bakes the WHOLE source at source resolution: fit, never
+    /// crop (#115) — the present letterboxes, so no source pixel is ever discarded here.
+    func testFeedBakeKeepsSourceResolutionAndItsOwnAspect() {
         let size = MetalFeedFrameBaker.bakeSize(
             source: CGSize(width: 1_024, height: 576),
             drawable: CGSize(width: 2_868, height: 1_320))
 
-        XCTAssertEqual(size.width, 1_024, accuracy: 0.5)
-        XCTAssertEqual(size.height, 1_024 / (2_868.0 / 1_320.0), accuracy: 0.5)
-        // Aspect must match the drawable exactly, or the uniform scale on present stretches.
-        XCTAssertEqual(size.width / size.height, 2_868.0 / 1_320.0, accuracy: 0.001)
+        XCTAssertEqual(size, CGSize(width: 1_024, height: 576))
     }
 
-    /// A taller-than-panel source crops columns instead, and still matches the drawable's aspect.
-    func testFeedBakeCropsColumnsWhenSourceIsWiderThanTheDrawable() {
+    /// A source wider than the drawable downscales uniformly — the SOURCE's aspect survives,
+    /// because the present letterboxes rather than the bake cropping (#115).
+    func testFeedBakeDownscalesPreservingTheSourceAspect() {
         let size = MetalFeedFrameBaker.bakeSize(
             source: CGSize(width: 1_024, height: 256),
             drawable: CGSize(width: 800, height: 600))
 
-        XCTAssertEqual(size.height, 256, accuracy: 0.5)
-        XCTAssertEqual(size.width / size.height, 800.0 / 600.0, accuracy: 0.001)
-        XCTAssertLessThan(size.width, 1_024)
+        XCTAssertEqual(size.width, 800, accuracy: 0.5)
+        XCTAssertEqual(size.width / size.height, 1_024.0 / 256.0, accuracy: 0.001)
     }
 
     /// Demo stills out-resolve the panel. Baking at their size would render pixels that can never
