@@ -1401,7 +1401,8 @@ final class NativeAppModel {
                 MonitorRelayFrameMetadata.Sound(
                     peakLeft: $0.peakLeft, peakRight: $0.peakRight,
                     currentLeft: $0.currentLeft, currentRight: $0.currentRight)
-            })
+            },
+            rotation: Int(frame.rotation.rawValue))
     }
 
     /// Serves one picture to the viewers, rate-capped BEFORE the encode: the encode is the
@@ -1801,6 +1802,12 @@ final class NativeAppModel {
     /// The readings ride with the frame whichever codec carried it.
     private func applyRelayFrameReadings(_ metadata: MonitorRelayFrameMetadata) {
         if let timecode = metadata.timecode { liveTimecode = timecode }
+        // The broadcaster's body orientation rides every frame; a watcher rotates the picture
+        // upright exactly like the broadcaster does. Absent (older host) means landscape.
+        let rotation =
+            metadata.rotation
+            .flatMap { PTPLiveViewRotation(rawValue: UInt8(clamping: $0)) } ?? .landscape
+        if liveFeedRotation != rotation { liveFeedRotation = rotation }
         liveViewFocus = metadata.focus.map { focus in
             PTPLiveViewFocusInfo(
                 coordinateWidth: focus.coordinateWidth,
@@ -6578,6 +6585,11 @@ final class NativeAppModel {
     /// first-frame latency and tighten if it lands well under this.]
     private static let firstLiveViewFrameDeadline: Duration = .seconds(10)
 
+    /// How long a full-screen cover persists before the loop ends live view on the body. Short
+    /// covers (settings visits) keep the stream warm — restart churn costs more than seconds of
+    /// encode heat; the heat case this exists for is a cover measured in minutes.
+    private static let coverEndsLiveViewAfterSeconds: TimeInterval = 30
+
     /// One bounded frame fetch, wrapped so every streaming call site uses a consistent deadline.
     private func liveFrameTask(
         _ session: NativeCameraSession,
@@ -6643,6 +6655,9 @@ final class NativeAppModel {
             connection = .connected
             var pausedForCommand = false
             var liveViewSuspended = false
+            // When the current full-screen cover began; nil while the feed is visible. Only a
+            // cover older than `coverEndsLiveViewAfterSeconds` ends live view on the body.
+            var coverStartedAt: Date?
             // Non-nil while a repeating-frame stall is being HELD as body-busy (#297) instead
             // of restarted; cleared when fresh payloads resume or the hold escalates.
             var bodyBusyHoldStart: Date?
@@ -6652,16 +6667,28 @@ final class NativeAppModel {
             nextFrameTask = liveFrameTask(session, deadline: liveViewFrameDeadline(for: session))
             while !Task.isCancelled {
                 if shouldPauseLiveFeed {
-                    // Feed hidden behind a full-screen cover: stop pulling frames AND end live
-                    // view on the camera — sensor readout + JPEG encode is the dominant
-                    // camera-heat source. Property polls and queued writes keep running on this
-                    // idle cadence (cheap, separate transactions).
+                    // Feed hidden behind a full-screen cover. A SHORT cover (a settings visit)
+                    // keeps the stream up and idles it with a slow keep-warm pull — ending live
+                    // view here meant every settings exit paid a full StartLiveView restart,
+                    // which the body regularly refuses or slow-walks straight into the recovery
+                    // arc (the field "RECOV on every settings exit", still reproducing after
+                    // deadline fixes). Only a cover that PERSISTS ends live view: sensor
+                    // readout + JPEG encode heat matters over minutes, not seconds.
                     pausedForCommand = true
                     nextFrameTask.cancel()
-                    if !liveViewSuspended {
+                    if coverStartedAt == nil { coverStartedAt = Date() }
+                    if !liveViewSuspended,
+                        Date().timeIntervalSince(coverStartedAt ?? Date())
+                            >= Self.coverEndsLiveViewAfterSeconds
+                    {
                         liveViewSuspended = true
                         await session.stopLiveView()
                         lastAppliedStreamImageSize = nil
+                    }
+                    if !liveViewSuspended {
+                        // Keep-warm: one discarded frame per idle tick holds the body's live
+                        // view open, so resume is instant and restart-free.
+                        _ = try? await session.liveViewFrame(deadline: .seconds(2))
                     }
                     // Tell the watch so it shows the paused placeholder over the last frame instead
                     // of a stalled preview.
@@ -6670,6 +6697,7 @@ final class NativeAppModel {
                     try? await Task.sleep(for: .milliseconds(250))
                     continue
                 }
+                coverStartedAt = nil
                 if pausedForCommand {
                     pausedForCommand = false
                     if liveViewSuspended {

@@ -233,10 +233,19 @@ public enum MonitorFeedLayout {
         if viewportHeight > viewportWidth {
             let width = viewportWidth
             let height = width / aspectRatio
-            // Vertical (rotated) feeds are taller than the tall viewport itself: bind to the
-            // height and pillarbox-centre. Gated to aspect < 1 so every landscape-or-wider
-            // aspect keeps its historical full-width portrait frame untouched.
+            // Vertical (rotated) feeds are taller than the tall viewport itself. Gated to
+            // aspect < 1 so every landscape-or-wider aspect keeps its historical full-width
+            // portrait frame untouched.
             if aspectRatio < 1, height > viewportHeight + 0.5 {
+                // A SMALL overflow (≤15%) binds to the WIDTH and centre-crops the sliver: a
+                // vertical phone filming vertical wants edge-to-edge, and the ~13 pt
+                // pillarbox this produced read as a rendering bug in the field. The mount
+                // clips the overflow. A LARGE overflow still pillarboxes — cropping real
+                // framing is worse than bars.
+                if height <= viewportHeight * 1.15 {
+                    return MonitorFeedFrame(
+                        x: 0, y: (viewportHeight - height) / 2, width: width, height: height)
+                }
                 let boundWidth = viewportHeight * aspectRatio
                 return MonitorFeedFrame(
                     x: (viewportWidth - boundWidth) / 2, y: 0,

@@ -293,7 +293,7 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
     public init(
         timecode: Timecode?, isRecording: Bool, focus: Focus?, levelRoll: Double?,
         levelPitch: Double?, sound: Sound?, codec: Int = MonitorRelayProtocol.FrameCodec.jpeg,
-        isKeyframe: Bool = true, parameterSets: [Data]? = nil
+        isKeyframe: Bool = true, parameterSets: [Data]? = nil, rotation: Int? = nil
     ) {
         self.timecode = timecode
         self.isRecording = isRecording
@@ -304,6 +304,7 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
         self.codec = codec
         self.isKeyframe = isKeyframe
         self.parameterSets = parameterSets
+        self.rotation = rotation
     }
 
     public let timecode: Timecode?
@@ -320,13 +321,17 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
     /// HEVC parameter sets (VPS/SPS/PPS), present on keyframes so a joiner can build a decoder
     /// from the stream alone — there is no side channel to fetch them from.
     public let parameterSets: [Data]?
+    /// The body's own orientation for this frame (`PTPLiveViewRotation` raw value), so a
+    /// watcher rotates the picture upright exactly like the broadcaster. Optional on the wire —
+    /// absent from older hosts means landscape, the historical behavior.
+    public let rotation: Int?
 
     /// Returns a copy carrying the encoder's output description.
     public func carryingVideo(codec: Int, isKeyframe: Bool, parameterSets: [Data]?) -> Self {
         Self(
             timecode: timecode, isRecording: isRecording, focus: focus, levelRoll: levelRoll,
             levelPitch: levelPitch, sound: sound, codec: codec, isKeyframe: isKeyframe,
-            parameterSets: parameterSets)
+            parameterSets: parameterSets, rotation: rotation)
     }
 }
 

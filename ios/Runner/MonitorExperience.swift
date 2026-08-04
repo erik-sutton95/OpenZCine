@@ -453,12 +453,29 @@ struct LiveFeedModule: View {
                     height: CGFloat(fixedContentHeight ?? Double(proxy.size.height)),
                     alignment: .topLeading
                 )
+                // Portrait's fixed band clips the small-overflow vertical fill (core layout's
+                // width-bound frame) instead of letting it paint over the chrome above/below.
+                // Landscape full-bleed must stay unclipped — its safe-area escape depends on it.
+                .modifier(ClipToBandWhenFixed(active: fixedContentHeight != nil))
                 .offset(x: CGFloat(canvasOffsetX))
             }
         }
         // The safe-area escape belongs to the landscape full-bleed mount only; with a fixed
         // content height (portrait), it would re-expand the proposal and shift the box up.
         .modifier(FullBleedWhenMeasured(active: fixedContentHeight == nil))
+    }
+
+    /// Clips the feed container to its band only when portrait hands it a fixed height; the
+    /// landscape full-bleed mount keeps its unbounded overflow (safe-area escape).
+    private struct ClipToBandWhenFixed: ViewModifier {
+        let active: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if active {
+                content.clipped()
+            } else {
+                content
+            }
+        }
     }
 
     /// Lays the feed stack out in the camera's own frame (width/height swapped when the body is

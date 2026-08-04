@@ -33,38 +33,53 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         usbBrowser.start()
         let usbCameras = usbBrowser.attachedCameras()
 
-        // Unicast presence rides discovery, concurrently and without blocking the return: it
-        // finds broadcasts and in-use beacons that filtered-multicast networks hide from
-        // Bonjour, and the model compares the two to warn the operator. Rate-limited to one
-        // full-subnet sweep per 30 s — discovery passes run every few seconds, and 252 SYNs
-        // (plus the router's ARP for every absent host) per pass is airtime taken from the
-        // very camera link this feature protects. The model prunes hits at 90 s, so a 30 s
-        // refresh keeps live rows live with three chances before expiry.
+        // Unicast presence runs FIRST and is AWAITED before anything probes: on a network where
+        // Bonjour never delivers (filtered multicast, odd interface topology), the presence
+        // answers are the ONLY thing that names the served camera — and a fresh device with no
+        // shield running its probe passes against that camera is exactly the drop mechanism
+        // (field report: new device on the network knocks the broadcaster's feed over, empty
+        // excluded=[] in its probe logs). Concurrent-and-non-blocking was tried for snappiness;
+        // it raced the shield against the probes it exists to stop. Rate-limited to one
+        // full-subnet sweep per 30 s; between sweeps the model's ledger (90 s linger) keeps
+        // the exclusion warm.
+        var presenceShieldedHosts: Set<String> = []
         if Self.claimPresenceSweepSlot() {
-            let presenceTask = Task { () -> [String: RelayPresence] in
-                let localAddresses = nativeLocalIPv4Interfaces()
-                    .filter {
-                        CameraDiscovery.isSupportedScanInterface(
-                            name: $0.name, address: $0.address)
-                    }
-                    .map(\.address)
-                let split = CameraDiscovery.prioritizedScanHosts(
-                    priorityHosts: priorityHosts, localAddresses: localAddresses)
-                return await Self.relayPresenceSweep(hosts: split.priority + split.remaining)
-            }
-            Task { @MainActor in
-                let hits = await presenceTask.value
-                let listing =
-                    hits
-                    .map { host, presence in
-                        "\(host)(\(presence.n) w=\(presence.w) ch=\(presence.ch ?? "nil")"
-                            + " p=\(presence.p.map(String.init) ?? "nil"))"
-                    }
-                    .joined(separator: " ")
+            let localAddresses = nativeLocalIPv4Interfaces()
+                .filter {
+                    CameraDiscovery.isSupportedScanInterface(
+                        name: $0.name, address: $0.address)
+                }
+                .map(\.address)
+            let split = CameraDiscovery.prioritizedScanHosts(
+                priorityHosts: priorityHosts, localAddresses: localAddresses)
+            let hits = await Self.relayPresenceSweep(hosts: split.priority + split.remaining)
+            let listing =
+                hits
+                .map { host, presence in
+                    "\(host)(\(presence.n) w=\(presence.w) ch=\(presence.ch ?? "nil")"
+                        + " p=\(presence.p.map(String.init) ?? "nil"))"
+                }
+                .joined(separator: " ")
+            await MainActor.run {
                 logConnection("presence sweep hits=\(hits.count) [\(listing)]")
                 if !hits.isEmpty { onRelayPresences(hits) }
             }
+            // An answering host is an OpenZCine device, never a camera — skip probing it — and
+            // every camera it names is shielded even before the model's ledger round-trips.
+            for (host, presence) in hits {
+                presenceShieldedHosts.insert(host)
+                if let normalized = PTPIPPairedHosts.normalizedHost(host) {
+                    presenceShieldedHosts.insert(normalized)
+                }
+                if let served = presence.ch, !served.isEmpty {
+                    presenceShieldedHosts.insert(served)
+                    if let normalized = PTPIPPairedHosts.normalizedHost(served) {
+                        presenceShieldedHosts.insert(normalized)
+                    }
+                }
+            }
         }
+        let shielded = presenceShieldedHosts
 
         await status("Searching for cameras on Wi‑Fi and USB‑C…")
         // Bonjour FIRST, and the trusted-host probe only covers what Bonjour did not report.
@@ -83,7 +98,7 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             : await probeTrustedHosts(
                 guid: guid,
                 priorityHosts: priorityHosts,
-                excludedHosts: { excludedHosts().union(bonjourHosts) })
+                excludedHosts: { excludedHosts().union(bonjourHosts).union(shielded) })
         let quickResults = CameraDiscovery.dedupeAndSort(usbCameras + bonjour + priority)
         if !quickResults.isEmpty {
             return quickResults
@@ -94,7 +109,8 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
 
         await status("Still searching your network for cameras…")
         let probeResults = try await subnetProbe(
-            guid: guid, priorityHosts: priorityHosts, excludedHosts: excludedHosts,
+            guid: guid, priorityHosts: priorityHosts,
+            excludedHosts: { excludedHosts().union(shielded) },
             status: status)
         return CameraDiscovery.dedupeAndSort(usbBrowser.attachedCameras() + probeResults)
     }
