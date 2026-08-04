@@ -1818,7 +1818,7 @@ final class NativeAppModel {
 
     /// The readings ride with the frame whichever codec carried it.
     private func applyRelayFrameReadings(_ metadata: MonitorRelayFrameMetadata) {
-        if let timecode = metadata.timecode { liveTimecode = timecode }
+        if let timecode = metadata.timecode { applyLiveViewHeaderTimecode(timecode) }
         // The broadcaster's body orientation rides every frame; a watcher rotates the picture
         // upright exactly like the broadcaster does. Absent (older host) means landscape.
         let rotation =
@@ -1875,6 +1875,12 @@ final class NativeAppModel {
     // Per-frame telemetry (timecode, FPS) is held separately from `cameraState` so updating it
     // never invalidates every view observing the heavy HUD struct — only the readouts re-render.
     var liveTimecode = CameraDisplayState.preview.timecode
+    /// Whether the body is running timecode at all — the header's own status byte, held apart from
+    /// `liveTimecode` on purpose. Chrome that only needs "is there a timecode" must not observe the
+    /// counter: that ticks every frame and would re-render the whole top bar at feed rate. Bodies
+    /// without timecode hardware pin the status byte to zero forever, which is exactly the signal
+    /// that hides the readout rather than parking a frozen 00:00:00:00 on set.
+    var cameraReportsTimecode = CameraDisplayState.preview.timecode.on
     var liveFPS = CameraDisplayState.preview.liveFPS
     /// Top-bar signal indicator level (0–4 bars), derived from the continuously-scored
     /// `linkHealth` transport health with hysteresis (`LinkSignalBars`) so it reads steadily.
@@ -2050,7 +2056,10 @@ final class NativeAppModel {
         case .railMedia:
             return available.mediaBrowser
         case .timecodeReadout:
-            return available.cameraTimecode
+            // Photography rents this slot for the SHOTS counter, which has nothing to do with
+            // timecode — gate that on the camera link, not on the body's timecode status.
+            if isPhotographyMode { return available.cameraControls }
+            return available.cameraTimecode && cameraReportsTimecode
         case .focusBox:
             return available.focusBoxes
         case .statusBar, .assistToolbar, .lockButton, .fpsReadout, .railSettings, .railDisp,
@@ -6190,6 +6199,7 @@ final class NativeAppModel {
         liveViewFocus = nil
         liveAudioLevels = .silent
         liveTimecode = Timecode(on: false, hour: 0, minute: 0, second: 0, frame: 0)
+        cameraReportsTimecode = false
         cameraLevelRoll = nil
         cameraLevelPitch = nil
         liveFeedRotation = .landscape
@@ -7735,6 +7745,7 @@ final class NativeAppModel {
     /// Constant camera-header TC sync — every live-view frame updates the hero readout.
     private func applyLiveViewHeaderTimecode(_ timecode: Timecode) {
         if timecode != liveTimecode { liveTimecode = timecode }
+        if timecode.on != cameraReportsTimecode { cameraReportsTimecode = timecode.on }
     }
 
     /// Full live-order property + storage + descriptor burst (Android bootstrap parity).

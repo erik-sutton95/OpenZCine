@@ -83,7 +83,9 @@ struct CommandMonitor: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 11) {
                         RecordChip(state: model.cameraState.recordState)
-                        CommandTimecodeReadout()
+                        // Bodies that run no timecode head the dashboard with the record chip
+                        // alone — a frozen 00:00:00:00 hero is worse than none.
+                        if model.cameraReportsTimecode { CommandTimecodeReadout() }
                         Spacer(minLength: 0)
                     }
 

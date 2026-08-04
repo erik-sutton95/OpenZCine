@@ -892,7 +892,11 @@ struct SettingsCrushClipSegmented: View {
                         .foregroundStyle(active ? LiveDesign.text : LiveDesign.muted)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
-                        .frame(minHeight: 34)
+                        // Segment labels are single glyphs, so the row's intrinsic width collapsed
+                        // to about a finger's worth for all five stops — and the wide card form
+                        // shrink-wraps to intrinsic width. The floor is what makes each stop
+                        // tappable.
+                        .frame(minWidth: 46, minHeight: 34)
                         .background(
                             active ? LiveDesign.surface : Color.clear,
                             in: RoundedRectangle(

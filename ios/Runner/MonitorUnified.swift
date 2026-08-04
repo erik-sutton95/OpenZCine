@@ -166,7 +166,11 @@ struct MonitorInfoBar: View {
                     + Text(frames).foregroundStyle(LiveDesign.accent))
                     .font(.system(size: 20, weight: .medium, design: .monospaced))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    // Timecode is the one readout that must survive a squeezed deck intact — on
+                    // set a truncated TC is worse than no TC. It takes its full width first and
+                    // the softer cells beside it (codec, media, resolution) give way instead.
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
             }
         }
 
@@ -328,6 +332,8 @@ struct MonitorInfoBar: View {
                 .foregroundStyle(LiveDesign.accent))
                 .font(.system(size: 15, weight: .regular, design: .monospaced))
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
         }
     }
 }
@@ -1954,8 +1960,11 @@ struct MonitorShell: View {
                 // and shifts the tiles down by it; fit-mode live tiles carry no band. The timecode
                 // isn't lock-dimmed (live status, like the top bar); only the tiles dim.
                 let isCommand = model.displayMode == .command
-                let tcBand: CGFloat = isCommand ? 80 : 0
-                if isCommand {
+                // A body that runs no timecode gets no hero band — the grid takes the space back
+                // rather than heading the dashboard with a frozen 00:00:00:00.
+                let showsHeroTimecode = isCommand && model.cameraReportsTimecode
+                let tcBand: CGFloat = showsHeroTimecode ? 80 : 0
+                if showsHeroTimecode {
                     PortraitCommandTimecode()
                         .environment(model)
                         .padding(.horizontal, 12)

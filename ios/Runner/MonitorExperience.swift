@@ -1415,27 +1415,7 @@ struct BatteryRailModule: View {
         }
     }
 
-    /// The combined battery gauges (Dynamic-Island rails): two bare rows above the island,
-    /// each a device icon beside a battery-shaped outline with the number inside — narrow
-    /// enough to sit inside the rail lane without touching the feed.
-    private var batteryPill: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            BatteryIndicator(
-                percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: "iphone",
-                isCamera: false,
-                isCharging: model.phoneBatteryCharging,
-                layout: .pillRow
-            )
-            BatteryIndicator(
-                percent: model.cameraState.cameraBatteryPercent,
-                deviceSystemName: "camera",
-                isCamera: true,
-                isCharging: model.cameraBatteryCharging,
-                layout: .pillRow
-            )
-        }
-    }
+    private var batteryPill: some View { BatteryGaugeStack() }
 
     private func phoneBatteryIndicator(compact: Bool) -> some View {
         BatteryIndicator(
@@ -1457,30 +1437,40 @@ struct BatteryRailModule: View {
     }
 }
 
-/// Inline phone + camera battery row for width-constrained (4:3-ish iPad) landscape layouts,
-/// mounted beside the lock button at the zone map's `.batteryInline` cluster frame. Reuses the
-/// portrait top bar's single-row `BatteryIndicator` presentation.
-struct BatteryInlineCluster: View {
+/// The combined battery gauges (Dynamic-Island rails, and the iPad's inline cluster): two bare
+/// rows, each a device icon beside a battery-shaped outline with the number inside — narrow
+/// enough to sit inside the rail lane without touching the feed.
+struct BatteryGaugeStack: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 14) {
+        VStack(alignment: .leading, spacing: 5) {
             BatteryIndicator(
                 percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: "iphone",
+                deviceSystemName: deviceSymbol,
                 isCamera: false,
                 isCharging: model.phoneBatteryCharging,
-                layout: .inline
+                layout: .pillRow
             )
             BatteryIndicator(
                 percent: model.cameraState.cameraBatteryPercent,
                 deviceSystemName: "camera",
                 isCamera: true,
                 isCharging: model.cameraBatteryCharging,
-                layout: .inline
+                layout: .pillRow
             )
         }
     }
+
+    private var deviceSymbol: String {
+        UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+    }
+}
+
+/// Inline phone + camera battery cluster for width-constrained (4:3-ish iPad) landscape layouts,
+/// mounted beside the lock button at the zone map's `.batteryInline` cluster frame.
+struct BatteryInlineCluster: View {
+    var body: some View { BatteryGaugeStack() }
 }
 
 /// A single tappable exposure readout (label + value) that opens its picker above the capture bar.

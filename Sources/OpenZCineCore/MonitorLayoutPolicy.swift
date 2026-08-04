@@ -892,9 +892,13 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// (4:3-ish iPad) landscape layouts.
     public static let inlineLeadingGap = 12.0
 
-    /// Nominal frame width for the inline battery cluster (two single-row indicators). The shell's
+    /// Nominal frame width for the inline battery cluster (the two stacked gauge rows). The shell's
     /// content hugs the frame's leading edge, so slack here never shifts the indicators.
-    public static let inlineClusterWidth = 190.0
+    ///
+    /// The stacked gauges are a third the width of the side-by-side row they replaced, and every
+    /// point saved here is a point the top info bar gets back: this cluster is what the deck insets
+    /// past, and the deck is where the timecode lives.
+    public static let inlineClusterWidth = 52.0
 
     // Indicator centers.
     public let phoneCenterX: Double

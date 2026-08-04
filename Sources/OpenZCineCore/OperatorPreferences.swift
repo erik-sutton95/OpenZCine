@@ -1594,7 +1594,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
 
         public init(
             waveformScale: Double = defaultScale,
-            waveformMode: WaveformMode = .luma,
+            waveformMode: WaveformMode = .rgb,
             waveformGuides: GuideLines = GuideLines(),
             waveformBrightness: Int = defaultBrightness,
             paradeScale: Double = defaultScale,
@@ -1689,7 +1689,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             waveformScale = Self.clampedScale(
                 try c.decodeIfPresent(Double.self, forKey: .waveformScale) ?? Self.defaultScale)
-            waveformMode = try c.decodeIfPresent(WaveformMode.self, forKey: .waveformMode) ?? .luma
+            waveformMode = try c.decodeIfPresent(WaveformMode.self, forKey: .waveformMode) ?? .rgb
             waveformGuides =
                 try c.decodeIfPresent(GuideLines.self, forKey: .waveformGuides) ?? GuideLines()
             let brightnessCalibrationVersion = try c.decodeIfPresent(
