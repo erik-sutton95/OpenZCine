@@ -1,6 +1,7 @@
 import CoreImage
 @preconcurrency import Metal
 import UIKit
+import os
 
 /// Bakes monitor effects into a reusable Metal texture **off the main thread** for `MetalLiveView`.
 ///
@@ -23,6 +24,8 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     private let stateLock = NSLock()
     private var bakedState = BakedState()
     private var pendingRequest: BakeRequest?
+    /// Last aspect-mismatch witness logged (#115) — one line per source→drawable signature.
+    private var lastCropSignature: String?
     private var pendingOnComplete: (@Sendable () -> Void)?
     private var workerBusy = false
     private let workingColorSpace =
@@ -140,6 +143,26 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
             // kernel evaluate at drawable resolution; see `bakeSize`.
             let extent = source.extent
             let bakeSize = Self.bakeSize(source: extent.size, drawable: drawableSize)
+            // #115 witness: this crop is a NO-OP when the hosting view was framed at the
+            // source's aspect. If it ever bites more than ~2%, the layout upstream lied about
+            // the aspect and the operator is losing frame edges — one line per signature says
+            // exactly how much and against which drawable.
+            if extent.height > 0, drawableSize.height > 0 {
+                let sourceAspect = extent.width / extent.height
+                let drawableAspect = drawableSize.width / drawableSize.height
+                let signature =
+                    "\(Int(extent.width))x\(Int(extent.height))->"
+                    + "\(Int(drawableSize.width))x\(Int(drawableSize.height))"
+                if abs(sourceAspect / drawableAspect - 1) > 0.02,
+                    signature != lastCropSignature
+                {
+                    lastCropSignature = signature
+                    Logger(subsystem: "com.opencapture.openzcine", category: "metal-feed")
+                        .warning(
+                            "metal feed cropping \(signature, privacy: .public): source aspect \(String(format: "%.3f", sourceAspect), privacy: .public) vs drawable \(String(format: "%.3f", drawableAspect), privacy: .public)"
+                        )
+                }
+            }
             let width = max(1, Int(bakeSize.width.rounded()))
             let height = max(1, Int(bakeSize.height.rounded()))
             // Centre the visible window on the source and put it at the texture origin, then flip:

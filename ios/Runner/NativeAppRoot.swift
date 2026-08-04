@@ -937,6 +937,8 @@ final class NativeAppModel {
     var videoSource: VideoSourceKind = .cameraLiveView
     /// What the HDMI capture path is doing. Only meaningful while it is the active source.
     var hdmiCaptureState: UVCVideoSourceState = .waitingForDevice
+    /// Last HDMI frame size logged by `presentHDMIFrame` — one witness line per change (#115).
+    @ObservationIgnored private var lastLoggedHDMIFrameSize: CGSize?
     /// The live capture session. Non-nil only while `videoSource == .hdmiCapture`.
     @ObservationIgnored private var uvcSource: UVCVideoSource?
     /// Frame-rate sampler for the capture path, mirroring the camera stream's `liveFPS` readout.
@@ -6064,6 +6066,17 @@ final class NativeAppModel {
         guard videoSource == .hdmiCapture else { return }
         guard let display = await displayReadyLiveFrame(from: image) else { return }
         guard videoSource == .hdmiCapture else { return }
+        // One line per size change: the #115 crop hunt. Every SwiftUI link reads
+        // aspect-correct statically, so the witness is which size actually arrives here
+        // versus what the capture readout claims.
+        if image.size != lastLoggedHDMIFrameSize {
+            lastLoggedHDMIFrameSize = image.size
+            let w = Int(image.size.width * image.scale)
+            let h = Int(image.size.height * image.scale)
+            logConnection(
+                "hdmi frame \(w)x\(h) aspect=\(String(format: "%.3f", Double(w) / Double(max(1, h))))"
+            )
+        }
         hdmiFrameRate.recordFrame(at: CACurrentMediaTime())
         measuredLiveViewFPS = hdmiFrameRate.displayFPS
         let label = hdmiFrameRate.formatted
