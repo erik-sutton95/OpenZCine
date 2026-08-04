@@ -684,7 +684,7 @@ struct CleanViewPinStrip: View {
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], spacing: 7) {
-            ForEach(MonitorAssistTool.allCases) { tool in
+            ForEach(MonitorAssistTool.activeCases) { tool in
                 DisplayToggleItem(
                     title: tool.displaySettingsTitle,
                     isOn: model.preferences.cleanViewPinnedTools.contains(tool)

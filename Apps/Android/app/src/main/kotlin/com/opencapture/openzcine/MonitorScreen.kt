@@ -2089,6 +2089,9 @@ internal fun MonitorScreen(
         }
         val focusResetVisible =
             focusResetAvailable(feedFocus, focusPointLocked) &&
+                // A watcher has no focus-box source to recenter (iOS `.focusBox` mount rule):
+                // the relayed session reads Connected, so the availability gate must lead.
+                availability.hasSource(ChromeSection.FOCUS_BOX) &&
                 sessionState is CameraSessionState.Connected &&
                 !locked &&
                 !mediaOwnsCommandChannel &&

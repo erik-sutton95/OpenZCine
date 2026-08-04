@@ -31,6 +31,15 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
 
     public var id: String { rawValue }
 
+    /// Retired from every operator-facing surface; the case survives only so stored payloads
+    /// decode. Magnification became direct manipulation (pinch the feed) — a toolbar/settings
+    /// row for it is a control for a tool that no longer exists.
+    public var isRetired: Bool { self == .magnification }
+
+    /// The tool set UI and defaults build from — `allCases` minus retired tools. Decode paths
+    /// filter through this too, so a blob persisted before a retirement stops resurfacing it.
+    public static var activeCases: [MonitorAssistTool] { allCases.filter { !$0.isRetired } }
+
     /// Whether long-pressing the toolbar button opens a quick-settings popup. Tap still toggles the
     /// tool on/off. Framing aids and LUT carry richer pickers; analysis tools expose compact
     /// settings (scale, thresholds, scope modes, …) without duplicating the full settings tab.
@@ -824,7 +833,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         dispOrder: [.live, .clean, .command],
         enabledDispModes: Set(DispMode.allCases),
         displayChrome: DisplayChromeVisibility(),
-        assistToolbarOrder: MonitorAssistTool.allCases,
+        assistToolbarOrder: MonitorAssistTool.activeCases,
         exposureBarVisibleControls: Set(MonitorAssistTool.exposureBarTools),
         framingBarVisibleControls: Set(MonitorAssistTool.framingBarTools),
         liveViewVisibleAssistTools: [],
@@ -902,13 +911,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         from container: KeyedDecodingContainer<K>, forKey key: K
     ) throws -> [MonitorAssistTool] {
         let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.allCases)
+        let valid = Set(MonitorAssistTool.activeCases)
         let decoded = raw.compactMap(MonitorAssistTool.init(rawValue:)).filter {
             valid.contains($0)
         }
         // Tools introduced after the order was first persisted append at the end — without
         // this, a saved order simply never shows a new tool.
-        return decoded + MonitorAssistTool.allCases.filter { !decoded.contains($0) }
+        return decoded + MonitorAssistTool.activeCases.filter { !decoded.contains($0) }
     }
 
     /// Same as ``decodeAssistToolArray`` but tolerates an absent key (returns `nil` instead of
@@ -918,7 +927,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     ) throws -> [MonitorAssistTool]? {
         guard container.contains(key) else { return nil }
         let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.allCases)
+        let valid = Set(MonitorAssistTool.activeCases)
         return raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) }
     }
 
@@ -937,7 +946,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     ) throws -> Set<MonitorAssistTool>? {
         guard container.contains(key) else { return nil }
         let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.allCases)
+        let valid = Set(MonitorAssistTool.activeCases)
         return Set(raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) })
     }
 
@@ -989,7 +998,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// (present in the order, absent from the visible set) stay hidden.
     public mutating func reconcileAssistTools() {
         let present = Set(assistToolbarOrder)
-        for (index, tool) in MonitorAssistTool.allCases.enumerated() where !present.contains(tool) {
+        for (index, tool) in MonitorAssistTool.activeCases.enumerated()
+        where !present.contains(tool) {
             assistToolbarOrder.insert(tool, at: min(index, assistToolbarOrder.count))
             if MonitorAssistTool.exposureBarTools.contains(tool) {
                 exposureBarVisibleControls.insert(tool)
@@ -1950,13 +1960,15 @@ public enum DispOrder {
 /// Pure helpers for the persisted assist-toolbar order.
 public enum AssistToolbarOrder {
     /// Every tool in its canonical position.
-    public static let `default` = MonitorAssistTool.allCases
+    public static let `default` = MonitorAssistTool.activeCases
 
     /// Reconciles a persisted order with the current tool set (same rules as ``CommandGridOrder``).
+    /// Retired tools drop out here too, so an order persisted before a retirement stops
+    /// resurfacing the dead tool's row.
     public static func reconciled(_ order: [MonitorAssistTool]) -> [MonitorAssistTool] {
         var seen = Set<MonitorAssistTool>()
-        var result = order.filter { seen.insert($0).inserted }
-        for tool in MonitorAssistTool.allCases where !seen.contains(tool) {
+        var result = order.filter { !$0.isRetired && seen.insert($0).inserted }
+        for tool in MonitorAssistTool.activeCases where !seen.contains(tool) {
             result.append(tool)
             seen.insert(tool)
         }

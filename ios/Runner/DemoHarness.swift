@@ -330,6 +330,15 @@ enum DemoHarness {
                         model.captureStill()
                     }
                 }
+                if env["ZC_DEMO_WATCHER"] == "1" {
+                    // Watcher-chrome screenshot hook: the demo feed keeps pumping frames, but the
+                    // chrome derives from availability — `.relay` source WITHOUT camera control
+                    // (the demo session normally counts as control, so suppress it) unmounts
+                    // record/capture and arms the freed-band zone refinement, exactly as on a
+                    // real joined watcher.
+                    model.videoSource = .relay
+                    model.demoSuppressesCameraControl = true
+                }
                 if env["ZC_DEMO_RELAY_HOST"] == "1" {
                     // Verification affordance: broadcast the demo still through the real relay
                     // path so a second simulator can join and prove the whole chain. Demo-only, so

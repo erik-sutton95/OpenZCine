@@ -649,3 +649,56 @@ private enum PadMiniViewport {
     #expect(abs(map.systemSlots.settings.midY - (rail.settingsCenterY + ry)) < 0.0001)
     #expect(map.systemSlots.settings.width == aux && map.systemSlots.settings.height == aux)
 }
+
+// MARK: - Watcher (freed-band) refinement
+
+@Test func watcherRefinementCornersDispCentersStripAndRaisesTopBand() throws {
+    let viewportWidth = 1194.0
+    let viewportHeight = 834.0
+    let safeArea = MonitorEdgeInsets(top: 24, leading: 0, bottom: 20, trailing: 0)
+    let chromeInsets = MonitorChromeLayout.insets(feedSafeArea: safeArea)
+    let base = MonitorZoneLayout.map(
+        viewportWidth: viewportWidth, viewportHeight: viewportHeight, safeArea: safeArea,
+        chromeInsets: chromeInsets, mode: .live, isPortrait: false, aspect: .fit16x9,
+        scopeCount: 0, horizontalDirection: .standard, bottomBarHeight: 58)
+    let refined = MonitorZoneLayout.watcherRefined(
+        base, viewportWidth: viewportWidth, minimumTopY: chromeInsets.top)
+
+    let record = base.systemSlots.record
+    let disp = refined.systemSlots.disp
+    // DISP takes the record corner: right edges align, midline sits on the strip's.
+    #expect(abs((disp.x + disp.width) - (record.x + record.width)) < 0.5, "disp=\(disp)")
+    let baseStrip = try #require(base.assistStrip).frame
+    let strip = try #require(refined.assistStrip).frame
+    #expect(abs(disp.midY - (strip.y + strip.height / 2)) < 0.5, "disp=\(disp) strip=\(strip)")
+    // The strip recenters at its own width (a widened glass panel failed to render — see
+    // `watcherRefined`), clearing DISP.
+    #expect(abs(strip.midX - viewportWidth / 2) < 0.5, "strip=\(strip)")
+    #expect(strip.width == baseStrip.width, "base=\(baseStrip) refined=\(strip)")
+    #expect(strip.x + strip.width <= disp.x - 15.5, "strip=\(strip) disp=\(disp)")
+    // Top-band chrome rises to the minimum top; the record slot itself is untouched.
+    #expect(
+        refined.systemSlots.lock.y <= base.systemSlots.lock.y, "lock=\(refined.systemSlots.lock)")
+    #expect(refined.infoBar.frame.y <= base.infoBar.frame.y, "infoBar=\(refined.infoBar.frame)")
+    #expect(refined.systemSlots.record == base.systemSlots.record)
+}
+
+@Test func watcherRefinementLeavesFullBleedPhoneTopChromeAlone() throws {
+    let viewportWidth = 874.0
+    let viewportHeight = 402.0
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 0, trailing: 0)
+    let chromeInsets = MonitorChromeLayout.insets(feedSafeArea: safeArea)
+    let base = MonitorZoneLayout.map(
+        viewportWidth: viewportWidth, viewportHeight: viewportHeight, safeArea: safeArea,
+        chromeInsets: chromeInsets, mode: .live, isPortrait: false, aspect: .fit16x9,
+        scopeCount: 0, horizontalDirection: .standard, bottomBarHeight: 58)
+    let refined = MonitorZoneLayout.watcherRefined(
+        base, viewportWidth: viewportWidth, minimumTopY: chromeInsets.top)
+    // Full-bleed feed starts at y=0: nothing sits fully above it, so nothing moves up,
+    // and the strip still centers without crossing the relocated DISP.
+    #expect(refined.systemSlots.media == base.systemSlots.media)
+    #expect(refined.systemSlots.settings == base.systemSlots.settings)
+    let strip = try #require(refined.assistStrip).frame
+    #expect(abs(strip.midX - viewportWidth / 2) < 0.5, "strip=\(strip)")
+    #expect(strip.width > 0, "strip=\(strip)")
+}

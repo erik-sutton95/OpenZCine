@@ -1224,20 +1224,41 @@ struct MonitorShell: View {
     /// shells use — the banner is mounted above `allowsHitTesting(false)`, outside the branch that
     /// already holds `map`, and only ever while the editor is open.
     private var editorZoneMap: MonitorZoneMap {
-        MonitorZoneLayout.map(
+        refinedIfFreedBand(
+            MonitorZoneLayout.map(
+                viewportWidth: context.viewportWidth,
+                viewportHeight: context.viewportHeight,
+                safeArea: context.feedSafeArea,
+                chromeInsets: context.isPortrait ? nil : context.chromeInsets,
+                mode: model.displayMode,
+                isPortrait: context.isPortrait,
+                aspect: model.preferences.portraitFeedAspect,
+                scopeCount: scopeCount,
+                horizontalDirection: context.horizontalDirection,
+                bottomBarHeight: context.isPortrait
+                    ? (model.chromeSectionMounts(.assistToolbar)
+                        ? MonitorPortraitLayout.assistToolbarHeight : 0)
+                    : landscapeBottomBarHeight
+            ))
+    }
+
+    /// Whether the landscape band runs the freed-band redistribution: no record control and no
+    /// capture strip mounted (a relay watcher, or an operator who unmounted both) leaves the
+    /// bottom-trailing corner and the capture lane empty — DISP takes the corner, the assist
+    /// strip centers wide, and the top chrome rises (`MonitorZoneLayout.watcherRefined`).
+    private var refinesForFreedBand: Bool {
+        !context.isPortrait
+            && model.displayMode != .command
+            && !model.chromeSectionMounts(.railRecord)
+            && !model.chromeSectionMounts(.cameraValues)
+    }
+
+    private func refinedIfFreedBand(_ map: MonitorZoneMap) -> MonitorZoneMap {
+        guard refinesForFreedBand else { return map }
+        return MonitorZoneLayout.watcherRefined(
+            map,
             viewportWidth: context.viewportWidth,
-            viewportHeight: context.viewportHeight,
-            safeArea: context.feedSafeArea,
-            chromeInsets: context.isPortrait ? nil : context.chromeInsets,
-            mode: model.displayMode,
-            isPortrait: context.isPortrait,
-            aspect: model.preferences.portraitFeedAspect,
-            scopeCount: scopeCount,
-            horizontalDirection: context.horizontalDirection,
-            bottomBarHeight: context.isPortrait
-                ? (model.chromeSectionMounts(.assistToolbar)
-                    ? MonitorPortraitLayout.assistToolbarHeight : 0)
-                : landscapeBottomBarHeight
+            minimumTopY: context.chromeInsets.top
         )
     }
 
@@ -1325,20 +1346,21 @@ struct MonitorShell: View {
         // physical height — use the context's restored full height for both the map and the
         // canvas frame, otherwise lock/battery/rail frames land short.
         let fullHeight = context.viewportHeight
-        let map = MonitorZoneLayout.map(
-            viewportWidth: context.viewportWidth,
-            viewportHeight: fullHeight,
-            safeArea: context.feedSafeArea,
-            // Carries the iPadOS 26 window-control clearance the safe area lacks (see
-            // `clearingWindowControls`), so the lock button and top deck render below the pill.
-            chromeInsets: context.chromeInsets,
-            mode: model.displayMode,
-            isPortrait: false,
-            aspect: model.preferences.portraitFeedAspect,
-            scopeCount: scopeCount,
-            horizontalDirection: context.horizontalDirection,
-            bottomBarHeight: landscapeBottomBarHeight
-        )
+        let map = refinedIfFreedBand(
+            MonitorZoneLayout.map(
+                viewportWidth: context.viewportWidth,
+                viewportHeight: fullHeight,
+                safeArea: context.feedSafeArea,
+                // Carries the iPadOS 26 window-control clearance the safe area lacks (see
+                // `clearingWindowControls`), so the lock button and top deck render below the pill.
+                chromeInsets: context.chromeInsets,
+                mode: model.displayMode,
+                isPortrait: false,
+                aspect: model.preferences.portraitFeedAspect,
+                scopeCount: scopeCount,
+                horizontalDirection: context.horizontalDirection,
+                bottomBarHeight: landscapeBottomBarHeight
+            ))
         let chrome = model.monitorChrome
 
         ZStack(alignment: .topLeading) {
@@ -1483,9 +1505,17 @@ struct MonitorShell: View {
             if let assist = map.assistStrip, let capture = map.captureStrip,
                 assistVisible || captureVisible
             {
-                let leftX = min(assist.frame.x, capture.frame.x)
-                let rightX = max(
-                    assist.frame.x + assist.frame.width, capture.frame.x + capture.frame.width)
+                // The union exists to span BOTH strips; an unmounted capture strip must not
+                // drag the container back to its empty lane (that pinned the freed-band
+                // recentered assist zone at the capture strip's old leading edge).
+                let leftX =
+                    captureVisible ? min(assist.frame.x, capture.frame.x) : assist.frame.x
+                let rightX =
+                    captureVisible
+                    ? max(
+                        assist.frame.x + assist.frame.width,
+                        capture.frame.x + capture.frame.width)
+                    : assist.frame.x + assist.frame.width
                 let width = rightX - leftX
                 HStack(alignment: .bottom, spacing: 8) {
                     if assistVisible {
@@ -1521,7 +1551,9 @@ struct MonitorShell: View {
                 }
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 // Photography centres the strip under the centred feed (cinema keeps the
-                // assist-then-strip leading flow).
+                // assist-then-strip leading flow). The freed band needs no alignment override:
+                // its zone is already widened and viewport-centred by `watcherRefined`, and the
+                // strip's scroller fills whatever width the zone hands it.
                 .frame(
                     width: CGFloat(width), height: CGFloat(assist.frame.height),
                     alignment: MonitorBottomBandAlignment.alignment(

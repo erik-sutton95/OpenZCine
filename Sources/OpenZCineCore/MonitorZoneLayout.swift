@@ -249,6 +249,104 @@ public enum MonitorZoneLayout {
         )
     }
 
+    // MARK: Watcher refinement
+
+    /// Redistributes a landscape map for a monitor with NO record control and NO capture strip
+    /// mounted — a relay watcher, or an operator who unmounted both. Three moves, each a field
+    /// request from the watcher surface:
+    ///
+    /// - DISP takes the trailing corner the record button vacated (right edge aligned to the
+    ///   record slot's), midline-aligned with the assist strip so the two read as one bottom
+    ///   line instead of DISP hanging beside an invisible record button.
+    /// - The assist strip widens into the freed span and centers on the viewport. Its half-width
+    ///   is capped by the original edge margin on both sides, and by the relocated DISP cluster
+    ///   only when that cluster actually shares the strip's vertical band (on full-bleed phones
+    ///   the rail sits above the strip line and must not narrow it).
+    /// - Top-band chrome (lock, info bar, and any system slot living above the feed) rises to
+    ///   `minimumTopY`, returning the dead headroom to the picture. Elements inside or below
+    ///   the feed's top edge (full-bleed phones, rail-mounted media/settings) never move.
+    ///
+    /// Pure geometry in, pure geometry out — the shell decides WHEN by what it mounts.
+    public static func watcherRefined(
+        _ map: MonitorZoneMap,
+        viewportWidth: Double,
+        minimumTopY: Double
+    ) -> MonitorZoneMap {
+        let slots = map.systemSlots
+        let record = slots.record
+        let dispW = slots.disp.width
+        let dispH = slots.disp.height
+        let stripFrame = map.assistStrip?.frame
+        let disp = MonitorModuleFrame(
+            x: record.x + record.width - dispW,
+            y: stripFrame.map { $0.y + ($0.height - dispH) / 2 }
+                ?? (record.y + record.height - dispH),
+            width: dispW,
+            height: dispH
+        )
+
+        var assistStrip = map.assistStrip
+        if let strip = map.assistStrip {
+            // Recenter at the strip's OWN width — never widen it. A ~2x-widened glass panel
+            // rendered as an empty sheet in verification (tools present in the accessibility
+            // tree, invisible in pixels — a glass-container span limit, apparently), and the
+            // base width already carries the full tool set behind its scroll chevrons. The
+            // relocated DISP still bounds the slide when it shares the band.
+            let center = viewportWidth / 2
+            var x = center - strip.frame.width / 2
+            let dispSharesBand =
+                disp.y < strip.frame.y + strip.frame.height
+                && disp.y + disp.height > strip.frame.y
+            if dispSharesBand {
+                x =
+                    disp.midX >= center
+                    ? min(x, disp.x - 16 - strip.frame.width)
+                    : max(x, disp.x + disp.width + 16)
+            }
+            assistStrip = MonitorZone(
+                frame: MonitorModuleFrame(
+                    x: max(x, 12),
+                    y: strip.frame.y,
+                    width: strip.frame.width,
+                    height: strip.frame.height
+                ),
+                style: strip.style,
+                collapsible: strip.collapsible
+            )
+        }
+
+        let feedTop = map.feed.y
+        func raised(_ frame: MonitorModuleFrame) -> MonitorModuleFrame {
+            guard frame.y + frame.height <= feedTop, frame.y > minimumTopY else { return frame }
+            return MonitorModuleFrame(
+                x: frame.x, y: minimumTopY, width: frame.width, height: frame.height)
+        }
+        let infoBar = MonitorZone(
+            frame: raised(map.infoBar.frame),
+            style: map.infoBar.style,
+            collapsible: map.infoBar.collapsible
+        )
+
+        return MonitorZoneMap(
+            feed: map.feed,
+            infoBar: infoBar,
+            captureStrip: map.captureStrip,
+            assistStrip: assistStrip,
+            systemCluster: map.systemCluster,
+            systemSlots: MonitorSystemSlotFrames(
+                lock: raised(slots.lock),
+                disp: disp,
+                record: record,
+                media: raised(slots.media),
+                settings: raised(slots.settings)
+            ),
+            batteryCluster: map.batteryCluster,
+            scopes: map.scopes,
+            controlsGrid: map.controlsGrid,
+            recOptions: map.recOptions
+        )
+    }
+
     /// Builds the five system slots for landscape: the lock module verbatim, plus rail-centered
     /// disp / record / media / settings frames offset into absolute viewport coordinates.
     private static func landscapeSlots(
