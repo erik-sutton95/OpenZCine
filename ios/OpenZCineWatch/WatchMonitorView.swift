@@ -153,7 +153,6 @@ struct WatchMonitorView: View {
                 }
             }
             .clipped()
-            .overlay(alignment: .topLeading) { diagnosticStamp }
             .overlay(overlay)
             .overlay {
                 if isRecording {
@@ -210,24 +209,6 @@ struct WatchMonitorView: View {
         return CGSize(
             width: min(max(pan.width, -limitX), limitX),
             height: min(max(pan.height, -limitY), limitY))
-    }
-
-    /// TEMPORARY (#141 diagnosis): the log path is unusable — the Mac's tunnel to both the phone
-    /// and the watch drops on connect — so the two facts we need read off the wrist instead. The
-    /// stamp proves which binary is running; the flag proves what survived the wire.
-    private var diagnosticStamp: some View {
-        // The ratio is bound to a typed local first: `?? 0` inside the interpolation reaches
-        // `String(format:)` as an Int and trips the varargs type check at runtime.
-        let aspect: Double = state?.feedAspectRatio ?? 0
-        return Text(
-            "\(WatchSessionController.buildStamp)"
-                + " p:\(state == nil ? "nil" : String(isPhotography))"
-                + " a:\(String(format: "%.2f", aspect))"
-        )
-        .font(.system(size: 9, design: .monospaced))
-        .foregroundStyle(.yellow)
-        .padding(.horizontal, 3)
-        .background(.black.opacity(0.6))
     }
 
     @ViewBuilder private var overlay: some View {

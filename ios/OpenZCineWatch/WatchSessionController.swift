@@ -23,13 +23,8 @@ final class WatchSessionController: NSObject {
     @ObservationIgnored private let session: WCSession? =
         WCSession.isSupported() ? .default : nil
 
-    /// TEMPORARY (#141 diagnosis): bumped by hand each deploy, so the log proves which binary is
-    /// actually on the wrist rather than which one Xcode believes it installed.
-    static let buildStamp = "photo-mode-1"
-
     /// Activates the shared session. Safe to call from `onAppear`.
     func activate() {
-        NSLog("[ZCWATCH] watch build=\(Self.buildStamp) activate")
         guard let session else { return }
         session.delegate = self
         if session.activationState != .activated {
@@ -136,19 +131,7 @@ final class WatchSessionController: NSObject {
         switch kind {
         case .state:
             if let decoded = try? WatchRelayEnvelope.decode(WatchRelayState.self, from: data) {
-                // TEMPORARY (#141 diagnosis): what actually survived the wire, on change only.
-                if decoded.isPhotography != state?.isPhotography
-                    || decoded.shotsRemaining != state?.shotsRemaining
-                {
-                    NSLog(
-                        "[ZCWATCH] watch build=\(Self.buildStamp)"
-                            + " isPhotography=\(decoded.isPhotography)"
-                            + " shots=\(decoded.shotsRemaining.isEmpty ? "-" : decoded.shotsRemaining)"
-                            + " aspect=\(String(format: "%.4f", decoded.feedAspectRatio))")
-                }
                 state = decoded
-            } else {
-                NSLog("[ZCWATCH] watch build=\(Self.buildStamp) STATE DECODE FAILED")
             }
         case .frame:
             if let frame = try? WatchRelayEnvelope.decode(WatchRelayFrame.self, from: data) {

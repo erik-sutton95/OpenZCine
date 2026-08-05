@@ -10294,23 +10294,8 @@ final class NativeAppModel {
 
     /// Publishes the current state to the watch relay (coalesced; no-ops when nothing changed).
     func publishWatchState() {
-        let state = currentWatchRelayState()
-        // TEMPORARY (#141 diagnosis): what the phone believes the mode is, at the moment it
-        // decides. Logged only on change — this runs on every live-view frame.
-        let key =
-            "selector=\(String(describing: cameraPropertySnapshot.captureSelector))"
-            + " isPhotography=\(state.isPhotography)"
-            + " shots=\(state.shotsRemaining.isEmpty ? "-" : state.shotsRemaining)"
-            + " aspect=\(String(format: "%.4f", state.feedAspectRatio))"
-        if key != lastWatchDiagnosticKey {
-            lastWatchDiagnosticKey = key
-            NSLog("[ZCWATCH] phone \(key) linkReady=\(watchRelay.isReady)")
-        }
-        watchRelay.ingestState(state)
+        watchRelay.ingestState(currentWatchRelayState())
     }
-
-    /// TEMPORARY (#141 diagnosis): last line emitted, so the log above fires on change only.
-    @ObservationIgnored private var lastWatchDiagnosticKey = ""
 
     /// easeOutExpo tween (CSS `cubic-bezier(0.16, 1, 0.3, 1)`) for the exposure picker's slide-up
     /// reveal — a hard front-loaded ramp into a long soft settle, kept brisk so it never lags the

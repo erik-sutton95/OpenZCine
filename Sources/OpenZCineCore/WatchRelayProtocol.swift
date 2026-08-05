@@ -87,6 +87,26 @@ public struct WatchRelayState: Codable, Equatable, Sendable {
     /// without a second table to keep in sync.
     public let feedAspectRatio: Double
 
+    /// True when nothing the wrist renders *as state* differs from `other`.
+    ///
+    /// The two readouts that tick on their own are excluded. Timecode rides the frame stream and
+    /// the wrist prefers that copy; the FPS string it never renders at all. Including them makes
+    /// every snapshot compare as new, so any caller that publishes often would put a state message
+    /// on the link beside every frame and starve the feed it is competing with.
+    public func matchesIgnoringLiveReadouts(_ other: WatchRelayState) -> Bool {
+        recordState == other.recordState
+            && mediaStatus == other.mediaStatus
+            && media == other.media
+            && cameraBatteryPercent == other.cameraBatteryPercent
+            && cameraName == other.cameraName
+            && isRecording == other.isRecording
+            && connection == other.connection
+            && feedLive == other.feedLive
+            && isPhotography == other.isPhotography
+            && shotsRemaining == other.shotsRemaining
+            && feedAspectRatio == other.feedAspectRatio
+    }
+
     /// Decoded leniently for the three stills fields.
     ///
     /// A default on `init` does NOT reach Codable's synthesised decoder — it still demands every

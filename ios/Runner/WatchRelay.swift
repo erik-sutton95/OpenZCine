@@ -82,7 +82,7 @@ final class WatchRelay: NSObject {
     /// and resends within a frame. Stills have no timecode, so the snapshot goes quiet and a
     /// single lost send strands the wrist on its last received state until it asks for a resume.
     func ingestState(_ state: WatchRelayState) {
-        guard state != lastSentState else { return }
+        guard lastSentState.map({ !state.matchesIgnoringLiveReadouts($0) }) ?? true else { return }
         guard isReady, let session,
             let data = try? WatchRelayEnvelope.encode(kind: .state, payload: state)
         else { return }
