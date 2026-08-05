@@ -1871,7 +1871,12 @@ final class NativeAppModel {
         }
     }
 
-    var cameraState = CameraDisplayState.preview
+    var cameraState = CameraDisplayState.preview {
+        // The wrist reads battery, media and camera name from here, and had no way to hear about
+        // any of them changing. Per-frame telemetry deliberately lives outside this struct (see
+        // below), so this fires on real changes, not every frame.
+        didSet { publishWatchState() }
+    }
     // Per-frame telemetry (timecode, FPS) is held separately from `cameraState` so updating it
     // never invalidates every view observing the heavy HUD struct — only the readouts re-render.
     var liveTimecode = CameraDisplayState.preview.timecode
@@ -4095,7 +4100,14 @@ final class NativeAppModel {
     @ObservationIgnored private var lastPairedRejoinAttemptAt: Date?
     /// Active post-confirm fast path (see `beginPairedReconnectFastPath`).
     @ObservationIgnored private var pairedReconnectFastPathTask: Task<Void, Never>?
-    private(set) var cameraPropertySnapshot = PTPCameraPropertySnapshot()
+    private(set) var cameraPropertySnapshot = PTPCameraPropertySnapshot() {
+        // Everything the wrist knows about the body's MODE comes from here — stills vs cinema,
+        // SHOTS, the still image area. Publishing was wired to discrete events only (connect,
+        // record, monitor presented, watch reachability), so a change made ON THE CAMERA reached
+        // the phone's own chrome and stopped there. `ingestState` coalesces, so a snapshot that
+        // changed nothing the watch renders costs one comparison.
+        didSet { publishWatchState() }
+    }
     /// True while a still release is in flight (optimistic UI lock on the shutter).
     private(set) var isStillCapturing = false
     /// Bumped each time a shutter fired ON THE CAMERA BODY is detected, so the app's shutter
