@@ -611,25 +611,18 @@ fun LiveFeedView(
                     "gpuBackend=${gpuBackend.kind} composablePresent=$preferComposablePresentation",
             )
         }
-        // Low-RAM devices (A12 class): slightly smaller decode when assists are
-        // active so GPU grade bandwidth stays under the frame budget.
-        val lowEnd =
-            runCatching {
-                val am =
-                    applicationContext.getSystemService(Context.ACTIVITY_SERVICE)
-                        as android.app.ActivityManager
-                val info = android.app.ActivityManager.MemoryInfo().also(am::getMemoryInfo)
-                am.isLowRamDevice || info.totalMem < MIN_FULL_GLASS_RAM_BYTES
-            }.getOrDefault(false)
-        val decoder =
-            JpegFrameDecoder(
-                maxLongSide =
-                    if (lowEnd && !effects.isIdentity) {
-                        720
-                    } else {
-                        JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE
-                    },
-            )
+        // Always decode the frame at its native size.
+        //
+        // Low-RAM devices used to drop to a 720 cap whenever an assist was active, described as a
+        // "slightly smaller decode". `inSampleSize` is power-of-two, so against the 1024-wide
+        // live-view frame there is no slightly: 720 resolves to sample=2 and decodes 512x288 —
+        // quarter resolution, stretched back over the whole panel. That is what read as "half the
+        // resolution of iOS" on the A12, and it was invisible in the relay, which encodes the
+        // source frame and so looked correct on the receiving device.
+        //
+        // The same power-of-two trap already cost this path once, when a 960 cap carried over from
+        // a 1080p source halved every frame on every device.
+        val decoder = JpegFrameDecoder(maxLongSide = JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE)
         val stats = FramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
         withContext(Dispatchers.Default) {
             pumpFramesWithSourceFrame(

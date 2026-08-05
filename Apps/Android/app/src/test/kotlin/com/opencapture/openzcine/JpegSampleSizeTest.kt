@@ -30,9 +30,17 @@ class JpegSampleSizeTest {
         assertEquals(2, jpegSampleSizeForLongSide(feedWidth, feedHeight, 960))
     }
 
+    /**
+     * Why the retired low-RAM cap could never do what it said. It was documented as a "slightly
+     * smaller decode" for assist-heavy frames, but power-of-two sampling offers no such step: at
+     * this width the only choices are full (1024) and half (512). 720 bought quarter-resolution
+     * pixels, not a trim, and that is what read as a soft feed on A12-class devices.
+     */
     @Test
-    fun `the low-RAM effects cap still halves, deliberately`() {
+    fun `a cap between the halves buys half resolution, not a trim`() {
         assertEquals(2, jpegSampleSizeForLongSide(feedWidth, feedHeight, 720))
+        assertEquals(2, jpegSampleSizeForLongSide(feedWidth, feedHeight, 1023))
+        assertEquals(1, jpegSampleSizeForLongSide(feedWidth, feedHeight, feedWidth))
     }
 
     @Test
