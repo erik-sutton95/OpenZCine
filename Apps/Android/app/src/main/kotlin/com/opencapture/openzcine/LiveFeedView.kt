@@ -71,6 +71,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val TAG = "ZCLiveFeed"
+
+/**
+ * Paint for the feed blit. A null Paint means NO filtering: Android samples nearest-neighbour, so
+ * the live-view frame — 1024x576 at the Quality preset — arrives on a 1080p panel as hard pixel
+ * blocks and reads as roughly half the resolution it is.
+ *
+ * `isFilterBitmap` turns that into a bilinear reconstruction, and `isDither` breaks up the banding
+ * an 8-bit gradient shows once it is stretched. This is the floor, not iOS parity: iOS
+ * reconstructs the same frame with MetalFX Spatial over a Lanczos fallback, which resolves finer
+ * detail than bilinear can.
+ *
+ * Lazy on purpose: `Paint` is a stubbed framework class on the local JVM, so building it at file
+ * initialisation makes every unit test that touches anything in this file fail to load the class.
+ * Deferring to first draw keeps it off the test path entirely.
+ */
+private val feedBlitPaint: android.graphics.Paint by lazy {
+    android.graphics.Paint().apply {
+        isFilterBitmap = true
+        isDither = true
+    }
+}
+
 private const val FALSE_COLOR_REFERENCE_WIDTH = 264f
 private const val FALSE_COLOR_REFERENCE_HEIGHT = 52f
 private const val FALSE_COLOR_REFERENCE_GAP = 10f
@@ -131,8 +153,6 @@ public class LiveFeedPresentationState {
     /** Bumped when the feed Canvas should redraw; feed Canvas is the only intended reader. */
     private var frameEpoch by mutableLongStateOf(0L)
     private var latestBitmap: Bitmap? = null
-    /** Cap Compose draw invalidations so UI thread keeps free time for input. */
-    private var lastDrawPublishNanos: Long = 0L
     private var textureSourceGeometry: FeedTextureSourceGeometry? by mutableStateOf(null)
     private var presentedColorMode: LiveFeedColorMode by mutableStateOf(LiveFeedColorMode.UNKNOWN)
     private var focusGestureGeometrySignature: FocusGestureGeometrySignature? = null
@@ -203,13 +223,15 @@ public class LiveFeedPresentationState {
         if (retainedFocus != frame.focus) retainedFocus = frame.focus
         if (retainedLevel != frame.level) retainedLevel = frame.level
         latestBitmap = bitmap
-        // Always keep the newest bitmap; only invalidate Compose draw at ~20 Hz
-        // so the UI thread is not saturated by 25–30 full-frame Skia blits/s.
-        val now = System.nanoTime()
-        if (lastDrawPublishNanos == 0L || now - lastDrawPublishNanos >= MIN_DRAW_INTERVAL_NANOS) {
-            lastDrawPublishNanos = now
-            frameEpoch += 1
-        }
+        // Every delivered frame is drawn. The camera's pull rate is the only limiter, which is
+        // what makes the feed as smooth as the body allows.
+        //
+        // This used to gate on `elapsed >= 50ms` to hold redraws near 20 Hz. An elapsed-time gate
+        // against a fixed-period source cannot land on an arbitrary target — it only ever passes
+        // one frame in N. Against a 40 ms (25 fps) stream the 50 ms gate skipped every second
+        // frame and ran at 12.5 fps; against 30 fps it ran at 15. It cost far more than the ~20 it
+        // claimed to keep. Same aliasing that silently halved the iOS feed in 4ae1544.
+        frameEpoch += 1
         val nextTextureGeometry =
             retainedFeedTextureSourceGeometry(
                 current = textureSourceGeometry,
@@ -227,7 +249,6 @@ public class LiveFeedPresentationState {
             focusGestureGeometryGeneration += 1
         }
         latestBitmap = null
-        lastDrawPublishNanos = 0L
         frameEpoch += 1
         if (retainedSourceWidth != 0) retainedSourceWidth = 0
         if (retainedSourceHeight != 0) retainedSourceHeight = 0
@@ -237,10 +258,6 @@ public class LiveFeedPresentationState {
         presentedColorMode = LiveFeedColorMode.UNKNOWN
     }
 
-    private companion object {
-        /** ~20 fps max Compose feed redraws — leaves headroom for chrome input. */
-        const val MIN_DRAW_INTERVAL_NANOS: Long = 50_000_000L
-    }
 }
 
 private data class FocusGestureGeometrySignature(
@@ -703,7 +720,7 @@ fun LiveFeedView(
                             content.left + content.width,
                             content.top + content.height,
                         )
-                    canvas.nativeCanvas.drawBitmap(androidBitmap, null, dst, null)
+                    canvas.nativeCanvas.drawBitmap(androidBitmap, null, dst, feedBlitPaint)
                 }
             }
         }
