@@ -3,6 +3,7 @@ package com.opencapture.openzcine.relay
 import android.net.nsd.NsdManager
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import com.opencapture.openzcine.UNAVAILABLE_MONITOR_VALUE
 import com.opencapture.openzcine.monitorResolutionLabel
 import com.opencapture.openzcine.monitorStorageLabel
 import com.opencapture.openzcine.monitorValueOrNull
@@ -209,7 +210,41 @@ class RelayBroadcastController(
                 cameraName = cameraName ?: identityName ?: "",
                 lens = snapshot.lens.monitorValueOrNull() ?: "",
                 temperature = "",
-                values = emptyList(),
+                // The capture bar's five cells. Labels are a wire contract, not copy: the
+                // watcher's strip is built against exactly ISO / SHUTTER / IRIS / WB / FOCUS
+                // (core `CameraDisplayState`), so a different word here renders an empty cell.
+                // Every cell is always sent — a missing one reads as "this camera has no iris",
+                // where a dash reads as "not known yet", which is the truth while properties
+                // are still settling.
+                values =
+                    listOf(
+                        MonitorRelayWire.StateValue(
+                            "ISO",
+                            snapshot.iso?.toString() ?: UNAVAILABLE_MONITOR_VALUE
+                        ),
+                        MonitorRelayWire.StateValue(
+                            "SHUTTER",
+                            // Angle when the body is in that mode, seconds otherwise — the same
+                            // preference the local capture bar shows.
+                            snapshot.shutterAngle.monitorValueOrNull()
+                                ?: snapshot.shutterSpeed.monitorValueOrNull()
+                                ?: UNAVAILABLE_MONITOR_VALUE
+                        ),
+                        MonitorRelayWire.StateValue(
+                            "IRIS",
+                            snapshot.iris.monitorValueOrNull() ?: UNAVAILABLE_MONITOR_VALUE
+                        ),
+                        MonitorRelayWire.StateValue(
+                            "WB",
+                            snapshot.whiteBalanceKelvin?.let { "${it}K" }
+                                ?: snapshot.whiteBalanceMode.monitorValueOrNull()
+                                ?: UNAVAILABLE_MONITOR_VALUE
+                        ),
+                        MonitorRelayWire.StateValue(
+                            "FOCUS",
+                            snapshot.focusMode.monitorValueOrNull() ?: UNAVAILABLE_MONITOR_VALUE
+                        ),
+                    ),
                 mediaStatus = null,
                 isRecording = recording,
                 allowsControlRequests = allowsControlRequests,
