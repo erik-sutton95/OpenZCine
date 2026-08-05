@@ -1,6 +1,12 @@
 package com.opencapture.openzcine.relay
 
 import android.net.nsd.NsdManager
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import com.opencapture.openzcine.monitorResolutionLabel
+import com.opencapture.openzcine.monitorStorageLabel
+import com.opencapture.openzcine.monitorValueOrNull
+import com.opencapture.openzcine.validBatteryPercent
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
@@ -157,7 +163,12 @@ class RelayBroadcastController(
             }
         statePump =
             scope.launch {
-                session.recordingState.collect { publishState() }
+                // Readings change far more often than the record state; collecting only the
+                // latter left a watcher on whatever values happened to be current at connect.
+                merge(
+                    session.recordingState.map { },
+                    session.cameraProperties.map { },
+                ).collect { publishState() }
             }
         mutableUi.value = mutableUi.value.copy(isBroadcasting = true)
         scope.launch { publishState() }
@@ -170,6 +181,11 @@ class RelayBroadcastController(
         val identityName =
             (session.state.value as? CameraSessionState.Connected)?.identity?.name
         val recording = session.recordingState.value == CameraRecordingState.RECORDING
+        // The camera's own readings, mapped through the SAME helpers the local readouts use, so a
+        // watcher of an Android broadcast reads identically to one watching iOS. These were all
+        // hardcoded empty, which is why an Android broadcast arrived with blank codec/media/
+        // resolution pills and no camera battery.
+        val snapshot = session.cameraProperties.value
         host.broadcastState(
             MonitorRelayWire.State(
                 recordState =
@@ -178,13 +194,20 @@ class RelayBroadcastController(
                     } else {
                         MonitorRelayWire.State.RECORD_STATE_STANDBY
                     },
-                resolutionFrameRate = "",
-                codec = "",
-                media = "",
+                resolutionFrameRate =
+                    monitorResolutionLabel(
+                        resolution = snapshot.resolution,
+                        frameRate = snapshot.frameRate,
+                        fallback = ""
+                    ),
+                codec = snapshot.codec.monitorValueOrNull() ?: "",
+                media = monitorStorageLabel(snapshot.storage).takeIf { it != "—" } ?: "",
                 liveFPS = latestFPS?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "",
-                cameraBatteryPercent = 0,
+                // The gauge's raw value, not a bar count — the watcher's own gauge maps it, the
+                // same way this device's does. Zero reads as "no camera" on the far side.
+                cameraBatteryPercent = validBatteryPercent(snapshot.batteryPercent) ?: 0,
                 cameraName = cameraName ?: identityName ?: "",
-                lens = "",
+                lens = snapshot.lens.monitorValueOrNull() ?: "",
                 temperature = "",
                 values = emptyList(),
                 mediaStatus = null,
