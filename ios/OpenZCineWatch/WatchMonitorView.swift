@@ -17,6 +17,21 @@ struct WatchMonitorView: View {
     @State private var panAnchor: CGSize = .zero
     /// The rendered feed box, needed to bound the pan when a drag ends.
     @State private var feedSize: CGSize = .zero
+    /// Debounces the viewport report against the crown's continuous stream.
+    @State private var viewportReportTask: Task<Void, Never>?
+
+    /// Reports the visible rectangle as a normalized centre, so the phone needs to know nothing
+    /// about this watch's frame size or how the pan was clamped.
+    private func reportViewport() {
+        guard feedSize.width > 0, feedSize.height > 0 else { return }
+        let offset = clampedPan(in: feedSize)
+        // The picture is scaled about the centre then translated, so the content point at the
+        // middle of the screen sits at -offset/(size*zoom) from centre in unit terms.
+        let centerX = 0.5 - offset.width / (feedSize.width * zoom)
+        let centerY = 0.5 - offset.height / (feedSize.height * zoom)
+        controller.reportViewport(
+            WatchViewportRegion(zoom: zoom, centerX: centerX, centerY: centerY))
+    }
 
     var body: some View {
         // Stacked, not overlaid: the feed takes exactly the height left over by the two bars, so
@@ -160,7 +175,10 @@ struct WatchMonitorView: View {
                             width: panAnchor.width + value.translation.width,
                             height: panAnchor.height + value.translation.height)
                     }
-                    .onEnded { _ in panAnchor = clampedPan(in: feedSize) }
+                    .onEnded { _ in
+                        panAnchor = clampedPan(in: feedSize)
+                        reportViewport()
+                    }
             )
             // Backing all the way out re-centres, so the next zoom starts from the whole frame
             // instead of wherever the last inspection left the window.
@@ -168,6 +186,15 @@ struct WatchMonitorView: View {
                 if level <= 1 {
                     pan = .zero
                     panAnchor = .zero
+                }
+                // The crown emits continuously, so the report is debounced to the moment it
+                // settles. Sending per tick would put a WatchConnectivity message on every
+                // detent and starve the frame pump it is meant to improve.
+                viewportReportTask?.cancel()
+                viewportReportTask = Task {
+                    try? await Task.sleep(for: .milliseconds(180))
+                    guard !Task.isCancelled else { return }
+                    reportViewport()
                 }
             }
     }

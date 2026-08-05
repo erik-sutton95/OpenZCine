@@ -18,6 +18,8 @@ public enum WatchRelayProtocol {
         case command = 0x10
         /// Phone → watch: a ``WatchCommandResult`` reply to a command.
         case result = 0x11
+        /// Watch → phone: which part of the picture the wrist is actually showing.
+        case viewport = 0x12
     }
 }
 
@@ -93,6 +95,45 @@ public enum WatchRelayCommand: String, Codable, Equatable, Sendable {
     /// acked — so the phone's pump can be left holding a permit that will not come back while the
     /// watch shows a stale picture. The watch asking on wake is what clears both sides (#187).
     case resume
+}
+
+/// Watch → phone: the region of the frame the wrist is currently displaying.
+///
+/// The crown zoom happens entirely on the watch, but the ENCODE should not: magnifying a 416 px
+/// frame magnifies its blocks. Reporting the region lets the phone crop the source to it before
+/// the downscale, so every encoded pixel lands on screen and detail scales with the zoom at no
+/// extra bandwidth. The phone's own view never zooms — it only learns which rectangle to send.
+///
+/// The centre is normalized (0...1) rather than an offset in points, so the phone needs to know
+/// nothing about the watch's frame size or its pan clamping.
+public struct WatchViewportRegion: Codable, Equatable, Sendable {
+    public init(zoom: Double, centerX: Double, centerY: Double) {
+        // A zoom below 1 has no meaning here and would invert the crop.
+        self.zoom = max(1, zoom)
+        self.centerX = min(max(centerX, 0), 1)
+        self.centerY = min(max(centerY, 0), 1)
+    }
+
+    public let zoom: Double
+    public let centerX: Double
+    public let centerY: Double
+
+    /// The whole picture — what an unzoomed watch reports, and the phone's default.
+    public static let full = WatchViewportRegion(zoom: 1, centerX: 0.5, centerY: 0.5)
+
+    public var isFullFrame: Bool { zoom <= 1.001 }
+
+    /// The source rectangle to crop, in unit coordinates of the frame.
+    ///
+    /// Clamped so the window stays inside the picture: the watch bounds its pan the same way, but
+    /// the phone must not trust a stale or rounded centre to keep the crop in range.
+    public var unitCrop: (x: Double, y: Double, width: Double, height: Double) {
+        let side = 1.0 / zoom
+        let half = side / 2
+        let x = min(max(centerX - half, 0), 1 - side)
+        let y = min(max(centerY - half, 0), 1 - side)
+        return (x, y, side, side)
+    }
 }
 
 /// Phone → watch reply acknowledging a ``WatchRelayCommand``.

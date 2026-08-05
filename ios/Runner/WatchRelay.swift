@@ -51,6 +51,11 @@ final class WatchRelay: NSObject {
     /// Exponential moving average of the frame send→ack round-trip. Drives adaptive sizing: a slow
     /// link shrinks frames so they cross faster, a fast link enlarges them for quality.
     private var rttEMA: TimeInterval = 0.15
+    /// What the wrist is currently showing. The watch reports this as it zooms and pans; the phone
+    /// crops the source to it before encoding so a magnified view gets real pixels rather than
+    /// bigger blocks. Defaults to the whole frame, which is also what an older watch build reports
+    /// by never sending one.
+    private var watchViewport: WatchViewportRegion = .full
 
     override init() {
         session = WCSession.isSupported() ? .default : nil
@@ -110,6 +115,7 @@ final class WatchRelay: NSObject {
         framesInFlight += 1
         let params = adaptiveEncodingParams()
         let renderer = rendererForEffects(pending.effects)
+        let viewport = watchViewport
         Task { @MainActor [weak self] in
             let data = await Self.encodeFrame(
                 image: pending.image,
@@ -118,7 +124,8 @@ final class WatchRelay: NSObject {
                 timecode: pending.timecode,
                 isRecording: pending.isRecording,
                 width: params.width,
-                quality: params.quality)
+                quality: params.quality,
+                viewport: viewport)
             guard let self else { return }
             self.dispatchFrame(data)
         }
@@ -178,12 +185,12 @@ final class WatchRelay: NSObject {
     private nonisolated static func encodeFrame(
         image: UIImage, effects: LiveImageEffects?, renderer: LiveFrameRenderer?,
         timecode: Timecode, isRecording: Bool,
-        width: CGFloat, quality: CGFloat
+        width: CGFloat, quality: CGFloat, viewport: WatchViewportRegion
     ) async -> Data? {
         guard
             let jpeg = await thumbnailJPEG(
                 from: image, applying: effects, renderer: renderer,
-                maxWidth: width, quality: quality)
+                maxWidth: width, quality: quality, viewport: viewport)
         else {
             return nil
         }
@@ -201,6 +208,15 @@ final class WatchRelay: NSObject {
         pendingFrame = nil
         onReachabilityChanged?()
         pumpFrames()
+    }
+
+    /// Adopts the watch's reported viewport. Cheap and unacked: it rides its own envelope kind
+    /// rather than the command path, because a dropped one costs a single frame's framing and the
+    /// next report corrects it — an ack would cost a round trip per crown tick.
+    private func handleViewport(_ data: Data) {
+        guard let region = try? WatchRelayEnvelope.decode(WatchViewportRegion.self, from: data)
+        else { return }
+        watchViewport = region
     }
 
     private func handleCommand(_ data: Data) -> Data {
@@ -235,10 +251,42 @@ final class WatchRelay: NSObject {
     /// JPEG. Applying after the thumbnail is intentional: Metal's full-resolution bake stays on the
     /// GPU, while the Watch pays only for its adaptive 256/336/416-pixel frame. Internal so the
     /// actual LUT-to-JPEG path is regression-testable.
+    /// The source cropped to the watch's visible rectangle, or the source itself at 1x.
+    ///
+    /// Works in the CGImage's own pixel grid — `UIImage.size` is points, and a scaled image would
+    /// otherwise crop the wrong rectangle. Any failure returns the original: a missing crop costs
+    /// detail, a wrong one shows the operator the wrong part of the frame.
+    nonisolated static func croppedToViewport(
+        image: UIImage, viewport: WatchViewportRegion
+    ) -> UIImage {
+        guard !viewport.isFullFrame, let cgImage = image.cgImage else { return image }
+        let width = CGFloat(cgImage.width)
+        let height = CGFloat(cgImage.height)
+        guard width > 0, height > 0 else { return image }
+        let unit = viewport.unitCrop
+        let rect = CGRect(
+            x: (width * unit.x).rounded(.down),
+            y: (height * unit.y).rounded(.down),
+            width: max(1, (width * unit.width).rounded()),
+            height: max(1, (height * unit.height).rounded())
+        ).intersection(CGRect(x: 0, y: 0, width: width, height: height))
+        guard !rect.isNull, rect.width >= 1, rect.height >= 1,
+            let cropped = cgImage.cropping(to: rect)
+        else { return image }
+        return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
+    }
+
     nonisolated static func thumbnailJPEG(
-        from image: UIImage, applying effects: LiveImageEffects? = nil,
-        renderer: LiveFrameRenderer? = nil, maxWidth: CGFloat, quality: CGFloat
+        from source: UIImage, applying effects: LiveImageEffects? = nil,
+        renderer: LiveFrameRenderer? = nil, maxWidth: CGFloat, quality: CGFloat,
+        viewport: WatchViewportRegion = .full
     ) async -> Data? {
+        // Crop to what the wrist is actually showing BEFORE the downscale. The watch magnifies
+        // whatever it is sent, so a zoomed watch was enlarging the blocks of a 416 px frame; by
+        // sending only the visible rectangle at the same encode width, every pixel lands on screen
+        // and detail scales with the zoom for the same bytes. The phone's own view never zooms —
+        // this only changes which rectangle it encodes.
+        let image = croppedToViewport(image: source, viewport: viewport)
         let size = image.size
         guard size.width > 0, size.height > 0 else { return nil }
         // `UIImage.size` is points while the Watch payload budget is pixels. Marketing/demo images
@@ -290,6 +338,13 @@ extension WatchRelay: WCSessionDelegate {
     ) {
         let reply = RelaySendableBox(value: replyHandler)
         Task { @MainActor [weak self] in
+            // Viewport reports ride the same channel but carry no result: reply immediately with
+            // an empty payload so the watch's send completes without waiting on anything.
+            if (try? WatchRelayEnvelope.kind(of: messageData)) == .viewport {
+                self?.handleViewport(messageData)
+                reply.value(Data())
+                return
+            }
             let response = self?.handleCommand(messageData) ?? Data()
             reply.value(response)
         }

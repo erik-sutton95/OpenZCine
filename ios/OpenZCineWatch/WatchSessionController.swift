@@ -20,6 +20,9 @@ final class WatchSessionController: NSObject {
     /// True while a Record toggle command is awaiting its reply.
     private(set) var isSendingCommand = false
 
+    /// Last region reported, so an unchanged one is not re-sent.
+    @ObservationIgnored private var lastSentViewport: WatchViewportRegion = .full
+
     @ObservationIgnored private let session: WCSession? =
         WCSession.isSupported() ? .default : nil
 
@@ -55,6 +58,22 @@ final class WatchSessionController: NSObject {
         // pump restarts, and that is the authority. Acting on the ack too would briefly paint the
         // phone's pre-resume record state over it. @Sendable for the same reason as the Record
         // reply below.
+        session.sendMessageData(
+            data, replyHandler: { @Sendable _ in }, errorHandler: { @Sendable _ in })
+    }
+
+    /// Tells the phone which part of the picture the wrist is showing, so it can crop the source
+    /// to that rectangle before encoding.
+    ///
+    /// Fire-and-forget: a dropped report costs one frame's framing and the next corrects it, so
+    /// paying a round trip to confirm it would be worse than losing it. Coalesced against the last
+    /// sent region because the crown emits continuously and every send is a real message.
+    func reportViewport(_ region: WatchViewportRegion) {
+        guard let session, session.isReachable, region != lastSentViewport else { return }
+        guard
+            let data = try? WatchRelayEnvelope.encode(kind: .viewport, payload: region)
+        else { return }
+        lastSentViewport = region
         session.sendMessageData(
             data, replyHandler: { @Sendable _ in }, errorHandler: { @Sendable _ in })
     }
@@ -116,7 +135,8 @@ final class WatchSessionController: NSObject {
                     feedImage = image
                 }
             }
-        case .command, .result:
+        case .command, .result, .viewport:
+            // Viewport travels watch → phone only; the watch never receives one.
             break
         }
     }

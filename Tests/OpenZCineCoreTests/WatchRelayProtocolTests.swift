@@ -148,3 +148,42 @@ struct WatchRelayProtocolTests {
         }
     }
 }
+
+@Suite("Watch viewport crop")
+struct WatchViewportRegionTests {
+    @Test("The whole frame crops to the whole frame")
+    func fullFrame() {
+        let crop = WatchViewportRegion.full.unitCrop
+        #expect(WatchViewportRegion.full.isFullFrame)
+        #expect(crop.x == 0 && crop.y == 0 && crop.width == 1 && crop.height == 1)
+    }
+
+    /// The window shrinks as 1/zoom per axis, so 4x sends a quarter of the picture in each
+    /// direction — which is what makes detail scale with the zoom at unchanged bandwidth.
+    @Test("The window is 1/zoom per axis, centred where asked")
+    func windowScalesWithZoom() {
+        let crop = WatchViewportRegion(zoom: 4, centerX: 0.5, centerY: 0.5).unitCrop
+        #expect(abs(crop.width - 0.25) < 1e-9)
+        #expect(abs(crop.x - 0.375) < 1e-9)
+    }
+
+    /// A centre near the edge must slide the window inward rather than run off the picture — the
+    /// watch clamps its pan, but a stale or rounded report must not crop outside the frame.
+    @Test("A window at the edge stays inside the picture")
+    func edgeWindowStaysInside() {
+        let topLeft = WatchViewportRegion(zoom: 2, centerX: 0, centerY: 0).unitCrop
+        #expect(topLeft.x == 0 && topLeft.y == 0)
+        let bottomRight = WatchViewportRegion(zoom: 2, centerX: 1, centerY: 1).unitCrop
+        #expect(abs(bottomRight.x - 0.5) < 1e-9)
+        #expect(abs(bottomRight.y + bottomRight.height - 1) < 1e-9)
+    }
+
+    /// Zoom below 1 would invert the crop; the centre outside 0...1 would leave the picture.
+    @Test("Degenerate input is clamped, not trusted")
+    func clampsDegenerateInput() {
+        let region = WatchViewportRegion(zoom: 0.25, centerX: -3, centerY: 9)
+        #expect(region.zoom == 1)
+        #expect(region.centerX == 0 && region.centerY == 1)
+        #expect(region.isFullFrame)
+    }
+}
