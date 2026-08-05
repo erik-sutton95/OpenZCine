@@ -9,6 +9,8 @@ struct WatchMonitorView: View {
 
     private var state: WatchRelayState? { controller.state }
     private var isRecording: Bool { state?.isRecording ?? false }
+    /// Stills chrome follows the phone's own mode rather than being inferred here.
+    private var isPhotography: Bool { state?.isPhotography ?? false }
 
     /// Crown-driven magnification of the preview, 1 = the whole frame.
     @State private var zoom: Double = 1
@@ -23,7 +25,7 @@ struct WatchMonitorView: View {
         // the bars can never sit on the image. On the Ultra the leftover fits the full-width 16:9
         // box (edge-to-edge); the smallest watches trade a few points of feed width for that.
         VStack(spacing: 2) {
-            timecodeBar
+            topBar
                 .padding(.horizontal, 6)
             feed
                 .frame(maxHeight: .infinity)
@@ -42,6 +44,26 @@ struct WatchMonitorView: View {
     }
 
     // MARK: Top bar
+
+    /// Stills rent the timecode's slot for SHOTS, exactly as the phone does — timecode means
+    /// nothing for a still, and leaving the bar empty would waste the wrist's scarcest space.
+    @ViewBuilder private var topBar: some View {
+        if isPhotography {
+            Text(shotsLabel)
+                .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                .minimumScaleFactor(0.5)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Shots remaining \(shotsLabel)")
+        } else {
+            timecodeBar
+        }
+    }
+
+    private var shotsLabel: String {
+        let shots = state?.shotsRemaining ?? ""
+        return shots.isEmpty ? "—" : shots
+    }
 
     /// Timecode owns the whole top bar: large monospaced digits, auto-shrinking to fit the row on
     /// smaller watches so it never truncates.
@@ -109,7 +131,10 @@ struct WatchMonitorView: View {
     /// inside a sizing container feeds its overflow back into the layout and breaks the ratio).
     private var feed: some View {
         Color.black
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            // The body's own image area, not a fixed shape: stills frame at FX/DX 3:2, 1:1 or
+            // 16:9, and the ratio arrives with the state so a crop change on the camera reaches
+            // the wrist directly.
+            .aspectRatio(state?.feedAspectRatio ?? (16.0 / 9.0), contentMode: .fit)
             .overlay {
                 if let image = controller.feedImage {
                     GeometryReader { proxy in
@@ -215,7 +240,7 @@ struct WatchMonitorView: View {
         HStack(spacing: 4) {
             Text(storageLabel)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            recordButton
+            captureControl
             HStack(spacing: 3) {
                 // The camera glyph, not a battery glyph: the gauge beside it already says
                 // "battery", so the icon's job is to say WHOSE — the phone's own charge never
@@ -235,6 +260,38 @@ struct WatchMonitorView: View {
 
     private var canRecord: Bool {
         controller.isReachable && state?.connection == .connected && !controller.isSendingCommand
+    }
+
+    /// Stills get a shutter, cinema keeps the record toggle. They are different actions — one is
+    /// momentary, one latches — so they get different shapes and different feedback rather than
+    /// one control wearing two labels.
+    @ViewBuilder private var captureControl: some View {
+        if isPhotography { shutterButton } else { recordButton }
+    }
+
+    private var shutterButton: some View {
+        Button {
+            // `.success` on the press, not the record button's `.click`: a release is a completed
+            // action, and the wrist should be able to tell a capture from a record toggle by feel
+            // alone without looking down.
+            WKInterfaceDevice.current().play(.success)
+            controller.sendCapture()
+        } label: {
+            ZStack {
+                Circle()
+                    .stroke(.white.opacity(0.85), lineWidth: 2)
+                    .frame(width: 38, height: 38)
+                Circle()
+                    .fill(.white)
+                    .frame(width: 28, height: 28)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canRecord)
+        .opacity(canRecord ? 1 : 0.4)
+        .accessibilityLabel("Shutter")
     }
 
     private var recordButton: some View {

@@ -10151,6 +10151,10 @@ final class NativeAppModel {
             self?.watchToggleRecord()
                 ?? WatchCommandResult(accepted: false, isRecording: false, error: "unavailable")
         }
+        watchRelay.onCapture = { [weak self] in
+            self?.watchCapture()
+                ?? WatchCommandResult(accepted: false, isRecording: false, error: "unavailable")
+        }
         watchRelay.onReachabilityChanged = { [weak self] in
             self?.publishWatchState()
         }
@@ -10218,6 +10222,22 @@ final class NativeAppModel {
     /// Handles a Record toggle relayed from the watch. Bypasses `recordConfirmationEnabled` —
     /// a phone-side confirmation dialog would strand an unseen prompt while the operator is
     /// looking at the watch.
+    /// Releases the shutter for the watch, through the phone's own `captureStill` rather than a
+    /// second release path — drive mode, focus preservation and the SHOTS decrement all live
+    /// there, and a parallel implementation would drift from every one of them.
+    func watchCapture() -> WatchCommandResult {
+        let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector)
+        guard isPhotography else {
+            return WatchCommandResult(
+                accepted: false, isRecording: isRecording,
+                error: "Switch the camera to photo mode first.")
+        }
+        captureStill()
+        publishWatchState()
+        return WatchCommandResult(accepted: true, isRecording: isRecording, error: nil)
+    }
+
     func watchToggleRecord() -> WatchCommandResult {
         let wasRecording = isRecording
         executeRecordToggle()
@@ -10246,7 +10266,18 @@ final class NativeAppModel {
             isRecording: isRecording,
             connection: connectionState,
             feedLive: feedLive,
-            liveFPS: liveFPS)
+            liveFPS: liveFPS,
+            // One source for the mode, so the wrist and the phone cannot disagree about which
+            // chrome to show.
+            isPhotography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector),
+            shotsRemaining: cameraPropertySnapshot.shotsRemaining.map(String.init) ?? "",
+            // The still image area the phone itself frames at — carried as a ratio so a crop
+            // change on the body reaches the wrist without a second mode-to-shape table.
+            feedAspectRatio: StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector)
+                ? cameraPropertySnapshot.photographyFeedAspect
+                : MonitorFeedLayout.aspectRatio)
     }
 
     /// Publishes the current state to the watch relay (coalesced; no-ops when nothing changed).

@@ -27,6 +27,8 @@ final class WatchRelay: NSObject {
     /// Called when the watch requests a Record toggle. Returns the result to reply with. Bypasses
     /// the phone-side confirmation alert by design (an unseen phone dialog would strand the take).
     var onToggleRecord: (@MainActor () -> WatchCommandResult)?
+    /// Called when the watch releases the shutter. Routed to the phone's own still-release path.
+    var onCapture: (@MainActor () -> WatchCommandResult)?
     /// Called when watch reachability changes so the owner can re-publish the current state.
     var onReachabilityChanged: (@MainActor () -> Void)?
 
@@ -235,6 +237,8 @@ final class WatchRelay: NSObject {
             pendingFrame = nil
             pumpFrames()
             result = WatchCommandResult(accepted: true, isRecording: wasRecording, error: nil)
+        case .capture:
+            result = onCapture.map { $0() } ?? fallback
         case .none:
             result = fallback
         }

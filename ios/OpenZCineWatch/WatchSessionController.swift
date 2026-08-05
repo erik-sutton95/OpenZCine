@@ -59,6 +59,25 @@ final class WatchSessionController: NSObject {
             data, replyHandler: { @Sendable _ in }, errorHandler: { @Sendable _ in })
     }
 
+    /// Releases the shutter on the phone's camera. Shares the Record toggle's in-flight guard so a
+    /// double tap cannot queue two releases.
+    func sendCapture() {
+        guard let session, session.isReachable, !isSendingCommand else { return }
+        guard
+            let data = try? WatchRelayEnvelope.encode(
+                kind: .command, payload: WatchRelayCommand.capture)
+        else { return }
+        isSendingCommand = true
+        session.sendMessageData(
+            data,
+            replyHandler: { @Sendable reply in
+                Task { @MainActor [weak self] in self?.handleCommandReply(reply) }
+            },
+            errorHandler: { @Sendable _ in
+                Task { @MainActor [weak self] in self?.isSendingCommand = false }
+            })
+    }
+
     /// Sends a Record toggle to the phone. No-ops when not reachable.
     func sendToggleRecord() {
         guard let session, session.isReachable, !isSendingCommand else { return }

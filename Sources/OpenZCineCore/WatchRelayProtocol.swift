@@ -44,7 +44,10 @@ public struct WatchRelayState: Codable, Equatable, Sendable {
         isRecording: Bool,
         connection: WatchConnectionState,
         feedLive: Bool,
-        liveFPS: String
+        liveFPS: String,
+        isPhotography: Bool = false,
+        shotsRemaining: String = "",
+        feedAspectRatio: Double = 16.0 / 9.0
     ) {
         self.recordState = recordState
         self.timecode = timecode
@@ -56,6 +59,10 @@ public struct WatchRelayState: Codable, Equatable, Sendable {
         self.connection = connection
         self.feedLive = feedLive
         self.liveFPS = liveFPS
+        self.isPhotography = isPhotography
+        self.shotsRemaining = shotsRemaining
+        // A non-positive ratio would collapse the wrist's feed box; fall back to cinema.
+        self.feedAspectRatio = feedAspectRatio > 0 ? feedAspectRatio : 16.0 / 9.0
     }
 
     public let recordState: RecordState
@@ -68,6 +75,44 @@ public struct WatchRelayState: Codable, Equatable, Sendable {
     public let connection: WatchConnectionState
     public let feedLive: Bool  // false in Command mode
     public let liveFPS: String
+    /// Whether the body is in stills mode. Sourced on the phone from
+    /// ``StillCapturePolicy/prefersPhotographyChrome(selector:)`` so the wrist and the phone can
+    /// never disagree about which chrome to show.
+    public let isPhotography: Bool
+    /// The SHOTS counter, which takes the top bar that timecode vacates in stills. Carried rather
+    /// than counted on the watch: two counts of the same captures would drift.
+    public let shotsRemaining: String
+    /// The feed's shape. Photography frames at the still IMAGE AREA — FX/DX 3:2, 1:1, 16:9 — so
+    /// the ratio travels rather than a mode, and a crop change on the body reaches the wrist
+    /// without a second table to keep in sync.
+    public let feedAspectRatio: Double
+
+    /// Decoded leniently for the three stills fields.
+    ///
+    /// A default on `init` does NOT reach Codable's synthesised decoder — it still demands every
+    /// key — so a payload written before photo mode existed would fail to decode entirely rather
+    /// than fall back. That is not hypothetical: the phone and the watch update independently, so
+    /// a new watch build routinely reads an old phone's state and vice versa. The golden-fixture
+    /// test pins exactly this.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recordState = try container.decode(RecordState.self, forKey: .recordState)
+        timecode = try container.decode(Timecode.self, forKey: .timecode)
+        mediaStatus = try container.decodeIfPresent(MediaStatus.self, forKey: .mediaStatus)
+        media = try container.decode(String.self, forKey: .media)
+        cameraBatteryPercent = try container.decode(Int.self, forKey: .cameraBatteryPercent)
+        cameraName = try container.decode(String.self, forKey: .cameraName)
+        isRecording = try container.decode(Bool.self, forKey: .isRecording)
+        connection = try container.decode(WatchConnectionState.self, forKey: .connection)
+        feedLive = try container.decode(Bool.self, forKey: .feedLive)
+        liveFPS = try container.decode(String.self, forKey: .liveFPS)
+        isPhotography =
+            try container.decodeIfPresent(Bool.self, forKey: .isPhotography) ?? false
+        shotsRemaining =
+            try container.decodeIfPresent(String.self, forKey: .shotsRemaining) ?? ""
+        let ratio = try container.decodeIfPresent(Double.self, forKey: .feedAspectRatio)
+        feedAspectRatio = (ratio ?? 0) > 0 ? (ratio ?? 0) : 16.0 / 9.0
+    }
 }
 
 /// Phone → watch preview frame. Throttled and drop-stale (only the latest matters).
@@ -93,6 +138,9 @@ public enum WatchRelayCommand: String, Codable, Equatable, Sendable {
     /// acked — so the phone's pump can be left holding a permit that will not come back while the
     /// watch shows a stale picture. The watch asking on wake is what clears both sides (#187).
     case resume
+    /// Release the shutter. Stills only; the phone routes it to the same still-release path its
+    /// own shutter uses rather than a second implementation.
+    case capture
 }
 
 /// Phone → watch reply acknowledging a ``WatchRelayCommand``.
