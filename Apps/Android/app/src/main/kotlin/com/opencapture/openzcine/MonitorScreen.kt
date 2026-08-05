@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -1831,7 +1832,11 @@ internal fun MonitorScreen(
         // The zoom is session-only: it is a focus check, not a setting, and a monitor that reopens
         // already magnified is a monitor that lies about the framing.
         var committedZoom by remember { mutableStateOf(FeedZoom.NONE) }
-        val feedZoom = committedZoom
+        // Read at composition scope ONLY through this boolean. `committedZoom` itself changes on
+        // every pointer event of a gesture, and reading it here would recompose the whole monitor
+        // tree each time — which is what made the gesture feel laggy. The transform is read in the
+        // graphicsLayer lambda instead, so a gesture costs a redraw and not a recomposition.
+        val isFeedZoomed by remember { derivedStateOf { committedZoom.isZoomed } }
         // The same instrument the playback viewer uses (`MediaStillViewer`): Compose's own
         // multitouch transform, which resolves centroid, zoom and pan together per event. Rolling
         // this by hand off the feed's pointer arbiter gave a noticeably worse gesture.
@@ -2222,29 +2227,40 @@ internal fun MonitorScreen(
                     // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
                     // of the gestures so Compose maps a touch back through the scale and
                     // tap-to-focus still lands on the pixel under the finger.
+                    // OUTSIDE the zoom layer, as the playback viewer's is. Inside it, Compose maps
+                    // pointer positions back through the scale before reporting them, so a finger
+                    // travelling D pixels arrives as D/scale and the picture tracks at a fraction
+                    // of the finger — worse the further you zoom.
+                    //
+                    // Pinch always transforms; a one-finger drag only pans once zoomed, so an
+                    // unzoomed drag still reaches the DISP swipe in the arbiter below.
+                    .transformable(
+                        state = feedTransformState,
+                        canPan = { committedZoom.isZoomed },
+                    )
                     .graphicsLayer {
                         // A CENTER-anchored scale then the offset, in that order — the pair every
                         // formula in FeedZoom is written against. Anchoring on the AF box instead
                         // (as the retired MAG tool did) would make the pinch pivot somewhere the
                         // operator's fingers are not.
-                        scaleX = feedZoom.scale
-                        scaleY = feedZoom.scale
+                        //
+                        // Read inside this lambda on purpose: graphicsLayer defers its state reads
+                        // to the draw phase, so a gesture redraws without recomposing.
+                        val zoom = committedZoom
+                        scaleX = zoom.scale
+                        scaleY = zoom.scale
                         transformOrigin = TransformOrigin.Center
-                        translationX = feedZoom.offsetX
-                        translationY = feedZoom.offsetY
+                        translationX = zoom.offsetX
+                        translationY = zoom.offsetY
                     }
                     .onSizeChanged { feedPointerSize = it }
-                    // Pinch always transforms; a one-finger drag only pans once zoomed, so an
-                    // unzoomed drag still reaches the DISP swipe in the arbiter below.
-                    .transformable(
-                        state = feedTransformState,
-                        canPan = { feedZoom.isZoomed },
-                    )
+                    // Stays INSIDE the layer: tap-to-focus wants its coordinates mapped back
+                    // through the scale so a tap lands on the pixel under the finger.
                     .focusFeedGestures(
                         geometry = feedGestureGeometry,
                         context = focusGestureContext,
                         isPortrait = isPortrait,
-                        isZoomed = feedZoom.isZoomed,
+                        isZoomed = isFeedZoomed,
                         onHoldingChanged = { focusLockHolding = it },
                         onAction = handleFocusFeedAction,
                     ),
