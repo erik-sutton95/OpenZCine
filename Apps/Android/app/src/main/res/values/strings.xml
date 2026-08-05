@@ -262,6 +262,7 @@
     <string name="sharing_share_this_feed">Share This Feed</string>
     <string name="sharing_watching">Watching</string>
     <string name="sharing_watching_count">%1$d device(s)</string>
+    <string name="sharing_broadcast_priority">Broadcast Priority</string>
     <string name="sharing_watcher_passcode">Watcher Passcode</string>
     <string name="sharing_passcode_none">None</string>
     <string name="sharing_control_requests">Control Requests</string>

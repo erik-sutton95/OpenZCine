@@ -9,6 +9,7 @@ import com.opencapture.openzcine.monitorStorageLabel
 import com.opencapture.openzcine.monitorValueOrNull
 import com.opencapture.openzcine.validBatteryPercent
 import com.opencapture.openzcine.core.CameraFocusPoint
+import com.opencapture.openzcine.core.RelayEncoderProfile
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
@@ -59,6 +60,16 @@ class RelayBroadcastController(
             host?.watcherPasscode = value
         }
 
+    /**
+     * Broadcast priority (iOS `relayEncoderProfile`). Reaches watchers as they join — see
+     * [MonitorRelayHost.encoderProfile] for why a live broadcast keeps its existing lanes.
+     */
+    var encoderProfile: RelayEncoderProfile = RelayEncoderProfile.LOW_LATENCY
+        set(value) {
+            field = value
+            host?.encoderProfile = value
+        }
+
     var allowsControlRequests: Boolean = true
         set(value) {
             field = value
@@ -87,6 +98,7 @@ class RelayBroadcastController(
         val host = MonitorRelayHost(scope, deviceName, cameraName)
         host.watcherPasscode = watcherPasscode
         host.allowsControlRequests = allowsControlRequests
+        host.encoderProfile = encoderProfile
         host.onPeerCountChanged = { count ->
             mutableUi.value = mutableUi.value.copy(watcherCount = count)
         }

@@ -1111,6 +1111,14 @@ class MainActivity : ComponentActivity() {
                                                         operatorSettings
                                                             .relayAllowsControlRequests
                                                             .value
+                                                    relayBroadcastController.encoderProfile =
+                                                        com.opencapture.openzcine.core
+                                                            .RelayEncoderProfile
+                                                            .fromWireValue(
+                                                                operatorSettings
+                                                                    .relayEncoderProfile
+                                                                    .value
+                                                            )
                                                     relayBroadcastEnabled =
                                                         relayBroadcastController.start(
                                                             session = active,

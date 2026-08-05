@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.relay
 
+import com.opencapture.openzcine.core.RelayEncoderProfile
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicLong
@@ -36,16 +37,29 @@ class MonitorRelayHost(
     var watcherPasscode: String = ""
     var allowsControlRequests: Boolean = true
 
+    /**
+     * The operator's latency-vs-quality stance. Only its in-flight depth applies here — this host
+     * serves standalone JPEGs, so there is no keyframe cadence to lengthen.
+     *
+     * A peer's lane depth is fixed when the peer joins, because a [Channel]'s capacity cannot be
+     * changed once created. Changing the stance therefore reaches watchers as they (re)join rather
+     * than mid-stream.
+     */
+    var encoderProfile: RelayEncoderProfile = RelayEncoderProfile.LOW_LATENCY
+
     var onPeerCountChanged: ((Int) -> Unit)? = null
     var onControlChanged: ((pendingName: String?, holderName: String?) -> Unit)? = null
     var onCommand: ((MonitorRelayWire.Command) -> Unit)? = null
     var onFailure: ((String) -> Unit)? = null
 
-    private class Peer(val id: Long, val socket: Socket) {
+    private class Peer(val id: Long, val socket: Socket, laneDepth: Int) {
         var name: String = "A device"
         var authorized: Boolean = false
         val control = Channel<ByteArray>(Channel.UNLIMITED)
-        val frames = Channel<ByteArray>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        // Newest-wins either way; the depth only decides how much link jitter is ridden out
+        // before a frame is skipped rather than waited for.
+        val frames =
+            Channel<ByteArray>(capacity = laneDepth, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         var writer: Job? = null
         var reader: Job? = null
     }
@@ -105,7 +119,12 @@ class MonitorRelayHost(
     }
 
     private suspend fun attach(socket: Socket) {
-        val peer = Peer(nextPeerID.getAndIncrement(), socket)
+        val peer =
+            Peer(
+                nextPeerID.getAndIncrement(),
+                socket,
+                laneDepth = encoderProfile.maxInFlightFramesPerPeer,
+            )
         mutex.withLock { peers[peer.id] = peer }
         notifyPeerCount()
         peer.writer =

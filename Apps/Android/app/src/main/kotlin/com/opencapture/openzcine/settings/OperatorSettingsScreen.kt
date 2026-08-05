@@ -827,6 +827,28 @@ private fun SharingRows(
         SettingsInlineRow(title = stringResource(R.string.sharing_watching)) {
             SettingsValueText(stringResource(R.string.sharing_watching_count, ui.watcherCount))
         }
+        // Between Watching and the passcode, exactly where the iOS Sharing panel puts it. The
+        // option words come from the shared core rather than a string resource, so the two shells
+        // cannot end up offering differently-named stances.
+        SettingsInlineRow(title = stringResource(R.string.sharing_broadcast_priority)) {
+            val profile =
+                com.opencapture.openzcine.core.RelayEncoderProfile.fromWireValue(
+                    settings.relayEncoderProfile.value
+                )
+            SettingsSegmented(
+                options =
+                    com.opencapture.openzcine.core.RelayEncoderProfile.entries.map { it.title },
+                selected = profile.title,
+            ) { value ->
+                val picked =
+                    com.opencapture.openzcine.core.RelayEncoderProfile.entries.firstOrNull {
+                        it.title == value
+                    } ?: return@SettingsSegmented
+                settings.relayEncoderProfile.value = picked.wireValue
+                sharing.encoderProfile = picked
+                onInteraction()
+            }
+        }
         SettingsInlineRow(title = stringResource(R.string.sharing_watcher_passcode)) {
             BasicTextField(
                 value = passcodeDraft,

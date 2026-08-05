@@ -868,6 +868,17 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val relayAllowsControlRequests: Toggle =
         Toggle("sharing.allowsControlRequests", default = true)
     /**
+     * Broadcast priority — iOS `relayEncoderProfile`. Stored as the shared core's raw value so
+     * the two shells persist the same thing, and read back through
+     * [com.opencapture.openzcine.core.RelayEncoderProfile.fromWireValue], which falls back to the
+     * tightest path rather than trusting whatever is on disk.
+     */
+    public val relayEncoderProfile: Text =
+        Text(
+            "sharing.encoderProfile",
+            default = com.opencapture.openzcine.core.RelayEncoderProfile.LOW_LATENCY.wireValue,
+        )
+    /**
      * Enables the live-view focus-by-wire scrub strip in video and photo mode (**default off**).
      * Surfaced as a row inside the FOCUS popup rather than Operator Setup, mirroring the iOS
      * shell; off hides the strip even in an AF focus mode.
