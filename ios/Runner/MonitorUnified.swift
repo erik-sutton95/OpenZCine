@@ -1250,62 +1250,20 @@ struct MonitorShell: View {
     /// shells use — the banner is mounted above `allowsHitTesting(false)`, outside the branch that
     /// already holds `map`, and only ever while the editor is open.
     private var editorZoneMap: MonitorZoneMap {
-        refinedIfFreedBand(
-            MonitorZoneLayout.map(
-                viewportWidth: context.viewportWidth,
-                viewportHeight: context.viewportHeight,
-                safeArea: context.feedSafeArea,
-                chromeInsets: context.isPortrait ? nil : context.chromeInsets,
-                mode: model.displayMode,
-                isPortrait: context.isPortrait,
-                aspect: model.preferences.portraitFeedAspect,
-                scopeCount: scopeCount,
-                horizontalDirection: context.horizontalDirection,
-                bottomBarHeight: context.isPortrait
-                    ? (model.chromeSectionMounts(.assistToolbar)
-                        ? MonitorPortraitLayout.assistToolbarHeight : 0)
-                    : landscapeBottomBarHeight
-            ))
-    }
-
-    /// Whether the landscape band runs the freed-band redistribution: DISP takes the
-    /// bottom-trailing corner, the assist strip centers wide, and the top chrome rises
-    /// (`MonitorZoneLayout.watcherRefined`).
-    ///
-    /// The condition is CAPABILITY, not what happens to be mounted: this device cannot drive the
-    /// camera, so the record control and the capture strip can never appear and their lanes are
-    /// permanently free.
-    ///
-    /// Two earlier versions keyed on mount state and both leaked. The first asked whether the
-    /// record control and capture strip were currently unmounted — true for a watcher, but also
-    /// for an operator who had switched both off, who then lost the capture lane to the widened
-    /// strip. The second added `videoSource == .relay` and kept the mount checks as a "second
-    /// gate", which was no gate at all: `chromeSectionMounts` already folds in the same
-    /// availability the first condition tested, so the two conditions shared one source of truth
-    /// and a stale value moved both together.
-    ///
-    /// `canDriveCamera` is computed fresh from the live session (`ownsCameraSession ||
-    /// holdsRelayControl`), so it cannot be carried over from a finished session the way a
-    /// latched source kind or a persisted chrome preference can. That is what makes this immune
-    /// to the three reports: a watcher who takes control gains `holdsRelayControl` and drops out
-    /// of the freed band immediately; a watcher whose broadcaster closes and who then connects to
-    /// the camera gains `ownsCameraSession` and drops out even if the source kind is still stale;
-    /// and an operator always has one of the two.
-    private var refinesForFreedBand: Bool {
-        !context.isPortrait
-            && model.displayMode != .command
-            && !model.monitorAvailability.canDriveCamera
-    }
-
-    private func refinedIfFreedBand(_ map: MonitorZoneMap) -> MonitorZoneMap {
-        guard refinesForFreedBand else { return map }
-        return MonitorZoneLayout.watcherRefined(
-            map,
+        MonitorZoneLayout.map(
             viewportWidth: context.viewportWidth,
-            // A bare breathing margin, NOT the chrome inset: the freed band's headroom is dead
-            // black and the monitor runs status-bar-less, so the watcher chrome hugs the top
-            // edge (field report: "can still be moved up further").
-            minimumTopY: 10
+            viewportHeight: context.viewportHeight,
+            safeArea: context.feedSafeArea,
+            chromeInsets: context.isPortrait ? nil : context.chromeInsets,
+            mode: model.displayMode,
+            isPortrait: context.isPortrait,
+            aspect: model.preferences.portraitFeedAspect,
+            scopeCount: scopeCount,
+            horizontalDirection: context.horizontalDirection,
+            bottomBarHeight: context.isPortrait
+                ? (model.chromeSectionMounts(.assistToolbar)
+                    ? MonitorPortraitLayout.assistToolbarHeight : 0)
+                : landscapeBottomBarHeight
         )
     }
 
@@ -1393,21 +1351,20 @@ struct MonitorShell: View {
         // physical height — use the context's restored full height for both the map and the
         // canvas frame, otherwise lock/battery/rail frames land short.
         let fullHeight = context.viewportHeight
-        let map = refinedIfFreedBand(
-            MonitorZoneLayout.map(
-                viewportWidth: context.viewportWidth,
-                viewportHeight: fullHeight,
-                safeArea: context.feedSafeArea,
-                // Carries the iPadOS 26 window-control clearance the safe area lacks (see
-                // `clearingWindowControls`), so the lock button and top deck render below the pill.
-                chromeInsets: context.chromeInsets,
-                mode: model.displayMode,
-                isPortrait: false,
-                aspect: model.preferences.portraitFeedAspect,
-                scopeCount: scopeCount,
-                horizontalDirection: context.horizontalDirection,
-                bottomBarHeight: landscapeBottomBarHeight
-            ))
+        let map = MonitorZoneLayout.map(
+            viewportWidth: context.viewportWidth,
+            viewportHeight: fullHeight,
+            safeArea: context.feedSafeArea,
+            // Carries the iPadOS 26 window-control clearance the safe area lacks (see
+            // `clearingWindowControls`), so the lock button and top deck render below the pill.
+            chromeInsets: context.chromeInsets,
+            mode: model.displayMode,
+            isPortrait: false,
+            aspect: model.preferences.portraitFeedAspect,
+            scopeCount: scopeCount,
+            horizontalDirection: context.horizontalDirection,
+            bottomBarHeight: landscapeBottomBarHeight
+        )
         let chrome = model.monitorChrome
 
         ZStack(alignment: .topLeading) {
@@ -1599,7 +1556,7 @@ struct MonitorShell: View {
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 // Photography centres the strip under the centred feed (cinema keeps the
                 // assist-then-strip leading flow). The freed band needs no alignment override:
-                // its zone is already widened and viewport-centred by `watcherRefined`, and the
+                // its zone is the layout's own, and the
                 // strip's scroller fills whatever width the zone hands it.
                 .frame(
                     width: CGFloat(width), height: CGFloat(assist.frame.height),
