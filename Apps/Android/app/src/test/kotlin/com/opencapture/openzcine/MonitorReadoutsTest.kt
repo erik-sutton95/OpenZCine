@@ -70,12 +70,19 @@ class MonitorReadoutsTest {
 
     @Test
     fun `battery labels distinguish percentage external power and unavailable`() {
-        assertEquals("0%", batteryReadoutLabel(0))
-        assertEquals("80%", batteryReadoutLabel(80, externalPower = true))
+        // #303: the camera gauge is five bars, not a percentage — BatteryLevel only ever carries
+        // 1/20/40/60/80/100, so "80%" claimed a precision the body never sent.
+        assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(0))
+        assertEquals("4/5", batteryReadoutLabel(80, externalPower = true))
+        assertEquals("3/5", batteryReadoutLabel(60))
+        assertEquals("1/5", batteryReadoutLabel(20))
+        // The blinking shutter-disabled step, and an off-step value rounding up to its step.
+        assertEquals("1/5", batteryReadoutLabel(1))
+        assertEquals("2/5", batteryReadoutLabel(39))
         assertEquals("EXT", batteryReadoutLabel(null, externalPower = true))
         assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(Int.MIN_VALUE))
         val poweredPercentage = monitorBatteryPresentation(80, externalPower = true)
-        assertEquals("80%", poweredPercentage.label)
+        assertEquals("4/5", poweredPercentage.label)
         assertEquals(80, poweredPercentage.percent)
         assertTrue(poweredPercentage.externalPower)
         val poweredOnly = monitorBatteryPresentation(null, externalPower = true)

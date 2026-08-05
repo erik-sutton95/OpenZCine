@@ -1922,6 +1922,17 @@ struct BatteryIndicator: View {
     /// battery as discrete steps (1/20/40/60/80/100 %), so the camera readout naturally lands on
     /// 20/40/60/80/100 % (and 1 % when critical) rather than a misleadingly precise figure.
     private var batterySymbol: String {
+        // Camera: pick the glyph from the bar count so the icon and the readout cannot disagree.
+        if let cameraGauge {
+            switch cameraGauge.filledBars {
+            case 0: return "battery.0percent"
+            case 1: return "battery.25percent"
+            case 2: return "battery.25percent"
+            case 3: return "battery.50percent"
+            case 4: return "battery.75percent"
+            default: return "battery.100percent"
+            }
+        }
         let bucket = percent
         switch bucket {
         case ..<13: return "battery.0percent"
@@ -1932,13 +1943,28 @@ struct BatteryIndicator: View {
         }
     }
 
-    /// The readout under the glyph: charge percent for both the camera and the phone.
+    /// The camera's gauge, as the body reports it (nil for the phone, which is a real percentage).
+    private var cameraGauge: CameraBatteryGauge? {
+        isCamera ? CameraBatteryGauge.gauge(rawBatteryLevel: percent) : nil
+    }
+
+    /// The readout under the glyph.
+    ///
+    /// The phone is a true percentage. The camera is NOT: `BatteryLevel` is a five-bar gauge that
+    /// only ever carries 1/20/40/60/80/100, so printing it as "60%" claimed a precision the body
+    /// never sent and read 20 points high mid-step (#303). Bars are what the camera itself shows.
     private var readout: String {
-        "\(percent)%"
+        guard let cameraGauge else { return "\(percent)%" }
+        switch cameraGauge {
+        case .unknown: return "—"
+        case .critical, .bars: return "\(cameraGauge.filledBars)/\(CameraBatteryGauge.barCount)"
+        }
     }
 
     private var isLow: Bool {
-        isCamera ? percent < 10 : percent <= 15
+        guard let cameraGauge else { return percent <= 15 }
+        // The body's own threshold: one bar left, or the blinking exhausted step.
+        return cameraGauge.filledBars <= 1
     }
 
     private var batteryTint: Color {
@@ -1970,7 +1996,9 @@ struct BatteryIndicator: View {
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(batteryTint)
                 }
-                Text("\(percent)")
+                // `readout`, not the raw number: the camera's is a bar count (#303), and this row
+                // is the gauge the operator actually reads on the monitor.
+                Text(readout)
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(batteryTint)
                     // "100" plus the charging bolt is wider than the outline — shrink the

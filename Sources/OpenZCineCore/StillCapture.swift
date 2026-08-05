@@ -496,3 +496,46 @@ public enum StillReleaseReadiness: Equatable, Sendable {
     /// The release failed (out of focus, storage full, …).
     case failed(PTPResponseCode)
 }
+
+/// The camera's battery gauge, as the body actually reports it.
+///
+/// `BatteryLevel` (0x5001) is a five-bar gauge, not a percentage: the documented property only ever
+/// carries 1, 20, 40, 60, 80 or 100, mapping to 1/5…5/5 bars with 1 meaning the blinking
+/// shutter-disabled state. Rendering the raw number as "60%" claims a precision the camera never
+/// sent — the operator reads 60% while the body is anywhere from 40% to 59%, which is exactly the
+/// gap reported in #303 (app 60%, body 58% falling to 39%).
+public enum CameraBatteryGauge: Equatable, Sendable {
+    /// Filled bars out of ``barCount``, 1…5.
+    case bars(Int)
+    /// The body's critical step: one bar, blinking, shutter release disabled.
+    case critical
+    /// No battery reading yet (or no camera).
+    case unknown
+
+    /// Bars in a full gauge, matching the body's own display.
+    public static let barCount = 5
+
+    /// Maps a raw `BatteryLevel` value to the gauge the body is showing.
+    ///
+    /// Values between the documented steps are rounded UP to the step they sit under, so a body
+    /// that reports a finer value than the ZR spec allows still never overstates its charge.
+    public static func gauge(rawBatteryLevel raw: Int) -> CameraBatteryGauge {
+        guard raw > 0 else { return .unknown }
+        guard raw > 1 else { return .critical }
+        let clamped = min(100, raw)
+        // 20/40/60/80/100 -> 1…5. A value inside a step keeps that step's bar count.
+        return .bars(max(1, min(barCount, Int(ceil(Double(clamped) / 20.0)))))
+    }
+
+    /// Filled bars for rendering, with `critical` drawn as its single blinking bar.
+    public var filledBars: Int {
+        switch self {
+        case .bars(let count): return count
+        case .critical: return 1
+        case .unknown: return 0
+        }
+    }
+
+    /// Whether the body has disabled the shutter for exhaustion.
+    public var isCritical: Bool { self == .critical }
+}

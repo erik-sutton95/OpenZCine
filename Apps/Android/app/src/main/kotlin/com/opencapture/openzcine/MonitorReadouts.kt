@@ -9,6 +9,7 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import java.util.Locale
+import kotlin.math.ceil
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
 internal const val UNAVAILABLE_TIMECODE = "—:—:—:—"
@@ -121,8 +122,32 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String {
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
 
 /** Camera battery label that preserves authoritative external-power-only readback. */
+/** Bars in the camera's gauge, mirroring iOS `CameraBatteryGauge.barCount`. */
+internal const val CAMERA_BATTERY_BAR_COUNT = 5
+
+/**
+ * Filled bars for a raw `BatteryLevel` (0x5001) value, mirroring iOS `CameraBatteryGauge`.
+ *
+ * The property is a five-bar gauge, not a percentage — it only ever carries 1/20/40/60/80/100,
+ * where 1 is the blinking shutter-disabled step. Off-step values round UP to the step they sit
+ * under so the gauge can read low but never high.
+ */
+internal fun cameraBatteryBars(percent: Int?): Int? {
+    val raw = percent ?: return null
+    if (raw <= 0) return null
+    if (raw == 1) return 1
+    val clamped = minOf(100, raw)
+    return maxOf(1, minOf(CAMERA_BATTERY_BAR_COUNT, ceil(clamped / 20.0).toInt()))
+}
+
+/**
+ * The camera battery readout: bars, not a percentage (#303).
+ *
+ * Printing the raw value as "60%" claimed a precision the body never sent — it reads 60 for
+ * anything from 40% to 59%, which is exactly the discrepancy reported from the field.
+ */
 internal fun batteryReadoutLabel(percent: Int?, externalPower: Boolean? = null): String =
-    validBatteryPercent(percent)?.let { "$it%" }
+    cameraBatteryBars(validBatteryPercent(percent))?.let { "$it/$CAMERA_BATTERY_BAR_COUNT" }
         ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
 
 /** Builds the battery label and visible power-marker state from authoritative readback. */
