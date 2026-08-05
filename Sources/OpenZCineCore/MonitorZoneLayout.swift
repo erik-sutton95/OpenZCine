@@ -115,6 +115,39 @@ public struct MonitorZoneMap: Equatable, Sendable {
         self.controlsGrid = controlsGrid
         self.recOptions = recOptions
     }
+
+    /// A copy with a different assist strip. Every other zone is carried over unchanged, so a
+    /// caller adjusting one zone cannot silently drop another as the map gains fields.
+    /// A copy with different system slots, carrying every other zone over unchanged.
+    public func replacingSystemSlots(_ slots: MonitorSystemSlotFrames) -> MonitorZoneMap {
+        MonitorZoneMap(
+            feed: feed,
+            infoBar: infoBar,
+            captureStrip: captureStrip,
+            assistStrip: assistStrip,
+            systemCluster: systemCluster,
+            systemSlots: slots,
+            batteryCluster: batteryCluster,
+            scopes: scopes,
+            controlsGrid: controlsGrid,
+            recOptions: recOptions
+        )
+    }
+
+    public func replacingAssistStrip(_ strip: MonitorZone?) -> MonitorZoneMap {
+        MonitorZoneMap(
+            feed: feed,
+            infoBar: infoBar,
+            captureStrip: captureStrip,
+            assistStrip: strip,
+            systemCluster: systemCluster,
+            systemSlots: systemSlots,
+            batteryCluster: batteryCluster,
+            scopes: scopes,
+            controlsGrid: controlsGrid,
+            recOptions: recOptions
+        )
+    }
 }
 
 /// Pure adapter that normalizes the two existing monitor layout policies — landscape
@@ -132,6 +165,75 @@ public enum MonitorZoneLayout {
     /// `chromeInsets` lets the shell pass margins that carry platform exclusions the safe area
     /// does not (the iPadOS 26 window-control pill); `nil` derives them from `safeArea` via
     /// `MonitorChromeLayout.insets`, as before.
+    /// The watcher band: DISP moves to the bottom-trailing corner and the assist strip centres.
+    ///
+    /// A watcher WITHOUT control has no record button and no capture strip, so the trailing
+    /// corner and the capture lane are genuinely free. DISP takes the corner, and the strip
+    /// centres rather than sitting in the lane it normally shares with the capture strip.
+    ///
+    /// The caller decides on CAPABILITY — can this device drive the camera — not on whether
+    /// those controls happen to be mounted. Emptiness catches an operator who switched them off,
+    /// whose controls can come back at any moment; only a watcher without control owns the space.
+    ///
+    /// Two things this deliberately does NOT do. It never widens the strip: a ~2x-widened glass
+    /// panel rendered as an empty sheet in verification (tools in the accessibility tree,
+    /// invisible in pixels — a glass-container span limit), and the base width already carries
+    /// the full tool set behind its scroll chevrons. And it leaves the top chrome where it is.
+    public static func watcherBand(
+        _ map: MonitorZoneMap,
+        viewportWidth: Double
+    ) -> MonitorZoneMap {
+        let slots = map.systemSlots
+        let record = slots.record
+        // Bottom-aligned to the assist BAND's bottom line — the one line that sits at the same y
+        // in every DISP mode on every form factor. Anchoring to the record slot instead left DISP
+        // floating mid-screen on rail layouts, where record sits mid-rail.
+        let bandBottom =
+            map.assistStrip.map { $0.frame.y + $0.frame.height } ?? (record.y + record.height)
+        let disp = MonitorModuleFrame(
+            x: record.x + record.width - slots.disp.width,
+            y: bandBottom - slots.disp.height,
+            width: slots.disp.width,
+            height: slots.disp.height
+        )
+
+        var assistStrip = map.assistStrip
+        if let strip = map.assistStrip {
+            let center = viewportWidth / 2
+            var x = center - strip.frame.width / 2
+            // DISP now shares the band, so the strip slides clear of it rather than under it.
+            let sharesBand =
+                disp.y < strip.frame.y + strip.frame.height
+                && disp.y + disp.height > strip.frame.y
+            if sharesBand {
+                x =
+                    disp.x + disp.width / 2 >= center
+                    ? min(x, disp.x - 16 - strip.frame.width)
+                    : max(x, disp.x + disp.width + 16)
+            }
+            assistStrip = MonitorZone(
+                frame: MonitorModuleFrame(
+                    x: max(x, 12),
+                    y: strip.frame.y,
+                    width: strip.frame.width,
+                    height: strip.frame.height
+                ),
+                style: strip.style,
+                collapsible: strip.collapsible
+            )
+        }
+
+        return map.replacingAssistStrip(assistStrip)
+            .replacingSystemSlots(
+                MonitorSystemSlotFrames(
+                    lock: slots.lock,
+                    disp: disp,
+                    record: record,
+                    media: slots.media,
+                    settings: slots.settings
+                ))
+    }
+
     public static func map(
         viewportWidth: Double,
         viewportHeight: Double,

@@ -1250,21 +1250,42 @@ struct MonitorShell: View {
     /// shells use — the banner is mounted above `allowsHitTesting(false)`, outside the branch that
     /// already holds `map`, and only ever while the editor is open.
     private var editorZoneMap: MonitorZoneMap {
-        MonitorZoneLayout.map(
-            viewportWidth: context.viewportWidth,
-            viewportHeight: context.viewportHeight,
-            safeArea: context.feedSafeArea,
-            chromeInsets: context.isPortrait ? nil : context.chromeInsets,
-            mode: model.displayMode,
-            isPortrait: context.isPortrait,
-            aspect: model.preferences.portraitFeedAspect,
-            scopeCount: scopeCount,
-            horizontalDirection: context.horizontalDirection,
-            bottomBarHeight: context.isPortrait
-                ? (model.chromeSectionMounts(.assistToolbar)
-                    ? MonitorPortraitLayout.assistToolbarHeight : 0)
-                : landscapeBottomBarHeight
-        )
+        assistStripCenteredIfWatching(
+            MonitorZoneLayout.map(
+                viewportWidth: context.viewportWidth,
+                viewportHeight: context.viewportHeight,
+                safeArea: context.feedSafeArea,
+                chromeInsets: context.isPortrait ? nil : context.chromeInsets,
+                mode: model.displayMode,
+                isPortrait: context.isPortrait,
+                aspect: model.preferences.portraitFeedAspect,
+                scopeCount: scopeCount,
+                horizontalDirection: context.horizontalDirection,
+                bottomBarHeight: context.isPortrait
+                    ? (model.chromeSectionMounts(.assistToolbar)
+                        ? MonitorPortraitLayout.assistToolbarHeight : 0)
+                    : landscapeBottomBarHeight
+            ))
+    }
+
+    /// A watcher WITHOUT control centres its assist strip: it has no capture strip, so the lane
+    /// the strip normally takes — which exists to share the band with one — would leave it
+    /// hanging off to one side of an otherwise empty band.
+    ///
+    /// Keyed on capability, so control decides it live: being granted control brings the capture
+    /// strip back and returns the strip to its lane in the same moment, and giving control back
+    /// centres it again. `canDriveCamera` is computed from the current session, so it cannot be
+    /// carried over from one that has ended.
+    ///
+    /// Centring is ALL that happens here. The earlier version of this idea also relocated DISP to
+    /// the bottom-trailing corner and raised the top chrome; that breadth is what produced the
+    /// layout reports, and only the centring was ever wanted.
+    private func assistStripCenteredIfWatching(_ map: MonitorZoneMap) -> MonitorZoneMap {
+        guard !context.isPortrait,
+            model.displayMode != .command,
+            !model.monitorAvailability.canDriveCamera
+        else { return map }
+        return MonitorZoneLayout.watcherBand(map, viewportWidth: context.viewportWidth)
     }
 
     var body: some View {
@@ -1351,20 +1372,21 @@ struct MonitorShell: View {
         // physical height — use the context's restored full height for both the map and the
         // canvas frame, otherwise lock/battery/rail frames land short.
         let fullHeight = context.viewportHeight
-        let map = MonitorZoneLayout.map(
-            viewportWidth: context.viewportWidth,
-            viewportHeight: fullHeight,
-            safeArea: context.feedSafeArea,
-            // Carries the iPadOS 26 window-control clearance the safe area lacks (see
-            // `clearingWindowControls`), so the lock button and top deck render below the pill.
-            chromeInsets: context.chromeInsets,
-            mode: model.displayMode,
-            isPortrait: false,
-            aspect: model.preferences.portraitFeedAspect,
-            scopeCount: scopeCount,
-            horizontalDirection: context.horizontalDirection,
-            bottomBarHeight: landscapeBottomBarHeight
-        )
+        let map = assistStripCenteredIfWatching(
+            MonitorZoneLayout.map(
+                viewportWidth: context.viewportWidth,
+                viewportHeight: fullHeight,
+                safeArea: context.feedSafeArea,
+                // Carries the iPadOS 26 window-control clearance the safe area lacks (see
+                // `clearingWindowControls`), so the lock button and top deck render below the pill.
+                chromeInsets: context.chromeInsets,
+                mode: model.displayMode,
+                isPortrait: false,
+                aspect: model.preferences.portraitFeedAspect,
+                scopeCount: scopeCount,
+                horizontalDirection: context.horizontalDirection,
+                bottomBarHeight: landscapeBottomBarHeight
+            ))
         let chrome = model.monitorChrome
 
         ZStack(alignment: .topLeading) {

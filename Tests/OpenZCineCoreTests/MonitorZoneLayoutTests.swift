@@ -651,3 +651,39 @@ private enum PadMiniViewport {
 }
 
 // MARK: - Watcher (freed-band) refinement
+
+@Test func watcherBandPutsDispInTheCornerAndCentersTheStrip() {
+    let base = MonitorZoneLayout.map(
+        viewportWidth: 1194,
+        viewportHeight: 834,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0),
+        chromeInsets: nil,
+        mode: .live,
+        isPortrait: false,
+        aspect: .fit16x9,
+        scopeCount: 0,
+        horizontalDirection: .standard,
+        bottomBarHeight: 64
+    )
+    let band = MonitorZoneLayout.watcherBand(base, viewportWidth: 1194)
+
+    let record = base.systemSlots.record
+    // DISP takes the trailing corner the record button vacates, on the assist band's bottom line.
+    #expect(band.systemSlots.disp.x + band.systemSlots.disp.width == record.x + record.width)
+    if let strip = base.assistStrip {
+        #expect(
+            band.systemSlots.disp.y + band.systemSlots.disp.height
+                == strip.frame.y + strip.frame.height)
+    }
+
+    // The strip is moved, never resized — a widened glass panel renders as an empty sheet.
+    #expect(band.assistStrip?.frame.width == base.assistStrip?.frame.width)
+    #expect(band.assistStrip?.frame.y == base.assistStrip?.frame.y)
+
+    // Everything else is carried over untouched: this is a two-zone adjustment, not a relayout.
+    #expect(band.feed == base.feed)
+    #expect(band.infoBar == base.infoBar)
+    #expect(band.captureStrip == base.captureStrip)
+    #expect(band.systemSlots.lock == base.systemSlots.lock)
+    #expect(band.systemSlots.record == base.systemSlots.record)
+}
