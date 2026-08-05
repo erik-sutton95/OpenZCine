@@ -1824,18 +1824,30 @@ internal fun MonitorScreen(
         LaunchedEffect(operatorSettings.splitComparisonEnabled.value) {
             if (operatorSettings.splitComparisonEnabled.value) splitComparisonMuted = false
         }
-        // The punch-in is session-only for the same reason: it is a focus check, not a setting, and
-        // a monitor that reopens already magnified is a monitor that lies about the framing.
-        var magnificationActive by remember { mutableStateOf(false) }
-        // Switching the tool off clears the punch-in. Leaving it armed behind a disabled tool is
-        // how the key and the transform desynchronise — a magnified feed with no visible control
-        // that explains it (shared core `Magnification.activeAfterDisabling`).
-        LaunchedEffect(operatorSettings.magnificationEnabled.value) {
-            if (!operatorSettings.magnificationEnabled.value) magnificationActive = false
-        }
-        // Read off `renderedFraming`, so a DISP mode that suppresses the tool drops the punch-in
-        // with it — the same rule that takes the key away.
-        val punchIn = renderedFraming.magnificationScale(magnificationActive)
+        // The zoom is session-only: it is a focus check, not a setting, and a monitor that reopens
+        // already magnified is a monitor that lies about the framing.
+        var committedZoom by remember { mutableStateOf(FeedZoom.NONE) }
+        // In-flight pinch (accumulated factor + its own start centroid) and pan translation. The
+        // render derives the live transform from these every frame, exactly as iOS does with
+        // `@GestureState`, so nothing has to be unwound if a gesture is cancelled.
+        var livePinch by remember { mutableStateOf<Triple<Float, Float, Float>?>(null) }
+        var livePan by remember { mutableStateOf(0f to 0f) }
+        val feedZoom =
+            run {
+                val width = feedPointerSize.width.toFloat()
+                val height = feedPointerSize.height.toFloat()
+                if (width <= 0f || height <= 0f) {
+                    committedZoom
+                } else {
+                    val pinched =
+                        livePinch?.let { (factor, startX, startY) ->
+                            feedZoomAfterPinch(
+                                committedZoom, factor, startX, startY, width, height,
+                            )
+                        } ?: committedZoom
+                    feedZoomAfterPan(pinched, livePan.first, livePan.second, width, height)
+                }
+            }
         val renderedEffects =
             renderedFeedEffects(
                 assist.effects.copy(
@@ -1969,22 +1981,6 @@ internal fun MonitorScreen(
         // portrait fill centre-crops the image and every feed-aligned overlay
         // through the same content-rect resolver. Command unmounts the feed.
         val feedFocus = liveFeedPresentation.focus
-        // Read fresh each frame, so moving the focus point — by tap or on the body — takes the
-        // magnified view with it. Centre when there is no box to aim at.
-        val punchInAnchor =
-            magnificationAnchorBoxIndex(
-                    boxCount = feedFocus?.boxes?.size ?: 0,
-                    selectedBoxIndex = feedFocus?.selectedBoxIndex,
-                )
-                .let { index -> index?.let { feedFocus?.boxes?.get(it) } }
-                .let { box ->
-                    magnificationAnchor(
-                        boxCenterX = box?.centerX,
-                        boxCenterY = box?.centerY,
-                        coordinateWidth = feedFocus?.coordinateWidth ?: 0,
-                        coordinateHeight = feedFocus?.coordinateHeight ?: 0,
-                    )
-                }
         val feedContent =
             liveFeedContentRect(
                 containerWidth = feedPointerSize.width.toFloat(),
@@ -2205,21 +2201,36 @@ internal fun MonitorScreen(
                     // of the gestures so Compose maps a touch back through the scale and
                     // tap-to-focus still lands on the pixel under the finger.
                     .graphicsLayer {
-                        scaleX = punchIn
-                        scaleY = punchIn
-                        transformOrigin = TransformOrigin(punchInAnchor.first, punchInAnchor.second)
+                        // A CENTER-anchored scale then the offset, in that order — the pair every
+                        // formula in FeedZoom is written against. Anchoring on the AF box instead
+                        // (as the retired MAG tool did) would make the pinch pivot somewhere the
+                        // operator's fingers are not.
+                        scaleX = feedZoom.scale
+                        scaleY = feedZoom.scale
+                        transformOrigin = TransformOrigin.Center
+                        translationX = feedZoom.offsetX
+                        translationY = feedZoom.offsetY
                     }
                     .onSizeChanged { feedPointerSize = it }
                     .focusFeedGestures(
                         geometry = feedGestureGeometry,
                         context = focusGestureContext,
                         isPortrait = isPortrait,
+                        isZoomed = feedZoom.isZoomed,
                         onHoldingChanged = { focusLockHolding = it },
                         onAction = handleFocusFeedAction,
-                        onPortraitPinch = { zoom ->
-                            portraitAspectAfterPinch(zoom, portraitAspect)?.let { next ->
-                                operatorSettings.portraitFeedAspect = next
-                            }
+                        onPinch = { factor, startX, startY ->
+                            livePinch = Triple(factor, startX, startY)
+                        },
+                        onPinchEnd = {
+                            committedZoom = feedZoomSettled(feedZoom)
+                            livePinch = null
+                            livePan = 0f to 0f
+                        },
+                        onPan = { dx, dy -> livePan = dx to dy },
+                        onPanEnd = {
+                            committedZoom = feedZoom
+                            livePan = 0f to 0f
                         },
                     ),
                 contentAlignment = Alignment.Center,
@@ -3154,47 +3165,8 @@ internal fun MonitorScreen(
                 )
             }
         }
-        // Punch-in quick key, opposite the recenter/50-50 lane so it never lifts or shifts as those
-        // two come and go. One tap in, one tap out — reopening a popup to leave a magnified view
-        // would defeat the point of a focus check. The accent state is read off the same flag that
-        // drives the transform, so the two cannot disagree.
-        if (renderedFraming.magnificationEnabled && !locked && chromeEditorMode == null) {
-            val bottomChromeInset = with(density) { levelGaugeBottomChromeInset.toDp().value }
-            val factorLabel = operatorSettings.magnificationFactor.label
-            val magnifyDescription =
-                stringResource(
-                    if (magnificationActive) R.string.magnification_key_exit
-                    else R.string.magnification_key_enter,
-                    factorLabel,
-                )
-            Box(
-                Modifier
-                    .zone(
-                        magnificationKeyFrame(
-                            feed = effectiveFeed,
-                            isPortrait = isPortrait,
-                            bottomChromeInset = bottomChromeInset,
-                        ),
-                    )
-                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                    .border(
-                        1.dp,
-                        if (magnificationActive) LiveDesign.accent else LiveDesign.hairline,
-                        CircleShape,
-                    )
-                    .chromeClickable { magnificationActive = !magnificationActive }
-                    .testTag("magnification_key")
-                    .semantics { contentDescription = magnifyDescription },
-                contentAlignment = Alignment.Center,
-            ) {
-                // iOS `plus.magnifyingglass` / `minus.magnifyingglass` in a 40pt black circle.
-                MagnifyKeyGlyph(
-                    tint = if (magnificationActive) LiveDesign.accent else LiveDesign.text,
-                    active = magnificationActive,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
+        // The punch-in quick key is retired with the MAG tool it drove: zoom is direct
+        // manipulation now, so the feed itself is the control and a key would have nothing to say.
         } // end sceneLayer (feed + chrome under popups)
 
         if (!isCommand && !isClean) {

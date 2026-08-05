@@ -114,7 +114,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     val appliesToPhotography: Boolean
         get() =
             when (this) {
-                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY, DESQ, MAG -> true
+                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY, DESQ -> true
                 else -> false
             }
 
@@ -133,7 +133,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
          * feed-effect state. EV rides with the framing group: its visibility is
          * a local presentation choice, while the value stays camera-fed.
          */
-        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, EV, DESQ, MAG)
+        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, EV, DESQ)
 
         /** Independently selectable scope panels subject to the portrait fit-mode cap. */
         val scopeTools: Set<AssistTool> = setOf(WAVE, PARADE, HISTO, VECTOR, LIGHTS)

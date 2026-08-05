@@ -14,38 +14,58 @@ import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * One feed-local pointer arbiter for tap-to-focus, DISP swipe, focus lock, and portrait pinch.
+ * One feed-local pointer arbiter for tap-to-focus, DISP swipe, focus lock, and feed zoom.
+ *
+ * ONE recognizer serves the drag's two roles — pan while zoomed, the DISP swipe when not. Two
+ * drag recognizers on one surface arbitrate unpredictably: on iOS the earlier-recognizing pan
+ * starved the swipe even while inert (`7020cf9`), which is why the roles share this arbiter here
+ * rather than stacking a second `pointerInput`.
  *
  * A second pointer permanently cancels focus/lock/swipe recognition for that touch sequence and
- * hands only the accumulated pinch scale to [onPortraitPinch]. Full geometry and the interface
- * lock are pointer-input keys, so a rotation, crop, de-squeeze, coordinate-space change, or lock
- * cancels the active coroutine before a stale coordinate can be emitted. Updated-state callbacks
- * and focus gates keep later DISP swipes and focus decisions current without restarting solely for
- * camera command availability.
+ * drives the zoom instead: [onPinch] receives the accumulated factor together with the pinch's own
+ * start centroid, so every pinch pivots on where it began rather than reusing a stale anchor.
+ *
+ * Full geometry, the interface lock, and [isZoomed] are pointer-input keys, so a rotation, crop,
+ * de-squeeze, coordinate-space change, lock, or a change in the drag's role cancels the active
+ * coroutine before a stale coordinate can be emitted. Updated-state callbacks and focus gates keep
+ * later DISP swipes and focus decisions current without restarting solely for camera command
+ * availability.
  */
 @Composable
 internal fun Modifier.focusFeedGestures(
     geometry: FocusFeedGeometry?,
     context: FocusFeedGestureContext,
     isPortrait: Boolean,
+    isZoomed: Boolean,
     onHoldingChanged: (Boolean) -> Unit,
     onAction: (FocusFeedGestureAction) -> Unit,
-    onPortraitPinch: (Float) -> Unit,
+    onPinch: (factor: Float, startX: Float, startY: Float) -> Unit,
+    onPinchEnd: () -> Unit,
+    onPan: (translationX: Float, translationY: Float) -> Unit,
+    onPanEnd: () -> Unit,
 ): Modifier {
     val currentContext by rememberUpdatedState(context)
     val currentOnHoldingChanged by rememberUpdatedState(onHoldingChanged)
     val currentOnAction by rememberUpdatedState(onAction)
-    val currentOnPortraitPinch by rememberUpdatedState(onPortraitPinch)
+    val currentOnPinch by rememberUpdatedState(onPinch)
+    val currentOnPinchEnd by rememberUpdatedState(onPinchEnd)
+    val currentOnPan by rememberUpdatedState(onPan)
+    val currentOnPanEnd by rememberUpdatedState(onPanEnd)
     return pointerInput(
         geometry,
         context.interfaceLocked,
         isPortrait,
+        isZoomed,
     ) {
         val thresholds = FocusFeedGestureThresholds.forDensity(density)
         awaitEachGesture {
             var gestureState: FocusFeedGestureState = FocusFeedGestureState.Idle
             var pinchZoom = 1f
             var sawMultiplePointers = false
+            // The pinch's own start centroid, captured once. Reusing an earlier pinch's anchor
+            // makes the picture lunge sideways when you re-pinch after a pan.
+            var pinchStart: FocusFeedPixelPoint? = null
+            var panned = false
 
             fun reduce(event: FocusFeedGestureEvent) {
                 val reduction =
@@ -59,7 +79,12 @@ internal fun Modifier.focusFeedGestures(
                 currentOnHoldingChanged(
                     (gestureState as? FocusFeedGestureState.Tracking)?.holdEligible == true,
                 )
-                reduction.action?.let(currentOnAction)
+                reduction.action?.let { action ->
+                    // While zoomed the drag is a pan, so its DISP swipe stands down. Taps still
+                    // reach focus — only the swipe's lane is taken.
+                    if (isZoomed && action is FocusFeedGestureAction.RequestDisplayMode) return@let
+                    currentOnAction(action)
+                }
             }
 
             try {
@@ -101,11 +126,22 @@ internal fun Modifier.focusFeedGestures(
                         if (!sawMultiplePointers) {
                             sawMultiplePointers = true
                             reduce(FocusFeedGestureEvent.Cancel)
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isNotEmpty()) {
+                                pinchStart =
+                                    FocusFeedPixelPoint(
+                                        pressed.sumOf { it.position.x.toDouble() }
+                                            .toFloat() / pressed.size,
+                                        pressed.sumOf { it.position.y.toDouble() }
+                                            .toFloat() / pressed.size,
+                                    )
+                            }
                         }
                         pinchZoom *= event.calculateZoom()
                         event.changes.forEach { it.consume() }
+                        pinchStart?.let { currentOnPinch(pinchZoom, it.x, it.y) }
                         if (pressedCount == 0) {
-                            if (isPortrait) currentOnPortraitPinch(pinchZoom)
+                            currentOnPinchEnd()
                             return@awaitEachGesture
                         }
                         continue
@@ -127,6 +163,7 @@ internal fun Modifier.focusFeedGestures(
                                 consumed = primary.isConsumed,
                             ),
                         )
+                        if (panned) currentOnPanEnd()
                         primary.consume()
                         return@awaitEachGesture
                     }
@@ -138,6 +175,15 @@ internal fun Modifier.focusFeedGestures(
                             consumed = primary.isConsumed,
                         ),
                     )
+                    if (isZoomed) {
+                        // Cumulative from the touch-down, matching the iOS drag's `translation`,
+                        // so the owner can hold it as in-flight state and commit once on release.
+                        panned = true
+                        currentOnPan(
+                            point.x - down.position.x,
+                            point.y - down.position.y,
+                        )
+                    }
                     primary.consume()
                 }
             } finally {
