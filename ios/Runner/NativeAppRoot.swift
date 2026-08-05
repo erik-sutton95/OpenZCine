@@ -2049,8 +2049,13 @@ final class NativeAppModel {
     private func sectionHasASource(_ section: DisplayChromeVisibility.Section) -> Bool {
         let available = monitorAvailability
         switch section {
-        case .cameraValues, .codecReadout, .mediaReadout, .resolutionReadout, .batteryIndicators:
+        case .cameraValues, .codecReadout, .mediaReadout, .resolutionReadout:
             return available.cameraControls
+        case .batteryIndicators:
+            // A reading, not a control. The host forwards the camera's charge to every watcher,
+            // and the phone's own battery needs no camera at all — gating this on being able to
+            // DRIVE the camera hid both from a watcher that was being sent one of them.
+            return available.receivesCameraMetadata || !isCameraControlSession
         case .recReadout, .railRecord:
             return available.recordControl
         case .railMedia:

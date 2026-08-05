@@ -1558,10 +1558,13 @@ struct MonitorShell: View {
                         .environment(model)
                         .liveViewGuideAnchor(.viewAssist)
                         .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
-                        .frame(
-                            maxWidth: captureVisible ? .infinity : CGFloat(assist.frame.width),
-                            alignment: .leading
-                        )
+                        // Always the zone's own width — the ternary here used to hand the strip
+                        // `.infinity` when the capture strip was visible, which is exactly when it
+                        // must be bounded: the tool row then took the whole band and squeezed the
+                        // capture bar into a sliver at the trailing edge. The zone already carries
+                        // the right answer for both cases: half the band when a capture strip
+                        // shares it, its own centred width when a watcher has the band alone.
+                        .frame(maxWidth: CGFloat(assist.frame.width), alignment: .leading)
                         .layoutPriority(0)
                         .frame(maxHeight: .infinity)
                     }
