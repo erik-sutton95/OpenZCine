@@ -2460,17 +2460,18 @@ final class NativeAppModel {
     /// key once, in-popup, exactly like a first pair. The record itself is written by the
     /// connect that follows — establishment stamps the AP path from the join it applied.
     func beginAddCameraAPSetup(for camera: PTPIPSavedCameraRecord) {
-        guard
-            let ssid = CameraWiFiSSID.resolve(for: camera)
-                ?? CameraWiFiSSID.deriveSSID(fromCameraName: camera.displayName)
-        else {
-            // No derivable SSID (custom/generic camera name): the scan flow reads it off the
-            // camera's own network screen. A silent return here was a dead button.
-            presentCameraWiFiScanner()
-            return
-        }
-        let stored = CameraWiFiCredentialStore.password(forSSID: ssid, prefix: nil) ?? ""
-        stageCameraWiFiCredentials(ssid: ssid, key: stored, cameFromScan: false)
+        // Which camera this setup is FOR. Every other kind already arms this; AP did not, and
+        // nothing downstream could then tell the new record which body it belongs to — so it
+        // saved itself as a second camera. A host lookup cannot answer this: the AP address is
+        // by definition not yet saved.
+        pendingSetupIntent = .init(anchor: camera, kind: .cameraAccessPoint)
+        // Straight to the scanner, exactly as the wizard's Camera AP step does. Deriving the
+        // SSID from the name and staging a stored key jumped to `.readyToJoin`, which skipped
+        // BOTH the confirm-on-camera step and the scanner — the scanner was only ever reached
+        // by the no-derivable-SSID fallback, which a Nikon name never takes. The camera has to
+        // be put on its own network screen first regardless, and that screen is what the
+        // scanner reads.
+        presentCameraWiFiScanner()
     }
 
     private func stageCameraWiFiCredentials(ssid: String, key: String, cameFromScan: Bool) {
@@ -3417,7 +3418,10 @@ final class NativeAppModel {
                 host: host,
                 displayName: displayNameHint,
                 transport: transport,
+                // Saved row first, then the add-setup anchor: a new setup's address is not yet
+                // saved, so only the operator's own choice of row can name the body.
                 serialNumber: savedCamera?.serialNumber
+                    ?? pendingSetupIntent?.anchor.serialNumber
             )
             connection = .scanning
             connectionPhase = .handshaking
@@ -3550,7 +3554,10 @@ final class NativeAppModel {
                     displayName: session.identity.displayName,
                     transport: transport,
                     onCameraAccessPoint: cameraAccessPointEvidence,
-                    serialNumber: session.identity.serialNumber,
+                    // Falls back to the row the operator was adding a setup to: a body that
+                    // reports no serial on this path would otherwise save as its own camera.
+                    serialNumber: session.identity.serialNumber
+                        ?? pendingSetupIntent?.anchor.serialNumber,
                     path: declaredPathForSave(
                         host: session.identity.host,
                         displayName: session.identity.displayName)
