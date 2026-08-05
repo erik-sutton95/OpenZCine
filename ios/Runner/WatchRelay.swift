@@ -76,6 +76,11 @@ final class WatchRelay: NSObject {
     /// Sends the latest state snapshot, coalescing to only send on change. State is tiny, so every
     /// change is sent; when the watch is unreachable the send is skipped (the watch shows its own
     /// "open OpenZCine on iPhone" placeholder from reachability).
+    ///
+    /// The coalescing latch is only safe because a failed send releases it (below). Video hides a
+    /// stuck latch — the snapshot carries a running timecode, so the next publish differs anyway
+    /// and resends within a frame. Stills have no timecode, so the snapshot goes quiet and a
+    /// single lost send strands the wrist on its last received state until it asks for a resume.
     func ingestState(_ state: WatchRelayState) {
         guard state != lastSentState else { return }
         guard isReady, let session,
@@ -84,7 +89,16 @@ final class WatchRelay: NSObject {
         // Recorded only after an actual send: marking a skipped-while-unreachable state as sent
         // would coalesce every identical re-publish away, and the watch would never get it.
         lastSentState = state
-        session.sendMessageData(data, replyHandler: nil, errorHandler: nil)
+        session.sendMessageData(
+            data, replyHandler: nil,
+            errorHandler: { @Sendable [weak self] _ in
+                // A dropped send must un-record itself, or the coalescing above swallows every
+                // retry and the wrist keeps whatever it last actually received. Only the newest
+                // send may clear the latch — an older failure must not undo a newer success.
+                Task { @MainActor in
+                    if self?.lastSentState == state { self?.lastSentState = nil }
+                }
+            })
     }
 
     /// Buffers the latest frame (drop-stale) and pumps the backpressure send loop. CPU live-view
