@@ -55,53 +55,41 @@ internal fun clampFeedPan(
 }
 
 /**
- * The live transform for an in-flight pinch, derived fresh from the committed state.
+ * One transform step, taking the centroid, zoom change and pan change together exactly as the
+ * playback viewer does (`MediaStillViewer` / `anchoredPinchPan`).
  *
- * One exact formula instead of anchor bookkeeping: with a center-anchored scale, keeping the
- * content point under the fingers pinned while the factor changes is
- * `O' = (f - c) - ((f - c) - O) * m` with `s' = s * m` — for pinching in AND out, so both
- * directions track the fingers at the same rate. The factor is clamped BEFORE it is applied, so
- * pinching past the limits accumulates no dead travel to unwind.
+ * With a center-pivot scale followed by a translation, a content point p renders at
+ * `p * scale + offset`, so holding the point under the pinch centroid fixed across a scale step
+ * means `offset' = a - (a - offset) * ratio`, with the simultaneous finger drag added on top.
+ * Because the step is relative, every event re-anchors on the current centroid — a re-pinch after
+ * a pan cannot reuse a stale anchor and lunge sideways.
  *
- * [startX]/[startY] are the pinch's own start centroid, so every pinch pivots on where it began —
- * re-pinching after a pan must not reuse an earlier pinch's stale anchor or the picture lunges.
+ * The scale is clamped BEFORE the ratio is taken, so a pinch past the limits banks no dead travel.
  */
-internal fun feedZoomAfterPinch(
+internal fun feedZoomAfterTransform(
     committed: FeedZoom,
-    pinchFactor: Float,
-    startX: Float,
-    startY: Float,
+    zoomChange: Float,
+    centroidX: Float,
+    centroidY: Float,
+    panChangeX: Float,
+    panChangeY: Float,
     width: Float,
     height: Float,
 ): FeedZoom {
-    val target = (committed.scale * pinchFactor).coerceIn(1f, FeedZoom.MAXIMUM)
-    val factor = if (committed.scale > 0f) target / committed.scale else 1f
-    val centerX = width / 2f
-    val centerY = height / 2f
-    val offsetX = (startX - centerX) - ((startX - centerX) - committed.offsetX) * factor
-    val offsetY = (startY - centerY) - ((startY - centerY) - committed.offsetY) * factor
-    val (clampedX, clampedY) = clampFeedPan(offsetX, offsetY, width, height, target)
-    return FeedZoom(target, clampedX, clampedY)
-}
-
-/** Applies a pan translation. A drag while unzoomed is the DISP swipe's, not the pan's. */
-internal fun feedZoomAfterPan(
-    committed: FeedZoom,
-    translationX: Float,
-    translationY: Float,
-    width: Float,
-    height: Float,
-): FeedZoom {
-    if (!committed.isZoomed) return committed
+    val target = (committed.scale * zoomChange).coerceIn(1f, FeedZoom.MAXIMUM)
+    if (target <= 1f) return FeedZoom.NONE
+    val ratio = if (committed.scale > 0f) target / committed.scale else 1f
+    val anchorX = centroidX - width / 2f
+    val anchorY = centroidY - height / 2f
     val (clampedX, clampedY) =
         clampFeedPan(
-            committed.offsetX + translationX,
-            committed.offsetY + translationY,
+            anchorX - (anchorX - committed.offsetX) * ratio + panChangeX,
+            anchorY - (anchorY - committed.offsetY) * ratio + panChangeY,
             width,
             height,
-            committed.scale,
+            target,
         )
-    return committed.copy(offsetX = clampedX, offsetY = clampedY)
+    return FeedZoom(target, clampedX, clampedY)
 }
 
 /** Settles a released pinch: anything below [FeedZoom.SNAP_BACK_BELOW] returns to the whole frame. */

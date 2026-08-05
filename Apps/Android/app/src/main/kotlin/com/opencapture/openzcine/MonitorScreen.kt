@@ -6,6 +6,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -45,6 +47,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -133,8 +136,6 @@ import com.opencapture.openzcine.settings.CaptureLayoutMode
 import com.opencapture.openzcine.settings.ChromeSection
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.labelResource
-import com.opencapture.openzcine.settings.magnificationAnchor
-import com.opencapture.openzcine.settings.magnificationAnchorBoxIndex
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
@@ -1827,27 +1828,35 @@ internal fun MonitorScreen(
         // The zoom is session-only: it is a focus check, not a setting, and a monitor that reopens
         // already magnified is a monitor that lies about the framing.
         var committedZoom by remember { mutableStateOf(FeedZoom.NONE) }
-        // In-flight pinch (accumulated factor + its own start centroid) and pan translation. The
-        // render derives the live transform from these every frame, exactly as iOS does with
-        // `@GestureState`, so nothing has to be unwound if a gesture is cancelled.
-        var livePinch by remember { mutableStateOf<Triple<Float, Float, Float>?>(null) }
-        var livePan by remember { mutableStateOf(0f to 0f) }
-        val feedZoom =
-            run {
+        val feedZoom = committedZoom
+        // The same instrument the playback viewer uses (`MediaStillViewer`): Compose's own
+        // multitouch transform, which resolves centroid, zoom and pan together per event. Rolling
+        // this by hand off the feed's pointer arbiter gave a noticeably worse gesture.
+        val feedTransformState =
+            rememberTransformableState { centroid, zoomChange, panChange, _ ->
                 val width = feedPointerSize.width.toFloat()
                 val height = feedPointerSize.height.toFloat()
-                if (width <= 0f || height <= 0f) {
-                    committedZoom
-                } else {
-                    val pinched =
-                        livePinch?.let { (factor, startX, startY) ->
-                            feedZoomAfterPinch(
-                                committedZoom, factor, startX, startY, width, height,
-                            )
-                        } ?: committedZoom
-                    feedZoomAfterPan(pinched, livePan.first, livePan.second, width, height)
+                if (width > 0f && height > 0f) {
+                    committedZoom =
+                        feedZoomAfterTransform(
+                            committed = committedZoom,
+                            zoomChange = zoomChange,
+                            centroidX = centroid.x,
+                            centroidY = centroid.y,
+                            panChangeX = panChange.x,
+                            panChangeY = panChange.y,
+                            width = width,
+                            height = height,
+                        )
                 }
             }
+        // A pinch released just about 1x settles back to the whole frame, as playback does.
+        LaunchedEffect(feedTransformState) {
+            snapshotFlow { feedTransformState.isTransformInProgress }
+                .collect { inProgress ->
+                    if (!inProgress) committedZoom = feedZoomSettled(committedZoom)
+                }
+        }
         val renderedEffects =
             renderedFeedEffects(
                 assist.effects.copy(
@@ -2212,6 +2221,12 @@ internal fun MonitorScreen(
                         translationY = feedZoom.offsetY
                     }
                     .onSizeChanged { feedPointerSize = it }
+                    // Pinch always transforms; a one-finger drag only pans once zoomed, so an
+                    // unzoomed drag still reaches the DISP swipe in the arbiter below.
+                    .transformable(
+                        state = feedTransformState,
+                        canPan = { feedZoom.isZoomed },
+                    )
                     .focusFeedGestures(
                         geometry = feedGestureGeometry,
                         context = focusGestureContext,
@@ -2219,19 +2234,6 @@ internal fun MonitorScreen(
                         isZoomed = feedZoom.isZoomed,
                         onHoldingChanged = { focusLockHolding = it },
                         onAction = handleFocusFeedAction,
-                        onPinch = { factor, startX, startY ->
-                            livePinch = Triple(factor, startX, startY)
-                        },
-                        onPinchEnd = {
-                            committedZoom = feedZoomSettled(feedZoom)
-                            livePinch = null
-                            livePan = 0f to 0f
-                        },
-                        onPan = { dx, dy -> livePan = dx to dy },
-                        onPanEnd = {
-                            committedZoom = feedZoom
-                            livePan = 0f to 0f
-                        },
                     ),
                 contentAlignment = Alignment.Center,
             ) {

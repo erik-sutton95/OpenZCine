@@ -87,7 +87,6 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     EV("EV", "EV Meter"),
     DESQ("DE-SQ", "Desqueeze"),
     /** Live-view punch-in for checking critical focus. */
-    MAG("MAG", "Magnification"),
     /** Photography-only instant playback of the just-captured still. */
     PLAY("PLAY", "Instant Playback"),
     AUDIO("AUDIO", "Audio Levels"),
@@ -238,7 +237,6 @@ internal fun AssistTool.labelResource(): Int =
         AssistTool.LEVEL -> R.string.assist_label_level
         AssistTool.EV -> R.string.assist_label_ev_meter
         AssistTool.DESQ -> R.string.assist_label_desqueeze
-        AssistTool.MAG -> R.string.assist_label_magnification
         AssistTool.PLAY -> R.string.assist_label_play
         AssistTool.AUDIO -> R.string.assist_label_audio
     }
@@ -261,7 +259,6 @@ internal fun AssistTool.titleResource(): Int =
         AssistTool.LEVEL -> R.string.assist_title_horizon
         AssistTool.EV -> R.string.assist_title_ev_meter
         AssistTool.DESQ -> R.string.assist_title_desqueeze
-        AssistTool.MAG -> R.string.assist_title_magnification
         AssistTool.PLAY -> R.string.assist_title_instant_playback
         AssistTool.AUDIO -> R.string.assist_title_audio_levels
     }
@@ -368,7 +365,6 @@ class AssistState(
             AssistTool.LEVEL,
             AssistTool.EV,
             AssistTool.DESQ,
-            AssistTool.MAG,
             -> false
         }
 
@@ -427,7 +423,6 @@ class AssistState(
             AssistTool.LEVEL,
             AssistTool.EV,
             AssistTool.DESQ,
-            AssistTool.MAG,
             -> false
         }
     }
@@ -1016,7 +1011,6 @@ private fun LocalFramingAssistConfiguration.isToolEnabled(tool: AssistTool): Boo
         AssistTool.LEVEL -> levelEnabled
         AssistTool.EV -> evMeterEnabled
         AssistTool.DESQ -> desqueezeEnabled
-        AssistTool.MAG -> magnificationEnabled
         else -> false
     }
 
@@ -1339,7 +1333,6 @@ internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier =
                 drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
             }
             // SF `plus.magnifyingglass`: loupe with a plus in the lens.
-            AssistTool.MAG -> drawMagnifyingGlass(tint, plus = true)
             // SF `photo.badge.checkmark`: photo frame with a check tick.
             AssistTool.PLAY -> {
                 val stroke2 = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -1382,50 +1375,6 @@ internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier =
     }
 }
 
-/**
- * Canvas stand-in for SF `plus.magnifyingglass` / `minus.magnifyingglass`.
- *
- * Shared by the assist-toolbar chip and the on-feed punch-in key so the two read as the same
- * instrument — the key is the tool, moved to where focus is being judged.
- */
-internal fun DrawScope.drawMagnifyingGlass(tint: Color, plus: Boolean) {
-    val stroke = 1.7.dp.toPx()
-    val radius = size.minDimension * 0.30f
-    val centre = Offset(size.width * 0.42f, size.height * 0.42f)
-    drawCircle(tint, radius, centre, style = Stroke(stroke))
-    val arm = radius * 0.48f
-    drawLine(
-        tint,
-        Offset(centre.x - arm, centre.y),
-        Offset(centre.x + arm, centre.y),
-        stroke,
-        StrokeCap.Round,
-    )
-    if (plus) {
-        drawLine(
-            tint,
-            Offset(centre.x, centre.y - arm),
-            Offset(centre.x, centre.y + arm),
-            stroke,
-            StrokeCap.Round,
-        )
-    }
-    // Handle, on the loupe's own diagonal so it reads as one instrument.
-    val diagonal = radius * 0.7071f
-    drawLine(
-        tint,
-        Offset(centre.x + diagonal, centre.y + diagonal),
-        Offset(size.width * 0.92f, size.height * 0.92f),
-        stroke,
-        StrokeCap.Round,
-    )
-}
-
-/** The on-feed punch-in key's icon: plus to enter, minus to leave. */
-@Composable
-internal fun MagnifyKeyGlyph(tint: Color, active: Boolean, modifier: Modifier = Modifier) {
-    Canvas(modifier) { drawMagnifyingGlass(tint, plus = !active) }
-}
 
 /** Canvas stand-in for SF `slider.horizontal.3` (the fill-rail collapsed pill). */
 @Composable

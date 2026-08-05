@@ -39,18 +39,10 @@ internal fun Modifier.focusFeedGestures(
     isZoomed: Boolean,
     onHoldingChanged: (Boolean) -> Unit,
     onAction: (FocusFeedGestureAction) -> Unit,
-    onPinch: (factor: Float, startX: Float, startY: Float) -> Unit,
-    onPinchEnd: () -> Unit,
-    onPan: (translationX: Float, translationY: Float) -> Unit,
-    onPanEnd: () -> Unit,
 ): Modifier {
     val currentContext by rememberUpdatedState(context)
     val currentOnHoldingChanged by rememberUpdatedState(onHoldingChanged)
     val currentOnAction by rememberUpdatedState(onAction)
-    val currentOnPinch by rememberUpdatedState(onPinch)
-    val currentOnPinchEnd by rememberUpdatedState(onPinchEnd)
-    val currentOnPan by rememberUpdatedState(onPan)
-    val currentOnPanEnd by rememberUpdatedState(onPanEnd)
     return pointerInput(
         geometry,
         context.interfaceLocked,
@@ -60,12 +52,7 @@ internal fun Modifier.focusFeedGestures(
         val thresholds = FocusFeedGestureThresholds.forDensity(density)
         awaitEachGesture {
             var gestureState: FocusFeedGestureState = FocusFeedGestureState.Idle
-            var pinchZoom = 1f
             var sawMultiplePointers = false
-            // The pinch's own start centroid, captured once. Reusing an earlier pinch's anchor
-            // makes the picture lunge sideways when you re-pinch after a pan.
-            var pinchStart: FocusFeedPixelPoint? = null
-            var panned = false
 
             fun reduce(event: FocusFeedGestureEvent) {
                 val reduction =
@@ -123,27 +110,14 @@ internal fun Modifier.focusFeedGestures(
 
                     val pressedCount = event.changes.count { it.pressed }
                     if (pressedCount >= 2 || sawMultiplePointers) {
+                        // A second pointer means a pinch, which `Modifier.transformable` owns.
+                        // Stand down for the rest of the sequence and leave the events unconsumed
+                        // so the transform sees them.
                         if (!sawMultiplePointers) {
                             sawMultiplePointers = true
                             reduce(FocusFeedGestureEvent.Cancel)
-                            val pressed = event.changes.filter { it.pressed }
-                            if (pressed.isNotEmpty()) {
-                                pinchStart =
-                                    FocusFeedPixelPoint(
-                                        pressed.sumOf { it.position.x.toDouble() }
-                                            .toFloat() / pressed.size,
-                                        pressed.sumOf { it.position.y.toDouble() }
-                                            .toFloat() / pressed.size,
-                                    )
-                            }
                         }
-                        pinchZoom *= event.calculateZoom()
-                        event.changes.forEach { it.consume() }
-                        pinchStart?.let { currentOnPinch(pinchZoom, it.x, it.y) }
-                        if (pressedCount == 0) {
-                            currentOnPinchEnd()
-                            return@awaitEachGesture
-                        }
+                        if (pressedCount == 0) return@awaitEachGesture
                         continue
                     }
 
@@ -163,7 +137,6 @@ internal fun Modifier.focusFeedGestures(
                                 consumed = primary.isConsumed,
                             ),
                         )
-                        if (panned) currentOnPanEnd()
                         primary.consume()
                         return@awaitEachGesture
                     }
@@ -175,16 +148,9 @@ internal fun Modifier.focusFeedGestures(
                             consumed = primary.isConsumed,
                         ),
                     )
-                    if (isZoomed) {
-                        // Cumulative from the touch-down, matching the iOS drag's `translation`,
-                        // so the owner can hold it as in-flight state and commit once on release.
-                        panned = true
-                        currentOnPan(
-                            point.x - down.position.x,
-                            point.y - down.position.y,
-                        )
-                    }
-                    primary.consume()
+                    // While zoomed a one-finger drag is the pan, which `transformable` owns; leave
+                    // the move unconsumed so it gets it.
+                    if (!isZoomed) primary.consume()
                 }
             } finally {
                 currentOnHoldingChanged(false)

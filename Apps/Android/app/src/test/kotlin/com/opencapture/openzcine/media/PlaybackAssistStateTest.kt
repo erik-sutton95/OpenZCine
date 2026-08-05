@@ -110,7 +110,6 @@ class PlaybackAssistStateTest {
                     AssistTool.LUT,
                     AssistTool.LEVEL,
                     AssistTool.EV,
-                    AssistTool.MAG,
                     AssistTool.AUDIO,
                 ),
             ),
