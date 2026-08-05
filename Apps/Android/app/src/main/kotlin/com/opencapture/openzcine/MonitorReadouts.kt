@@ -152,6 +152,14 @@ internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 
 internal const val CAMERA_BATTERY_BAR_COUNT = 5
 
 /**
+ * Gauge markers carried in the readout label. The label is the shared contract between the
+ * readout builder and the chrome that draws it; the chrome recognises these and renders real
+ * segments rather than printing the characters, which never matched the iOS gauge's metrics.
+ */
+internal const val FILLED_BAR = '\u25AE'
+internal const val EMPTY_BAR = '\u25AF'
+
+/**
  * Filled bars for a raw `BatteryLevel` (0x5001) value, mirroring iOS `CameraBatteryGauge`.
  *
  * The property is a five-bar gauge, not a percentage — it only ever carries 1/20/40/60/80/100,
@@ -179,7 +187,7 @@ internal fun batteryReadoutLabel(percent: Int?, externalPower: Boolean? = null):
         // a text label rather than its own view.
         buildString {
             repeat(CAMERA_BATTERY_BAR_COUNT) { index ->
-                append(if (index < filled) '\u25AE' else '\u25AF')
+                append(if (index < filled) FILLED_BAR else EMPTY_BAR)
             }
         }
     } ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE

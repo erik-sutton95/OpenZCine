@@ -65,14 +65,40 @@ struct WatchMonitorView: View {
         return state?.media ?? "—"
     }
 
-    /// SF Symbol battery glyph matching the reported charge level.
-    private var batterySymbol: String {
-        switch state?.cameraBatteryPercent ?? 0 {
-        case 88...: "battery.100"
-        case 62..<88: "battery.75"
-        case 37..<62: "battery.50"
-        case 12..<37: "battery.25"
-        default: "battery.0"
+    /// The camera's gauge. `BatteryLevel` is a five-bar gauge, not a percentage — it only ever
+    /// carries 1/20/40/60/80/100 — so the wrist shows bars for the same reason the phone does
+    /// (#303). Printing "60%" claimed a precision the body never sent.
+    private var cameraGauge: CameraBatteryGauge? {
+        state.map { CameraBatteryGauge.gauge(rawBatteryLevel: $0.cameraBatteryPercent) }
+    }
+
+    /// Colour before count: green from three bars, orange at two, red at one, matching the phone.
+    private var batteryTint: Color {
+        switch cameraGauge?.urgency ?? .nominal {
+        case .nominal: Color(red: 0.42, green: 0.80, blue: 0.53)
+        case .low: .orange
+        case .depleted: .red
+        }
+    }
+
+    /// Five segments, as the body itself shows. Sized for the wrist rather than the phone's rail.
+    @ViewBuilder private var batteryGauge: some View {
+        if let cameraGauge, cameraGauge != .unknown {
+            HStack(spacing: 1) {
+                ForEach(0..<CameraBatteryGauge.barCount, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 0.8, style: .continuous)
+                        .fill(
+                            index < cameraGauge.filledBars
+                                ? batteryTint : Color.white.opacity(0.22)
+                        )
+                        .frame(width: 2.5, height: 7)
+                }
+            }
+            .accessibilityElement()
+            .accessibilityLabel(
+                "Camera battery \(cameraGauge.filledBars) of \(CameraBatteryGauge.barCount) bars")
+        } else {
+            Text("—").foregroundStyle(.secondary)
         }
     }
 
@@ -191,8 +217,11 @@ struct WatchMonitorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             recordButton
             HStack(spacing: 3) {
-                Image(systemName: batterySymbol)
-                Text("\(state?.cameraBatteryPercent ?? 0)%")
+                // The camera glyph, not a battery glyph: the gauge beside it already says
+                // "battery", so the icon's job is to say WHOSE — the phone's own charge never
+                // appears on the wrist.
+                Image(systemName: "camera")
+                batteryGauge
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }

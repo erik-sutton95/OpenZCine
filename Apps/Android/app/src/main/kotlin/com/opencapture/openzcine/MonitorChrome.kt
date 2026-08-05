@@ -715,16 +715,36 @@ private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean)
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (charging) BoltGlyph(tint, Modifier.size(5.dp, 9.dp))
-            // "100" plus the charging bolt is wider than the outline — step the digits
-            // down so the readout stays inside the battery body (iOS shrinks to fit).
-            val fits = !(charging && label.length >= 3)
-            Text(
-                label,
-                style = chromeStyle(if (fits) 10.5f else 8.5f, FontWeight.SemiBold, mono = true),
-                color = tint,
-                maxLines = 1,
-                softWrap = false,
-            )
+            val gaugeBars = label.count { it == FILLED_BAR || it == EMPTY_BAR }
+            if (gaugeBars > 0) {
+                // DRAWN segments, not the block characters this used to print. Glyphs carry the
+                // font's own metrics, weight and side bearings, so the gauge never matched the
+                // iOS one no matter how the size was tuned — which is what "looks nothing like
+                // the baseline" was. These are the same rounded segments iOS fills.
+                val filled = label.count { it == FILLED_BAR }
+                Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                    repeat(gaugeBars) { index ->
+                        Canvas(Modifier.size(2.dp, 7.dp)) {
+                            drawRoundRect(
+                                if (index < filled) tint else tint.copy(alpha = 0.22f),
+                                cornerRadius = CornerRadius(0.8.dp.toPx()),
+                            )
+                        }
+                    }
+                }
+            } else {
+                // The phone's own charge stays a numeral: it IS a true percentage, and the two
+                // readings must not look like the same kind of measurement.
+                val fits = !(charging && label.length >= 3)
+                Text(
+                    label,
+                    style =
+                        chromeStyle(if (fits) 10.5f else 8.5f, FontWeight.SemiBold, mono = true),
+                    color = tint,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
     }
 }
