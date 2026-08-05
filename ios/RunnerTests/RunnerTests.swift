@@ -1578,3 +1578,49 @@ extension RunnerTests {
         XCTAssertTrue(CameraPicker.stillFocus.modes[1].options.contains("3D tracking"))
     }
 }
+
+/// The watch feed's encoder. HEIC carries roughly JPEG's perceived quality in half the bytes,
+/// which is what buys back the cost of the larger frames.
+@MainActor
+final class WatchFrameEncodingTests: XCTestCase {
+    private func solidImage(width: Int = 64, height: Int = 36) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+    }
+
+    /// HEIC, not JPEG. An ISOBMFF file names its box type at bytes 4..8 ("ftyp"), where a JPEG
+    /// opens 0xFFD8. Checking the container rather than "some bytes came back" is the point: the
+    /// JPEG fallback is silent by design, so it would look identical to success at the call site,
+    /// and shipping the fallback everywhere would quietly undo the whole change.
+    func testFramesEncodeAsHeic() throws {
+        let data = try XCTUnwrap(WatchRelay.encodedFrameData(solidImage(), quality: 0.5))
+        XCTAssertGreaterThan(data.count, 0)
+        let isJPEG =
+            data.count >= 2 && data[data.startIndex] == 0xFF
+            && data[data.startIndex + 1] == 0xD8
+        XCTAssertFalse(isJPEG, "still JPEG — the HEIC destination silently fell back")
+        let ftyp = data.count >= 8 ? Array(data[(data.startIndex + 4)..<(data.startIndex + 8)]) : []
+        XCTAssertEqual(ftyp, Array("ftyp".utf8), "not an ISOBMFF container")
+    }
+
+    /// Quality has to actually reach the encoder. A parameter accepted and ignored would leave the
+    /// feed exactly as compressed as before while the ladder claims otherwise.
+    func testQualityReachesTheEncoder() throws {
+        // A gradient, not a flat fill: a solid colour compresses to nearly the same size at any
+        // quality, so it would pass this test without the parameter doing anything.
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 128, height: 72)).image { ctx in
+            let colors = [UIColor.black.cgColor, UIColor.white.cgColor] as CFArray
+            if let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])
+            {
+                ctx.cgContext.drawLinearGradient(
+                    gradient, start: .zero, end: CGPoint(x: 128, y: 72), options: [])
+            }
+        }
+        let low = try XCTUnwrap(WatchRelay.encodedFrameData(image, quality: 0.1))
+        let high = try XCTUnwrap(WatchRelay.encodedFrameData(image, quality: 0.9))
+        XCTAssertGreaterThan(high.count, low.count, "quality is not reaching the encoder")
+    }
+}

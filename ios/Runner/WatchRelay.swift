@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import WatchConnectivity
 
 /// A minimal `@unchecked Sendable` box for handing a non-`Sendable` value across an isolation hop.
@@ -176,9 +178,9 @@ final class WatchRelay: NSObject {
     /// a slow link, and the RTT ladder still steps down to protect the latter.
     private func adaptiveEncodingParams() -> (width: CGFloat, quality: CGFloat) {
         switch rttEMA {
-        case 0.35...: (width: 512, quality: 0.24)
-        case 0.20..<0.35: (width: 672, quality: 0.28)
-        default: (width: 832, quality: 0.32)
+        case 0.35...: (width: 512, quality: 0.40)
+        case 0.20..<0.35: (width: 672, quality: 0.45)
+        default: (width: 832, quality: 0.50)
         }
     }
 
@@ -243,6 +245,35 @@ final class WatchRelay: NSObject {
     /// JPEG. Applying after the thumbnail is intentional: Metal's full-resolution bake stays on the
     /// GPU, while the Watch pays only for its adaptive 256/336/416-pixel frame. Internal so the
     /// actual LUT-to-JPEG path is regression-testable.
+    /// Encodes the preview frame, preferring HEIC.
+    ///
+    /// HEVC-based still coding carries roughly the same perceived quality as JPEG in about half
+    /// the bytes, which on this link buys back most of what the 2x frame size costs — the watch
+    /// feed's problem was always that a monitor image has to stay legible, and JPEG was spending
+    /// its budget on blocking. watchOS decodes HEIF natively, so the wrist needs no change: it
+    /// hands the bytes to `UIImage` either way.
+    ///
+    /// Falls back to JPEG whenever the destination cannot be made or finalised. The fallback is
+    /// not theoretical tidiness — an unencodable frame would otherwise drop silently, and a
+    /// dropped frame on a monitor reads as a frozen picture.
+    nonisolated static func encodedFrameData(_ image: UIImage, quality: CGFloat) -> Data? {
+        guard let cgImage = image.cgImage else {
+            return image.jpegData(compressionQuality: quality)
+        }
+        let buffer = NSMutableData()
+        guard
+            let destination = CGImageDestinationCreateWithData(
+                buffer, UTType.heic.identifier as CFString, 1, nil)
+        else { return image.jpegData(compressionQuality: quality) }
+        CGImageDestinationAddImage(
+            destination, cgImage,
+            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination), buffer.length > 0 else {
+            return image.jpegData(compressionQuality: quality)
+        }
+        return buffer as Data
+    }
+
     nonisolated static func thumbnailJPEG(
         from image: UIImage, applying effects: LiveImageEffects? = nil,
         renderer: LiveFrameRenderer? = nil, maxWidth: CGFloat, quality: CGFloat
@@ -269,7 +300,7 @@ final class WatchRelay: NSObject {
         } else {
             displayImage = thumb
         }
-        return displayImage.jpegData(compressionQuality: quality)
+        return encodedFrameData(displayImage, quality: quality)
     }
 }
 
