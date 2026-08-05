@@ -164,13 +164,21 @@ final class WatchRelay: NSObject {
 
     /// Picks encode dimensions from the current round-trip estimate: a slow link gets small frames
     /// (they cross faster, raising sustainable fps), a fast link gets larger frames for clarity.
-    /// The fast tier matches the widest watch display (Ultra: 410 px) so the edge-to-edge feed is
-    /// rendered 1:1, not upscaled.
+    ///
+    /// Every tier is 2x the watch's own display, deliberately. Sizing the fast tier to the Ultra's
+    /// 410 px made the unzoomed feed exactly 1:1 and left the crown zoom nothing to magnify but
+    /// blocks. Oversampling gives the zoom real pixels to reveal, at a cost paid on every frame
+    /// rather than only while zoomed.
+    ///
+    /// The alternative — cropping to the watch's reported viewport, so the same bytes carry only
+    /// the visible region — was built and did not feel right in the hand (f72f319, reverted).
+    /// This is the blunter trade taken knowingly: more bytes per frame, fewer frames per second on
+    /// a slow link, and the RTT ladder still steps down to protect the latter.
     private func adaptiveEncodingParams() -> (width: CGFloat, quality: CGFloat) {
         switch rttEMA {
-        case 0.35...: (width: 256, quality: 0.24)
-        case 0.20..<0.35: (width: 336, quality: 0.28)
-        default: (width: 416, quality: 0.32)
+        case 0.35...: (width: 512, quality: 0.24)
+        case 0.20..<0.35: (width: 672, quality: 0.28)
+        default: (width: 832, quality: 0.32)
         }
     }
 
