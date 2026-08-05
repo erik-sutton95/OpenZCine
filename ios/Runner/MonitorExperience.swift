@@ -1961,6 +1961,33 @@ struct BatteryIndicator: View {
         }
     }
 
+    /// The camera's gauge drawn as segments — the body shows bars, so the monitor shows bars.
+    ///
+    /// The phone keeps its numeral: it reports a true percentage, and the two readings should not
+    /// look like the same kind of measurement (#303).
+    @ViewBuilder
+    private func gaugeReadout(size: CGFloat) -> some View {
+        if let cameraGauge {
+            let filled = cameraGauge.filledBars
+            HStack(spacing: max(1, size * 0.18)) {
+                ForEach(0..<CameraBatteryGauge.barCount, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: max(0.5, size * 0.12), style: .continuous)
+                        .fill(index < filled ? batteryTint : LiveDesign.text.opacity(0.22))
+                        .frame(width: max(1.5, size * 0.42), height: size)
+                }
+            }
+            .accessibilityElement()
+            .accessibilityLabel(
+                "Camera battery \(filled) of \(CameraBatteryGauge.barCount) bars")
+        } else {
+            Text(readout)
+                .font(.system(size: size + 2.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(LiveDesign.text.opacity(0.72))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+    }
+
     private var isLow: Bool {
         guard let cameraGauge else { return percent <= 15 }
         // The body's own threshold: one bar left, or the blinking exhausted step.
@@ -1996,15 +2023,9 @@ struct BatteryIndicator: View {
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(batteryTint)
                 }
-                // `readout`, not the raw number: the camera's is a bar count (#303), and this row
-                // is the gauge the operator actually reads on the monitor.
-                Text(readout)
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(batteryTint)
-                    // "100" plus the charging bolt is wider than the outline — shrink the
-                    // digits to keep the readout inside the battery body.
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
+                // Bars for the camera, numeral for the phone (#303). Sized to sit inside the
+                // battery outline alongside the charging bolt.
+                gaugeReadout(size: 7.5)
             }
             .frame(width: 26, height: 15)
             .overlay {
@@ -2041,9 +2062,7 @@ struct BatteryIndicator: View {
                 .font(.system(size: 18, weight: .regular))
                 .foregroundStyle(batteryTint)
                 .overlay { chargingOverlay }
-            Text(readout)
-                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.72))
+            gaugeReadout(size: 8)
             Image(systemName: deviceSystemName)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(LiveDesign.muted)
@@ -2060,9 +2079,7 @@ struct BatteryIndicator: View {
                 .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(batteryTint)
                 .overlay { chargingOverlay }
-            Text(readout)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.72))
+            gaugeReadout(size: 6.5)
         }
         .frame(
             width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
@@ -2080,9 +2097,7 @@ struct BatteryIndicator: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(batteryTint)
                 .overlay { chargingOverlay }
-            Text(readout)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.72))
+            gaugeReadout(size: 10)
             Image(systemName: deviceSystemName)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(LiveDesign.muted)

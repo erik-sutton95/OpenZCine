@@ -147,8 +147,16 @@ internal fun cameraBatteryBars(percent: Int?): Int? {
  * anything from 40% to 59%, which is exactly the discrepancy reported from the field.
  */
 internal fun batteryReadoutLabel(percent: Int?, externalPower: Boolean? = null): String =
-    cameraBatteryBars(validBatteryPercent(percent))?.let { "$it/$CAMERA_BATTERY_BAR_COUNT" }
-        ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
+    cameraBatteryBars(validBatteryPercent(percent))?.let { filled ->
+        // Drawn as filled/empty blocks so the readout reads as a gauge rather than a number.
+        // iOS draws real segments; this is the string-based mirror, since the Android readout is
+        // a text label rather than its own view.
+        buildString {
+            repeat(CAMERA_BATTERY_BAR_COUNT) { index ->
+                append(if (index < filled) '\u25AE' else '\u25AF')
+            }
+        }
+    } ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
 
 /** Builds the battery label and visible power-marker state from authoritative readback. */
 internal fun monitorBatteryPresentation(
