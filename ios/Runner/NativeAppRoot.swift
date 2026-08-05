@@ -3385,7 +3385,8 @@ final class NativeAppModel {
             pendingPairingSaveCandidate = PendingPairingSaveCandidate(
                 host: host,
                 displayName: displayNameHint,
-                transport: transport
+                transport: transport,
+                serialNumber: savedCamera?.serialNumber
             )
             connection = .scanning
             connectionPhase = .handshaking
@@ -4194,6 +4195,13 @@ final class NativeAppModel {
         let host: String
         let displayName: String
         let transport: String
+        /// Identity of the camera this pairing is FOR, when the connect was launched from a saved
+        /// one. Nothing here knows a serial of its own — the candidate is built before the
+        /// handshake and both save sites run before a session exists — but a serial-less record
+        /// is its own card forever (`SavedCameraPathGroups.group`), which is how adding a second
+        /// setup to a saved camera produced a second camera. Inheriting is right by construction:
+        /// the operator picked the row, declaring this is another way to reach THAT body.
+        let serialNumber: String?
     }
 
     private struct PendingCameraWrite {
@@ -4944,7 +4952,8 @@ final class NativeAppModel {
         savePairedCamera(
             host: candidate.host,
             displayName: candidate.displayName,
-            transport: candidate.transport
+            transport: candidate.transport,
+            serialNumber: candidate.serialNumber
         )
     }
 
@@ -5462,7 +5471,8 @@ final class NativeAppModel {
             candidate.displayName.isEmpty
         else { return }
         pendingPairingSaveCandidate = PendingPairingSaveCandidate(
-            host: candidate.host, displayName: name, transport: candidate.transport)
+            host: candidate.host, displayName: name, transport: candidate.transport,
+            serialNumber: candidate.serialNumber)
     }
 
     private func confirmPairing(_ challenge: PTPIPPairingChallenge) async -> Bool {

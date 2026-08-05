@@ -135,3 +135,25 @@ private func record(
     ])
     #expect(records.count == 2)
 }
+
+/// The failure "+ Add setup" hit: a second setup saved for a camera already in the list arrived
+/// with no serial, and a serial-less record is its own card unconditionally — so the operator got
+/// a second Nikon ZR instead of a second chip on the first one. Grouping is right to split here;
+/// the fix is that the pairing candidate inherits the serial of the row it was launched from.
+@Test func aSerialLessSetupCannotJoinItsCamera() {
+    let groups = SavedCameraPathGroups.group([
+        record(host: "10.99.0.20", seen: 300, serial: "6002199"),
+        record(host: "192.168.1.1", seen: 400, ap: true, serial: nil),
+    ])
+    #expect(groups.count == 2)
+}
+
+/// The same two setups once the candidate carries the identity: one camera, two paths.
+@Test func aStampedSetupJoinsItsCamera() {
+    let groups = SavedCameraPathGroups.group([
+        record(host: "10.99.0.20", seen: 300, serial: "6002199"),
+        record(host: "192.168.1.1", seen: 400, ap: true, serial: "6002199"),
+    ])
+    #expect(groups.count == 1)
+    #expect(groups[0].map(\.host) == ["192.168.1.1", "10.99.0.20"])
+}
