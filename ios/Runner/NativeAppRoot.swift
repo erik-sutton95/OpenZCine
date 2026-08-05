@@ -2465,13 +2465,20 @@ final class NativeAppModel {
         // saved itself as a second camera. A host lookup cannot answer this: the AP address is
         // by definition not yet saved.
         pendingSetupIntent = .init(anchor: camera, kind: .cameraAccessPoint)
-        // Straight to the scanner, exactly as the wizard's Camera AP step does. Deriving the
-        // SSID from the name and staging a stored key jumped to `.readyToJoin`, which skipped
-        // BOTH the confirm-on-camera step and the scanner — the scanner was only ever reached
-        // by the no-derivable-SSID fallback, which a Nikon name never takes. The camera has to
-        // be put on its own network screen first regardless, and that screen is what the
-        // scanner reads.
-        presentCameraWiFiScanner()
+        guard
+            let ssid = CameraWiFiSSID.resolve(for: camera)
+                ?? CameraWiFiSSID.deriveSSID(fromCameraName: camera.displayName)
+        else {
+            // No derivable SSID (custom or generic camera name): the scan reads it off the
+            // camera's own network screen, so there is no card to show first.
+            presentCameraWiFiScanner()
+            return
+        }
+        // The join card, whose primary button opens the scanner — the wizard's Camera AP shape.
+        // The key is deliberately NOT pre-filled from the keychain: a staged key let this card
+        // run straight on to connecting, which is what skipped the operator's chance to put the
+        // camera on its network screen first.
+        stageCameraWiFiCredentials(ssid: ssid, key: "", cameFromScan: false)
     }
 
     private func stageCameraWiFiCredentials(ssid: String, key: String, cameFromScan: Bool) {
