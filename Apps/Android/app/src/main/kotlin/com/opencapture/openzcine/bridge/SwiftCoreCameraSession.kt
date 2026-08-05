@@ -43,7 +43,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 
-private val legacyPtpIpInitiatorGuid: ByteArray = "OpenZCineAndroid".encodeToByteArray()
+private val defaultPtpIpInitiatorGuid: ByteArray
+    get() = PtpIpInitiatorIdentity.guid
 
 /**
  * The Nikon connection sequence selected by the Android startup flow.
@@ -144,7 +145,7 @@ internal interface SwiftCoreSessionBridge {
                 host = host,
                 connectionOwner = connectionOwner,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
-                initiatorGuid = legacyPtpIpInitiatorGuid,
+                initiatorGuid = defaultPtpIpInitiatorGuid,
                 listener = listener,
             )
         }
@@ -313,7 +314,7 @@ class SwiftCoreCameraSession internal constructor(
     private val cameraNameHint: String? = null,
     private val connectionStrategy: PtpIpConnectionStrategy =
         PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
-    initiatorGuid: ByteArray = legacyPtpIpInitiatorGuid,
+    initiatorGuid: ByteArray = defaultPtpIpInitiatorGuid,
 ) : CameraSession {
     private val initiatorGuid: ByteArray = initiatorGuid.copyOf()
 

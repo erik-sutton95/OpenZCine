@@ -168,28 +168,19 @@ public class PairingEnvironment(
 /**
  * Production [PairingEnvironment] over the real platform services.
  *
- * [hasLegacySavedCameraProfiles] is true only while upgrading an installation
- * that already has Android camera records from the former shared initiator
- * GUID. It lets that one install retain those camera-side profiles; new
- * installs always receive a fresh private identity.
- *
  * [phaseLogger] receives progress and failure phases. Callers must discard or
  * privately handle the detail value rather than placing it in an anonymous
  * report. Safe phases are also written to logcat.
  */
 public fun realPairingEnvironment(
     context: Context,
-    hasLegacySavedCameraProfiles: Boolean = false,
     phaseLogger: (String, String) -> Unit = { _, _ -> },
 ): PairingEnvironment {
     val joiner = CameraApJoiner(context)
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
     val usbCameraSource = AndroidUsbPtpCameraSource(context)
-    val initiatorGuid =
-        PtpIpInitiatorIdentity(context).guid(
-            preferLegacyStaticIdentity = hasLegacySavedCameraProfiles,
-        )
+    val initiatorGuid = PtpIpInitiatorIdentity.guid
     val combinedPhaseLogger: (String, String) -> Unit = { phase, detail ->
         logCameraSessionPhase(phase, detail)
         phaseLogger(phase, detail)

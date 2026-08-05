@@ -20,13 +20,20 @@
 import Foundation
 import OpenZCineCore
 
-/// Stable Android PTP-IP initiator identity kept separate from the iOS camera profile.
+/// PTP-IP initiator identity for Android — deliberately the *same* identity iOS presents.
+///
+/// Nikon keys a paired-computer profile to the initiator GUID, so sharing it means one
+/// camera-side profile serves every OpenZCine install on either platform: pair a body once
+/// from any device and the rest connect straight to that profile. Android used to send its
+/// own GUID, which made it a stranger to a body paired from an iPhone (`rejectedInitiator`).
 public enum AndroidPTPIPInitiator {
-    /// The 16-byte Android GUID retained across reconnects and upgrades.
-    public static let appGUID = Data("OpenZCineAndroid".utf8)
+    /// Mirrors ``PTPIPInitiator/appGUID``. The Kotlin side sends the same bytes over JNI
+    /// (`PtpIpInitiatorIdentity.guid`); this is the default for the facade's own callers.
+    public static var appGUID: Data { PTPIPInitiator.appGUID }
 
-    /// Android's paired-initiator display name.
-    public static let friendlyName = "OpenZCine Android"
+    /// Mirrors ``PTPIPInitiator/friendlyName`` so a profile looks identical whichever
+    /// platform created it.
+    public static let friendlyName = PTPIPInitiator.friendlyName
 }
 
 #if canImport(Android)

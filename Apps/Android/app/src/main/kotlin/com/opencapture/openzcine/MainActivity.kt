@@ -339,11 +339,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
-                // Read once: a pre-parity Android installation paired every
-                // saved card with one static PTP-IP GUID. The production
-                // environment migrates that identity only on this upgrade;
-                // new installs receive their own persisted identity instead.
-                val hasSavedCameraProfilesAtLaunch = remember { savedCameras.isNotEmpty() }
                 // Offline Media: per-camera card entry or the global startup
                 // Media Library (all complete caches), matching iOS
                 // `openCachedMediaLibrary` / listAllCachedClips.
@@ -371,10 +366,7 @@ class MainActivity : ComponentActivity() {
                 val pairingEnvironment =
                     remember(pairingScript) {
                         pairingScript?.environment
-                            ?: realPairingEnvironment(
-                                applicationContext,
-                                hasLegacySavedCameraProfiles = hasSavedCameraProfilesAtLaunch,
-                            ) { phase, _ ->
+                            ?: realPairingEnvironment(applicationContext) { phase, _ ->
                                 // Closed phase tokens only; free-form detail is discarded here.
                                 AndroidDiagnosticEvent.fromPhase(phase)?.let {
                                     diagnostics.record(it)
