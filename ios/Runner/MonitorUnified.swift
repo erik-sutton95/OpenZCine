@@ -1268,13 +1268,22 @@ struct MonitorShell: View {
             ))
     }
 
-    /// Whether the landscape band runs the freed-band redistribution: no record control and no
-    /// capture strip mounted (a relay watcher, or an operator who unmounted both) leaves the
-    /// bottom-trailing corner and the capture lane empty — DISP takes the corner, the assist
-    /// strip centers wide, and the top chrome rises (`MonitorZoneLayout.watcherRefined`).
+    /// Whether the landscape band runs the freed-band redistribution: DISP takes the
+    /// bottom-trailing corner, the assist strip centers wide, and the top chrome rises
+    /// (`MonitorZoneLayout.watcherRefined`).
+    ///
+    /// Watchers only. This used to fire for anyone whose record control and capture strip were
+    /// both unmounted, on the reasoning that the band was empty either way — but an operator on a
+    /// live camera reaches that state too, and then the widened strip took the capture lane and
+    /// squeezed the capture bar into a sliver at the trailing edge. Emptiness is not the
+    /// condition; being a watcher is, because only a watcher can never get those controls back.
+    ///
+    /// The mount checks stay as a second gate: a watcher that HOLDS control mounts the capture
+    /// strip, and it needs the ordinary layout for the same reason the operator does.
     private var refinesForFreedBand: Bool {
         !context.isPortrait
             && model.displayMode != .command
+            && model.videoSource == .relay
             && !model.chromeSectionMounts(.railRecord)
             && !model.chromeSectionMounts(.cameraValues)
     }
