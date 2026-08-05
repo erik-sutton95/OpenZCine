@@ -68,7 +68,7 @@ final class WatchRelay: NSObject {
         session.activate()
     }
 
-    private var isReady: Bool {
+    var isReady: Bool {
         guard let session else { return false }
         return session.activationState == .activated && session.isReachable
     }
