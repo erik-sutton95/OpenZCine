@@ -1272,20 +1272,29 @@ struct MonitorShell: View {
     /// bottom-trailing corner, the assist strip centers wide, and the top chrome rises
     /// (`MonitorZoneLayout.watcherRefined`).
     ///
-    /// Watchers only. This used to fire for anyone whose record control and capture strip were
-    /// both unmounted, on the reasoning that the band was empty either way — but an operator on a
-    /// live camera reaches that state too, and then the widened strip took the capture lane and
-    /// squeezed the capture bar into a sliver at the trailing edge. Emptiness is not the
-    /// condition; being a watcher is, because only a watcher can never get those controls back.
+    /// The condition is CAPABILITY, not what happens to be mounted: this device cannot drive the
+    /// camera, so the record control and the capture strip can never appear and their lanes are
+    /// permanently free.
     ///
-    /// The mount checks stay as a second gate: a watcher that HOLDS control mounts the capture
-    /// strip, and it needs the ordinary layout for the same reason the operator does.
+    /// Two earlier versions keyed on mount state and both leaked. The first asked whether the
+    /// record control and capture strip were currently unmounted — true for a watcher, but also
+    /// for an operator who had switched both off, who then lost the capture lane to the widened
+    /// strip. The second added `videoSource == .relay` and kept the mount checks as a "second
+    /// gate", which was no gate at all: `chromeSectionMounts` already folds in the same
+    /// availability the first condition tested, so the two conditions shared one source of truth
+    /// and a stale value moved both together.
+    ///
+    /// `canDriveCamera` is computed fresh from the live session (`ownsCameraSession ||
+    /// holdsRelayControl`), so it cannot be carried over from a finished session the way a
+    /// latched source kind or a persisted chrome preference can. That is what makes this immune
+    /// to the three reports: a watcher who takes control gains `holdsRelayControl` and drops out
+    /// of the freed band immediately; a watcher whose broadcaster closes and who then connects to
+    /// the camera gains `ownsCameraSession` and drops out even if the source kind is still stale;
+    /// and an operator always has one of the two.
     private var refinesForFreedBand: Bool {
         !context.isPortrait
             && model.displayMode != .command
-            && model.videoSource == .relay
-            && !model.chromeSectionMounts(.railRecord)
-            && !model.chromeSectionMounts(.cameraValues)
+            && !model.monitorAvailability.canDriveCamera
     }
 
     private func refinedIfFreedBand(_ map: MonitorZoneMap) -> MonitorZoneMap {

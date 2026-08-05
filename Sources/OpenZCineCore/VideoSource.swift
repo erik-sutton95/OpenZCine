@@ -91,6 +91,19 @@ public struct MonitorDataAvailability: Equatable, Sendable {
     /// Browsing and downloading what is on the card — a control-link operation.
     public var mediaBrowser: Bool { ownsCameraSession }
 
+    /// Whether the landscape bottom band is permanently free, so the layout may redistribute it:
+    /// DISP to the trailing corner, the assist strip centred wide.
+    ///
+    /// Keyed on capability, never on what is currently mounted. A device that CAN drive the
+    /// camera may have its record control or capture strip switched off right now, but they can
+    /// come back at any moment and the band has to be theirs. Only a device that cannot drive the
+    /// camera at all — a watcher without the control token — owns that space outright.
+    ///
+    /// This has regressed twice by being written against mount state instead: once catching an
+    /// operator who had switched both off, once failing to release a watcher the moment it took
+    /// control.
+    public var freesTheCaptureBand: Bool { !canDriveCamera }
+
     /// The AF box overlay, and the body's focus confirmation behind it.
     public var focusBoxes: Bool { receivesCameraMetadata }
     public var focusConfirmation: Bool { receivesCameraMetadata }

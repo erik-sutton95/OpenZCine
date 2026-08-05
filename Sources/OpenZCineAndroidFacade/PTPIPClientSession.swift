@@ -29,7 +29,7 @@ import OpenZCineCore
 public enum AndroidPTPIPInitiator {
     /// Mirrors ``PTPIPInitiator/appGUID``. The Kotlin side sends the same bytes over JNI
     /// (`PtpIpInitiatorIdentity.guid`); this is the default for the facade's own callers.
-    public static var appGUID: Data { PTPIPInitiator.appGUID }
+    public static let appGUID = PTPIPInitiator.appGUID
 
     /// Mirrors ``PTPIPInitiator/friendlyName`` so a profile looks identical whichever
     /// platform created it.
