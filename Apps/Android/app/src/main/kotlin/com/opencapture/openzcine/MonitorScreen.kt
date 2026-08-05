@@ -1583,7 +1583,7 @@ internal fun MonitorScreen(
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
                 isPortrait, effectiveDisplayMode, isPortraitFill, scopeCount, bottomBarHeight,
-                portraitFeedAspectRatio,
+                portraitFeedAspectRatio, availability.canDriveCamera,
             ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
@@ -1600,6 +1600,7 @@ internal fun MonitorScreen(
                         mirrored = false,
                         bottomBarHeight = bottomBarHeight,
                         portraitFeedAspectRatio = portraitFeedAspectRatio,
+                        canDriveCamera = availability.canDriveCamera,
                     ),
                 )
             }

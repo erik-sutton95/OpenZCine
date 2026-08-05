@@ -150,6 +150,10 @@ object SwiftCore {
      * @param portraitFeedAspectRatio fit-mode feed content ratio: photography
      *   passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders
      *   whole under the top bar; video passes 16:9. Ignored in fill.
+     * @param canDriveCamera `MonitorDataAvailability.canDriveCamera`. False for a
+     *   relay watcher without the control token, which owns the band the capture
+     *   strip would have taken: the core then centres the assist strip and drops
+     *   DISP into the trailing corner, exactly as on iOS.
      */
     external fun monitorZoneMap(
         viewportWidth: Float,
@@ -165,6 +169,7 @@ object SwiftCore {
         mirrored: Boolean,
         bottomBarHeight: Float,
         portraitFeedAspectRatio: Float,
+        canDriveCamera: Boolean,
     ): FloatArray
 
     /**
