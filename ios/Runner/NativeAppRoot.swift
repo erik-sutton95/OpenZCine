@@ -2942,6 +2942,37 @@ final class NativeAppModel {
         }
     }
 
+    /// The camera-AP SSID of the setup about to be forgotten, if that is what this host is.
+    /// Router, hotspot and USB setups own no Wi-Fi key, so they clear nothing.
+    private func accessPointSSIDBeingForgotten(host: String) -> String? {
+        let normalized = PTPIPPairedHosts.normalizedHost(host)
+        guard
+            let record = savedCameras.first(where: {
+                PTPIPPairedHosts.normalizedHost($0.host) == normalized
+            }),
+            record.path?.kind == .cameraAccessPoint
+        else { return nil }
+        return CameraWiFiSSID.resolve(for: record)
+    }
+
+    /// Removing a camera-AP setup takes its stored key with it: keeping the key is what let a
+    /// re-added setup join silently, so the operator could not tell a remembered camera from a
+    /// forgotten one — and could not clear it at all short of deleting the app.
+    private func clearCameraWiFiCredential(forForgottenSSID ssid: String?) {
+        guard let ssid, !ssid.isEmpty else { return }
+        CameraWiFiCredentialStore.deletePassword(forSSID: ssid)
+        // The prefix entry is the "any NIKON_ZR_… " fallback a first join writes before an exact
+        // SSID is known, so it is shared. It only goes when no access-point setup is left to
+        // use it — otherwise forgetting one body would break the join for another.
+        let accessPointSetupsRemain = savedCameras.contains {
+            $0.path?.kind == .cameraAccessPoint
+        }
+        if !accessPointSetupsRemain {
+            CameraWiFiCredentialStore.deletePassword(
+                forPrefix: CameraWiFiSSID.nikonAccessPointPrefix)
+        }
+    }
+
     private func clearStoredCameraWiFiPassword(
         for target: CameraWiFiJoinPolicy.ProactiveJoinTarget
     ) {
@@ -3765,8 +3796,12 @@ final class NativeAppModel {
         // Fully forget the camera, including the knownPaired identity. Silent reconnect still
         // works because every connection probes the camera; if the Nikon still recognizes this
         // phone the next connect reconnects without a code, otherwise it pairs fresh.
+        // The setup's Wi-Fi key belongs to the setup, not to the device. Read it BEFORE the
+        // record goes, because the SSID is resolved from the record.
+        let forgottenAccessPointSSID = accessPointSSIDBeingForgotten(host: host)
         NativeCameraConnectionStore.shared.forgetKnownPairing(host: host)
         refreshSavedCameras()
+        clearCameraWiFiCredential(forForgottenSSID: forgottenAccessPointSSID)
         applyStartupDestination()
         connectionMessage =
             "Removed this camera from OpenZCine. You can pair it again anytime."
