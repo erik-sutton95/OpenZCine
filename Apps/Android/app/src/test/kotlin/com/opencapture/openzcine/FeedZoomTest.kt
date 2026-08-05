@@ -92,6 +92,43 @@ class FeedZoomTest {
         assertEquals(height * (2f - 1f) / 2f, panned.offsetY, 0.001f)
     }
 
+    /**
+     * A 16:9 picture letterboxed in a 4:3 zone: vertically the picture is shorter than the frame,
+     * so at 2x it overhangs by less than the frame would suggest. Bounding by the zone instead
+     * would let the picture be dragged until the black bars invade.
+     */
+    @Test
+    fun `pan bounds on the picture, not the letterboxed zone`() {
+        val pictureHeight = width * 9f / 16f // 225 inside a 300-tall zone
+        val zoomed =
+            feedZoomAfterTransform(
+                FeedZoom.NONE, 2f, width / 2f, height / 2f, 0f, 0f,
+                width, height, width, pictureHeight,
+            )
+        val panned =
+            feedZoomAfterTransform(
+                zoomed, 1f, width / 2f, height / 2f, 0f, 10_000f,
+                width, height, width, pictureHeight,
+            )
+
+        assertEquals((pictureHeight * 2f - height) / 2f, panned.offsetY, 0.001f)
+        assertTrue(
+            panned.offsetY < height * (2f - 1f) / 2f,
+            "bounding by the zone would have allowed ${height * 0.5f}, got ${panned.offsetY}",
+        )
+    }
+
+    /** A picture smaller than the frame at 1x cannot pan at all — the bound floors at zero. */
+    @Test
+    fun `a picture that does not overhang cannot be dragged`() {
+        val zoomed =
+            feedZoomAfterTransform(
+                FeedZoom.NONE, 1.2f, width / 2f, height / 2f, 0f, 0f,
+                width, height, width, height / 2f,
+            )
+        assertEquals(0f, zoomed.offsetY, 0.001f)
+    }
+
     @Test
     fun `a pinch released just above one settles back to the whole frame`() {
         assertEquals(FeedZoom.NONE, feedZoomSettled(FeedZoom(scale = 1.04f, offsetX = 12f)))

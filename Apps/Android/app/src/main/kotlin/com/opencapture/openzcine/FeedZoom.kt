@@ -33,24 +33,33 @@ internal data class FeedZoom(
 }
 
 /**
- * Pan bound for a center-anchored scale: the picture overflows the frame by `size*(scale-1)/2` on
- * each side, and the offset may travel exactly that far — the content edge pins to the frame edge.
+ * Pan bound for a center-anchored scale: the offset may travel until the picture's own edge
+ * reaches the frame's, which is `(picture*scale - frame)/2` per axis.
  *
- * The bound falls to zero as the scale falls to 1, which is what re-centers the picture on the way
- * out of a zoom. Clamping DURING the gesture is load-bearing, not just a commit-time tidy.
+ * The picture is what moves, not the frame, so the bound is measured on the PICTURE. On the live
+ * feed those differ: a 16:9 image inside a taller zone is letterboxed, and bounding by the zone
+ * would let the picture be dragged until the black bars invade — looser than the playback viewer,
+ * whose image fills its own box. Where the picture does fill the frame this reduces to the
+ * familiar `frame*(scale-1)/2`.
+ *
+ * The bound floors at zero, so it collapses as the scale returns to 1 — which is what re-centers
+ * the picture on the way out of a zoom. Clamping DURING the gesture is load-bearing, not just a
+ * commit-time tidy.
  */
 internal fun clampFeedPan(
     offsetX: Float,
     offsetY: Float,
-    width: Float,
-    height: Float,
+    frameWidth: Float,
+    frameHeight: Float,
     scale: Float,
+    pictureWidth: Float = frameWidth,
+    pictureHeight: Float = frameHeight,
 ): Pair<Float, Float> {
     // scale is always >= 1 by construction; guard anyway so a degenerate call cannot invert the
     // coerce bounds (Kotlin throws on a reversed range, which would take the feed down).
     val safeScale = maxOf(scale, 1f)
-    val limitX = width * (safeScale - 1f) / 2f
-    val limitY = height * (safeScale - 1f) / 2f
+    val limitX = maxOf(0f, (pictureWidth * safeScale - frameWidth) / 2f)
+    val limitY = maxOf(0f, (pictureHeight * safeScale - frameHeight) / 2f)
     return offsetX.coerceIn(-limitX, limitX) to offsetY.coerceIn(-limitY, limitY)
 }
 
@@ -75,6 +84,8 @@ internal fun feedZoomAfterTransform(
     panChangeY: Float,
     width: Float,
     height: Float,
+    pictureWidth: Float = width,
+    pictureHeight: Float = height,
 ): FeedZoom {
     val target = (committed.scale * zoomChange).coerceIn(1f, FeedZoom.MAXIMUM)
     if (target <= 1f) return FeedZoom.NONE
@@ -88,6 +99,8 @@ internal fun feedZoomAfterTransform(
             width,
             height,
             target,
+            pictureWidth,
+            pictureHeight,
         )
     return FeedZoom(target, clampedX, clampedY)
 }

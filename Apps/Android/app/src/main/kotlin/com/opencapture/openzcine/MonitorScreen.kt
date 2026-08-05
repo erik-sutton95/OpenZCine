@@ -1810,6 +1810,9 @@ internal fun MonitorScreen(
         val liveFeedEffectsPresentation =
             remember(monitorFrameSource) { LiveFeedEffectsPresentationState() }
         var feedPointerSize by remember(monitorFrameSource) { mutableStateOf(IntSize.Zero) }
+        // The drawn picture inside that zone (letterboxed when the feed's aspect differs),
+        // which is what bounds the zoom pan. Filled in where the content rect is resolved.
+        var feedPictureSize by remember(monitorFrameSource) { mutableStateOf(0f to 0f) }
         val audioMetersEnabled = assist.audioMetersEnabled
         // Mode-filtered render inputs (#256): the operator's stored on/off state is untouched, so
         // leaving clean restores everything exactly.
@@ -1837,6 +1840,9 @@ internal fun MonitorScreen(
                 val width = feedPointerSize.width.toFloat()
                 val height = feedPointerSize.height.toFloat()
                 if (width > 0f && height > 0f) {
+                    // The picture, not the zone: a letterboxed feed must not be draggable until
+                    // its black bars invade.
+                    val picture = feedPictureSize
                     committedZoom =
                         feedZoomAfterTransform(
                             committed = committedZoom,
@@ -1847,6 +1853,8 @@ internal fun MonitorScreen(
                             panChangeY = panChange.y,
                             width = width,
                             height = height,
+                            pictureWidth = picture.first.takeIf { it > 0f } ?: width,
+                            pictureHeight = picture.second.takeIf { it > 0f } ?: height,
                         )
                 }
             }
@@ -1998,6 +2006,11 @@ internal fun MonitorScreen(
                 sourceHeight = liveFeedPresentation.sourceHeight,
                 aspectFill = portraitRasterFill,
             )
+        // Publish the drawn picture's size so the zoom pan bounds on it rather than on the zone.
+        LaunchedEffect(feedContent) {
+            feedPictureSize =
+                feedContent?.let { it.width.toFloat() to it.height.toFloat() } ?: (0f to 0f)
+        }
         val focusMetadataAvailable =
             sessionState is CameraSessionState.Connected &&
                 monitorFrameSource != null &&
