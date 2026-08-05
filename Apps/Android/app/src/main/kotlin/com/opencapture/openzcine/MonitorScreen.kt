@@ -2262,7 +2262,17 @@ internal fun MonitorScreen(
                         isPortrait = isPortrait,
                         isZoomed = isFeedZoomed,
                         onHoldingChanged = { focusLockHolding = it },
-                        onAction = handleFocusFeedAction,
+                        // A zoom or a pan must never move the focus box. The arbiter lives inside
+                        // the zoom layer, so its coordinates are divided by the scale: a 200px pan
+                        // at 4x reaches it as 50px, lands under its tap threshold, and would be
+                        // read as a tap-to-focus. Deferring to the transform while it is running
+                        // settles it by intent rather than by tuning a threshold against a moving
+                        // coordinate space. A discrete tap starts no transform and still focuses.
+                        onAction = { action ->
+                            if (!feedTransformState.isTransformInProgress) {
+                                handleFocusFeedAction(action)
+                            }
+                        },
                     ),
                 contentAlignment = Alignment.Center,
             ) {
