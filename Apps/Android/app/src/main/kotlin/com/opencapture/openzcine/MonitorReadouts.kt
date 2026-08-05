@@ -29,7 +29,33 @@ internal data class MonitorBatteryPresentation(
     val percent: Int?,
     val label: String,
     val externalPower: Boolean,
+    val urgency: CameraBatteryUrgency = CameraBatteryUrgency.NOMINAL,
+    /** The body's blinking exhaustion step. Only that step pulses. */
+    val pulses: Boolean = false,
 )
+
+/**
+ * How urgently the camera gauge should read, mirroring the shared core's
+ * `CameraBatteryGauge.Urgency`.
+ *
+ * The steps are the operator's, not the body's: three bars or more is "carry on", two is "find a
+ * spare", one is "swap now". Keeping the thresholds in one definition per platform is what stops
+ * iOS and Android warning at different charges for the same reading.
+ */
+internal enum class CameraBatteryUrgency {
+    NOMINAL,
+    LOW,
+    DEPLETED,
+}
+
+/** Mirrors `CameraBatteryGauge.urgency`. An absent reading must not cry wolf. */
+internal fun cameraBatteryUrgency(filledBars: Int?): CameraBatteryUrgency =
+    when (filledBars) {
+        null -> CameraBatteryUrgency.NOMINAL
+        1 -> CameraBatteryUrgency.DEPLETED
+        2 -> CameraBatteryUrgency.LOW
+        else -> CameraBatteryUrgency.NOMINAL
+    }
 
 /**
  * Live-view header timecode retention for one connected camera.
@@ -168,6 +194,9 @@ internal fun monitorBatteryPresentation(
         percent = validPercent,
         label = batteryReadoutLabel(validPercent, externalPower),
         externalPower = externalPower == true,
+        urgency = cameraBatteryUrgency(cameraBatteryBars(validPercent)),
+        // Raw 1 is the body's blinking shutter-disabled step, distinct from a steady last bar.
+        pulses = validPercent == 1,
     )
 }
 

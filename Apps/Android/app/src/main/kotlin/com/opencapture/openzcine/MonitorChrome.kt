@@ -1,5 +1,10 @@
 package com.opencapture.openzcine
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -611,13 +616,37 @@ fun BatteryRowStack(
 private fun BatteryOutlineRow(percent: Int?, isCamera: Boolean, externalPower: Boolean?) {
     val presentation = monitorBatteryPresentation(percent, externalPower)
     val batteryPercent = presentation.percent
-    val low = batteryPercent?.let { if (isCamera) it < 10 else it <= 15 } == true
+    // Charge reads as colour before it reads as a count. The camera's thresholds come from the
+    // shared gauge (`CameraBatteryUrgency`, mirroring core `CameraBatteryGauge.Urgency`) so the
+    // two platforms cannot warn at different charges; the phone keeps its own percentage rule.
     val tint =
         when {
-            low -> Color.Red
             batteryPercent == null && externalPower != true -> LiveDesign.faint
-            isCamera -> LiveDesign.accent
+            isCamera ->
+                when (presentation.urgency) {
+                    // Muted, not a signal green: a healthy battery must not compete with the
+                    // record tally for attention.
+                    CameraBatteryUrgency.NOMINAL -> Color(0xFF6BCC87)
+                    CameraBatteryUrgency.LOW -> Color(0xFFE59A3C)
+                    CameraBatteryUrgency.DEPLETED -> Color.Red
+                }
+            batteryPercent != null && batteryPercent <= 15 -> Color.Red
             else -> LiveDesign.text.copy(alpha = 0.85f)
+        }
+    // Only the body's blinking exhaustion step pulses. A steady red bar is "nearly out"; a
+    // pulsing one is the body reporting the shutter is already disabled.
+    val pulseAlpha =
+        if (presentation.pulses) {
+            val transition = rememberInfiniteTransition(label = "batteryPulse")
+            transition.animateFloat(
+                initialValue = 1f,
+                targetValue = 0.35f,
+                animationSpec =
+                    infiniteRepeatable(tween(600), repeatMode = RepeatMode.Reverse),
+                label = "batteryPulseAlpha",
+            ).value
+        } else {
+            1f
         }
     val source =
         stringResource(if (isCamera) R.string.battery_source_camera else R.string.battery_source_phone)
@@ -644,7 +673,7 @@ private fun BatteryOutlineRow(percent: Int?, isCamera: Boolean, externalPower: B
         }
         BatteryOutlineReadout(
             label = presentation.label.removeSuffix("%"),
-            tint = tint,
+            tint = tint.copy(alpha = tint.alpha * pulseAlpha),
             charging = presentation.externalPower,
         )
     }

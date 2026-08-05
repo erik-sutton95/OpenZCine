@@ -1918,6 +1918,9 @@ struct BatteryIndicator: View {
     var isCharging: Bool = false
     var layout: Layout = .rail
 
+    /// Drives the exhausted gauge's pulse. Only ever set while ``batteryPulses``.
+    @State private var batteryPulsePhase = false
+
     /// Standard SF battery glyph whose fill reflects the charge percent. The Nikon ZR reports
     /// battery as discrete steps (1/20/40/60/80/100 %), so the camera readout naturally lands on
     /// 20/40/60/80/100 % (and 1 % when critical) rather than a misleadingly precise figure.
@@ -1965,9 +1968,12 @@ struct BatteryIndicator: View {
     ///
     /// The phone keeps its numeral: it reports a true percentage, and the two readings should not
     /// look like the same kind of measurement (#303).
+    // An unknown gauge falls through to the dash, never to an empty meter. A watcher that is not
+    // being sent a battery reading was drawing five hollow bars in warning red — which reads as
+    // "this camera is flat", the most alarming thing the indicator can say, on no evidence at all.
     @ViewBuilder
     private func gaugeReadout(size: CGFloat) -> some View {
-        if let cameraGauge {
+        if let cameraGauge, cameraGauge != .unknown {
             let filled = cameraGauge.filledBars
             HStack(spacing: max(1, size * 0.18)) {
                 ForEach(0..<CameraBatteryGauge.barCount, id: \.self) { index in
@@ -1976,9 +1982,21 @@ struct BatteryIndicator: View {
                         .frame(width: max(1.5, size * 0.42), height: size)
                 }
             }
+            // The glow rides the same pulse as the fill, so the exhausted gauge reads at a glance
+            // in a bright room where a colour change alone would not.
+            .shadow(color: batteryTint.opacity(batteryPulses ? 0.9 : 0), radius: size * 0.5)
+            .opacity(batteryPulses && batteryPulsePhase ? 0.35 : 1)
+            .animation(
+                batteryPulses
+                    ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true) : .default,
+                value: batteryPulsePhase
+            )
+            .onAppear { if batteryPulses { batteryPulsePhase = true } }
+            .onChange(of: batteryPulses) { _, pulses in batteryPulsePhase = pulses }
             .accessibilityElement()
             .accessibilityLabel(
-                "Camera battery \(filled) of \(CameraBatteryGauge.barCount) bars")
+                "Camera battery \(filled) of \(CameraBatteryGauge.barCount) bars"
+                    + (batteryPulses ? ", exhausted" : ""))
         } else {
             Text(readout)
                 .font(.system(size: size + 2.5, weight: .medium, design: .monospaced))
@@ -1994,10 +2012,25 @@ struct BatteryIndicator: View {
         return cameraGauge.filledBars <= 1
     }
 
+    /// Charge reads as colour before it reads as a count: an operator glancing down should know
+    /// whether to reach for a spare without counting bars. The thresholds are the shared core's
+    /// (`CameraBatteryGauge.Urgency`), so the two platforms cannot warn at different charges.
     private var batteryTint: Color {
-        if isLow { return .red }
-        return isCamera ? LiveDesign.accent : LiveDesign.text.opacity(0.85)
+        guard let cameraGauge else {
+            return isLow ? .red : (isCamera ? LiveDesign.accent : LiveDesign.text.opacity(0.85))
+        }
+        switch cameraGauge.urgency {
+        // Muted rather than a signal green: a healthy battery should not compete with the
+        // record tally for attention.
+        case .nominal: return Color(red: 0.42, green: 0.80, blue: 0.53)
+        case .low: return .orange
+        case .depleted: return .red
+        }
     }
+
+    /// The body's blinking exhaustion step, mirrored. Only that step pulses — a steady red bar is
+    /// "nearly out", a pulsing one is "the shutter is already disabled".
+    private var batteryPulses: Bool { cameraGauge?.pulses ?? false }
 
     var body: some View {
         switch layout {

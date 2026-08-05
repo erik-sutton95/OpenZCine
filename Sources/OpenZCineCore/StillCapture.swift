@@ -538,4 +538,34 @@ public enum CameraBatteryGauge: Equatable, Sendable {
 
     /// Whether the body has disabled the shutter for exhaustion.
     public var isCritical: Bool { self == .critical }
+
+    /// How urgently the gauge should read, in one definition both shells transcribe.
+    ///
+    /// The steps are the operator's, not the body's: three bars or more is "fine, carry on", two
+    /// is "find a spare", one is "swap now". Splitting it here rather than in each shell is what
+    /// stops the two platforms drifting into different warning points for the same charge.
+    public enum Urgency: Equatable, Sendable {
+        /// 3/5 and above.
+        case nominal
+        /// 2/5 — a warning, not yet a failure.
+        case low
+        /// 1/5, including the body's blinking exhaustion step.
+        case depleted
+    }
+
+    public var urgency: Urgency {
+        switch filledBars {
+        case ...0: return .nominal  // No reading yet: an unknown gauge must not cry wolf.
+        case 1: return .depleted
+        case 2: return .low
+        default: return .nominal
+        }
+    }
+
+    /// Whether the gauge should pulse. Only the body's own blinking step does.
+    ///
+    /// A steady red bar and a pulsing red bar mean different things: the first is "nearly out",
+    /// the second is the body reporting the shutter is already disabled. Pulsing everything at one
+    /// bar would erase that difference at the moment it matters most.
+    public var pulses: Bool { isCritical }
 }
