@@ -87,6 +87,12 @@ public struct WatchRelayFrame: Codable, Equatable, Sendable {
 public enum WatchRelayCommand: String, Codable, Equatable, Sendable {
     /// Toggle recording (start if stopped, stop if recording).
     case toggleRecord
+    /// The watch came back to the foreground: resend a state snapshot and restart the frame pump.
+    ///
+    /// A dimmed display suspends the watch app, and any frames in flight at that moment are never
+    /// acked — so the phone's pump can be left holding a permit that will not come back while the
+    /// watch shows a stale picture. The watch asking on wake is what clears both sides (#187).
+    case resume
 }
 
 /// Phone → watch reply acknowledging a ``WatchRelayCommand``.

@@ -209,11 +209,23 @@ final class WatchRelay: NSObject {
             return (try? WatchRelayEnvelope.encode(kind: .result, payload: fallback)) ?? Data()
         }
         let result: WatchCommandResult
-        if let command = try? WatchRelayEnvelope.decode(WatchRelayCommand.self, from: data),
-            command == .toggleRecord, let onToggleRecord
-        {
-            result = onToggleRecord()
-        } else {
+        let command = try? WatchRelayEnvelope.decode(WatchRelayCommand.self, from: data)
+        switch command {
+        case .toggleRecord:
+            result = onToggleRecord.map { $0() } ?? fallback
+        case .resume:
+            // Same recovery as a reachability change, but driven by the watch, which is the side
+            // that knows it just woke. Frames in flight when the display dimmed are never acked,
+            // so clear the permits before pumping or the pump stays blocked; dropping the
+            // last-sent state forces a full snapshot rather than a diff against what the watch
+            // may have missed (#187).
+            let wasRecording = lastSentState?.isRecording ?? false
+            lastSentState = nil
+            framesInFlight = 0
+            pendingFrame = nil
+            pumpFrames()
+            result = WatchCommandResult(accepted: true, isRecording: wasRecording, error: nil)
+        case .none:
             result = fallback
         }
         return (try? WatchRelayEnvelope.encode(kind: .result, payload: result)) ?? Data()
