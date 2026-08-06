@@ -1150,7 +1150,15 @@ struct StartupAddSetupSheet: View {
                         }
                     }
                 case .phoneHotspot:
+                    // Same shape as the Router watch, and for the same reason: arming alone
+                    // dismissed the sheet onto an unchanged camera list, so the button read as
+                    // dead. The camera can only join a hotspot the operator turns on, so the
+                    // card is also the only place that instruction gets said.
                     model.pendingSetupIntent = .init(anchor: camera, kind: kind)
+                    model.pendingAddSetupAction = { [weak model] in
+                        model?.presentSetupWatchProgress(for: camera, kind: .phoneHotspot)
+                    }
+                    Task { await model.refreshCameraDiscovery() }
                 case .hdmiCapture:
                     break
                 }

@@ -2411,18 +2411,34 @@ final class NativeAppModel {
     /// setup watch, so Find On This Network shows progress from the tap onward. Fulfillment
     /// (`applyDiscoveryResults`) drives the same card through the normal connect phases; Cancel
     /// disarms the watch via `cancelConnectionAttempt`.
-    func presentSetupWatchProgress(for camera: PTPIPSavedCameraRecord) {
+    func presentSetupWatchProgress(
+        for camera: PTPIPSavedCameraRecord,
+        kind: CameraPath.Kind = .infrastructure
+    ) {
         connectionProgressDeviceName = ConnectionProgressCopy.resolveDisplayName(
             rawName: camera.displayName, savedCamera: camera)
         connectionProgressIsUSB = false
         connectionProgressShowsFailure = false
         connectionFailureDetail = ""
         connectionPhase = .discovering
-        // Says the thing the operator must actually do: a camera that has only ever met this
-        // phone over its own AP has no profile for this network, so it has to be put into its
-        // pairing wait here — "keep Connect to PC on" left them watching a spinner instead.
-        connectionMessage =
-            "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
+        // Says the thing the operator must actually do — a camera that has only ever met this
+        // phone one way has no profile for the new path, so it has to be put into its pairing
+        // wait by hand. This rides `connectionStageDetail` because that is the only detail the
+        // card reads; written to `connectionMessage` alone it never reached the screen, which
+        // left the operator watching a spinner — the exact thing the instruction exists to
+        // prevent. The connect clears the stage detail when it starts, which is precisely when
+        // the instruction stops applying.
+        let instruction: String
+        switch kind {
+        case .phoneHotspot:
+            instruction =
+                "Turn on Personal Hotspot in Settings, then on the camera: Network menu → Connect to computer → pair with this iPhone's hotspot. We'll connect the moment it joins."
+        default:
+            instruction =
+                "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
+        }
+        connectionStageDetail = instruction
+        connectionMessage = instruction
         isConnectionProgressPresented = true
     }
 
