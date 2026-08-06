@@ -1040,6 +1040,13 @@ struct SettingsPercentSlider: View {
                 step: 1
             )
             .tint(LiveDesign.accent)
+            // A Slider has no intrinsic width, and `SettingsInlineRow` measures its trailing
+            // control with `fixedSize(horizontal:)` so `ViewThatFits` can decide between the
+            // inline and stacked forms. Fixed to nothing is exactly what it collapsed to: the
+            // bare thumb, reading as a pill jammed against the percentage. An ideal width gives
+            // that measurement something to resolve to; the minimum keeps it draggable if the
+            // row ever squeezes, and the stacked form still stretches it edge to edge.
+            .frame(minWidth: 120, idealWidth: 190)
             Text("\(value)%")
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(LiveDesign.text)
