@@ -4382,7 +4382,14 @@ final class NativeAppModel {
     /// device's probe drops the body's live session (single-initiator). Saved rows light from
     /// the kernel-level liveness dial instead. Probes belong to the PAIRING surface only —
     /// a pairing-wait body advertises nothing, so the operator standing one up needs them.
-    private var discoveryProbesCameras: Bool { startupMode == .discovery }
+    /// An armed setup watch probes too. The operator tapped a path and was told to put the body
+    /// into its pairing wait on that network — which is both the consent a probe needs and the
+    /// one state where it is the ONLY thing that works: a waiting body advertises nothing, so a
+    /// Bonjour-only pass can never see it. Without this the watch searched forever with the
+    /// camera sitting on the network in plain sight.
+    private var discoveryProbesCameras: Bool {
+        startupMode == .discovery || pendingSetupIntent != nil
+    }
 
     /// Exercising ICC camera control makes the OS show its "Using Camera Access to Control
     /// Connected Cameras" disclosure on every launch — so USB browsing runs only where a
@@ -4417,11 +4424,6 @@ final class NativeAppModel {
         startDiscoveryLoop(resetResults: false)
     }
 
-    /// Whether a camera is expected to be sitting in its "pairing computer and camera" wait right
-    /// now, so discovery must stay PASSIVE (Bonjour only — a probe is an Init, and an Init knocks
-    /// a pairing-mode ZR out of pairing). True while an infrastructure/hotspot setup watch is
-    /// armed (the operator was told to put the body into pairing on that network) and through the
-    /// post-confirm window.
     /// One-line verdict per discovery pass while a setup watch is armed — the stuck-"Searching…"
     /// diagnosis line. Read in Console as `setup-watch`.
     ///
