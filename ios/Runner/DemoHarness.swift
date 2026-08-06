@@ -821,8 +821,12 @@ enum DemoHarness {
                 store.upsertSavedCamera(
                     host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C",
                     serialNumber: "6002199")
+                // A ZR-shaped name so the access-point SSID derives, which is what makes this an
+                // access-point setup you can actually JOIN — and the only way the tab's
+                // ready-to-join ring is reachable headless. A name that derives no SSID is a real
+                // state too, but it renders as the plain dark dot.
                 store.upsertSavedCamera(
-                    host: "192.168.1.1", displayName: "Z6_7005555", transport: "Wi-Fi",
+                    host: "192.168.1.1", displayName: "ZR_7005555", transport: "Wi-Fi",
                     onCameraAccessPoint: true, serialNumber: "7005555")
                 model.showSavedCameras()
             }

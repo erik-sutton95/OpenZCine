@@ -774,9 +774,7 @@ struct StartupCameraListRow: View {
             connect(path, availability: pathAvailability)
         } label: {
             HStack(spacing: 6) {
-                Circle()
-                    .fill(chipDotColor(for: pathAvailability))
-                    .frame(width: 7, height: 7)
+                setupTabDot(for: path, availability: pathAvailability)
                 Text(SavedCameraPathGroups.pathLabel(for: path))
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(isActive ? StartupColors.ink : StartupColors.muted)
@@ -818,8 +816,11 @@ struct StartupCameraListRow: View {
     /// saved camera setup, so it is not offered here.
     private var missingSetupKinds: [CameraPath.Kind] {
         let saved = Set(allPaths.compactMap(\.pathKind))
-        return [.usbC, .cameraAccessPoint, .infrastructure, .phoneHotspot]
-            .filter { !saved.contains($0) }
+        // HDMI capture is iPad-only — `AVCaptureDeviceTypeExternal` is UVC-on-iPad, so offering
+        // it on a phone would be offering something the hardware cannot do.
+        var kinds: [CameraPath.Kind] = [.usbC, .cameraAccessPoint, .infrastructure, .phoneHotspot]
+        if UVCVideoSource.isSupportedHardware { kinds.append(.hdmiCapture) }
+        return kinds.filter { !saved.contains($0) }
     }
 
     @ViewBuilder private var addSetupChip: some View {
@@ -855,6 +856,38 @@ struct StartupCameraListRow: View {
                     StartupAddSetupSheet(camera: camera, missingKinds: missingSetupKinds)
                         .environment(model)
                 })
+        }
+    }
+
+    /// A camera-AP setup we hold credentials for, while this device is not on that network.
+    ///
+    /// It is neither reachable nor dead, and iOS cannot tell us which: there is no API to scan for
+    /// a network by name (`NEHotspotNetwork` reports only the network already joined), so "is the
+    /// camera powered on" is unanswerable from here. What IS certain is that tapping it offers the
+    /// join, because the SSID resolves and the key is saved. A plain dark dot claimed the opposite
+    /// and read as a broken tab — the more so now that an AP setup only lights on its own fixed
+    /// address, which makes dark its normal resting state.
+    private func isReadyToJoin(
+        _ path: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
+    ) -> Bool {
+        guard path.path?.kind == .cameraAccessPoint, case .offline = availability else {
+            return false
+        }
+        return CameraWiFiJoinPolicy.resolvedSSID(savedCamera: path, discoveredCamera: nil) != nil
+    }
+
+    /// Hollow, not filled: a ring says "this can be done" where a filled dot says "this is so".
+    @ViewBuilder private func setupTabDot(
+        for path: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
+    ) -> some View {
+        if isReadyToJoin(path, availability: availability) {
+            Circle()
+                .strokeBorder(StartupColors.accent.opacity(0.9), lineWidth: 1.6)
+                .frame(width: 7, height: 7)
+        } else {
+            Circle()
+                .fill(chipDotColor(for: availability))
+                .frame(width: 7, height: 7)
         }
     }
 
@@ -1128,7 +1161,7 @@ struct StartupAddSetupSheet: View {
             case .infrastructure:
                 return match != nil ? "Connect Now" : "Find On This Network"
             case .phoneHotspot: return "Wait For Camera"
-            case .hdmiCapture: return nil
+            case .hdmiCapture: return "Use HDMI Capture"
             }
         }()
         if let title {
@@ -1152,17 +1185,17 @@ struct StartupAddSetupSheet: View {
                         // No match yet: ARM the watch — the first discovery on this path
                         // auto-connects (the row shows it waiting). A button that only
                         // dismissed here is what made add-setup feel dead.
+                        // The watch gets a VISIBLE card from the tap (Cancel disarms). Without
+                        // one, the later auto-fulfillment read as the whole flow "doing stuff in
+                        // the background" — and any card presented at fulfillment could land
+                        // mid-sheet-dismissal and be dropped. USB-C was the last kind still
+                        // arming silently, which is why "Connect When Plugged In" did nothing
+                        // visible: the watch WAS armed, it just never said so.
                         model.pendingSetupIntent = .init(anchor: camera, kind: kind)
-                        if kind == .infrastructure {
-                            // The watch gets a VISIBLE card from the tap (Cancel disarms).
-                            // Without one, the later auto-fulfillment read as the whole flow
-                            // "doing stuff in the background" — and any card presented at
-                            // fulfillment could land mid-sheet-dismissal and be dropped.
-                            model.pendingAddSetupAction = { [weak model] in
-                                model?.presentSetupWatchProgress(for: camera)
-                            }
-                            Task { await model.refreshCameraDiscovery() }
+                        model.pendingAddSetupAction = { [weak model] in
+                            model?.presentSetupWatchProgress(for: camera, kind: kind)
                         }
+                        Task { await model.refreshCameraDiscovery() }
                     }
                 case .phoneHotspot:
                     // Same shape as the Router watch, and for the same reason: arming alone
@@ -1175,7 +1208,13 @@ struct StartupAddSetupSheet: View {
                     }
                     Task { await model.refreshCameraDiscovery() }
                 case .hdmiCapture:
-                    break
+                    // Picture-only and no PTP control, so there is nothing to watch FOR — the
+                    // dongle either has a signal or it doesn't. Start the capture session
+                    // straight away; it adopts a live camera link as a source change rather
+                    // than tearing it down (`startHDMIMonitorSession`).
+                    model.pendingAddSetupAction = { [weak model] in
+                        model?.startHDMIMonitorSession()
+                    }
                 }
                 dismiss()
             } label: {

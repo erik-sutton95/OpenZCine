@@ -2417,7 +2417,7 @@ final class NativeAppModel {
     ) {
         connectionProgressDeviceName = ConnectionProgressCopy.resolveDisplayName(
             rawName: camera.displayName, savedCamera: camera)
-        connectionProgressIsUSB = false
+        connectionProgressIsUSB = kind == .usbC
         connectionProgressShowsFailure = false
         connectionFailureDetail = ""
         connectionPhase = .discovering
@@ -2433,6 +2433,11 @@ final class NativeAppModel {
         case .phoneHotspot:
             instruction =
                 "Turn on Personal Hotspot in Settings, then on the camera: Network menu → Connect to computer → pair with this iPhone's hotspot. We'll connect the moment it joins."
+        case .usbC:
+            // A cable path has no network step at all, so the network instruction below would be
+            // asking the operator to configure something this setup never touches.
+            instruction =
+                "Connect \(connectionProgressDeviceName) with a USB-C cable. We'll connect the moment it's plugged in."
         default:
             instruction =
                 "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
