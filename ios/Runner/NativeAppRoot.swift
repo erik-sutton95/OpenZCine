@@ -4229,6 +4229,11 @@ final class NativeAppModel {
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
     /// is itself a heat source — see `applyThermalStreamStepDownIfNeeded`).
     @ObservationIgnored private var lastAppliedStreamImageSize: UInt8?
+    /// The compression byte the running stream was configured with, tracked exactly like the
+    /// size above so the reconciler can see a quality-bias change. Without it the bias only
+    /// reached the body when a size change happened to force a reconfigure — every settings
+    /// change bails out of the immediate restart, because the settings panel hides the feed.
+    @ObservationIgnored private var lastAppliedStreamCompression: UInt8?
     /// Adaptive ceiling on `LiveViewImageSize`: congestion lowers it below the operator's
     /// preset, sustained health raises it back. Reset per session.
     /// Wall-clock cadences gating the descriptor/storage refresh burst to slow timers — re-reading
@@ -6003,6 +6008,7 @@ final class NativeAppModel {
         isRecording = false
         resetPendingRecordCommand()
         lastAppliedStreamImageSize = nil
+        lastAppliedStreamCompression = nil
         lastDescriptorRefreshAt = nil
         lastStorageRefreshAt = nil
         resetCameraPropertyState()
@@ -6539,13 +6545,21 @@ final class NativeAppModel {
         return preferences.streamPreset.liveViewImageSize
     }
 
-    /// Restarts live view when `effectiveStreamImageSize` has moved since the last configure — e.g.
-    /// the phone crossed a thermal tier. No-op when the size is unchanged or the feed isn't up, so a
-    /// stable thermal state never thrashes the encoder.
+    /// Restarts live view when what the stream was configured with has moved since — the phone
+    /// crossed a thermal tier, or the operator changed a quality control. No-op when nothing moved
+    /// or the feed isn't up, so a stable state never thrashes the encoder.
+    ///
+    /// COMPRESSION IS RECONCILED TOO, not just size. Both quality controls restart the feed when
+    /// they change, but that restart bails whenever the feed is hidden — which is always, because
+    /// the settings panel that carries the controls is what hides it. Size then healed itself here
+    /// on the way out while compression had no reconciler, so a Quality Bias change did nothing
+    /// until a Stream Preset change happened to force a reconfigure and re-send both bytes.
     private func applyThermalStreamStepDownIfNeeded() {
         guard cameraSession != nil, isMonitorPresented, !shouldPauseLiveFeed else { return }
-        guard let applied = lastAppliedStreamImageSize else { return }
-        if effectiveStreamImageSize != applied {
+        guard let appliedSize = lastAppliedStreamImageSize else { return }
+        if effectiveStreamImageSize != appliedSize
+            || preferences.qualityBias.liveViewImageCompression != lastAppliedStreamCompression
+        {
             restartLiveViewForQualityChange()
         }
     }
@@ -6884,10 +6898,12 @@ final class NativeAppModel {
         // (re)start includes configure/start time and must not be scored as congestion.
         do {
             let requestedSize = effectiveStreamImageSize
+            let requestedCompression = preferences.qualityBias.liveViewImageCompression
             await session.configureLiveView(
                 size: requestedSize,
-                compression: preferences.qualityBias.liveViewImageCompression)
+                compression: requestedCompression)
             lastAppliedStreamImageSize = requestedSize
+            lastAppliedStreamCompression = requestedCompression
             try await session.startLiveView()
             // NEVER cancel the in-flight fetch on a session this loop intends to keep: task
             // cancellation inside a blocked socket read fires `PTPIPSocket.interrupt()` (the
@@ -6966,6 +6982,7 @@ final class NativeAppModel {
                         liveViewSuspended = true
                         await session.stopLiveView()
                         lastAppliedStreamImageSize = nil
+                        lastAppliedStreamCompression = nil
                     }
                     if !liveViewSuspended {
                         // Keep-warm: one discarded frame per idle tick holds the body's live
@@ -7027,10 +7044,12 @@ final class NativeAppModel {
                     _ = try? await nextFrameTask.value
                     await session.stopLiveView()
                     let requestedSize = effectiveStreamImageSize
+                    let requestedCompression = preferences.qualityBias.liveViewImageCompression
                     await session.configureLiveView(
                         size: requestedSize,
-                        compression: preferences.qualityBias.liveViewImageCompression)
+                        compression: requestedCompression)
                     lastAppliedStreamImageSize = requestedSize
+                    lastAppliedStreamCompression = requestedCompression
                     try await session.startLiveView()
                     frameRate = FrameRateSampler()
                     watchdog.recordGoodFrame(at: Date())
@@ -11693,6 +11712,7 @@ final class NativeAppModel {
         // bootstrap, the record safe point, the thermal timer) cancel the restart and kick
         // another — an endless burst loop that froze the feed the moment recording began.
         lastAppliedStreamImageSize = nil
+        lastAppliedStreamCompression = nil
         startLiveView(session: session, skipPropertyBootstrap: true)
     }
 
