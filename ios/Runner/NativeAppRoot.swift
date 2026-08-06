@@ -610,10 +610,15 @@ final class NativeAppModel {
         }
 
         /// The paths this card offers, in the order shown.
+        ///
+        /// HDMI capture is absent on iPhone rather than shown-and-disabled: `AVCaptureDeviceTypeExternal`
+        /// is UVC-on-iPad, so on a phone it is not a path that might work later — it is not a path.
+        /// Offering it there would only teach the operator to try something that cannot exist.
         var options: [FirstPairTransportMethod] {
             switch self {
             case .wireless: [.cameraAccessPoint, .phoneHotspot, .wiFiNetwork]
-            case .cableLink: [.usbC, .hdmiCapture]
+            case .cableLink:
+                UVCVideoSource.isSupportedHardware ? [.usbC, .hdmiCapture] : [.usbC]
             }
         }
 
@@ -4426,7 +4431,13 @@ final class NativeAppModel {
     /// Connected Cameras" disclosure on every launch — so USB browsing runs only where a
     /// cable is actually in play: a saved USB-C setup, or the pairing surface.
     private var discoveryBrowsesUSB: Bool {
+        // An armed cable watch has to browse USB or it can never fulfill — and a camera being
+        // GIVEN its first USB-C setup has no USB record yet by definition, which is exactly what
+        // the two conditions before this one look for. "Connect When Plugged In" therefore sat on
+        // "Searching…" with the cable attached: the watch was armed and correct, and the device
+        // it was waiting for was never enumerated for it to see.
         startupMode == .discovery || savedCameras.contains(where: \.isUSBTransport)
+            || pendingSetupIntent?.kind == .usbC
     }
 
     /// Pull-to-refresh on the camera list: one immediate, awaited scan — without blanking the

@@ -98,19 +98,14 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// connect wizard can explain the limitation on an iPhone instead of showing a path that will
     /// never find anything. The Simulator reports `.pad` on an iPad simulator but never enumerates
     /// a device, which lands on `waitingForDevice`.
-    static var isSupportedHardware: Bool {
-        #if DEBUG
-            // Debug-only experiment: `AVCaptureDeviceTypeExternal` is documented as iPad-only, but
-            // a discovery session costs nothing to run and the only way to learn whether some
-            // phone + dongle pair ever enumerates is to let it try. It finds nothing on a phone
-            // today, in which case the capture step simply sits on "waiting for the device" —
-            // there is no session to start and so no camera indicator or thermal load either.
-            // Release keeps the honest gate, so nothing ships an option that cannot work.
-            return true
-        #else
-            return isDocumentedHardware
-        #endif
-    }
+    /// iPad only, in every configuration.
+    ///
+    /// This used to return true on any device in Debug — an experiment to learn whether some
+    /// phone + dongle pair ever enumerates. It never did, and the cost was an HDMI option
+    /// appearing throughout the iPhone UI of every development build, which is not a thing to
+    /// leave lying around on the device the app is actually tested on. The capability is
+    /// documented iPad-only; the app now says so with one answer rather than two.
+    static var isSupportedHardware: Bool { isDocumentedHardware }
 
     /// Whether Apple documents UVC support on this hardware. Kept separate from
     /// `isSupportedHardware` so a Debug build that lets a phone try can still explain why it
