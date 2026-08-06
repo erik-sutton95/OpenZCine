@@ -5281,10 +5281,19 @@ final class NativeAppModel {
         // machinery. Router, hotspot and cable setups exit here — for them the code below does
         // not exist, which is the refactor's whole point. (A nil record is a fresh pairing; the
         // wizard gate right after owns that flow.)
-        if let savedCamera, savedCamera.path?.kind != .cameraAccessPoint { return }
+        // Every gate below can decline silently, and a silent decline looks exactly like a broken
+        // button: the operator taps Camera AP and nothing happens. Each one says which it was.
+        if let savedCamera, savedCamera.path?.kind != .cameraAccessPoint {
+            logConnection(
+                "join skipped: setup path is \(savedCamera.path?.kind.rawValue ?? "none")")
+            return
+        }
         // The operator picked a path that never puts this device on the camera's own access point,
         // so joining one is wrong however tempting a saved SSID makes it look.
-        if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint { return }
+        if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint {
+            logConnection("join skipped: wizard path \(firstPairTransportMethod) never joins an AP")
+            return
+        }
         // RECOVERY of a live monitor session: the dropped session already proved its topology.
         // A router / hotspot / cable session must never answer a drop by reconfiguring Wi-Fi
         // toward the camera's AP — applying that configuration is itself what kicks this phone
@@ -5292,7 +5301,10 @@ final class NativeAppModel {
         // down with it. This is deliberately latched session state, not record evidence:
         // records on a device that cannot read SSIDs may never carry evidence at all.
         if isStreamRecovering || sessionRecovery != .idle {
-            guard establishedSessionUsedCameraAP else { return }
+            guard establishedSessionUsedCameraAP else {
+                logConnection("join skipped: recovering a session that did not use the camera AP")
+                return
+            }
         }
         guard
             let joinTarget = CameraWiFiJoinPolicy.joinTargetIfNeeded(
@@ -5302,7 +5314,19 @@ final class NativeAppModel {
                 discoveredCamera: discoveredCamera,
                 connectedSSID: connectedWiFiSSID
             )
-        else { return }
+        else {
+            // The four ways this returns nil, named so the log distinguishes them: a cable
+            // transport, a non-AP setup, this device already being on the camera's AP, and — the
+            // quiet one — an SSID that cannot be resolved from the setup at all, which is the
+            // difference between "no join needed" and "no join possible".
+            logConnection(
+                "join skipped: no target — transport=\(transportKind) "
+                    + "path=\(savedCamera?.path?.kind.rawValue ?? "none") "
+                    + "discovered=\(discoveredCamera == nil ? "nil" : "yes") "
+                    + "ssid=\(CameraWiFiJoinPolicy.resolvedSSID(savedCamera: savedCamera, discoveredCamera: discoveredCamera) ?? "unresolvable") "
+                    + "connectedSSID=\(connectedWiFiSSID ?? "unreadable")")
+            return
+        }
 
         let credentials = resolveCameraWiFiCredentials(
             ssid: joinTarget.ssid,
@@ -5321,9 +5345,16 @@ final class NativeAppModel {
         } else if let prefix = joinTarget.ssidPrefix {
             proactiveTarget = .ssidPrefix(prefix)
         } else {
+            logConnection("join skipped: target names neither an SSID nor a prefix")
             return
         }
         guard !joinWasDeclined(ssid: joinTarget.ssid, prefix: joinTarget.ssidPrefix) else {
+            // A "no" to the iOS join alert latches so nothing re-offers the same network. That
+            // latch is invisible, so a decline made during one bad session reads later as a dead
+            // button — the operator taps Camera AP and gets silence.
+            logConnection(
+                "join skipped: DECLINED latch for \(joinTarget.ssid ?? joinTarget.ssidPrefix ?? "?")"
+            )
             return
         }
         // hotspotConfigurationOnly keeps the native join alert over our sheet; the ASK
