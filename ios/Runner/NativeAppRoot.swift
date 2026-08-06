@@ -4860,7 +4860,14 @@ final class NativeAppModel {
                     // but only for a phone that was on it to begin with.
                     if sawCameraNetwork { sawCameraNetworkDrop = true }
                     let now = ContinuousClock.now
-                    if lastReapply == nil || now - lastReapply! >= .seconds(5) {
+                    // The camera is still coming back up for the first seconds after the drop,
+                    // and its configuration is still installed on this phone — so give iOS the
+                    // chance to re-associate by itself before chasing. An apply that lands early
+                    // only costs the operator an "Unable to connect". Hence one interval of
+                    // patience first, then a cadence wide enough that an attempt has resolved
+                    // before the next begins.
+                    if lastReapply == nil { lastReapply = now }
+                    if now - lastReapply! >= .seconds(10) {
                         lastReapply = now
                         WiFiJoinCoordinator.shared.reapplyCameraNetwork(ssid: ssid)
                     }
@@ -4870,7 +4877,11 @@ final class NativeAppModel {
             // Out of time without a reconnect: hand the AP path back to passive discovery, which
             // is held off below while this loop owns the restart signal. Without this a confirm
             // that lands late would leave the operator on a spinner nothing ever answers.
-            if !Task.isCancelled { self?.pairedReconnectSawCameraLeave = true }
+            // Cancelled means a newer chase already replaced this one in that slot — leave it be.
+            if !Task.isCancelled {
+                self?.pairedReconnectSawCameraLeave = true
+                self?.pairedReconnectFastPathTask = nil
+            }
         }
     }
 
@@ -4898,8 +4909,13 @@ final class NativeAppModel {
                 }
                 // The camera dropped its AP to restart with the new pairing profile. Pull the phone
                 // back onto the camera network so discovery can see it return (iOS may otherwise
-                // settle on a preferred home network and never rejoin on its own).
-                attemptPairedReconnectRejoin()
+                // settle on a preferred home network and never rejoin on its own) — but only when
+                // the fast path is not already chasing it. Two independently throttled re-appliers
+                // took turns applying into the same rebooting access point, and every attempt that
+                // fails is an "Unable to connect" the operator has to dismiss.
+                if pairedReconnectFastPathTask == nil {
+                    attemptPairedReconnectRejoin()
+                }
             } else if pairedReconnectSawCameraLeave, let match {
                 // Stay ARMED until a connect actually succeeds (cleared in the connected path):
                 // after an AP restart or internet hop the ZR can hold the pre-drop PTP session and
