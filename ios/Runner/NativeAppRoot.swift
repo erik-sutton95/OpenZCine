@@ -4977,7 +4977,12 @@ final class NativeAppModel {
             // hotspot: it connected over the wrong path, and because that fulfillment fired
             // inside the add-setup sheet's dismissal, the progress cover was silently
             // dropped — the whole connect+pair ran with no visible UI.
-            let shapeFits: (DiscoveredCamera) -> Bool = { [isOnCameraAccessPointNetwork] in
+            // The join PROOF, not the live-only read the chips use: an AP add-setup watch runs in
+            // the moment right after this app applied the access-point configuration, when the
+            // SSID is usually still unreadable. Live-only evidence would leave that watch on
+            // "Searching…" with the camera in plain sight.
+            let onCameraAccessPoint = cameraAccessPointEvidence == true
+            let shapeFits: (DiscoveredCamera) -> Bool = { [onCameraAccessPoint] in
                 let viaHotspot = CameraStartupPolicy.usesIPhoneHotspot(
                     host: $0.ip, transport: "")
                 switch intent.kind {
@@ -4986,9 +4991,9 @@ final class NativeAppModel {
                 case .phoneHotspot:
                     return $0.source != .usb && viaHotspot
                 case .infrastructure:
-                    return $0.source != .usb && !viaHotspot && !isOnCameraAccessPointNetwork
+                    return $0.source != .usb && !viaHotspot && !onCameraAccessPoint
                 case .cameraAccessPoint:
-                    return $0.source != .usb && isOnCameraAccessPointNetwork
+                    return $0.source != .usb && onCameraAccessPoint
                 }
             }
             let strictMatch = cameras.first { discovered in
@@ -5108,10 +5113,30 @@ final class NativeAppModel {
     /// Whether the phone is, right now, on a camera's own Wi-Fi — availability chips use
     /// this to stop a same-body discovery over the AP from lighting router/hotspot setups
     /// that have no route from here.
-    var isOnCameraAccessPointNetwork: Bool { cameraAccessPointEvidence == true }
+    /// Whether this device is sitting on a camera's own access point RIGHT NOW.
+    ///
+    /// Deliberately excludes the join latch. `sessionJoinedCameraAccessPoint` records that an
+    /// attempt applied an access-point configuration — how it DIALLED, not where the device
+    /// ended up — and nothing clears it when that attempt fails, so it outlives the network it
+    /// described. Read as a live answer it lit the Camera AP chip green while the phone sat on
+    /// the house router with the camera reachable there: the availability guard that keeps an AP
+    /// setup dark off its own network never fired, and the name-match fallback then handed the
+    /// router's camera to the AP setup. A green AP chip dials the discovered router address
+    /// THROUGH the AP setup instead of offering the join, so the false positive also suppresses
+    /// the fix.
+    ///
+    /// An unreadable SSID (the common case — iOS refuses the Wi-Fi information request) means
+    /// "unknown", which resolves to not-on-AP. That is the safe direction: a dark AP chip still
+    /// connects when tapped, and its connect is the one that offers the join.
+    var isOnCameraAccessPointNetwork: Bool { liveCameraAccessPointEvidence == true }
 
+    /// The join proof INCLUDED: what an attempt did counts when declaring the path it took.
     private var cameraAccessPointEvidence: Bool? {
         if sessionJoinedCameraAccessPoint { return true }
+        return liveCameraAccessPointEvidence
+    }
+
+    private var liveCameraAccessPointEvidence: Bool? {
         guard let ssid = connectedWiFiSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
             !ssid.isEmpty
         else { return nil }
