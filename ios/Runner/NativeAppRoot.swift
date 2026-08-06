@@ -2797,7 +2797,8 @@ final class NativeAppModel {
                 !reconnectHost.isEmpty
             {
                 _ = await directConnectLoop(
-                    host: reconnectHost, deviceName: deviceName, maxAttempts: 6)
+                    host: reconnectHost, deviceName: deviceName, maxAttempts: 6,
+                    viaCameraAccessPointJoin: true)
                 // Exhausted or connected either way — the last attempt owns the card.
                 return
             }
@@ -2812,7 +2813,10 @@ final class NativeAppModel {
             {
                 connectionPhase = .discovering
                 connectionMessage = "Connecting to \(deviceName)…"
-                if await directConnectLoop(host: direct, deviceName: deviceName, maxAttempts: 2) {
+                if await directConnectLoop(
+                    host: direct, deviceName: deviceName, maxAttempts: 2,
+                    viaCameraAccessPointJoin: true)
+                {
                     return
                 }
                 guard !Task.isCancelled, isConnectionProgressPresented else { return }
@@ -2904,9 +2908,11 @@ final class NativeAppModel {
     }
 
     /// Dials one known host through the single-flighted connect until it lands or attempts run
-    /// out. Returns whether the session connected; the last attempt's failure card stays up.
+    /// out. Returns whether this loop resolved the card — connected, or handed off to the
+    /// post-pairing wait; the last attempt's failure card stays up.
     private func directConnectLoop(
-        host: String, deviceName: String, maxAttempts: Int
+        host: String, deviceName: String, maxAttempts: Int,
+        viaCameraAccessPointJoin: Bool = false
     ) async -> Bool {
         cameraHost = host
         for attempt in 1...maxAttempts {
@@ -2914,13 +2920,19 @@ final class NativeAppModel {
             // on the card — stop retrying then, even though the .handshaking phase isn't one
             // `dismissConnectionProgress` cancels this task from.
             guard !Task.isCancelled, isConnectionProgressPresented else { return false }
-            connectToCamera()
+            connectToCamera(viaCameraAccessPointJoin: viaCameraAccessPointJoin)
             // Wait for the single-flighted attempt to resolve (success or ~10s Init timeout).
             while isEstablishingConnection {
                 try? await Task.sleep(for: .milliseconds(200))
                 guard !Task.isCancelled else { return false }
             }
             if isConnected { return true }
+            // Pairing just handed the card to the "Confirm on camera" wait (the only thing that
+            // arms this). Retrying over that hand-off is what overwrote the instruction before
+            // the operator could read it and then redialled a body busy rebooting its access
+            // point — "Establishing a secure link…", then "The camera ended the connection".
+            // The paired-reconnect machinery owns the return from here.
+            if pendingPairedReconnectHost != nil { return true }
             guard attempt < maxAttempts, isConnectionProgressPresented else { break }
             // Hold the card in a reconnecting state (not the flashed failure) and give the
             // ZR a moment to release the stale session before the next Init.
@@ -3279,9 +3291,15 @@ final class NativeAppModel {
 
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
-        preservingMonitorSurface: Bool = false
+        preservingMonitorSurface: Bool = false,
+        viaCameraAccessPointJoin: Bool = false
     ) {
-        sessionJoinedCameraAccessPoint = false
+        // An attempt carries only its OWN access-point evidence — except one dialled straight off
+        // a join this app just applied, which is the strongest proof there is. Clearing it
+        // unconditionally threw that proof away one line before the pairing branch asked for it,
+        // so the post-pairing wait got no SSID to chase and nothing ever pulled the phone back
+        // onto the camera's rebooted network.
+        sessionJoinedCameraAccessPoint = viaCameraAccessPointJoin
         relaySoloFPSBaseline = 0
         if let discoveredCamera {
             cameraHost = discoveredCamera.ip
@@ -4828,7 +4846,9 @@ final class NativeAppModel {
                     }
                     // Back on the camera's rebooted network: dial the fixed AP host directly.
                     self.cameraHost = host
-                    self.connectToCamera()
+                    // This loop re-applied the camera's network to get here, so the dial carries
+                    // that proof — the record it saves is an access-point setup.
+                    self.connectToCamera(viaCameraAccessPointJoin: true)
                     while self.isEstablishingConnection, !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(200))
                     }
