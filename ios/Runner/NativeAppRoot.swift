@@ -5369,6 +5369,35 @@ final class NativeAppModel {
             recordDeclinedJoinIfUserSaidNo(error, ssid: joinTarget.ssid)
             throw error
         }
+        await awaitCameraAccessPointReachable()
+    }
+
+    /// Waits for the camera to actually ANSWER after a join, before the session Init goes out.
+    ///
+    /// The join resolves on association — a new address on the interface — which is not the same
+    /// as a usable route. The body's soft access point starts answering about a second after that
+    /// address appears, and an Init sent into the gap does not fail fast: it sits in a blackholed
+    /// socket until the transaction deadline. That is the "Connecting…" that only Cancel-and-retry
+    /// clears, because retrying is what finally dials a settled route.
+    ///
+    /// Uses the camera list's own readiness probe, which never sends a PTP Init — so waiting here
+    /// cannot disturb a body that is still bringing its network up.
+    private func awaitCameraAccessPointReachable(timeout: TimeInterval = 12) async {
+        let host = cameraHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        var dials = 0
+        while Date() < deadline, !Task.isCancelled {
+            dials += 1
+            if await NativeCameraDiscoveryService.checkHostAlive(host: host) {
+                logConnection("post-join: \(host) answered after \(dials) dial(s)")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+        // Never fatal. A body that stays silent is a real failure worth surfacing through the
+        // establish path's own error, not a reason to refuse to try the Init at all.
+        logConnection("post-join: \(host) silent for \(Int(timeout))s — connecting anyway")
     }
 
     private func transitionToSavedCameraNetworkCheck(message: String) {
