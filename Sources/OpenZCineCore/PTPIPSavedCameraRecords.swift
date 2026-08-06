@@ -135,7 +135,21 @@ public enum PTPIPSavedCameraRecords {
     /// keeps the AP's fixed address, the foreign host becomes the infrastructure setup it
     /// always described.
     public static func typed(_ record: PTPIPSavedCameraRecord) -> [PTPIPSavedCameraRecord] {
-        if record.path != nil { return [record] }
+        if let path = record.path {
+            // A DECLARED path is authoritative — with one exception, because it is the one claim
+            // a record can make that its own address disproves. An access-point setup lives at
+            // the AP's fixed address by definition; an AP stamp on a foreign host describes a
+            // session that was never on the camera's own network. That record dials an address
+            // the camera does not answer on, and no join can rescue it, because the app believes
+            // it is already looking at the AP setup it needs. Same split as below: the AP setup
+            // keeps the AP's address, the foreign host becomes the infrastructure setup it always
+            // was. (The untyped case below only ever ran once, at migration, so a record poisoned
+            // AFTER being typed had nothing left to repair it.)
+            guard case .cameraAccessPoint = path,
+                record.host != CameraDiscovery.nikonZRAccessPointHost
+            else { return [record] }
+            return splittingAccessPoint(record)
+        }
         var typedRecord = record
         if record.isUSBTransport {
             typedRecord.path = .usbC
@@ -149,18 +163,29 @@ public enum PTPIPSavedCameraRecords {
             typedRecord.path = .infrastructure(networkName: nil)
             return [typedRecord]
         }
-        let ssid =
-            record.presentation?.wifiSSID
-            ?? CameraWiFiSSID.deriveSSID(fromCameraName: record.displayName)
-        typedRecord.path = .cameraAccessPoint(ssid: ssid)
+        return splittingAccessPoint(record)
+    }
+
+    /// Pins an access-point setup to the AP's fixed address, and hands any foreign host it was
+    /// carrying to the infrastructure setup that host actually describes.
+    private static func splittingAccessPoint(_ record: PTPIPSavedCameraRecord)
+        -> [PTPIPSavedCameraRecord]
+    {
+        var accessPoint = record
+        accessPoint.pairedViaCameraAccessPoint = true
+        accessPoint.path = .cameraAccessPoint(
+            ssid: record.path?.accessPointSSID
+                ?? record.presentation?.wifiSSID
+                ?? CameraWiFiSSID.deriveSSID(fromCameraName: record.displayName)
+        )
         guard record.host != CameraDiscovery.nikonZRAccessPointHost else {
-            return [typedRecord]
+            return [accessPoint]
         }
-        typedRecord.host = CameraDiscovery.nikonZRAccessPointHost
+        accessPoint.host = CameraDiscovery.nikonZRAccessPointHost
         var infrastructure = record
         infrastructure.path = .infrastructure(networkName: nil)
         infrastructure.pairedViaCameraAccessPoint = false
-        return [typedRecord, infrastructure]
+        return [accessPoint, infrastructure]
     }
 
     public static func upserting(

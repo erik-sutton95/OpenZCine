@@ -88,10 +88,38 @@ public data class SavedCameraRecord(
  * multiplying visible camera cards.
  */
 public object SavedCameraRecords {
+    /** Every Nikon camera access point hands out this address to itself. */
+    public const val CAMERA_ACCESS_POINT_HOST: String = "192.168.1.1"
+
+    /**
+     * Pins a camera-AP setup to the access point's fixed address.
+     *
+     * An access-point setup lives at that address by definition, so an AP stamp on any other host
+     * describes a session that was never on the camera's own network. Such a record dials an
+     * address the camera does not answer on, and cannot be rescued by a join — the app believes it
+     * already holds the AP setup it needs. "+ Add setup -> Camera access point" builds its record
+     * by copying the row it was invoked from, which is exactly how a router address gets an AP
+     * stamp.
+     */
+    public fun pinnedToAccessPoint(record: SavedCameraRecord): SavedCameraRecord =
+        if (record.host == CAMERA_ACCESS_POINT_HOST) {
+            record
+        } else {
+            record.copy(host = CAMERA_ACCESS_POINT_HOST)
+        }
+
     /** Returns normalized, deduplicated records in their original card order. */
     public fun canonicalized(records: List<SavedCameraRecord>): List<SavedCameraRecord> {
         val output = mutableListOf<SavedCameraRecord>()
-        for (record in records) {
+        for (rawRecord in records) {
+            // Repair before dedupe: an AP setup carrying a foreign host is not the setup it claims
+            // to be, and must not be matched or preferred as one.
+            val record =
+                if (rawRecord.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+                    pinnedToAccessPoint(rawRecord)
+                } else {
+                    rawRecord
+                }
             val normalized = normalized(record) ?: continue
             val existingIndex =
                 output.indexOfFirst { existing ->

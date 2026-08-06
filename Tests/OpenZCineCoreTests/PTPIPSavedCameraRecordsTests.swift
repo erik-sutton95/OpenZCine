@@ -428,3 +428,49 @@ import Testing
     // And the lookup the connect pipeline must never make is ambiguous by construction.
     #expect(records.filter { $0.host == shared }.count == 2)
 }
+
+/// An access-point setup lives at the AP's fixed address, and a record that says otherwise is
+/// repaired even though it already carries a declared path.
+///
+/// The migration split only ever ran on UNTYPED records, so a record poisoned after being typed
+/// had nothing left to repair it: the post-pairing rejoin left the join flag set while the camera
+/// came back on the house network, and the session that landed there was saved as an AP setup
+/// holding a router address. Tapping it dialled an address the camera never answers on, and the
+/// join that would have fixed it was suppressed — the app believed it already had the AP setup.
+@Test func aTypedAccessPointSetupOnAForeignHostIsSplitApart() {
+    let records = PTPIPSavedCameraRecords.canonicalized([
+        PTPIPSavedCameraRecord(
+            host: "192.168.1.246",
+            displayName: "ZR_6002199",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            serialNumber: "6002199",
+            path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+        )
+    ])
+
+    let accessPoint = records.first { $0.path?.kind == .cameraAccessPoint }
+    let infrastructure = records.first { $0.path?.kind == .infrastructure }
+    // The AP setup is pinned to the AP's address, keeping the SSID it needs to offer the join.
+    #expect(accessPoint?.host == CameraDiscovery.nikonZRAccessPointHost)
+    #expect(accessPoint?.path?.accessPointSSID == "NIKON_ZR_6002199")
+    // The foreign address becomes the router setup it always described, rather than vanishing.
+    #expect(infrastructure?.host == "192.168.1.246")
+}
+
+/// A well-formed access-point setup is left exactly as it is — the repair must not fire on the
+/// records it exists to protect.
+@Test func aTypedAccessPointSetupAtItsOwnAddressIsUntouched() {
+    let record = PTPIPSavedCameraRecord(
+        host: CameraDiscovery.nikonZRAccessPointHost,
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    let records = PTPIPSavedCameraRecords.canonicalized([record])
+    #expect(records.count == 1)
+    #expect(records.first?.path?.kind == .cameraAccessPoint)
+    #expect(records.first?.host == CameraDiscovery.nikonZRAccessPointHost)
+}

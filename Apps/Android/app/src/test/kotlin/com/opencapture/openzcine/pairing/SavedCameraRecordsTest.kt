@@ -80,20 +80,26 @@ class SavedCameraRecordsTest {
 
     @Test
     fun `generic camera names do not collapse distinct profiles`() {
+        // Two router setups, because two ADDRESSES are what makes these profiles distinct. This
+        // case used to be written as two camera-AP setups at .1 and .2 -- an input the AP-host
+        // invariant now makes impossible, since a camera access point only ever hands out .1.
+        // Two generically-named records that both resolve to that one address are genuinely
+        // indistinguishable and do merge; two bodies with real names at it stay apart (see
+        // `two bodies sharing the camera-AP address both survive`).
         val records =
             SavedCameraRecords.canonicalized(
                 listOf(
                     SavedCameraRecord(
                         host = "192.168.1.1",
                         cameraName = "Nikon ZR",
-                        transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                        transport = SavedCameraTransport.INFRASTRUCTURE,
                         lastSeenAtEpochMillis = null,
                         wifiSsid = null,
                     ),
                     SavedCameraRecord(
                         host = "192.168.1.2",
                         cameraName = "Nikon ZR",
-                        transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                        transport = SavedCameraTransport.INFRASTRUCTURE,
                         lastSeenAtEpochMillis = null,
                         wifiSsid = null,
                     ),
@@ -183,5 +189,41 @@ class SavedCameraRecordsTest {
         // Forgetting the Z 5 by name leaves the Z 6III standing.
         val afterForget = SavedCameraRecords.removing("192.168.1.1", "Z 5_7654321", both)
         assertEquals(listOf("Z 6III_1234567"), afterForget.map { it.cameraName })
+    }
+
+    /**
+     * An access-point setup lives at the AP's fixed address. "+ Add setup -> Camera access point"
+     * builds its record by copying the row it was invoked from, so without pinning it produced an
+     * AP setup carrying a router address -- one that dials somewhere the camera never answers, and
+     * that suppresses the very join which would have fixed it (the app believes it already holds
+     * the AP setup it needs).
+     */
+    @Test
+    fun canonicalizedPinsACameraApSetupToTheAccessPointAddress() {
+        val poisoned =
+            SavedCameraRecord(
+                host = "192.168.1.246",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                lastSeenAtEpochMillis = 1_000L,
+                wifiSsid = "NIKON_ZR_6002199",
+            )
+        val repaired = SavedCameraRecords.canonicalized(listOf(poisoned)).single()
+        assertEquals(SavedCameraRecords.CAMERA_ACCESS_POINT_HOST, repaired.host)
+        assertEquals("NIKON_ZR_6002199", repaired.wifiSsid)
+    }
+
+    /** A router setup keeps its own address -- the repair must only touch AP-stamped records. */
+    @Test
+    fun canonicalizedLeavesARouterSetupAddressAlone() {
+        val router =
+            SavedCameraRecord(
+                host = "192.168.1.246",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = 1_000L,
+                wifiSsid = null,
+            )
+        assertEquals("192.168.1.246", SavedCameraRecords.canonicalized(listOf(router)).single().host)
     }
 }

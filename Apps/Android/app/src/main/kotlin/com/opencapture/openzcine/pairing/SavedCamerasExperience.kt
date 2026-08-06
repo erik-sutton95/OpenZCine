@@ -738,7 +738,13 @@ public fun SavedCamerasExperience(
             return
         }
         handedOff.value = false
-        val apRecord = record.copy(transport = SavedCameraTransport.CAMERA_ACCESS_POINT, wifiSsid = ssid)
+        // Pinned to the AP's own address: the row this was invoked from is a router or hotspot
+        // setup, and carrying its host into the copy would create an AP setup that dials an
+        // address the camera never answers on.
+        val apRecord =
+            SavedCameraRecords.pinnedToAccessPoint(
+                record.copy(transport = SavedCameraTransport.CAMERA_ACCESS_POINT, wifiSsid = ssid),
+            )
         phase = SavedCameraPhase.ReadyToJoin(record = apRecord, ssid = ssid, key = key)
         environment.primeCameraApScan(ssid)
     }

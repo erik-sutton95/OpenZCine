@@ -5135,6 +5135,24 @@ final class NativeAppModel {
     private func declaredPathForSave(
         host: String, displayName: String?, setup: PTPIPSavedCameraRecord? = nil
     ) -> CameraPath {
+        let path = resolvedPathForSave(host: host, displayName: displayName, setup: setup)
+        // ONE invariant, enforced once, over every source of evidence above: an access-point
+        // setup lives at the AP's fixed address. A camera reached at any other address was not
+        // reached over its own access point, however strong the evidence looks — and the evidence
+        // goes stale in exactly the case that matters. After the post-pairing rejoin the join flag
+        // is still set while the camera has come back on the HOUSE network, so the session that
+        // finally lands there was being stamped as an AP setup carrying a router address. That
+        // record dials an address the camera never answers on, and because the app then believes
+        // it is already looking at the AP setup, it suppresses the join that would have fixed it.
+        if case .cameraAccessPoint = path, host != CameraDiscovery.nikonZRAccessPointHost {
+            return .infrastructure(networkName: nil)
+        }
+        return path
+    }
+
+    private func resolvedPathForSave(
+        host: String, displayName: String?, setup: PTPIPSavedCameraRecord?
+    ) -> CameraPath {
         if host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) { return .usbC }
         if CameraStartupPolicy.usesIPhoneHotspot(host: host, transport: "") {
             return .phoneHotspot
