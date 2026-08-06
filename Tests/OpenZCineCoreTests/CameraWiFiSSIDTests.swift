@@ -415,3 +415,58 @@ import Testing
     #expect(records.count == 1)
     #expect(records.first?.pairedViaCameraAccessPoint == false)
 }
+
+/// Tapping the Camera AP setup must offer its join even when the camera is reachable elsewhere.
+///
+/// The guard this pins used to be a blanket "discovered at all → no join needed". Every record
+/// reaching it is already an access-point setup, so that read as: if the camera is visible on ANY
+/// network, do not join its own one. Switch the body to its router profile and tap Camera AP, and
+/// the ROUTER path's discovery result silently cancelled the ACCESS POINT path's join — the exact
+/// cross-path leak the typed setups exist to prevent.
+@Test func apSetupStillJoinsWhenTheCameraIsDiscoveredOnAnotherNetwork() {
+    let record = PTPIPSavedCameraRecord(
+        host: CameraDiscovery.nikonZRAccessPointHost,
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    // The same body, answering on the house network.
+    let onRouter = DiscoveredCamera(
+        ip: "192.168.1.246", name: "ZR_6002199", source: .bonjour)
+
+    let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
+        transportKind: .ptpIP,
+        localAddresses: ["192.168.1.88"],
+        savedCamera: record,
+        discoveredCamera: onRouter,
+        connectedSSID: nil
+    )
+    #expect(target?.ssid == "NIKON_ZR_6002199")
+}
+
+/// …and must NOT re-offer it when the camera is discovered at the access point's own address,
+/// which is what "already on the camera's AP" looks like when iOS refuses to name the network.
+@Test func apSetupDoesNotRejoinWhenTheCameraAnswersOnTheAccessPointItself() {
+    let record = PTPIPSavedCameraRecord(
+        host: CameraDiscovery.nikonZRAccessPointHost,
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    let onAccessPoint = DiscoveredCamera(
+        ip: CameraDiscovery.nikonZRAccessPointHost,
+        name: "ZR_6002199",
+        source: .bonjour
+    )
+
+    #expect(
+        CameraWiFiJoinPolicy.joinTargetIfNeeded(
+            transportKind: .ptpIP,
+            localAddresses: ["192.168.1.88"],
+            savedCamera: record,
+            discoveredCamera: onAccessPoint,
+            connectedSSID: nil
+        ) == nil)
+}

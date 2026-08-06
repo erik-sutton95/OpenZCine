@@ -169,10 +169,21 @@ public enum CameraWiFiJoinPolicy {
                 connectedSSID: connectedSSID
             )
         else { return nil }
-        // A DISCOVERED camera is by definition reachable on the network this device is already on
-        // — discovery is what found it there. Joining its access point would leave that network to
-        // reach a camera we can already see.
-        if discoveredCamera != nil { return nil }
+        // A discovered camera only proves "no join needed" when it was discovered ON the camera's
+        // own access point — at the AP's fixed address. The guard above already restricted this
+        // function to AP setups, so a body found at ANY OTHER address was found on a DIFFERENT
+        // network, and the operator who tapped the Camera AP setup is asking to leave that network
+        // — not to be told the camera is visible from it.
+        //
+        // The blanket "discovered at all" check suppressed the join for precisely the case this
+        // setup exists to serve: switch the camera to its router profile, tap Camera AP, and the
+        // router path's own discovery result silently cancelled the access point's join.
+        if let discoveredCamera,
+            PTPIPPairedHosts.normalizedHost(discoveredCamera.ip)
+                == CameraDiscovery.nikonZRAccessPointHost
+        {
+            return nil
+        }
         guard
             let ssid = resolvedSSID(
                 savedCamera: savedCamera,
