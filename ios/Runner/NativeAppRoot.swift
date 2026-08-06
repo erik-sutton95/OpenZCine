@@ -3563,8 +3563,10 @@ final class NativeAppModel {
                     onCameraAccessPoint: cameraAccessPointEvidence,
                     // Falls back to the row the operator was adding a setup to: a body that
                     // reports no serial on this path would otherwise save as its own camera.
-                    serialNumber: session.identity.serialNumber
-                        ?? pendingSetupIntent?.anchor.serialNumber,
+                    // A body that reports no serial gives an empty string here, not nil.
+                    serialNumber: session.identity.serialNumber.isEmpty
+                        ? pendingSetupIntent?.anchor.serialNumber
+                        : session.identity.serialNumber,
                     path: declaredPathForSave(
                         host: session.identity.host,
                         displayName: session.identity.displayName)
@@ -4796,6 +4798,12 @@ final class NativeAppModel {
         pairedReconnectFastPathTask = Task { [weak self] in
             let deadline = ContinuousClock.now + .seconds(90)
             var lastReapply: ContinuousClock.Instant?
+            // "Off the camera's SSID" only counts as the camera restarting once we have actually
+            // been ON it. Adding a setup to a saved camera starts with iOS already wandered back
+            // to a home network, so the very first poll used to read as a restart: the reapply
+            // pulled the phone onto the camera's still-running, not-yet-confirmed AP and dialled
+            // it, which the body answers by ending the connection.
+            var sawCameraNetwork = false
             var sawCameraNetworkDrop = false
             while !Task.isCancelled, ContinuousClock.now < deadline {
                 guard let self, !self.isConnected else { return }
@@ -4809,6 +4817,7 @@ final class NativeAppModel {
                 }
                 let current = await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
                 if let current, current.caseInsensitiveCompare(ssid) == .orderedSame {
+                    sawCameraNetwork = true
                     // Pre-confirm, the phone is often STILL on the camera's old AP — dialing
                     // then grabs the lingering pre-confirm session (what `sawCameraLeave`
                     // exists to prevent). Dial only once the camera has been seen going away:
@@ -4827,8 +4836,9 @@ final class NativeAppModel {
                     // Give the ZR a moment to release its stale session before the next Init.
                     try? await Task.sleep(for: .seconds(2))
                 } else {
-                    // The phone got kicked off the camera's AP — that IS the restart signal.
-                    sawCameraNetworkDrop = true
+                    // The phone got kicked off the camera's AP — that IS the restart signal,
+                    // but only for a phone that was on it to begin with.
+                    if sawCameraNetwork { sawCameraNetworkDrop = true }
                     let now = ContinuousClock.now
                     if lastReapply == nil || now - lastReapply! >= .seconds(5) {
                         lastReapply = now
@@ -4837,6 +4847,10 @@ final class NativeAppModel {
                     try? await Task.sleep(for: .seconds(1))
                 }
             }
+            // Out of time without a reconnect: hand the AP path back to passive discovery, which
+            // is held off below while this loop owns the restart signal. Without this a confirm
+            // that lands late would leave the operator on a spinner nothing ever answers.
+            if !Task.isCancelled { self?.pairedReconnectSawCameraLeave = true }
         }
     }
 
@@ -4854,7 +4868,14 @@ final class NativeAppModel {
                 PTPIPPairedHosts.normalizedHost($0.ip) == normalized
             })
             if match == nil {
-                pairedReconnectSawCameraLeave = true
+                // A miss only says "not on the network we just swept". On the camera-AP path that
+                // network is often the phone's home Wi-Fi, where the camera never was — so it is
+                // no evidence the camera restarted, and acting on it dialled a body still waiting
+                // for its Confirm. There the fast path owns the signal (it watches the camera's
+                // own AP go away) and hands back here if it runs out of time.
+                if pendingPairedReconnectSSID == nil {
+                    pairedReconnectSawCameraLeave = true
+                }
                 // The camera dropped its AP to restart with the new pairing profile. Pull the phone
                 // back onto the camera network so discovery can see it return (iOS may otherwise
                 // settle on a preferred home network and never rejoin on its own).
