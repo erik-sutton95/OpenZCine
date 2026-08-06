@@ -98,6 +98,7 @@
 		C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000051 /* ConnectionProgressSheet.swift */; };
 		C0DE00000000000000000052 /* ConnectionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000053 /* ConnectionProgress.swift */; };
 		C0DE00000000000000000054 /* CameraWiFiSSID.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000055 /* CameraWiFiSSID.swift */; };
+		C0DE000000000000000000FB /* CameraCredentialHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FC /* CameraCredentialHandoff.swift */; };
 		C0DE00000000000000000056 /* WiFiJoinCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */; };
 		C0DE00000000000000000058 /* CameraWiFiCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */; };
 		C0DE00000000000000000060 /* AccessorySetupWiFiCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */; };
@@ -297,6 +298,7 @@
 		C0DE00000000000000000051 /* ConnectionProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProgressSheet.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000053 /* ConnectionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConnectionProgress.swift; path = ../Sources/OpenZCineCore/ConnectionProgress.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000055 /* CameraWiFiSSID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraWiFiSSID.swift; path = ../Sources/OpenZCineCore/CameraWiFiSSID.swift; sourceTree = SOURCE_ROOT; };
+		C0DE000000000000000000FC /* CameraCredentialHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraCredentialHandoff.swift; path = ../Sources/OpenZCineCore/CameraCredentialHandoff.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiJoinCoordinator.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStore.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessorySetupWiFiCoordinator.swift; sourceTree = "<group>"; };
@@ -498,6 +500,7 @@
 				C0DE00000000000000000053 /* ConnectionProgress.swift */,
 				C0DE000000000000000000A1 /* CameraWiFiScreenParser.swift */,
 				C0DE00000000000000000055 /* CameraWiFiSSID.swift */,
+				C0DE000000000000000000FC /* CameraCredentialHandoff.swift */,
 				C0DE0000000000000000000F /* PTPIPTransaction.swift */,
 				CTRN00000000000000000001 /* CameraTransport.swift */,
 				USBC00000000000000000001 /* PTPUSBContainer.swift */,
@@ -771,6 +774,7 @@
 				C0DE00000000000000000052 /* ConnectionProgress.swift in Sources */,
 				C0DE000000000000000000A0 /* CameraWiFiScreenParser.swift in Sources */,
 				C0DE00000000000000000054 /* CameraWiFiSSID.swift in Sources */,
+				C0DE000000000000000000FB /* CameraCredentialHandoff.swift in Sources */,
 				C0DE00000000000000000056 /* WiFiJoinCoordinator.swift in Sources */,
 				C0DE00000000000000000060 /* AccessorySetupWiFiCoordinator.swift in Sources */,
 				C0DE00000000000000000066 /* CameraWiFiScannerView.swift in Sources */,
