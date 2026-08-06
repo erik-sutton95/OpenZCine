@@ -163,19 +163,16 @@ struct LinkExperience: View {
         .fullScreenCover(isPresented: connectionProgressSheetPresented) {
             ConnectionProgressSheet()
                 .environment(model)
+                // The scanner has to hang off whichever surface is on screen: a view can present
+                // only one cover at a time, so the root's copy below is inert while the progress
+                // sheet owns the presentation. That is why the sheet's "Scan SSID & key" did
+                // nothing — the flag flipped and no one was free to present it.
+                .cameraWiFiScannerCover(model)
         }
-        // Owned at the root so the credential scanner can present directly from the join/scan action
-        // (no intermediate confirmation popup) and also over the connection progress sheet.
-        .fullScreenCover(isPresented: Bindable(model).isCameraWiFiScannerPresented) {
-            CameraWiFiScannerScreen(
-                onCapture: { model.applyScannedCameraWiFi(ssid: $0.ssid, key: $0.key) },
-                onManualEntry: {
-                    model.applyManualCameraWiFi(ssid: $0.ssid, key: $0.key)
-                },
-                onCancel: { model.isCameraWiFiScannerPresented = false },
-                startsInManualEntry: DemoHarness.cameraWiFiScannerMode == "manual"
-            )
-        }
+        // Owned at the root so the credential scanner can present directly from the join/scan
+        // action (no intermediate confirmation popup). Stood down while the progress sheet is up,
+        // since the copy above is the live one then and two mounts of one flag would race.
+        .cameraWiFiScannerCover(model, active: !model.isConnectionProgressPresented)
     }
 
     /// Blurred dim layer shown behind the credential-scanner card. Purely visual — tap-to-dismiss
@@ -243,4 +240,25 @@ struct LinkExperience: View {
         )
     }
 
+}
+
+extension View {
+    /// The camera Wi‑Fi credential scanner, mounted on a surface that is free to present it.
+    /// `active` picks which of the two mounts is the live one — see the call sites.
+    fileprivate func cameraWiFiScannerCover(
+        _ model: NativeAppModel,
+        active: Bool = true
+    ) -> some View {
+        fullScreenCover(
+            isPresented: active
+                ? Bindable(model).isCameraWiFiScannerPresented : .constant(false)
+        ) {
+            CameraWiFiScannerScreen(
+                onCapture: { model.applyScannedCameraWiFi(ssid: $0.ssid, key: $0.key) },
+                onManualEntry: { model.applyManualCameraWiFi(ssid: $0.ssid, key: $0.key) },
+                onCancel: { model.isCameraWiFiScannerPresented = false },
+                startsInManualEntry: DemoHarness.cameraWiFiScannerMode == "manual"
+            )
+        }
+    }
 }

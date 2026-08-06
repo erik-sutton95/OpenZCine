@@ -842,7 +842,13 @@ enum DemoHarness {
                 // Demo/screenshot affordance: stage the scanned-credentials join popup over the
                 // startup screen — the scanner itself needs a physical camera screen to point at.
                 // The value picks the staged phase: "joining"/"failed", anything else ⇒ ready.
-                model.applyScannedCameraWiFi(ssid: "NIKON_ZR_01234", key: "a1b2c3d4")
+                // "scan" stages it keyless — the "+ Add setup → Camera AP" shape, where the
+                // card's own button has to open the scanner over this sheet.
+                if raw == "scan" {
+                    model.applyManualCameraWiFi(ssid: "NIKON_ZR_01234", key: "")
+                } else {
+                    model.applyScannedCameraWiFi(ssid: "NIKON_ZR_01234", key: "a1b2c3d4")
+                }
                 if raw == "joining" {
                     model.connectionPhase = .joiningWiFi
                 } else if raw == "confirm" {
