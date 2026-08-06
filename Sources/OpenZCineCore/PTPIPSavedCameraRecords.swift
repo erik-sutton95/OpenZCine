@@ -511,7 +511,18 @@ public enum SavedCameraAvailabilityPolicy {
             case .infrastructure:
                 return !viaHotspot && !onCameraAccessPoint
             case .cameraAccessPoint:
-                return onCameraAccessPoint
+                // NEVER by name. This fallback exists for a host that MOVED — a DHCP lease
+                // changing under a record — and an access-point setup's address cannot move: it
+                // is the AP's fixed address by construction. So the only thing that can light an
+                // AP setup is the camera answering AT that address, which the exact-host match
+                // above already covers.
+                //
+                // Matching by name here meant a body discovered on the HOUSE network lit the
+                // Camera AP tab green, because the name is the same body either way. It then took
+                // the available branch on tap, which dials the discovered router address through
+                // the AP setup instead of offering the join — the router path wearing the access
+                // point's badge.
+                return false
             case .usbC, .hdmiCapture, nil:
                 return true
             }

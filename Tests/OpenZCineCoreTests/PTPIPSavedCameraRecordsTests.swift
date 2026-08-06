@@ -474,3 +474,72 @@ import Testing
     #expect(records.first?.path?.kind == .cameraAccessPoint)
     #expect(records.first?.host == CameraDiscovery.nikonZRAccessPointHost)
 }
+
+/// With the camera on the house network, ONLY the router setup is reachable.
+///
+/// The name-match fallback exists for a host that moved under a record — a changed DHCP lease.
+/// An access-point setup's address cannot move, so matching it by name only ever meant "this body
+/// exists somewhere", and the same body seen on the router lit the Camera AP tab green. A green
+/// tab then dials the discovered router address THROUGH the access point setup on tap, instead of
+/// offering the join.
+@Test func aCameraOnTheHouseNetworkLightsOnlyItsRouterSetup() {
+    let accessPoint = PTPIPSavedCameraRecord(
+        host: CameraDiscovery.nikonZRAccessPointHost,
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    let router = PTPIPSavedCameraRecord(
+        host: "192.168.1.246",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .infrastructure(networkName: "Home")
+    )
+    let onRouter = DiscoveredCamera(
+        ip: "192.168.1.246", name: "ZR_6002199", source: .bonjour)
+
+    // Even asserting the device IS on a camera access point — the reading that used to make this
+    // green — the body is not answering at the AP's address, so the AP setup stays dark.
+    for onAccessPoint in [true, false] {
+        #expect(
+            SavedCameraAvailabilityPolicy.resolve(
+                camera: accessPoint,
+                discoveredCameras: [onRouter],
+                connectedHost: nil,
+                onCameraAccessPoint: onAccessPoint
+            ) == .offline)
+    }
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router,
+            discoveredCameras: [onRouter],
+            connectedHost: nil,
+            onCameraAccessPoint: false
+        ) == .available(onRouter))
+}
+
+/// …and the AP setup still lights when the body actually answers at the access point's address.
+@Test func anApSetupLightsWhenTheCameraAnswersAtTheAccessPointAddress() {
+    let accessPoint = PTPIPSavedCameraRecord(
+        host: CameraDiscovery.nikonZRAccessPointHost,
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    let onAP = DiscoveredCamera(
+        ip: CameraDiscovery.nikonZRAccessPointHost, name: "ZR_6002199", source: .bonjour)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: accessPoint,
+            discoveredCameras: [onAP],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(onAP))
+}
