@@ -3212,7 +3212,7 @@ final class NativeAppModel {
 
     func connectSavedCamera(_ camera: PTPIPSavedCameraRecord) {
         cameraHost = camera.host
-        connectToCamera()
+        connectToCamera(setup: camera)
     }
 
     /// Dismisses the connection progress sheet without tearing down an active session.
@@ -3258,10 +3258,11 @@ final class NativeAppModel {
 
     private func beginConnectionProgress(
         host: String,
-        discoveredCamera: DiscoveredCamera?
+        discoveredCamera: DiscoveredCamera?,
+        setup: PTPIPSavedCameraRecord? = nil
     ) {
         let normalizedHost = PTPIPPairedHosts.normalizedHost(host) ?? host
-        let savedCamera = savedCameras.first { $0.host == normalizedHost }
+        let savedCamera = setup ?? savedCameras.first { $0.host == normalizedHost }
         let rawName =
             discoveredCamera?.displayName
             ?? savedCamera?.displayName
@@ -3305,10 +3306,18 @@ final class NativeAppModel {
         activeSessionPath?.kind == .cameraAccessPoint
     }
 
+    /// - Parameter setup: the saved setup the operator actually tapped, when there is one.
+    ///   THE identity of a connect attempt. A record's `id` is `host|name|kind` precisely because
+    ///   one body's access-point and router setups can share an address, so re-deriving the record
+    ///   from the dialled host alone returns whichever setup happens to sit first in the canonical
+    ///   order — and the whole path dispatch downstream (`performWiFiJoinIfNeeded`) then runs the
+    ///   wrong path's machinery. Tapping the AP setup silently took the router's branch, which is
+    ///   why it never offered the join. Passed down rather than stored so it cannot go stale.
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
         preservingMonitorSurface: Bool = false,
-        viaCameraAccessPointJoin: Bool = false
+        viaCameraAccessPointJoin: Bool = false,
+        setup: PTPIPSavedCameraRecord? = nil
     ) {
         // An attempt carries only its OWN access-point evidence — except one dialled straight off
         // a join this app just applied, which is the strongest proof there is. Clearing it
@@ -3340,7 +3349,8 @@ final class NativeAppModel {
             sessionDropStormGuard.reset()
             beginConnectionProgress(
                 host: host,
-                discoveredCamera: discoveredCamera
+                discoveredCamera: discoveredCamera,
+                setup: setup
             )
         }
 
@@ -3407,9 +3417,15 @@ final class NativeAppModel {
             let store = NativeCameraConnectionStore.shared
             let savedCameras = store.savedCameras()
             let knownPairedCameras = store.knownPairedCameras()
-            let savedCamera = savedCameras.first {
-                $0.host == PTPIPPairedHosts.normalizedHost(host)
-            }
+            // The tapped setup wins outright. The host fallback is for connects that genuinely
+            // have no record behind them (first-run pairing, a discovery auto-reconnect) — it may
+            // never stand in for a setup the operator chose, because a host can name more than
+            // one of them.
+            let savedCamera =
+                setup
+                ?? savedCameras.first {
+                    $0.host == PTPIPPairedHosts.normalizedHost(host)
+                }
             // Saved (trusted) camera → silent reconnect; unknown camera → the (auto-accepted)
             // pairing handshake. We never run the silent probe on an unknown network camera
             // because it is destructive to a camera sitting on its Wi-Fi pairing wizard; USB
@@ -3475,7 +3491,10 @@ final class NativeAppModel {
             establishmentDiagnostic.withLock { $0 = "" }
             connectionMessage = startupConnectionMessage(for: strategy, host: host)
             logConnection(
-                "attempt host=\(host) strategy=\(strategy) saved=\(savedCameras.count) knownPaired=\(knownPairedCameras.count)"
+                "attempt host=\(host) path=\(savedCamera?.path?.kind.rawValue ?? "none")"
+                    + "\(setup == nil ? " (derived)" : " (tapped)")"
+                    + " strategy=\(strategy) saved=\(savedCameras.count)"
+                    + " knownPaired=\(knownPairedCameras.count)"
             )
             do {
                 let guid = store.guid()
@@ -3569,7 +3588,8 @@ final class NativeAppModel {
                 // then the host's shape.
                 activeSessionPath = declaredPathForSave(
                     host: session.identity.host,
-                    displayName: session.identity.displayName)
+                    displayName: session.identity.displayName,
+                    setup: setup)
                 // The session just proved its topology; a broadcast started before it (or across
                 // a path switch) may be advertising for the wrong one. Peer-to-peer is worth its
                 // radio cost only on an AP session — and only matters for viewers still LOOKING,
@@ -3603,7 +3623,8 @@ final class NativeAppModel {
                         : session.identity.serialNumber,
                     path: declaredPathForSave(
                         host: session.identity.host,
-                        displayName: session.identity.displayName)
+                        displayName: session.identity.displayName,
+                        setup: setup)
                 )
                 refreshSavedCameras()
                 markFirstPairWizardCompleted()
@@ -5111,7 +5132,9 @@ final class NativeAppModel {
     /// applied; a readable SSID answering either way), then the saved setup's declaration,
     /// then the wizard's, then infrastructure. This is the moment transport intent becomes a
     /// value instead of an artifact for downstream code to re-derive.
-    private func declaredPathForSave(host: String, displayName: String?) -> CameraPath {
+    private func declaredPathForSave(
+        host: String, displayName: String?, setup: PTPIPSavedCameraRecord? = nil
+    ) -> CameraPath {
         if host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) { return .usbC }
         if CameraStartupPolicy.usesIPhoneHotspot(host: host, transport: "") {
             return .phoneHotspot
@@ -5132,9 +5155,12 @@ final class NativeAppModel {
         case nil:
             break
         }
-        // Nothing readable (the common hardware case): the saved setup for this host already
-        // declares the path — a reconnect must not demote an AP setup to infrastructure just
-        // because iOS refused the Wi-Fi information request.
+        // Nothing readable (the common hardware case): the saved setup already declares the path
+        // — a reconnect must not demote an AP setup to infrastructure just because iOS refused
+        // the Wi-Fi information request. The setup the operator TAPPED answers this outright; the
+        // host lookup behind it is a guess whenever two of a body's setups share an address, and
+        // guessing here mislabels the session for its whole life (recovery dispatches on it).
+        if let path = setup?.path { return path }
         if let saved = savedCameras.first(where: {
             $0.host == PTPIPPairedHosts.normalizedHost(host)
         }), let path = saved.path {

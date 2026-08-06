@@ -392,3 +392,39 @@ import Testing
 
     #expect(records.map(\.host) == ["10.99.0.57"])
 }
+
+/// A host cannot identify a setup, and this is the test that says so out loud.
+///
+/// Every camera-AP Nikon answers at 192.168.1.1, and a home router hands out that same address —
+/// so one body's AP and Router setups legitimately collide on `host`. The connect pipeline used to
+/// re-derive "which setup am I dialling" with `savedCameras.first { $0.host == host }`, which
+/// silently returned whichever was saved first: tapping Camera AP ran the Router's branch, so the
+/// join was never offered and the dial went out on the wrong network.
+@Test func oneHostCanNameTwoSetupsSoItCannotIdentifyOne() {
+    let shared = "192.168.1.1"
+    let records = PTPIPSavedCameraRecords.canonicalized([
+        PTPIPSavedCameraRecord(
+            host: shared,
+            displayName: "ZR_6002199",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            serialNumber: "6002199",
+            path: .infrastructure(networkName: "Home")
+        ),
+        PTPIPSavedCameraRecord(
+            host: shared,
+            displayName: "ZR_6002199",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            serialNumber: "6002199",
+            path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+        ),
+    ])
+
+    // Both survive: canonicalization keys on the declared path, not the address.
+    #expect(records.count == 2)
+    let ids = Set(records.map { $0.id })
+    #expect(ids.count == 2)
+    // And the lookup the connect pipeline must never make is ambiguous by construction.
+    #expect(records.filter { $0.host == shared }.count == 2)
+}

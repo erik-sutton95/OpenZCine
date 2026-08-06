@@ -750,9 +750,12 @@ struct StartupCameraListRow: View {
     private func connect(
         _ record: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
     ) {
+        // Both branches carry the tapped record: a path chip is a statement about WHICH setup to
+        // use, and dialling a discovered address without it left the connect to re-derive the
+        // setup from the host — which cannot tell one body's setups apart when they share one.
         switch availability {
         case .available(let discoveredCamera):
-            model.connectToCamera(discoveredCamera)
+            model.connectToCamera(discoveredCamera, setup: record)
         case .connected, .offline:
             model.connectSavedCamera(record)
         }
