@@ -633,6 +633,10 @@ struct StartupCameraListRow: View {
 
     private var allPaths: [PTPIPSavedCameraRecord] { paths.isEmpty ? [camera] : paths }
 
+    /// Squarer than the pills elsewhere in this list, on purpose: these read as segmented TABS
+    /// the operator picks between, not as status chips that merely report something.
+    private static let setupTabCornerRadius: CGFloat = 10
+
     var body: some View {
         // Ticks once a second so the card-scan state (pill %, dimmed Preparing… button, subtitle)
         // stays live between discovery passes — the scan progresses outside observable state.
@@ -661,18 +665,20 @@ struct StartupCameraListRow: View {
                 // glance, and the add chip is how the second one gets made. Scrolls sideways
                 // rather than truncating: four chips don't fit a portrait phone row.
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 7) {
                         ForEach(allPaths) { path in
                             pathChip(path)
                         }
                         addSetupChip
                     }
                 }
-                .padding(.top, 2)
+                .padding(.top, 4)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        // The setup tabs are the row's primary control now, so the card breathes a little more
+        // around them — the extra height is the tabs' own, not padding for its own sake.
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(StartupColors.tile.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
         .overlay(
@@ -767,20 +773,23 @@ struct StartupCameraListRow: View {
         return Button {
             connect(path, availability: pathAvailability)
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Circle()
                     .fill(chipDotColor(for: pathAvailability))
-                    .frame(width: 6, height: 6)
+                    .frame(width: 7, height: 7)
                 Text(SavedCameraPathGroups.pathLabel(for: path))
-                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(isActive ? StartupColors.ink : StartupColors.muted)
                     .lineLimit(1)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(StartupColors.control.opacity(isActive ? 0.8 : 0.45), in: Capsule())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                StartupColors.control.opacity(isActive ? 0.8 : 0.45),
+                in: RoundedRectangle(cornerRadius: Self.setupTabCornerRadius)
+            )
             .overlay(
-                Capsule().stroke(
+                RoundedRectangle(cornerRadius: Self.setupTabCornerRadius).stroke(
                     isActive
                         ? StartupColors.accent.opacity(0.45)
                         : StartupColors.border.opacity(0.12),
@@ -818,18 +827,21 @@ struct StartupCameraListRow: View {
             Button {
                 isAddSetupPresented = true
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: "plus")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 10.5, weight: .bold))
                     Text("Add setup")
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                 }
                 .foregroundStyle(StartupColors.muted)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(StartupColors.control.opacity(0.25), in: Capsule())
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(
+                    StartupColors.control.opacity(0.25),
+                    in: RoundedRectangle(cornerRadius: Self.setupTabCornerRadius)
+                )
                 .overlay(
-                    Capsule().stroke(
+                    RoundedRectangle(cornerRadius: Self.setupTabCornerRadius).stroke(
                         StartupColors.border.opacity(0.2),
                         style: StrokeStyle(lineWidth: 1, dash: [3, 2.5]))
                 )
