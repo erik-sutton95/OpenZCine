@@ -100,6 +100,7 @@
 		C0DE00000000000000000054 /* CameraWiFiSSID.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000055 /* CameraWiFiSSID.swift */; };
 		C0DE000000000000000000FB /* CameraCredentialHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FC /* CameraCredentialHandoff.swift */; };
 		C0DE00000000000000000056 /* WiFiJoinCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */; };
+		C0DE000000000000000000FD /* CredentialHandoffTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FE /* CredentialHandoffTransport.swift */; };
 		C0DE00000000000000000058 /* CameraWiFiCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */; };
 		C0DE00000000000000000060 /* AccessorySetupWiFiCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */; };
 		C0DE00000000000000000066 /* CameraWiFiScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000067 /* CameraWiFiScannerView.swift */; };
@@ -300,6 +301,7 @@
 		C0DE00000000000000000055 /* CameraWiFiSSID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraWiFiSSID.swift; path = ../Sources/OpenZCineCore/CameraWiFiSSID.swift; sourceTree = SOURCE_ROOT; };
 		C0DE000000000000000000FC /* CameraCredentialHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraCredentialHandoff.swift; path = ../Sources/OpenZCineCore/CameraCredentialHandoff.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiJoinCoordinator.swift; sourceTree = "<group>"; };
+		C0DE000000000000000000FE /* CredentialHandoffTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialHandoffTransport.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStore.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessorySetupWiFiCoordinator.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000067 /* CameraWiFiScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiScannerView.swift; sourceTree = "<group>"; };
@@ -438,6 +440,7 @@
 				C0DE00000000000000000027 /* StartupDesign.swift */,
 				C0DE00000000000000000051 /* ConnectionProgressSheet.swift */,
 				C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */,
+				C0DE000000000000000000FE /* CredentialHandoffTransport.swift */,
 				C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */,
 				C0DE00000000000000000067 /* CameraWiFiScannerView.swift */,
 				C0DE00000000000000000069 /* StartupPermissions.swift */,
@@ -776,6 +779,7 @@
 				C0DE00000000000000000054 /* CameraWiFiSSID.swift in Sources */,
 				C0DE000000000000000000FB /* CameraCredentialHandoff.swift in Sources */,
 				C0DE00000000000000000056 /* WiFiJoinCoordinator.swift in Sources */,
+				C0DE000000000000000000FD /* CredentialHandoffTransport.swift in Sources */,
 				C0DE00000000000000000060 /* AccessorySetupWiFiCoordinator.swift in Sources */,
 				C0DE00000000000000000066 /* CameraWiFiScannerView.swift in Sources */,
 				C0DE00000000000000000068 /* StartupPermissions.swift in Sources */,
