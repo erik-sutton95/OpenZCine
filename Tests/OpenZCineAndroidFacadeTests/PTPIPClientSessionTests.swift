@@ -1278,6 +1278,39 @@ struct PTPIPClientSessionTests {
         #expect(writes[0].data == Data(ByteCoding.uint64LE(enum25)))
     }
 
+    /// The sibling above picks between two FX modes, so the crop tag never enters the match — which
+    /// is why it stayed green while tapping `[DX] 4K · 25p` wrote the FX mode above it. Here the two
+    /// modes share a bare camera label and differ ONLY by image area, so a match that strips the tag
+    /// picks whichever is listed first. FX is listed first deliberately.
+    @Test func pickingADXResolutionWritesTheDXModeNotTheFXOneAboveIt() throws {
+        let fx4K25 = UInt64(4_032) << 48 | UInt64(2_268) << 32 | UInt64(25) << 16
+        let dx4K25 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(25) << 16
+
+        let r3d: UInt32 = 0x0031_0A03
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = r3d
+        options.movieRecordScreenSizeRaw = fx4K25
+        options.descriptorEnumOverrides[.movieFileType] = [r3d]
+        options.screenSizeModesByFileType = [r3d: [fx4K25, dx4K25]]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        let offered = bootstrap.controls.resolutionFrameRates
+        // The tags are the only thing telling these two apart on the picker.
+        #expect(offered.filter { $0.hasPrefix("[FX] ") }.count == 1)
+        let dxLabel = try #require(offered.first { $0.hasPrefix("[DX] ") })
+
+        let before = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.resolutionFrameRate, label: dxLabel)
+        let writes = Array(server.receivedPropertyWrites().dropFirst(before))
+        #expect(writes.count == 1)
+        #expect(writes[0].property == PTPPropertyCode.movieRecordScreenSize.rawValue)
+        #expect(writes[0].data == Data(ByteCoding.uint64LE(dx4K25)))
+    }
+
     @Test func screenSizeReadbackMatchesOnDecodedGeometryNotExactBytes() {
         let writtenRaw = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
         let liveRaw = writtenRaw | 0x8000
