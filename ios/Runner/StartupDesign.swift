@@ -2897,7 +2897,9 @@ struct StartupDiscoveredCameraCard: View {
                         )
                         .foregroundStyle(StartupColors.ink)
                         .lineLimit(1)
-                    Text("\(sourceLabel(camera.source)) · nearby")
+                    // The holder replaces "nearby" rather than joining it: on this row the
+                    // question is not where the camera is, it is who has it.
+                    Text(camera.heldByLabel ?? "\(sourceLabel(camera.source)) · nearby")
                         .font(
                             .system(
                                 size: compact ? 10 : 12, weight: .regular, design: .rounded)
@@ -2908,9 +2910,13 @@ struct StartupDiscoveredCameraCard: View {
 
                 Spacer()
 
-                Image(systemName: "cellularbars")
+                // A held camera is reachable but not free — the antenna reads as "connect
+                // now", which is the one thing this row cannot promise.
+                Image(systemName: camera.isHeldByAnotherDevice ? "person.fill" : "cellularbars")
                     .font(.system(size: compact ? 16 : 20, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
+                    .foregroundStyle(
+                        camera.isHeldByAnotherDevice
+                            ? StartupColors.muted : StartupColors.accent)
             }
             .padding(.horizontal, compact ? 12 : 16)
             .frame(height: compact ? 64 : 84)
@@ -2934,6 +2940,10 @@ struct StartupDiscoveredCameraCard: View {
         case .bonjour, .subnetProbe, .liveness: "Wi-Fi"
         case .manual: "Manual"
         case .usb: "USB-C"
+        // The holder's name is what this row is for, and it replaces the transport label — the
+        // camera is on Wi-Fi either way, and that is not the fact standing between the operator
+        // and a picture.
+        case .heldByAnotherDevice: "In use"
         }
     }
 }
@@ -3164,5 +3174,46 @@ struct StartupQuietButtonStyle: ButtonStyle {
             .overlay(
                 RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
                     StartupColors.border.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// Asks before connecting to a camera another device is holding.
+///
+/// A modifier rather than an alert written into one screen: the pairing wizard and the saved-camera
+/// list both reach the same connect, so the confirmation has to be wherever the operator is when
+/// the model raises it. The alert names the device that loses its session, because "are you sure"
+/// without that is not a decision anyone can make.
+struct TakeOverConfirmation: ViewModifier {
+    /// Passed in rather than read from the environment: this is mounted at the app root, above
+    /// the point where the model is installed, and an `@Environment` lookup there traps at launch.
+    let model: NativeAppModel
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Take over this camera?",
+            isPresented: Binding(
+                get: { model.pendingTakeOverCamera != nil },
+                set: { if !$0 { model.cancelTakeOver() } }
+            )
+        ) {
+            Button("Take Over", role: .destructive) { model.confirmTakeOver() }
+            Button("Cancel", role: .cancel) { model.cancelTakeOver() }
+        } message: {
+            Text(takeOverMessage)
+        }
+    }
+
+    private var takeOverMessage: String {
+        let holder = model.pendingTakeOverCamera?.heldByDeviceName
+        guard let holder, !holder.isEmpty else {
+            return "Another device is using this camera. Connecting will disconnect it."
+        }
+        return "\(holder) is using this camera. Connecting will disconnect it."
+    }
+}
+
+extension View {
+    func takeOverConfirmation(model: NativeAppModel) -> some View {
+        modifier(TakeOverConfirmation(model: model))
     }
 }

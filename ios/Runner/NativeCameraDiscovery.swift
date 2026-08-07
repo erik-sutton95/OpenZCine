@@ -89,6 +89,13 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                 }
             }
             Self.storePresenceShield(presenceShieldedHosts)
+            Self.storeHeldCameras(
+                Dictionary(
+                    hits.compactMap { _, presence -> (String, String)? in
+                        guard let served = presence.ch, !served.isEmpty else { return nil }
+                        return (served, presence.n)
+                    },
+                    uniquingKeysWith: { first, _ in first }))
         } else {
             // Throttled pass: reuse the last completed sweep's shield rather than probing
             // naked. The 30 s slot exists to bound radio load, not to strip protection from
@@ -96,6 +103,12 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             presenceShieldedHosts = Self.cachedPresenceShield()
         }
         let shielded = presenceShieldedHosts
+        // A camera another device is holding is SHIELDED, not absent — this pass will never probe
+        // it, and it used to be dropped on the floor with it. That is what left the pairing list
+        // empty and searching forever on a network where the app could name the camera, the
+        // address, and the device holding it. Listing it says all three and leaves the decision
+        // to take it over where it belongs: with the operator, on the row.
+        let heldRows: [DiscoveredCamera] = heldCameraRows()
 
         await status("Searching for cameras on Wi‑Fi and USB‑C…")
         // Bonjour FIRST, and the trusted-host probe only covers what Bonjour did not report.
@@ -157,7 +170,8 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             guid: guid, priorityHosts: priorityHosts,
             excludedHosts: { excludedHosts().union(shielded) },
             status: status)
-        return CameraDiscovery.dedupeAndSort(usbBrowser.attachedCameras() + probeResults)
+        return CameraDiscovery.dedupeAndSort(
+            usbBrowser.attachedCameras() + probeResults + heldRows)
     }
 
     /// Whether iOS has denied USB camera-control access (drives permission-recovery copy).
@@ -299,6 +313,26 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
 
     private static func cachedPresenceShield() -> Set<String> {
         presenceSweepSlot.withLock { $0.shield }
+    }
+
+    /// Camera host → the device that says it is holding it, from the last completed sweep.
+    ///
+    /// Cached beside the shield and for the same reason: the throttled passes between sweeps must
+    /// show the operator the same picture the sweep found, not an empty list every other second.
+    private static let heldCameraSlot = OSAllocatedUnfairLock(initialState: [String: String]())
+
+    private static func storeHeldCameras(_ held: [String: String]) {
+        heldCameraSlot.withLock { $0 = held }
+    }
+
+    /// The in-use rows for this pass: every camera a nearby device claims, named by its holder.
+    private func heldCameraRows() -> [DiscoveredCamera] {
+        Self.heldCameraSlot.withLock { $0 }
+            .map { host, holder in
+                DiscoveredCamera(
+                    ip: host, name: nil, source: .heldByAnotherDevice, heldByDeviceName: holder)
+            }
+            .sorted { $0.ip < $1.ip }
     }
 
     /// One unicast presence read (`MonitorRelayProtocol.presenceTCPPort`), bounded. Nil for

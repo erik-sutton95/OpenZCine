@@ -38,7 +38,9 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -2251,6 +2253,33 @@ private fun DiscoverBody(
         HdmiDiscoverBody(hdmiCaptureReady, onStartHdmiMonitor)
         return
     }
+    var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
+    takeOverTarget?.let { held ->
+        AlertDialog(
+            onDismissRequest = { takeOverTarget = null },
+            title = { Text(stringResource(R.string.pairing_take_over_title)) },
+            text = {
+                Text(
+                    held.heldByDeviceName?.takeIf(String::isNotBlank)?.let {
+                        stringResource(R.string.pairing_take_over_message_named, it)
+                    } ?: stringResource(R.string.pairing_take_over_message),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        takeOverTarget = null
+                        onConnectCamera(held)
+                    },
+                ) { Text(stringResource(R.string.action_take_over)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { takeOverTarget = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
             EmptyDiscoveryCard(
@@ -2263,7 +2292,17 @@ private fun DiscoverBody(
                 Row(
                     Modifier.fillMaxWidth()
                         .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
-                        .clickable { onConnectCamera(camera) }
+                        .clickable {
+                            // Connecting to a held camera drops the holder's session — the same
+                            // single-initiator mechanism the discovery shield exists to avoid.
+                            // The row names whose it is; this stops the tap being the whole
+                            // decision.
+                            if (camera.isHeldByAnotherDevice) {
+                                takeOverTarget = camera
+                            } else {
+                                onConnectCamera(camera)
+                            }
+                        }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2280,14 +2319,21 @@ private fun DiscoverBody(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
+                        // The holder replaces "nearby": on this row the question is not
+                        // where the camera is, it is who has it.
                         Text(
-                            stringResource(R.string.pairing_wifi_nearby),
+                            camera.heldByLabel
+                                ?: stringResource(R.string.pairing_wifi_nearby),
                             color = StartupColors.muted,
                             fontSize = 11.sp,
                         )
                     }
                     Text(
-                        stringResource(R.string.action_connect),
+                        if (camera.isHeldByAnotherDevice) {
+                            stringResource(R.string.action_take_over)
+                        } else {
+                            stringResource(R.string.action_connect)
+                        },
                         color = StartupColors.darkText,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,

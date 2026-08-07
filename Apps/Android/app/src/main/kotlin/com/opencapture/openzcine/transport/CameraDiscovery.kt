@@ -18,7 +18,23 @@ data class DiscoveredCamera(
     val name: String,
     val host: String,
     val port: Int,
-)
+    /**
+     * The device that says it is holding this camera, when one does. A held camera
+     * is deliberately never probed — a PTP `Init` from a second initiator drops the
+     * first one's session — but shielded is not the same as absent, and dropping it
+     * from the list is what leaves an operator searching for a camera the app can
+     * already name. See iOS `DiscoverySource.heldByAnotherDevice`.
+     */
+    val heldByDeviceName: String? = null,
+) {
+    /** Whether another device holds this camera, so connecting would take it from them. */
+    val isHeldByAnotherDevice: Boolean
+        get() = heldByDeviceName != null
+
+    /** What the row says under the name — the holder if there is one, else nothing. */
+    val heldByLabel: String?
+        get() = heldByDeviceName?.takeIf(String::isNotBlank)?.let { "In use by \$it" }
+}
 
 /**
  * Platform-free mDNS browse events — the thin seam over [android.net.nsd.NsdManager]

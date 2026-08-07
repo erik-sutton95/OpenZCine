@@ -3323,12 +3323,38 @@ final class NativeAppModel {
     ///   order — and the whole path dispatch downstream (`performWiFiJoinIfNeeded`) then runs the
     ///   wrong path's machinery. Tapping the AP setup silently took the router's branch, which is
     ///   why it never offered the join. Passed down rather than stored so it cannot go stale.
+    /// The camera a take-over confirmation is currently asking about, if any.
+    ///
+    /// Connecting to a camera another device holds DROPS that device's session — the same
+    /// single-initiator mechanism the discovery shield exists to avoid. The row says whose it is;
+    /// this is what stops a tap on it from being the whole decision.
+    var pendingTakeOverCamera: DiscoveredCamera?
+
+    /// Proceeds with the connect the confirmation was asking about.
+    func confirmTakeOver() {
+        guard let camera = pendingTakeOverCamera else { return }
+        pendingTakeOverCamera = nil
+        connectToCamera(camera, takingOverConfirmed: true)
+    }
+
+    func cancelTakeOver() {
+        pendingTakeOverCamera = nil
+    }
+
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
         preservingMonitorSurface: Bool = false,
         viaCameraAccessPointJoin: Bool = false,
-        setup: PTPIPSavedCameraRecord? = nil
+        setup: PTPIPSavedCameraRecord? = nil,
+        takingOverConfirmed: Bool = false
     ) {
+        // The gate lives at the funnel every path already goes through, not on the row that
+        // happens to show the holder — a second entry point to connecting must not be a second
+        // way to drop someone else's session without asking.
+        if let discoveredCamera, discoveredCamera.isHeldByAnotherDevice, !takingOverConfirmed {
+            pendingTakeOverCamera = discoveredCamera
+            return
+        }
         // An attempt carries only its OWN access-point evidence — except one dialled straight off
         // a join this app just applied, which is the strongest proof there is. Clearing it
         // unconditionally threw that proof away one line before the pairing branch asked for it,
@@ -5444,6 +5470,10 @@ final class NativeAppModel {
             return "Manual IP"
         case .usb:
             return PTPIPSavedCameraRecord.usbTransportLabel
+        // A camera reached over Wi-Fi either way; the holder is a fact about right now, not about
+        // the transport a saved record should remember.
+        case .heldByAnotherDevice:
+            return "Wi-Fi"
         case nil:
             return fallback ?? "Wi-Fi"
         }
@@ -12687,6 +12717,10 @@ struct NativeAppRoot: View {
             // Demo/screenshot staging (ZC_DEMO_* launch env) — a Debug-only no-op elsewhere.
             DemoHarness.applyLaunchEnvironment(to: model)
         }
+        // At the root, not on the wizard: the pairing list and the saved-camera list both reach
+        // the same connect, and a confirmation that only exists on one screen turns a tap on the
+        // other into a tap that does nothing at all.
+        .takeOverConfirmation(model: model)
     }
     private var standaloneMediaLibraryPresented: Binding<Bool> {
         Binding(

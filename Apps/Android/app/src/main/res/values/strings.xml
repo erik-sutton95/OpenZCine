@@ -185,6 +185,10 @@
     <string name="pairing_looking_for_cameras">Looking for cameras</string>
     <string name="pairing_waiting_hotspot_detail">Waiting for the camera to join this phone\'s hotspot.</string>
     <string name="pairing_wifi_nearby">Wi‑Fi · nearby</string>
+    <string name="action_take_over">Take Over</string>
+    <string name="pairing_take_over_title">Take over this camera?</string>
+    <string name="pairing_take_over_message">Another device is using this camera. Connecting will disconnect it.</string>
+    <string name="pairing_take_over_message_named">%1$s is using this camera. Connecting will disconnect it.</string>
     <string name="pairing_waiting_usb">Waiting for camera on USB-C</string>
     <string name="pairing_waiting_usb_detail">Plug the camera into this device with a USB-C cable.</string>
 

@@ -11,6 +11,13 @@ public enum DiscoverySource: String, Codable, Equatable, Sendable {
     /// reaching the PTP layer. The camera list runs on this instead of PTP probes: an Init
     /// from an idle device is what drops another device's live session.
     case liveness
+    /// Another OpenZCine device on this network says it is holding this camera, so this device
+    /// deliberately never probed it — an `Init` from a second initiator drops the first one's
+    /// session. The address is known and the holder is named; what is missing is permission.
+    ///
+    /// Shielded is not the same as absent, and conflating the two is what left the pairing list
+    /// empty and searching forever while the app knew exactly where the camera was.
+    case heldByAnotherDevice
 }
 
 /// A camera discovered on the network or attached over USB.
@@ -18,18 +25,37 @@ public struct DiscoveredCamera: Equatable, Identifiable, Sendable {
     /// Prefix of the stable host key used for USB-attached cameras (no IP address exists).
     public static let usbHostKeyPrefix = "usb:"
 
-    public init(ip: String, name: String? = nil, source: DiscoverySource) {
+    public init(
+        ip: String,
+        name: String? = nil,
+        source: DiscoverySource,
+        heldByDeviceName: String? = nil
+    ) {
         self.ip = ip
         self.name = name
         self.source = source
+        self.heldByDeviceName = heldByDeviceName
     }
 
     /// Camera IP address, or a `usb:<device-id>` host key for USB-attached cameras.
     public let ip: String
     public let name: String?
     public let source: DiscoverySource
+    /// The device holding this camera, when one said so. Only ``DiscoverySource/heldByAnotherDevice``
+    /// carries it, and it is the whole point of that row: "in use" without a name is a dead end.
+    public let heldByDeviceName: String?
 
     public var id: String { ip }
+
+    /// Whether another device is holding this camera, so connecting would take it from them.
+    public var isHeldByAnotherDevice: Bool { source == .heldByAnotherDevice }
+
+    /// What the row says under the name — the holder if there is one, else nothing.
+    public var heldByLabel: String? {
+        guard isHeldByAnotherDevice else { return nil }
+        guard let heldByDeviceName, !heldByDeviceName.isEmpty else { return "In use" }
+        return "In use by \(heldByDeviceName)"
+    }
 
     /// Whether this camera is attached over USB rather than reachable by IP.
     public var isUSB: Bool { source == .usb }
