@@ -37,7 +37,9 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         presentation: PTPIPSavedCameraPresentation? = nil,
         pairedViaCameraAccessPoint: Bool? = nil,
         serialNumber: String? = nil,
-        path: CameraPath? = nil
+        path: CameraPath? = nil,
+        streamPreset: OperatorPreferences.StreamPreset? = nil,
+        qualityBias: OperatorPreferences.QualityBias? = nil
     ) {
         self.host = host
         self.displayName = displayName
@@ -47,6 +49,8 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         self.pairedViaCameraAccessPoint = pairedViaCameraAccessPoint
         self.serialNumber = serialNumber
         self.path = path
+        self.streamPreset = streamPreset
+        self.qualityBias = qualityBias
     }
 
     public var host: String  // IP address, hostname, or `usb:<device-id>` key
@@ -68,6 +72,15 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
     /// keyed by (camera, path kind). `nil` only on records that predate the field; the store
     /// migrates them on first read and the value never leaves `nil` afterwards.
     public var path: CameraPath?
+    /// What the camera is asked to SEND on this setup, chosen by the operator while connected to
+    /// it. `nil` means never chosen here, which is not the same as a value — see
+    /// ``SetupStreamSettings``. Per setup rather than per app because the constraint they answer
+    /// to belongs to the path: the camera's own access point is a different link from a cable,
+    /// and one global key meant a bias dropped for the AP followed the operator onto USB-C.
+    public var streamPreset: OperatorPreferences.StreamPreset?
+    /// The compression grade this setup runs at; `nil` means never chosen here. See
+    /// ``streamPreset``.
+    public var qualityBias: OperatorPreferences.QualityBias?
 
     /// This record's row key beside identity: at most one setup per kind and camera.
     public var pathKind: CameraPath.Kind? { path?.kind }
@@ -263,6 +276,34 @@ public enum PTPIPSavedCameraRecords {
         }
     }
 
+    /// Records the stream settings an operator chose while connected to ONE setup.
+    ///
+    /// Keyed by (host, path kind), never host alone: one body's access-point and router setups
+    /// legitimately share an address, and so do two camera-AP Nikons (all of them answer on
+    /// 192.168.1.1). Matching on the host would write the cable's choice onto the AP's record —
+    /// which is the class of bug the declared path exists to end.
+    ///
+    /// A `nil` argument leaves that setting untouched rather than clearing it, so a caller that
+    /// knows only one of the two does not have to read the other back first.
+    public static func updatingStreamSettings(
+        host rawHost: String,
+        pathKind: CameraPath.Kind?,
+        streamPreset: OperatorPreferences.StreamPreset?,
+        qualityBias: OperatorPreferences.QualityBias?,
+        in records: [PTPIPSavedCameraRecord]
+    ) -> [PTPIPSavedCameraRecord] {
+        guard let host = PTPIPPairedHosts.normalizedHost(rawHost) else {
+            return canonicalized(records)
+        }
+        return canonicalized(records).map { record in
+            guard record.host == host, record.pathKind == pathKind else { return record }
+            var updated = record
+            if let streamPreset { updated.streamPreset = streamPreset }
+            if let qualityBias { updated.qualityBias = qualityBias }
+            return updated
+        }
+    }
+
     public static func removing(
         _ rawHost: String,
         displayName: String? = nil,
@@ -302,7 +343,12 @@ public enum PTPIPSavedCameraRecords {
             presentation: normalizedPresentation(record.presentation),
             pairedViaCameraAccessPoint: record.pairedViaCameraAccessPoint,
             serialNumber: record.serialNumber,
-            path: record.path
+            path: record.path,
+            // Carried, not normalized: there is nothing to normalize about an enum, and this
+            // rebuild runs on every read. A field missing from here is a field the store quietly
+            // erases the next time anything touches the list.
+            streamPreset: record.streamPreset,
+            qualityBias: record.qualityBias
         )
     }
 
@@ -382,6 +428,15 @@ public enum PTPIPSavedCameraRecords {
         }
         if merged.serialNumber == nil {
             merged.serialNumber = fallback.serialNumber
+        }
+        // Same rule as the evidence above, and it is load-bearing here: every reconnect upserts a
+        // record that knows nothing about stream settings, so without this the operator's choice
+        // for this setup would survive exactly until the next time they connected to it.
+        if merged.streamPreset == nil {
+            merged.streamPreset = fallback.streamPreset
+        }
+        if merged.qualityBias == nil {
+            merged.qualityBias = fallback.qualityBias
         }
         if merged.presentation == nil {
             merged.presentation = fallback.presentation

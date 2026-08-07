@@ -1017,12 +1017,24 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         persistEnabledDisplayModes(enabled)
     }
 
+    /**
+     * Writes a stream-settings pick onto the setup it was made on, when there is a live one.
+     *
+     * A slot rather than a store handle: these settings belong to the connected setup, and only
+     * the activity knows which that is. Set when a camera is accepted, cleared on disconnect —
+     * so a pick made with nothing connected still moves the live value and simply has nowhere
+     * durable to live, which is the honest outcome.
+     */
+    public var activeSetupStreamSettingsWriter:
+        ((LiveViewStreamPreset?, LiveViewQualityBias?) -> Unit)? = null
+
     /** Requested preview-size profile, resolved by Swift before live view starts. */
     public var streamPreset: LiveViewStreamPreset
         get() = streamPresetState.value
         set(new) {
             streamPresetState.value = new
             preferences.edit().putString(STREAM_PRESET_KEY, new.name).apply()
+            activeSetupStreamSettingsWriter?.invoke(new, null)
         }
 
     /** Requested preview-compression profile, resolved by Swift rather than Kotlin. */
@@ -1031,7 +1043,28 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         set(new) {
             qualityBiasState.value = new
             preferences.edit().putString(QUALITY_BIAS_KEY, new.name).apply()
+            activeSetupStreamSettingsWriter?.invoke(null, new)
         }
+
+    /**
+     * Seeds the live values from the setup a session just established over, without writing back.
+     *
+     * The setter above is for an operator's pick; this is the setup telling the app what it runs
+     * at. Routing this through the setter would write the resolved value straight back onto the
+     * record and turn every default into a stored choice — after which the path rule could never
+     * apply again.
+     */
+    public fun adoptSetupStreamSettings(
+        streamPreset: LiveViewStreamPreset,
+        qualityBias: LiveViewQualityBias,
+    ) {
+        streamPresetState.value = streamPreset
+        qualityBiasState.value = qualityBias
+        preferences.edit()
+            .putString(STREAM_PRESET_KEY, streamPreset.name)
+            .putString(QUALITY_BIAS_KEY, qualityBias.name)
+            .apply()
+    }
 
     /**
      * Portrait feed fit/fill choice, persisted across monitor sessions.
@@ -1837,11 +1870,11 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     /** Defaults mirror `OperatorPreferences.defaults` in the shared core — keep them in step. */
     private fun loadStreamPreset(): LiveViewStreamPreset =
         LiveViewStreamPreset.fromStoredName(preferences.getString(STREAM_PRESET_KEY, null))
-            ?: LiveViewStreamPreset.QUALITY
+            ?: LiveViewStreamPreset.SHIPPED_DEFAULT
 
     private fun loadQualityBias(): LiveViewQualityBias =
         LiveViewQualityBias.fromStoredName(preferences.getString(QUALITY_BIAS_KEY, null))
-            ?: LiveViewQualityBias.BALANCED
+            ?: LiveViewQualityBias.SHIPPED_DEFAULT
 
     private fun loadPortraitFeedAspect(): PortraitFeedAspect =
         PortraitFeedAspect.fromStoredName(

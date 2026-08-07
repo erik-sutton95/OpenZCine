@@ -2,6 +2,8 @@ package com.opencapture.openzcine.pairing
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.opencapture.openzcine.settings.LiveViewQualityBias
+import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
@@ -71,6 +73,17 @@ public data class SavedCameraRecord(
      * host, then retain that value when a dynamic hotspot address changes.
      */
     val profileID: String = host,
+    /**
+     * What the camera is asked to SEND on this setup, chosen by the operator while connected to
+     * it. `null` means never chosen here, which is not the same as a value — see
+     * [com.opencapture.openzcine.settings.SetupStreamSettings]. Per setup rather than per app
+     * because the constraint they answer to belongs to the path: the camera's own access point is
+     * a different link from a cable, and one global key meant a bias dropped for the AP followed
+     * the operator onto USB-C.
+     */
+    val streamPreset: LiveViewStreamPreset? = null,
+    /** The compression grade this setup runs at; `null` means never chosen here. See [streamPreset]. */
+    val qualityBias: LiveViewQualityBias? = null,
 ) {
     /** Stable profile identity. */
     public val id: String
@@ -183,6 +196,37 @@ public object SavedCameraRecords {
         }
     }
 
+    /**
+     * Records the stream settings an operator chose while connected to ONE setup.
+     *
+     * Keyed by (host, transport), never host alone: one body's access-point and router setups
+     * legitimately share an address, and so do two camera-AP Nikons (all of them answer on
+     * 192.168.1.1). Matching on the host would write the cable's choice onto the AP's record.
+     *
+     * A `null` argument leaves that setting untouched rather than clearing it, so a caller that
+     * knows only one of the two does not have to read the other back first. Twin of the shared
+     * core's `PTPIPSavedCameraRecords.updatingStreamSettings`.
+     */
+    public fun updatingStreamSettings(
+        host: String,
+        transport: SavedCameraTransport,
+        streamPreset: LiveViewStreamPreset?,
+        qualityBias: LiveViewQualityBias?,
+        records: List<SavedCameraRecord>,
+    ): List<SavedCameraRecord> {
+        val normalizedHost = normalizedHost(host) ?: return canonicalized(records)
+        return canonicalized(records).map { record ->
+            if (record.host != normalizedHost || record.transport != transport) {
+                record
+            } else {
+                record.copy(
+                    streamPreset = streamPreset ?: record.streamPreset,
+                    qualityBias = qualityBias ?: record.qualityBias,
+                )
+            }
+        }
+    }
+
     /** Removes the profile identified by [host]. Wi-Fi credentials remain private to their store. */
     public fun removing(
         host: String,
@@ -249,6 +293,11 @@ public object SavedCameraRecords {
         return preferred.copy(
             wifiSsid = preferred.wifiSsid ?: fallback.wifiSsid,
             customName = preferred.customName ?: fallback.customName,
+            // Load-bearing: every reconnect upserts a record that knows nothing about stream
+            // settings, so without this the operator's choice for this setup would survive
+            // exactly until the next time they connected to it.
+            streamPreset = preferred.streamPreset ?: fallback.streamPreset,
+            qualityBias = preferred.qualityBias ?: fallback.qualityBias,
             // The existing card owns reconnect state and any offline-media
             // bucket. A refreshed route must not silently create a new owner.
             profileID = existing.profileID,
@@ -366,7 +415,12 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
                     .put(LAST_SEEN_KEY, record.lastSeenAtEpochMillis)
                     .put(WIFI_SSID_KEY, record.wifiSsid)
                     .put(CUSTOM_NAME_KEY, record.customName)
-                    .put(PROFILE_ID_KEY, record.profileID),
+                    .put(PROFILE_ID_KEY, record.profileID)
+                    // Persisted by NAME, not ordinal: the wire ordinals belong to the Swift
+                    // bridge and reordering an enum there must not silently re-read every
+                    // operator's saved setups as a different setting.
+                    .put(STREAM_PRESET_KEY, record.streamPreset?.name)
+                    .put(QUALITY_BIAS_KEY, record.qualityBias?.name),
             )
         }
         preferences.edit().putString(RECORDS_KEY, encoded.toString()).apply()
@@ -391,6 +445,16 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
             profileID =
                 value.optString(PROFILE_ID_KEY).takeIf(String::isNotBlank)
                     ?: host,
+            // An unreadable value reads as "never chosen" rather than dropping the whole record:
+            // a setting is not worth losing a paired camera over.
+            streamPreset =
+                value.optString(STREAM_PRESET_KEY).takeIf(String::isNotBlank)?.let { name ->
+                    LiveViewStreamPreset.entries.firstOrNull { it.name == name }
+                },
+            qualityBias =
+                value.optString(QUALITY_BIAS_KEY).takeIf(String::isNotBlank)?.let { name ->
+                    LiveViewQualityBias.entries.firstOrNull { it.name == name }
+                },
         )
     }
 
@@ -404,5 +468,7 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
         const val WIFI_SSID_KEY = "wifi-ssid"
         const val CUSTOM_NAME_KEY = "custom-name"
         const val PROFILE_ID_KEY = "profile-id"
+        const val STREAM_PRESET_KEY = "stream-preset"
+        const val QUALITY_BIAS_KEY = "quality-bias"
     }
 }

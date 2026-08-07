@@ -104,9 +104,12 @@ import com.opencapture.openzcine.relay.mergedNearbyBroadcasts
 import com.opencapture.openzcine.relay.presenceProvesFiltering
 import com.opencapture.openzcine.relay.updatedPresenceHiddenSince
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
+import com.opencapture.openzcine.settings.LiveViewQualityBias
+import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.OperatorSettingsTab
+import com.opencapture.openzcine.settings.SetupStreamSettings
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 import kotlinx.coroutines.Dispatchers
@@ -444,8 +447,47 @@ class MainActivity : ComponentActivity() {
                         } ?: saved
                 }
 
+                /**
+                 * Points the operator's stream-settings picks at ONE setup's record, and seeds
+                 * the live values from it. Twin of iOS `adoptActiveSetupStreamSettings` /
+                 * `recordActiveSetupStreamSettings`.
+                 */
+                fun adoptSetupStreamSettings(record: SavedCameraRecord?) {
+                    if (record == null) {
+                        operatorSettings.activeSetupStreamSettingsWriter = null
+                        return
+                    }
+                    operatorSettings.adoptSetupStreamSettings(
+                        streamPreset =
+                            SetupStreamSettings.streamPreset(
+                                stored = record.streamPreset,
+                                transport = record.transport,
+                                seed = LiveViewStreamPreset.SHIPPED_DEFAULT,
+                            ),
+                        qualityBias =
+                            SetupStreamSettings.qualityBias(
+                                stored = record.qualityBias,
+                                transport = record.transport,
+                                seed = LiveViewQualityBias.SHIPPED_DEFAULT,
+                            ),
+                    )
+                    operatorSettings.activeSetupStreamSettingsWriter = { preset, bias ->
+                        val updated =
+                            SavedCameraRecords.updatingStreamSettings(
+                                host = record.host,
+                                transport = record.transport,
+                                streamPreset = preset,
+                                qualityBias = bias,
+                                records = savedCameras,
+                            )
+                        savedCameras = updated
+                        savedCameraStore.replace(updated)
+                    }
+                }
+
                 fun acceptPairedCamera(paired: PairedCamera) {
                     activeSavedCamera = persistPairedCameraProfile(paired.savedCamera)
+                    adoptSetupStreamSettings(activeSavedCamera)
                     monitorSession = paired.session
                 }
                 // Startup and monitor are both immersive; re-assert whenever
@@ -732,6 +774,7 @@ class MainActivity : ComponentActivity() {
                                         // camera, and no stale profile steering
                                         // link-health or reconnect heuristics.
                                         activeSavedCamera = null
+                                        adoptSetupStreamSettings(null)
                                         uvcSource = UvcFrameSource(applicationContext)
                                         monitorSession =
                                             CaptureOnlyCameraSession(

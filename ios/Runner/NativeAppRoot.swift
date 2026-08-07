@@ -3663,6 +3663,10 @@ final class NativeAppModel {
                         setup: setup)
                 )
                 refreshSavedCameras()
+                // AFTER the upsert and the refresh: a first connect creates this setup's record,
+                // and what it runs at is read back from the record that now exists rather than
+                // from whatever the last setup left behind.
+                adoptActiveSetupStreamSettings(host: session.identity.host)
                 markFirstPairWizardCompleted()
                 liveFPS = "READY"
                 cameraState = cameraState.updating(
@@ -11777,13 +11781,69 @@ final class NativeAppModel {
     func setStreamPreset(_ preset: OperatorPreferences.StreamPreset) {
         guard preferences.streamPreset != preset else { return }
         preferences.streamPreset = preset
+        recordActiveSetupStreamSettings(streamPreset: preset, qualityBias: nil)
         restartLiveViewForQualityChange()
     }
 
     func setQualityBias(_ bias: OperatorPreferences.QualityBias) {
         guard preferences.qualityBias != bias else { return }
         preferences.qualityBias = bias
+        recordActiveSetupStreamSettings(streamPreset: nil, qualityBias: bias)
         restartLiveViewForQualityChange()
+    }
+
+    /// What the live session runs at, read off the setup it established over.
+    ///
+    /// `preferences` stays the value every consumer reads — the live-view configure, the step-down
+    /// checker, the settings rows — so this seeds it rather than adding a second source of truth
+    /// eight read sites would have to learn about. What changed is where the value COMES from:
+    /// the setup's own record, falling back to the shipped default for its path, never to whatever
+    /// the previously connected setup happened to leave in `preferences`.
+    private func adoptActiveSetupStreamSettings(host: String) {
+        let record = activeSetupRecord(host: host)
+        let preset = SetupStreamSettings.streamPreset(
+            stored: record?.streamPreset,
+            pathKind: activeSessionPath?.kind,
+            seed: OperatorPreferences.defaults.streamPreset)
+        let bias = SetupStreamSettings.qualityBias(
+            stored: record?.qualityBias,
+            pathKind: activeSessionPath?.kind,
+            seed: OperatorPreferences.defaults.qualityBias)
+        guard preferences.streamPreset != preset || preferences.qualityBias != bias else { return }
+        preferences.streamPreset = preset
+        preferences.qualityBias = bias
+        // The stream is configured from these during the bootstrap that follows a fresh connect,
+        // so nothing needs restarting here — and restarting mid-establishment is the burst loop
+        // `restartLiveViewForQualityChange` documents.
+        logConnection(
+            "setup stream settings preset=\(preset.rawValue) bias=\(bias.rawValue)"
+                + " stored=\(record?.qualityBias != nil)")
+    }
+
+    /// Writes an operator's pick onto the setup it was made on, so the next connect over this path
+    /// starts there. No active session means no setup to write to — the pick still applies to the
+    /// live value, it simply has nowhere durable to live.
+    private func recordActiveSetupStreamSettings(
+        streamPreset: OperatorPreferences.StreamPreset?,
+        qualityBias: OperatorPreferences.QualityBias?
+    ) {
+        guard !isDemoSession, let host = cameraSession?.identity.host else { return }
+        NativeCameraConnectionStore.shared.updateSavedCameraStreamSettings(
+            host: host,
+            pathKind: activeSessionPath?.kind,
+            streamPreset: streamPreset,
+            qualityBias: qualityBias)
+        refreshSavedCameras()
+    }
+
+    /// The record for the setup the live session established over. Keyed by host AND path kind:
+    /// a body's access-point and router setups can share an address, so the host alone returns
+    /// whichever sits first in the canonical order.
+    private func activeSetupRecord(host: String) -> PTPIPSavedCameraRecord? {
+        let normalized = PTPIPPairedHosts.normalizedHost(host) ?? host
+        return savedCameras.first {
+            $0.host == normalized && $0.pathKind == activeSessionPath?.kind
+        }
     }
 
     /// The broadcaster's latency-vs-quality stance. Adopted LIVE: the encoder is swapped and the

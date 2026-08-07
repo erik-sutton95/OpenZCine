@@ -214,6 +214,23 @@ final class NativeCameraConnectionStore {
         saveSavedCameras(records)
     }
 
+    func updateSavedCameraStreamSettings(
+        host: String,
+        pathKind: CameraPath.Kind?,
+        streamPreset: OperatorPreferences.StreamPreset?,
+        qualityBias: OperatorPreferences.QualityBias?
+    ) {
+        saveSavedCameras(
+            PTPIPSavedCameraRecords.updatingStreamSettings(
+                host: host,
+                pathKind: pathKind,
+                streamPreset: streamPreset,
+                qualityBias: qualityBias,
+                in: savedCameras()
+            )
+        )
+    }
+
     func forgetPairing(host: String) {
         saveSavedCameras(PTPIPSavedCameraRecords.removing(host, from: savedCameras()))
     }
