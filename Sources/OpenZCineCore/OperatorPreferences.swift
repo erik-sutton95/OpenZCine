@@ -497,7 +497,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         qualityBias: QualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
         scopeActivationOrder: [MonitorAssistTool] = [],
-        cleanViewPinnedTools: Set<MonitorAssistTool> = [],
+        cleanViewPinnedTools: Set<MonitorAssistTool> = Self.cleanViewDefaultPinnedTools,
         cleanChrome: DisplayChromeVisibility = .cleanDefaults,
         commandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoDisplayChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
@@ -572,8 +572,12 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
     /// newest activation. Drives the portrait-fit recency-based 2-scope display selection.
     public var scopeActivationOrder: [MonitorAssistTool]
-    /// The view-assist tools DISP 2 shows. Empty by default — clean is a bare image out of the
-    /// box; see ``MonitorChromePolicy``.
+    /// The view-assist tools DISP 2 shows; see ``MonitorChromePolicy``.
+    ///
+    /// Defaults to ``cleanViewDefaultPinnedTools`` rather than nothing. Clean strips the *chrome*
+    /// — the rail, the readouts, the buttons — but an operator on DISP 2 is still judging a
+    /// picture, and a grade, a focus aid and the two geometry corrections are what make it the
+    /// right picture rather than a raw one.
     public var cleanViewPinnedTools: Set<MonitorAssistTool>
     /// DISP 2's chrome. Defaults to ``DisplayChromeVisibility/cleanDefaults`` — the bare image.
     public var cleanChrome: DisplayChromeVisibility
@@ -741,11 +745,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             liveViewVisibleAssistTools = []
             playbackVisibleAssistTools = []
         }
-        // Added with the clean-view pin (#256). Absent in every older payload — decode to empty so
-        // an upgrade lands on the documented default (clean is bare) rather than resetting.
+        // Added with the clean-view pin (#256). The key is absent only in payloads written
+        // before it existed, i.e. by an operator who never pinned anything — so absent decodes to
+        // the documented default rather than to empty. Anyone who HAS touched the set wrote it,
+        // and gets back exactly what they chose.
         cleanViewPinnedTools =
             try Self.decodeAssistToolSetIfPresent(from: container, forKey: .cleanViewPinnedTools)
-            ?? []
+            ?? Self.cleanViewDefaultPinnedTools
         // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
         // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
         // the documented bare image, and DISP 3 inherits the old global set so a rail or battery
@@ -862,6 +868,15 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         splitComparisonEnabled: false,
         splitComparisonOrientation: .vertical
     )
+
+    /// What DISP 2 shows out of the box: the grade, the focus aid, and the two corrections that
+    /// change the picture's geometry rather than decorate it.
+    ///
+    /// Clean is not "no tools" — it is no *chrome*. A de-squeezed, mirrored, graded image with
+    /// peaking on is still a clean image; it is the rail and the readouts that make a monitor busy.
+    public static let cleanViewDefaultPinnedTools: Set<MonitorAssistTool> = [
+        .lut, .peaking, .desqueeze, .mirror,
+    ]
 
     /// Whether `tool` should appear on the bottom assist toolbar (LUT is always shown).
     public func isAssistToolbarButtonVisible(_ tool: MonitorAssistTool) -> Bool {

@@ -248,6 +248,9 @@ func cubeIsFinite(look: MonitorLUT) {
     var preferences = OperatorPreferences.defaults
     preferences.splitComparisonEnabled = true
     preferences.liveViewVisibleAssistTools = [.lut]
+    // The stock pins include the LUT; this is about what an UNPINNED tool does in clean, so
+    // start from a bare set rather than from whatever DISP 2 happens to ship with.
+    preferences.cleanViewPinnedTools = []
 
     let live = MonitorChromePolicy.visibleTools(mode: .live, preferences: preferences)
     #expect(LUTResolution.splitComparison(visibleTools: live, preferences: preferences) != nil)
