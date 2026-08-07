@@ -64,15 +64,19 @@ class SavedCameraGroupsTest {
                 record("10.99.0.20", "ZR_6002199", SavedCameraTransport.INFRASTRUCTURE, 1L),
                 record("usb:zr", "ZR_6002199", SavedCameraTransport.USB_C, 2L),
             )
+        // Router stays on offer even though this camera already has one: a body can live on a
+        // studio network, a home one and a location's, and each is its own setup keyed by the
+        // network's name. Every other kind is singular by definition.
         assertEquals(
             listOf(
                 SavedCameraTransport.CAMERA_ACCESS_POINT,
+                SavedCameraTransport.INFRASTRUCTURE,
                 SavedCameraTransport.PHONE_HOTSPOT,
             ),
             missingSetupKinds(group),
         )
         assertEquals(
-            emptyList(),
+            listOf(SavedCameraTransport.INFRASTRUCTURE),
             missingSetupKinds(
                 group +
                     listOf(

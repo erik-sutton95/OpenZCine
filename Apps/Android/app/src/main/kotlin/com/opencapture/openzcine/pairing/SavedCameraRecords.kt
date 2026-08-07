@@ -81,6 +81,16 @@ public data class SavedCameraRecord(
      * a different link from a cable, and one global key meant a bias dropped for the AP followed
      * the operator onto USB-C.
      */
+    /**
+     * The Wi-Fi network an INFRASTRUCTURE setup lives on, when the operator let us read it.
+     *
+     * The key that separates a camera's studio router from its home one. Never the address: the
+     * cross-host merge below absorbs a DHCP move on purpose, so keying on the address would fork
+     * one setup every lease and still not tell two networks apart. Null when unreadable — no
+     * permission, not Wi-Fi, or the OS redacted it — and an unnamed network joins whatever router
+     * setup is already there, which is what every operator had before this existed.
+     */
+    val networkName: String? = null,
     val streamPreset: LiveViewStreamPreset? = null,
     /** The compression grade this setup runs at; `null` means never chosen here. See [streamPreset]. */
     val qualityBias: LiveViewQualityBias? = null,
@@ -145,7 +155,11 @@ public object SavedCameraRecords {
             )
         // Keeps the host AND the identity it has always answered to; only its claim changes.
         val infrastructure =
-            record.copy(transport = SavedCameraTransport.INFRASTRUCTURE, wifiSsid = null)
+            record.copy(
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                wifiSsid = null,
+                networkName = null,
+            )
         return listOf(accessPoint, infrastructure)
     }
 
@@ -175,6 +189,18 @@ public object SavedCameraRecords {
                         // address alone swallowed one into the other (the shared core's
                         // `describesSameSetup`, carried across at last).
                         if (existing.transport != normalized.transport) {
+                            false
+                        } else if (
+                            // Within infrastructure the NETWORK is part of the key. Only two
+                            // named and DIFFERENT networks separate; an unnamed one joins what
+                            // is there, keeping the single-router behaviour (DHCP absorption
+                            // included) for anyone whose network cannot be identified. Mirrors
+                            // the shared core's `describesSameSetup`.
+                            existing.transport == SavedCameraTransport.INFRASTRUCTURE &&
+                            existing.networkName != null &&
+                            normalized.networkName != null &&
+                            existing.networkName != normalized.networkName
+                        ) {
                             false
                         } else if (
                             existing.profileID == normalized.profileID ||
@@ -211,6 +237,11 @@ public object SavedCameraRecords {
         lastSeenAtEpochMillis: Long?,
         wifiSsid: String?,
         records: List<SavedCameraRecord>,
+        /**
+         * The network an infrastructure setup is on; null when unreadable, and ignored on every
+         * other transport, which has no network to be told apart by.
+         */
+        networkName: String? = null,
     ): List<SavedCameraRecord> {
         val candidate =
             SavedCameraRecord(
@@ -219,6 +250,8 @@ public object SavedCameraRecords {
                 transport = transport,
                 lastSeenAtEpochMillis = lastSeenAtEpochMillis,
                 wifiSsid = wifiSsid,
+                networkName =
+                    networkName.takeIf { transport == SavedCameraTransport.INFRASTRUCTURE },
             )
         return canonicalized(records + candidate)
     }
@@ -303,6 +336,7 @@ public object SavedCameraRecords {
             profileID = normalizedProfileID(record.profileID) ?: host,
             cameraName = cameraName,
             wifiSsid = normalizedTag(record.wifiSsid),
+            networkName = normalizedTag(record.networkName),
             customName = normalizedTag(record.customName),
         )
     }
@@ -336,6 +370,7 @@ public object SavedCameraRecords {
             // Load-bearing: every reconnect upserts a record that knows nothing about stream
             // settings, so without this the operator's choice for this setup would survive
             // exactly until the next time they connected to it.
+            networkName = preferred.networkName ?: fallback.networkName,
             streamPreset = preferred.streamPreset ?: fallback.streamPreset,
             qualityBias = preferred.qualityBias ?: fallback.qualityBias,
             // The existing card owns reconnect state and any offline-media
@@ -459,6 +494,7 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
                     // Persisted by NAME, not ordinal: the wire ordinals belong to the Swift
                     // bridge and reordering an enum there must not silently re-read every
                     // operator's saved setups as a different setting.
+                    .put(NETWORK_NAME_KEY, record.networkName)
                     .put(STREAM_PRESET_KEY, record.streamPreset?.name)
                     .put(QUALITY_BIAS_KEY, record.qualityBias?.name),
             )
@@ -487,6 +523,7 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
                     ?: host,
             // An unreadable value reads as "never chosen" rather than dropping the whole record:
             // a setting is not worth losing a paired camera over.
+            networkName = value.optString(NETWORK_NAME_KEY).takeIf(String::isNotBlank),
             streamPreset =
                 value.optString(STREAM_PRESET_KEY).takeIf(String::isNotBlank)?.let { name ->
                     LiveViewStreamPreset.entries.firstOrNull { it.name == name }
@@ -508,6 +545,7 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
         const val WIFI_SSID_KEY = "wifi-ssid"
         const val CUSTOM_NAME_KEY = "custom-name"
         const val PROFILE_ID_KEY = "profile-id"
+        const val NETWORK_NAME_KEY = "network-name"
         const val STREAM_PRESET_KEY = "stream-preset"
         const val QUALITY_BIAS_KEY = "quality-bias"
     }

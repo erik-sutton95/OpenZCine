@@ -7,6 +7,125 @@ import kotlin.test.assertNull
 
 class SavedCameraRecordsTest {
     /**
+     * A camera reached from the studio and from home is two setups. The network's name is the only
+     * thing that can say so — the address changes with the lease.
+     */
+    @Test
+    fun `two named networks are two router setups`() {
+        val records =
+            listOf(
+                SavedCameraRecord(
+                    host = "192.168.1.50",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 1_000,
+                    wifiSsid = null,
+                    networkName = "Studio",
+                ),
+                SavedCameraRecord(
+                    host = "10.0.0.9",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 2_000,
+                    wifiSsid = null,
+                    networkName = "Home",
+                ),
+            )
+
+        assertEquals(2, SavedCameraRecords.canonicalized(records).size)
+    }
+
+    /** THE reason this is not keyed on the address: a new lease is still one setup. */
+    @Test
+    fun `a new address on the same network stays one router setup`() {
+        val records =
+            listOf(
+                SavedCameraRecord(
+                    host = "192.168.1.50",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 1_000,
+                    wifiSsid = null,
+                    networkName = "Studio",
+                ),
+                SavedCameraRecord(
+                    host = "192.168.1.77",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 2_000,
+                    wifiSsid = null,
+                    networkName = "Studio",
+                ),
+            )
+
+        val canonical = SavedCameraRecords.canonicalized(records)
+        assertEquals(1, canonical.size)
+        assertEquals("192.168.1.77", canonical.first().host)
+    }
+
+    /**
+     * A refusal must cost nothing: an unnamed network joins whatever is there, which is the
+     * single-router behaviour every operator had before names existed.
+     */
+    @Test
+    fun `an unnamed network joins the router setup already there`() {
+        val records =
+            listOf(
+                SavedCameraRecord(
+                    host = "192.168.1.50",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 1_000,
+                    wifiSsid = null,
+                    networkName = "Studio",
+                ),
+                SavedCameraRecord(
+                    host = "192.168.1.77",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 2_000,
+                    wifiSsid = null,
+                    networkName = null,
+                ),
+            )
+
+        val canonical = SavedCameraRecords.canonicalized(records)
+        assertEquals(1, canonical.size)
+        // …and the name learned once is not erased by the connect that could not read it.
+        assertEquals("Studio", canonical.first().networkName)
+    }
+
+    /** Only infrastructure has a network to be told apart by. */
+    @Test
+    fun `a network name is never stamped on a non-router setup`() {
+        val records =
+            SavedCameraRecords.upserting(
+                host = "192.168.1.1",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                lastSeenAtEpochMillis = 1_000,
+                wifiSsid = "NIKON_ZR_6002199",
+                records = emptyList(),
+                networkName = "Studio",
+            )
+
+        assertNull(records.single().networkName)
+    }
+
+    /** The SSID the platform hands back is quoted, and sometimes refused outright. */
+    @Test
+    fun `a platform ssid is unwrapped and its refusals rejected`() {
+        assertEquals("Studio", ConnectedNetworkName.sanitized("\"Studio\""))
+        assertEquals("Studio", ConnectedNetworkName.sanitized("  Studio  "))
+        assertNull(ConnectedNetworkName.sanitized(null))
+        assertNull(ConnectedNetworkName.sanitized(""))
+        assertNull(ConnectedNetworkName.sanitized("\"\""))
+        assertNull(ConnectedNetworkName.sanitized("<unknown ssid>"))
+        // A camera's own access point is never an infrastructure network.
+        assertNull(ConnectedNetworkName.sanitized("\"NIKON_Z6_123456\""))
+    }
+
+    /**
      * A record IS one camera setup, keyed by (camera, path). One body's access-point and router
      * setups routinely share an address — every camera-AP Nikon answers on 192.168.1.1 — and
      * matching on the address alone swallowed one into the other.

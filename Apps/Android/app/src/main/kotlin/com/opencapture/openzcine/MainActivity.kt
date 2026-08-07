@@ -91,6 +91,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
+import com.opencapture.openzcine.pairing.ConnectedNetworkName
 import com.opencapture.openzcine.pairing.SavedCameraRecords
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
@@ -432,6 +433,11 @@ class MainActivity : ComponentActivity() {
                             lastSeenAtEpochMillis = saved.lastSeenAtEpochMillis,
                             wifiSsid = saved.wifiSsid,
                             records = savedCameras,
+                            // Read at SAVE time, which is the only moment this device is
+                            // demonstrably on the network the setup describes. Null whenever the
+                            // operator has not allowed the read, and an unnamed network joins
+                            // whatever router setup exists — the behaviour everyone had before.
+                            networkName = ConnectedNetworkName.read(this@MainActivity),
                         )
                     savedCameras = updated
                     savedCameraStore.replace(updated)

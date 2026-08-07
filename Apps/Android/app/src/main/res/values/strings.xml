@@ -735,6 +735,8 @@
     <string name="settings_health_threshold">Health Threshold</string>
     <string name="settings_reconnect_window">Reconnect Window</string>
     <string name="settings_reconnect_window_value">4 sec</string>
+    <string name="saved_setup_router_name_permission">To keep more than one router setup for this camera, OpenZCine needs to read the name of the network you are on — Android treats a network name as location information. Without it, every router shares one setup, exactly as before.</string>
+    <string name="saved_setup_router_name_permission_action">Allow network names</string>
     <string name="settings_processing">Processing</string>
     <string name="settings_feed_upscaler">Feed Upscaler</string>
     <string name="settings_feed_noise_reduction">Feed Noise Reduction</string>

@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.pairing
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1511,7 +1513,11 @@ internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCamera
             SavedCameraTransport.INFRASTRUCTURE,
             SavedCameraTransport.PHONE_HOTSPOT,
         )
-        .filterNot(saved::contains)
+        // Router stays on offer however many are saved: a camera can live on a studio network, a
+        // home one and a location's, and each is its own setup keyed by the network's name. Every
+        // other kind is singular by definition — the access point is the camera's own network, the
+        // hotspot is this phone, the cable is the cable (iOS `missingSetupKinds`).
+        .filterNot { it != SavedCameraTransport.INFRASTRUCTURE && saved.contains(it) }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -1604,6 +1610,20 @@ private fun SavedCameraAddSetupDialog(
     onArmSetupWatch: (SavedCameraTransport) -> Unit,
 ) {
     val active = group.first()
+    val context = LocalContext.current
+    // Asked for HERE, and only here: naming a network is the one thing this permission buys, and
+    // a second router setup is the one place the name is needed. Launch, discovery and every
+    // other path stay untouched by it — and a refusal costs nothing but the ability to keep more
+    // than one router setup per camera, which is exactly where the operator is standing.
+    var networkNameGranted by remember {
+        mutableStateOf(ConnectedNetworkName.isPermissionGranted(context))
+    }
+    val networkNameLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            networkNameGranted = granted
+        }
+    val hasRouterSetup =
+        group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1617,6 +1637,31 @@ private fun SavedCameraAddSetupDialog(
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
                 )
+                // Only when a second router setup is actually on the table: with none saved, the
+                // next one needs no name to be told apart from anything.
+                if (hasRouterSetup && !networkNameGranted) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            stringResource(R.string.saved_setup_router_name_permission),
+                            color = StartupColors.muted,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
+                        TextButton(
+                            onClick = {
+                                networkNameLauncher.launch(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                )
+                            },
+                        ) {
+                            Text(
+                                stringResource(R.string.saved_setup_router_name_permission_action),
+                                color = StartupColors.accent,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                }
                 missingSetupKinds(group).forEach { kind ->
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
