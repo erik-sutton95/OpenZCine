@@ -25,6 +25,10 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     /// Camera-fed exposure indicator (the body's own metering needle).
     case evMeter = "EV"
     case desqueeze = "DE-SQ"
+    /// Flips the monitored picture left-to-right, for a body pointed back at the person watching
+    /// it. A display convenience only: the recording is never mirrored, and neither is anything
+    /// that measures the frame.
+    case mirror = "MIRROR"
     case instantReview = "PLAY"
     /// Monitoring punch-in for critical focus (see `Magnification`).
     case magnification = "MAG"
@@ -50,8 +54,9 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
             .guides, .grid,
             .crosshair, .level, .desqueeze, .instantReview, .magnification:
             true
-        case .audioMeters, .evMeter:
-            // Tap-only tools — the meters carry no operator-tunable options.
+        case .audioMeters, .evMeter, .mirror:
+            // Tap-only tools — the meters carry no operator-tunable options, and a left-to-right
+            // flip has nothing to tune: it is on or it is not.
             false
         }
     }
@@ -70,7 +75,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
 
     /// Framing aids on the bottom assist toolbar (Display ▸ Frame & Composition Tools).
     public static let framingBarTools: [MonitorAssistTool] = [
-        .guides, .grid, .crosshair, .level, .desqueeze,
+        .guides, .grid, .crosshair, .level, .desqueeze, .mirror,
     ]
 
     /// Scope-type tools: rendered as panels (floating in landscape/portrait-fill, stacked in
@@ -98,6 +103,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .level: "Horizon"
         case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
+        case .mirror: "Mirror"
         case .instantReview: "Instant Playback"
         case .magnification: "Magnification"
         }

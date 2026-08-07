@@ -247,7 +247,10 @@ extension MonitorAssistTool {
     public var appliesToPhotography: Bool {
         switch self {
         case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
-            .desqueeze, .magnification:
+            .desqueeze, .mirror, .magnification:
+            // Mirror joins de-squeeze for the same reason: a body turned back at the subject is
+            // just as common on a stills shoot, and both are display transforms that never reach
+            // the camera original.
             true
         case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
             .guides, .crosshair:

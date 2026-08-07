@@ -86,6 +86,12 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     /** Camera-fed exposure indicator (the body's own metering needle). */
     EV("EV", "EV Meter"),
     DESQ("DE-SQ", "Desqueeze"),
+    /**
+     * Flips the monitored picture left-to-right, for a body pointed back at the
+     * person watching it. A display transform only: the recording, the scopes,
+     * and every coordinate the camera reports stay in the true orientation.
+     */
+    MIRROR("MIRROR", "Mirror"),
     /** Live-view punch-in for checking critical focus. */
     /** Photography-only instant playback of the just-captured still. */
     PLAY("PLAY", "Instant Playback"),
@@ -97,7 +103,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     val hasConfiguration: Boolean
         // ponytail: PLAY's iOS options drawer (AF box / info / duration) is a
         // follow-up; the toggle alone covers the between-shots review.
-        get() = this != AUDIO && this != EV && this != PLAY
+        get() = this != AUDIO && this != EV && this != PLAY && this != MIRROR
 
     /**
      * Assist tools that apply to still photography (iOS `appliesToPhotography`):
@@ -113,7 +119,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     val appliesToPhotography: Boolean
         get() =
             when (this) {
-                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY, DESQ -> true
+                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY, DESQ, MIRROR -> true
                 else -> false
             }
 
@@ -132,7 +138,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
          * feed-effect state. EV rides with the framing group: its visibility is
          * a local presentation choice, while the value stays camera-fed.
          */
-        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, EV, DESQ)
+        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, EV, DESQ, MIRROR)
 
         /** Independently selectable scope panels subject to the portrait fit-mode cap. */
         val scopeTools: Set<AssistTool> = setOf(WAVE, PARADE, HISTO, VECTOR, LIGHTS)
@@ -237,6 +243,7 @@ internal fun AssistTool.labelResource(): Int =
         AssistTool.LEVEL -> R.string.assist_label_level
         AssistTool.EV -> R.string.assist_label_ev_meter
         AssistTool.DESQ -> R.string.assist_label_desqueeze
+        AssistTool.MIRROR -> R.string.assist_label_mirror
         AssistTool.PLAY -> R.string.assist_label_play
         AssistTool.AUDIO -> R.string.assist_label_audio
     }
@@ -259,6 +266,7 @@ internal fun AssistTool.titleResource(): Int =
         AssistTool.LEVEL -> R.string.assist_title_horizon
         AssistTool.EV -> R.string.assist_title_ev_meter
         AssistTool.DESQ -> R.string.assist_title_desqueeze
+        AssistTool.MIRROR -> R.string.assist_title_mirror
         AssistTool.PLAY -> R.string.assist_title_instant_playback
         AssistTool.AUDIO -> R.string.assist_title_audio_levels
     }
@@ -365,6 +373,7 @@ class AssistState(
             AssistTool.LEVEL,
             AssistTool.EV,
             AssistTool.DESQ,
+            AssistTool.MIRROR,
             -> false
         }
 
@@ -423,6 +432,7 @@ class AssistState(
             AssistTool.LEVEL,
             AssistTool.EV,
             AssistTool.DESQ,
+            AssistTool.MIRROR,
             -> false
         }
     }
@@ -1011,6 +1021,7 @@ private fun LocalFramingAssistConfiguration.isToolEnabled(tool: AssistTool): Boo
         AssistTool.LEVEL -> levelEnabled
         AssistTool.EV -> evMeterEnabled
         AssistTool.DESQ -> desqueezeEnabled
+        AssistTool.MIRROR -> mirrorEnabled
         else -> false
     }
 
@@ -1331,6 +1342,38 @@ internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier =
                 drawLine(tint, Offset(inset, y), Offset(inset + head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
                 drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y - head), 1.7.dp.toPx(), StrokeCap.Round)
                 drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
+            }
+            // SF `arrow.left.and.right.righttriangle.left.righttriangle.right`:
+            // an axis with a solid triangle pointing away on either side.
+            AssistTool.MIRROR -> {
+                val y = size.height / 2
+                val inset = size.width * 0.10f
+                val head = size.minDimension * 0.26f
+                drawLine(
+                    tint,
+                    Offset(size.width / 2, size.height * 0.12f),
+                    Offset(size.width / 2, size.height * 0.88f),
+                    1.4.dp.toPx(),
+                    StrokeCap.Round,
+                )
+                drawPath(
+                    Path().apply {
+                        moveTo(inset, y - head)
+                        lineTo(inset, y + head)
+                        lineTo(inset + head, y)
+                        close()
+                    },
+                    tint,
+                )
+                drawPath(
+                    Path().apply {
+                        moveTo(size.width - inset, y - head)
+                        lineTo(size.width - inset, y + head)
+                        lineTo(size.width - inset - head, y)
+                        close()
+                    },
+                    tint,
+                )
             }
             // SF `plus.magnifyingglass`: loupe with a plus in the lens.
             // SF `photo.badge.checkmark`: photo frame with a check tick.

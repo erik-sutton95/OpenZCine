@@ -2607,6 +2607,15 @@ struct AssistPanel: View {
                     Text("The camera's own exposure indicator, read live from the body.")
                         .font(.system(size: 13))
                         .foregroundStyle(LiveDesign.muted)
+                case .mirror:
+                    // Unreachable via long-press (`hasConfiguration == false`); kept for
+                    // exhaustiveness and the Display settings strips.
+                    Text(
+                        "Flips the monitor left-to-right, for a camera pointed back at you. "
+                            + "The recording and the scopes are never mirrored."
+                    )
+                    .font(.system(size: 13))
+                    .foregroundStyle(LiveDesign.muted)
                 }
             }
         }

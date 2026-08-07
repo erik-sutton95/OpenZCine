@@ -8977,7 +8977,11 @@ final class NativeAppModel {
         guard feedSize.width > 0, feedSize.height > 0 else { return }
         // Light tap confirming the AF point moved; after the guards so locked taps stay silent.
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        let normalizedX = min(max(point.x / feedSize.width, 0), 1)
+        // A mirrored feed is a mirrored tap: what the operator touched on the left of the picture
+        // is on the camera's right. Undo the flip here rather than anywhere downstream — the
+        // camera's coordinate space never mirrors, only the monitor does.
+        let tappedX = liveFeedMirrored ? feedSize.width - point.x : point.x
+        let normalizedX = min(max(tappedX / feedSize.width, 0), 1)
         let normalizedY = min(max(point.y / feedSize.height, 0), 1)
         // Coordinate space from the latest live-view header, then the last one the camera reported
         // (which outlives a switch to a source that carries no header), then a 16:9 default before
@@ -10401,6 +10405,15 @@ final class NativeAppModel {
         if !monitorAvailability.audioMeters { tools.remove(.audioMeters) }
         guard isPhotographyMode else { return tools }
         return tools.filter(\.appliesToPhotography)
+    }
+
+    /// Whether the monitored picture is flipped left-to-right (see `MonitorAssistTool.mirror`).
+    ///
+    /// A display transform and nothing more: the recording, the scopes, and every coordinate the
+    /// camera reports stay in the true orientation. Only the raster and the things drawn to sit on
+    /// top of it — the AF boxes, and a tap that moves them — take the flip into account.
+    var liveFeedMirrored: Bool {
+        renderedLiveAssistTools.contains(.mirror)
     }
 
     /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
@@ -12467,6 +12480,8 @@ extension MonitorAssistTool {
         case .level: "gyroscope"
         case .evMeter: "plusminus"
         case .desqueeze: "arrow.left.and.right"
+        // The system's own mirror glyph, and the one every camera app uses for this.
+        case .mirror: "arrow.left.and.right.righttriangle.left.righttriangle.right"
         case .magnification: "plus.magnifyingglass"
         case .instantReview: "photo.badge.checkmark"
         }
@@ -12490,6 +12505,7 @@ extension MonitorAssistTool {
         case .level: "Horizon"
         case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
+        case .mirror: "Mirror"
         case .magnification: "Magnify"
         case .instantReview: "Instant Playback"
         }

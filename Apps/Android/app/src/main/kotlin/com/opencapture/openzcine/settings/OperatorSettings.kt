@@ -532,6 +532,12 @@ public data class LocalFramingAssistConfiguration(
     public val evMeterEnabled: Boolean = false,
     /** Whether the local de-squeeze presentation is applied. */
     public val desqueezeEnabled: Boolean,
+    /**
+     * Whether the monitored picture is flipped left-to-right, for a body pointed
+     * back at the person watching it. Display only — the recording, the scopes
+     * and every camera-reported coordinate stay in the true orientation.
+     */
+    public val mirrorEnabled: Boolean = false,
     /** Named chip when the factor matches a preset (UI highlight). */
     public val desqueezeRatio: LocalDesqueezeRatio,
     /** Applied squeeze factor in 1.0…2.0 (source of truth for rendering). */
@@ -907,6 +913,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val evMeterAssistEnabled: Toggle = Toggle("assist.local.evMeter", default = false)
     public val desqueezeEnabled: Toggle =
         Toggle(DESQUEEZE_ENABLED_KEY, default = legacyDesqueezeWasEnabled())
+    /** Flips the monitored picture left-to-right; never touches the recording. */
+    public val mirrorEnabled: Toggle = Toggle("assist.local.mirror.v1", default = false)
     /** Puts the punch-in quick key on the feed; the punch-in itself is session-only. */
     /** Shows the shared Swift meter's RGB edge blocks on the histogram. */
     public val histogramTrafficLightsEnabled: Toggle =
@@ -1163,6 +1171,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.LEVEL -> levelAssistEnabled.toggle()
             AssistTool.EV -> evMeterAssistEnabled.toggle()
             AssistTool.DESQ -> desqueezeEnabled.toggle()
+            AssistTool.MIRROR -> mirrorEnabled.toggle()
             else -> Unit
         }
     }
@@ -1176,6 +1185,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.LEVEL -> levelAssistEnabled.value
             AssistTool.EV -> evMeterAssistEnabled.value
             AssistTool.DESQ -> desqueezeEnabled.value
+            AssistTool.MIRROR -> mirrorEnabled.value
             else -> false
         }
 
@@ -1322,6 +1332,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 desqueezeRatio = desqueezeRatio,
                 desqueezeFactor = desqueezeFactor,
                 desqueezeOrientation = desqueezeOrientation,
+                mirrorEnabled = mirrorEnabled.value,
             )
 
     private val assistToolbarOrderState = mutableStateOf(loadAssistToolbarOrder())

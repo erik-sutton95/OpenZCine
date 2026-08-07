@@ -413,6 +413,12 @@ private fun PlaybackAssistOptionsContent(
         AssistTool.PLAY ->
             OptionCopy("Shows the just-captured still full-screen after each release.")
         AssistTool.DESQ -> DesqueezeOptions(settings)
+        AssistTool.MIRROR ->
+            // Tap-only tool (no configuration); defensive copy if ever routed here.
+            OptionCopy(
+                "Flips the monitor left-to-right, for a camera pointed back at you. " +
+                    "The recording and the scopes are never mirrored.",
+            )
         AssistTool.AUDIO ->
             OptionCopy("Meters the playing clip's audio. Available during media playback.")
     }

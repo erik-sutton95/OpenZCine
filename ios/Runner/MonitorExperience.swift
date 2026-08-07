@@ -604,10 +604,23 @@ private struct LiveFrameRaster: View {
             width: width,
             height: height
         )
-        .scaleEffect(
-            desqueezeScale(model.assistConfiguration.desqueeze), anchor: .center
-        )
+        .scaleEffect(feedScale, anchor: .center)
         .clipped()
+    }
+
+    /// De-squeeze and mirror are the same kind of thing — a transform of the raster alone — so they
+    /// ride one `scaleEffect` rather than stacking two. The mirror is a negative x scale, which is
+    /// why it lands here and not in the effects graph: this node is above BOTH feed renderers, so
+    /// the Metal path and the `UIImageView` fallback flip identically and neither had to learn it.
+    ///
+    /// Sibling overlays are deliberately outside this: guides, grid and crosshair are symmetric so
+    /// a flip would not show, and the horizon reads the phone's own gyro rather than the picture —
+    /// mirroring it would be wrong. The AF boxes DO describe positions in the picture and are
+    /// handled where they are drawn.
+    private var feedScale: CGSize {
+        let squeeze = desqueezeScale(model.assistConfiguration.desqueeze)
+        guard model.liveFeedMirrored else { return squeeze }
+        return CGSize(width: -squeeze.width, height: squeeze.height)
     }
 }
 
@@ -787,7 +800,8 @@ private struct LiveFeedFocusOverlay: View {
             // Focus metadata repeats identically on most frames — the Equatable guard skips the
             // Canvas redraw unless a box, lock, or progress changed.
             LiveFocusBoxOverlay(
-                focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress
+                focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
+                mirrored: model.liveFeedMirrored
             )
             .equatable()
             // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
@@ -1232,12 +1246,15 @@ struct LiveFocusBoxOverlay: View, Equatable {
     var locked: Bool = false
     /// 0→1 while long-pressing the AF box to lock it: how much of box 0's outline has drawn in.
     var lockProgress: CGFloat = 0
+    /// Whether the picture underneath is flipped left-to-right. The camera's box coordinates never
+    /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
+    var mirrored: Bool = false
 
     nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
         // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
         // properties of `focus`, so its memberwise == already covers them.
         lhs.focus == rhs.focus && lhs.locked == rhs.locked
-            && lhs.lockProgress == rhs.lockProgress
+            && lhs.lockProgress == rhs.lockProgress && lhs.mirrored == rhs.mirrored
     }
 
     /// Idle AF-box white opacity — slightly transparent so acquired/tracking green reads as a
@@ -1266,8 +1283,9 @@ struct LiveFocusBoxOverlay: View, Equatable {
                     for (index, box) in focus.boxes.enumerated() {
                         let boxWidth = CGFloat(box.width) * scaleX
                         let boxHeight = CGFloat(box.height) * scaleY
+                        let centerX = CGFloat(box.centerX) * scaleX
                         let rect = CGRect(
-                            x: CGFloat(box.centerX) * scaleX - boxWidth / 2,
+                            x: (mirrored ? size.width - centerX : centerX) - boxWidth / 2,
                             y: CGFloat(box.centerY) * scaleY - boxHeight / 2,
                             width: boxWidth,
                             height: boxHeight
