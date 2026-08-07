@@ -11851,19 +11851,22 @@ final class NativeAppModel {
         let writes: [PTPCameraPropertyWrite]
         if cameraControl == .resolution {
             let codec = cameraPropertySnapshot.fileType
+            // Precedence, not a first-match-any: the crop-insensitive comparison would otherwise
+            // return the FX mode for a picked `[DX]` label. See `pickedModeIndex`.
             guard
-                let mode = cameraScreenModes.first(where: {
-                    screenSizePresentationLabel(for: $0, codec: codec) == value
-                        || $0.label == value
-                        || NikonZRRawCropPresentation.bareLabel($0.label)
-                            == NikonZRRawCropPresentation.bareLabel(value)
-                })
+                let index = NikonZRRawCropPresentation.pickedModeIndex(
+                    for: value,
+                    presentationLabels: cameraScreenModes.map {
+                        screenSizePresentationLabel(for: $0, codec: codec)
+                    },
+                    modeLabels: cameraScreenModes.map(\.label)),
+                index < cameraScreenModes.count
             else {
                 connectionMessage =
                     "\(value) isn't a recording mode the camera reported — pick a listed one."
                 return
             }
-            writes = [PTPCameraPropertyWrite.screenSize(raw: mode.raw)]
+            writes = [PTPCameraPropertyWrite.screenSize(raw: cameraScreenModes[index].raw)]
         } else if cameraControl == .codec {
             guard let mode = codecMode(forPickedLabel: value) else {
                 connectionMessage =
