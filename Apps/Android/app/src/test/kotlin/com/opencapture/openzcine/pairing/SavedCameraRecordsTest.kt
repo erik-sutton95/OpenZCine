@@ -6,6 +6,56 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 class SavedCameraRecordsTest {
+    /** Unnamed routers on different subnets are different setups — no permission required. */
+    @Test
+    fun `two unnamed routers on different subnets are two setups`() {
+        val records =
+            listOf(
+                SavedCameraRecord(
+                    host = "192.168.1.246",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 1_000,
+                    wifiSsid = null,
+                ),
+                SavedCameraRecord(
+                    host = "192.168.129.66",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 2_000,
+                    wifiSsid = null,
+                ),
+            )
+
+        assertEquals(2, SavedCameraRecords.canonicalized(records).size)
+    }
+
+    /** And a lease moving inside ONE router is still one setup. */
+    @Test
+    fun `an unnamed router absorbs its own lease changes`() {
+        val records =
+            listOf(
+                SavedCameraRecord(
+                    host = "192.168.1.50",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 1_000,
+                    wifiSsid = null,
+                ),
+                SavedCameraRecord(
+                    host = "192.168.1.246",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 2_000,
+                    wifiSsid = null,
+                ),
+            )
+
+        val canonical = SavedCameraRecords.canonicalized(records)
+        assertEquals(1, canonical.size)
+        assertEquals("192.168.1.246", canonical.first().host)
+    }
+
     /**
      * A camera reached from the studio and from home is two setups. The network's name is the only
      * thing that can say so — the address changes with the lease.

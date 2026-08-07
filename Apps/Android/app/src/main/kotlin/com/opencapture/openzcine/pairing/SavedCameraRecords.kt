@@ -191,16 +191,12 @@ public object SavedCameraRecords {
                         if (existing.transport != normalized.transport) {
                             false
                         } else if (
-                            // Within infrastructure the NETWORK is part of the key. Only two
-                            // named and DIFFERENT networks separate; an unnamed one joins what
-                            // is there, keeping the single-router behaviour (DHCP absorption
-                            // included) for anyone whose network cannot be identified. Mirrors
-                            // the shared core's `describesSameSetup`.
                             existing.transport == SavedCameraTransport.INFRASTRUCTURE &&
-                            existing.networkName != null &&
-                            normalized.networkName != null &&
-                            existing.networkName != normalized.networkName
+                            !sameInfrastructureNetwork(existing, normalized)
                         ) {
+                            // Within infrastructure the NETWORK is part of the key — see
+                            // `sameInfrastructureNetwork`, and the shared core's
+                            // `describesSameSetup` it mirrors.
                             false
                         } else if (
                             existing.profileID == normalized.profileID ||
@@ -346,6 +342,38 @@ public object SavedCameraRecords {
      * generic or placeholder name carries no identity, so it contradicts nothing — only two
      * *assigned* names that differ prove two different bodies.
      */
+    /**
+     * Whether two router records describe the same network.
+     *
+     * Two things can name one, and the good one is usually unavailable: the SSID needs a location
+     * permission the operator may never grant, so a home router and a portable one commonly both
+     * arrive unnamed — and keying on the name alone merged them, which is the field report this
+     * exists for.
+     *
+     * The SUBNET is always available and is the right shape besides. A different router is a
+     * different subnet in practice (192.168.1.x at home, 192.168.129.x on a portable), while a
+     * DHCP lease moving within one router stays inside its own — so this separates two setups
+     * without forking one every time its address changes. Two routers that both hand out
+     * 192.168.1.x still merge; that is genuinely ambiguous, and merging is what happens today.
+     */
+    private fun sameInfrastructureNetwork(
+        lhs: SavedCameraRecord,
+        rhs: SavedCameraRecord,
+    ): Boolean {
+        val lhsName = lhs.networkName
+        val rhsName = rhs.networkName
+        if (lhsName != null && rhsName != null) return lhsName == rhsName
+        return subnetBase(lhs.host) == subnetBase(rhs.host)
+    }
+
+    /** The /24 base of an IPv4 address, or null when it is not one (a USB device key). */
+    private fun subnetBase(host: String): String? {
+        val octets = host.trim().split(".")
+        if (octets.size != 4) return null
+        if (octets.any { part -> part.toIntOrNull()?.let { it in 0..255 } != true }) return null
+        return octets.take(3).joinToString(".")
+    }
+
     private fun namesCompatible(lhs: String, rhs: String): Boolean {
         val left = normalizedAssignedCameraName(lhs) ?: return true
         val right = normalizedAssignedCameraName(rhs) ?: return true

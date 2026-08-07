@@ -98,3 +98,27 @@ private func router(
 
     #expect(PTPIPSavedCameraRecords.canonicalized(records).count == 2)
 }
+
+/// The case the field hit, and the reason the SSID alone was not enough: iOS only reveals a
+/// network THIS APP configured, so a home router and a portable one both arrive unnamed. Their
+/// subnets are what tell them apart, and those need no permission at all.
+@Test func twoUnnamedRoutersOnDifferentSubnetsAreTwoSetups() {
+    let canonical = PTPIPSavedCameraRecords.canonicalized([
+        router(host: "192.168.1.246", network: nil, seen: 1),
+        router(host: "192.168.129.66", network: nil, seen: 2),
+    ])
+
+    #expect(canonical.count == 2)
+    #expect(Set(canonical.map(\.id)).count == 2)
+}
+
+/// And the balance it has to strike: a lease moving inside ONE router is still one setup.
+@Test func anUnnamedRouterAbsorbsItsOwnLeaseChanges() {
+    let canonical = PTPIPSavedCameraRecords.canonicalized([
+        router(host: "192.168.1.50", network: nil, seen: 1),
+        router(host: "192.168.1.246", network: nil, seen: 2),
+    ])
+
+    #expect(canonical.count == 1)
+    #expect(canonical.first?.host == "192.168.1.246")
+}

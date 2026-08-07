@@ -212,8 +212,17 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             savedHosts: priorityHosts
         )
         let localAddressSet = Set(localAddresses.compactMap(PTPIPPairedHosts.normalizedHost))
+        // The subnets this device is actually standing in are always swept; the rest of the ladder
+        // is earned, one rung per empty pass, so the common case costs exactly what it did before
+        // the ladder existed.
+        let localSubnets = Set(
+            scanInterfaces.compactMap { CameraDiscovery.subnetBase(for: $0.address) })
+        let networkSignature = scanInterfaces.map(\.address).sorted().joined(separator: ",")
+        let budget = Self.subnetBudget(
+            signature: networkSignature, localCount: max(1, localSubnets.count))
+        let sweptSubnets = Array(plannedSubnets.prefix(budget))
         let sweepHosts =
-            plannedSubnets
+            sweptSubnets
             .flatMap(CameraDiscovery.fastHosts(inSubnet:))
             .filter { !excluded.contains($0) && !localAddressSet.contains($0) }
         let candidateChunks =
@@ -231,7 +240,7 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         logConnection(
             "discovery sweep pass hosts=\(candidateChunks.reduce(0) { $0 + $1.count }) "
                 + "excluded=\(excluded.count) on=[\(interfaceWitness)] "
-                + "subnets=[\(plannedSubnets.joined(separator: " "))]")
+                + "subnets=[\(sweptSubnets.joined(separator: " "))] of \(plannedSubnets.count)")
 
         if scanInterfaces.isEmpty {
             let bridgeAddresses = allLocalInterfaces.filter { $0.name.hasPrefix("bridge") }
@@ -305,6 +314,8 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             }
         }
 
+        Self.recordSweepOutcome(
+            signature: networkSignature, foundCamera: !discovered.isEmpty)
         return discovered
     }
 
@@ -389,6 +400,42 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         }
         if error is CancellationError { return "cancelled" }
         return "\(nsError.domain)-\(nsError.code)"
+    }
+
+    /// How many consecutive sweeps have found nothing, per network.
+    ///
+    /// The widening ladder is a FALLBACK, not a default. A camera is nearly always on the subnet
+    /// this device is standing in, and paying twelve subnets on every pass to cover the case where
+    /// it is not made the common case twelve times slower — the field verdict on the first cut was
+    /// "took forever", with the camera one address away on our own /24 the whole time.
+    ///
+    /// Keyed by the interface signature so walking onto a different network starts the ladder over
+    /// rather than inheriting the last one's despair.
+    private static let sweepWideningSlot = OSAllocatedUnfairLock(
+        initialState: (signature: "", emptyPasses: 0))
+
+    /// How many subnets this pass may sweep: the local ones always, plus one more for each empty
+    /// pass past the grace period.
+    private static func subnetBudget(signature: String, localCount: Int) -> Int {
+        sweepWideningSlot.withLock { state in
+            if state.signature != signature {
+                state.signature = signature
+                state.emptyPasses = 0
+            }
+            let grace = 2
+            let widened = max(0, state.emptyPasses - grace)
+            return min(SubnetScanPlan.maximumSubnets, max(localCount, localCount + widened))
+        }
+    }
+
+    private static func recordSweepOutcome(signature: String, foundCamera: Bool) {
+        sweepWideningSlot.withLock { state in
+            if state.signature != signature {
+                state.signature = signature
+                state.emptyPasses = 0
+            }
+            state.emptyPasses = foundCamera ? 0 : state.emptyPasses + 1
+        }
     }
 
     /// Grants at most one full-subnet presence sweep per 30 s across every discovery entry

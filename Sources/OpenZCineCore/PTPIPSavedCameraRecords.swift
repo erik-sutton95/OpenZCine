@@ -104,7 +104,11 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         // setups of one camera are two rows, and two rows answering to one id collide in the card
         // list and in reconnect targeting.
         var id = host + "|" + displayName.lowercased() + "|" + (path?.kind.rawValue ?? "")
-        if case .infrastructure(let network?) = path { id += "|" + network.lowercased() }
+        if case .infrastructure(let network) = path {
+            // Whatever `describesSameSetup` separates on has to reach the id, or two rows it
+            // keeps apart end up sharing an identity in the card list and in reconnect targeting.
+            id += "|" + (network?.lowercased() ?? CameraDiscovery.subnetBase(for: host) ?? "")
+        }
         return id
     }
 
@@ -368,17 +372,31 @@ public enum PTPIPSavedCameraRecords {
         // cross-kind swallow is what poisoned multi-path records. (Both-nil only occurs on
         // records built directly in tests; `canonicalized` types everything first.)
         guard lhs.path?.kind == rhs.path?.kind else { return false }
-        // Within infrastructure, the NETWORK is part of the key: one camera reached from the
-        // studio router and from home is two setups, not one that keeps changing address. Only
-        // two NAMED and different networks separate them — an unnamed one (iOS declined the
-        // Wi-Fi information request, or this is not Wi-Fi at all) joins whatever is there, which
-        // keeps today's single-router behaviour, DHCP absorption included, for everyone whose
-        // network we cannot identify. Anything else would fork a setup on every lease.
-        if case .infrastructure(let lhsNetwork?) = lhs.path,
-            case .infrastructure(let rhsNetwork?) = rhs.path,
-            lhsNetwork != rhsNetwork
+        // Within infrastructure the NETWORK is part of the key: one camera reached from a home
+        // router and from a portable one is two setups, not one that keeps changing address.
+        //
+        // Two things can name a network, and the good one is usually unavailable. The SSID is
+        // ideal and `NEHotspotNetwork.fetchCurrent` only returns a network THIS APP configured —
+        // so a camera's own access point is readable and somebody's router never is, which is
+        // precisely backwards for this. Keying on the name alone meant both of an operator's
+        // router setups arrived unnamed and merged: the field report this comment replaces.
+        //
+        // The SUBNET is the discriminator that is always available and needs no permission, and
+        // it is the right shape besides. A different router is a different subnet in practice
+        // (192.168.1.x at home, 192.168.129.x on a portable), while a DHCP lease moving within
+        // one router stays inside its own subnet — so this separates the two setups without
+        // forking one every time its address changes, which is the whole balance to strike.
+        // Two routers that both hand out 192.168.1.x still merge; that is genuinely ambiguous,
+        // and merging is what happens today.
+        if case .infrastructure(let lhsNetwork) = lhs.path,
+            case .infrastructure(let rhsNetwork) = rhs.path
         {
-            return false
+            if let lhsNetwork, let rhsNetwork, lhsNetwork != rhsNetwork { return false }
+            if CameraDiscovery.subnetBase(for: lhs.host)
+                != CameraDiscovery.subnetBase(for: rhs.host)
+            {
+                return false
+            }
         }
         // A shared address only means "same camera" when the names don't contradict it. Every
         // camera-AP Nikon is 192.168.1.1, so a bare host match let a newly paired second body

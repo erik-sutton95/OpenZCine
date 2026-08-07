@@ -25,6 +25,12 @@ public struct DiscoveredCamera: Equatable, Identifiable, Sendable {
     /// Prefix of the stable host key used for USB-attached cameras (no IP address exists).
     public static let usbHostKeyPrefix = "usb:"
 
+    /// Whether a saved "host" is a USB device-id key rather than a network address. Nothing on the
+    /// network side should ever dial one.
+    public static func isUSBHostKey(_ host: String) -> Bool {
+        host.hasPrefix(usbHostKeyPrefix)
+    }
+
     public init(
         ip: String,
         name: String? = nil,
@@ -148,6 +154,11 @@ public enum CameraDiscovery {
         var priority: [String] = []
         for host in [nikonZRAccessPointHost] + priorityHosts {
             guard let normalized = PTPIPPairedHosts.normalizedHost(host),
+                // A USB camera's saved "host" is a device-id key, not an address. Dialling it as
+                // one opens a TCP connection to a hostname that cannot resolve, every pass, and
+                // charges the wait to the network probe — the sweep verdicts made it visible
+                // ("usb:0000…=no-camera" beside the real addresses).
+                !DiscoveredCamera.isUSBHostKey(normalized),
                 !localAddressSet.contains(normalized),
                 !seen.contains(normalized)
             else { continue }

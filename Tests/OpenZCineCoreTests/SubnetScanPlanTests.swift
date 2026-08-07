@@ -100,3 +100,18 @@ private func wifi(_ address: String, netmask: String? = "255.255.255.0") -> Loca
         !SubnetScanPlan.isOnLink(host: "192.168.1.9", interface: wifi("192.168.1.42", netmask: nil))
     )
 }
+
+/// A USB camera's saved "host" is a device-id key, not an address. The network probe used to dial
+/// it as one every pass, waiting on a hostname that cannot resolve.
+@Test func aUSBHostKeyIsNeverANetworkProbeCandidate() {
+    #expect(DiscoveredCamera.isUSBHostKey("usb:00000030-3030"))
+    #expect(!DiscoveredCamera.isUSBHostKey("192.168.1.246"))
+
+    let split = CameraDiscovery.prioritizedScanHosts(
+        priorityHosts: ["192.168.1.246", "usb:00000030-3030-3030-3036-303032313939"],
+        localAddresses: ["192.168.1.146"]
+    )
+
+    #expect(split.priority.contains("192.168.1.246"))
+    #expect(!split.priority.contains { DiscoveredCamera.isUSBHostKey($0) })
+}
