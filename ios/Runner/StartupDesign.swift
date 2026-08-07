@@ -3009,10 +3009,21 @@ struct StartupEmptyDiscoveryCard: View {
     private var wiFiHint: String {
         switch pairingMethod {
         case .wiFiNetwork:
-            // Nothing to join from here: both ends are already somebody else's guests.
+            // Nothing to join from here: both ends are already somebody else's guests, so the one
+            // thing worth showing is WHICH network this device is searching. A search that finds
+            // nothing looks the same whether the camera is off, not paired, or simply on another
+            // network — and the operator can only check the last one if the app says which it is
+            // on. The SSID would read better; iOS refuses it often enough that the subnet, which
+            // always answers, is the honest choice.
+            let network = NativeNetworkInterfaceSnapshot.currentScanSubnetLabel()
+            guard let network else {
+                return compact
+                    ? "The camera appears once it's on this same network."
+                    : "Both devices need to be on the same network. The camera appears here a few seconds after it joins."
+            }
             return compact
-                ? "The camera appears once it's on this same network."
-                : "Both devices need to be on the same network. The camera appears here a few seconds after it joins."
+                ? "Searching \(network) — the camera has to be on it too."
+                : "Searching \(network), the network this device is on. The camera appears here a few seconds after it joins that same network."
         case .phoneHotspot:
             // The direction matters: the CAMERA joins this phone, the phone joins nothing.
             return compact

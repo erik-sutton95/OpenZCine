@@ -2453,7 +2453,10 @@ final class NativeAppModel {
             instruction =
                 cameraAccessPointEvidence == true
                 ? "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use — we keep looking, and the camera appears once you are both on it."
-                : "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
+                : NativeNetworkInterfaceSnapshot.currentScanSubnetLabel().map {
+                    "Searching \($0), the network this device is on. On the camera: Network menu → Connect to computer → pair with a profile for that same network."
+                }
+                    ?? "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
         }
         connectionStageDetail = instruction
         connectionMessage = instruction
@@ -5088,7 +5091,10 @@ final class NativeAppModel {
                 let blocked =
                     "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use — we keep looking, and the camera appears once you are both on it."
                 let searching =
-                    "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
+                    NativeNetworkInterfaceSnapshot.currentScanSubnetLabel().map {
+                        "Searching \($0), the network this device is on. On the camera: Network menu → Connect to computer → pair with a profile for that same network."
+                    }
+                    ?? "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
                 let wanted = onCameraAccessPoint ? blocked : searching
                 if connectionStageDetail != wanted {
                     connectionStageDetail = wanted

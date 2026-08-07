@@ -205,11 +205,16 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         let candidateChunks =
             [priorityChunk].filter { !$0.isEmpty }
             + split.remaining.filter { !excluded.contains($0) }.chunked(into: 128)
-        // Sweep-pass witness (counts only — a /24 listing would drown the Console): correlates
-        // a blind-probe round with a broadcaster's drop timestamps.
+        // Sweep-pass witness. Counts only for the hosts — a /24 listing would drown the Console —
+        // but the INTERFACES are named, and that is the fact the counts cannot carry: a sweep
+        // that finds nothing looks identical whether the camera is absent or this device is
+        // simply on a different network from it. "hosts=256, found nothing" answers neither
+        // question; "en0 192.168.1.42" answers both the moment you know where the camera is.
+        let interfaceWitness =
+            scanInterfaces.map { "\($0.name) \($0.address)" }.joined(separator: ", ")
         logConnection(
             "discovery sweep pass hosts=\(candidateChunks.reduce(0) { $0 + $1.count }) "
-                + "excluded=\(excluded.count)")
+                + "excluded=\(excluded.count) on=[\(interfaceWitness)]")
 
         if scanInterfaces.isEmpty {
             let bridgeAddresses = allLocalInterfaces.filter { $0.name.hasPrefix("bridge") }
@@ -281,16 +286,61 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                     + "excluded=[\(excluded.sorted().joined(separator: " "))]")
         }
         guard !hosts.isEmpty else { return [] }
-        return await withTaskGroup(of: DiscoveredCamera?.self) { group in
+        return await withTaskGroup(of: (String, Result<DiscoveredCamera?, Error>).self) { group in
             for host in hosts {
-                group.addTask { try? await self.probe(host: host, guid: guid) }
+                group.addTask {
+                    do {
+                        return (host, .success(try await self.probe(host: host, guid: guid)))
+                    } catch {
+                        return (host, .failure(error))
+                    }
+                }
             }
             var results: [DiscoveredCamera] = []
-            for await result in group {
-                if let result { results.append(result) }
+            var verdicts: [String] = []
+            for await (host, outcome) in group {
+                switch outcome {
+                case .success(let camera?):
+                    results.append(camera)
+                case .success(nil):
+                    // Answered, but not as a camera this app can use.
+                    verdicts.append("\(host)=no-camera")
+                case .failure(let error):
+                    verdicts.append("\(host)=\(Self.probeVerdict(for: error))")
+                }
+            }
+            // Only when the pass found NOTHING, and this is the whole point: the outcome used to
+            // be swallowed by `try?`, so a denied local-network permission, a host with no route,
+            // a refused port and a camera that simply is not there all printed as the same
+            // silence. "Can't find the camera" is unanswerable without this line.
+            if results.isEmpty, !verdicts.isEmpty {
+                logConnection(
+                    "discovery probe verdicts \(verdicts.sorted().joined(separator: " "))")
             }
             return results
         }
+    }
+
+    /// A short, greppable name for why one probe failed.
+    ///
+    /// `NSPOSIXErrorDomain` codes are the ones that separate the diagnoses that matter:
+    /// unreachable means the network is wrong, refused means the host is there but nothing is
+    /// listening, and timeout means it answered nothing at all — which on iOS is also what a
+    /// denied Local Network permission looks like from here.
+    private static func probeVerdict(for error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain {
+            switch Int32(nsError.code) {
+            case ECONNREFUSED: return "refused"
+            case EHOSTUNREACH: return "no-route"
+            case ENETUNREACH: return "no-network"
+            case ETIMEDOUT: return "timeout"
+            case ECONNRESET: return "reset"
+            default: return "posix-\(nsError.code)"
+            }
+        }
+        if error is CancellationError { return "cancelled" }
+        return "\(nsError.domain)-\(nsError.code)"
     }
 
     /// Grants at most one full-subnet presence sweep per 30 s across every discovery entry
@@ -472,6 +522,23 @@ enum NativePersonalHotspotDetector {
 enum NativeNetworkInterfaceSnapshot {
     static func localIPv4Addresses() -> [String] {
         nativeLocalIPv4Interfaces().map(\.address)
+    }
+
+    /// The Wi-Fi network this device is scanning, as an operator-readable subnet ("192.168.1.x").
+    ///
+    /// The name would be better, and iOS often refuses to give it — the field logs are full of
+    /// "nehelper sent invalid result code [1] for Wi-Fi information request". The subnet always
+    /// answers, needs no permission, and settles the only question that matters when a search
+    /// finds nothing: are the camera and this device even on the same network. Nil when there is
+    /// no scannable Wi-Fi interface at all.
+    static func currentScanSubnetLabel() -> String? {
+        let scannable = nativeLocalIPv4Interfaces().filter {
+            CameraDiscovery.isSupportedScanInterface(name: $0.name, address: $0.address)
+        }
+        guard let address = scannable.first?.address else { return nil }
+        let octets = address.split(separator: ".")
+        guard octets.count == 4 else { return nil }
+        return octets.prefix(3).joined(separator: ".") + ".x"
     }
 
     /// Reads the SSID of the Wi‑Fi network the phone is currently using, if available.
