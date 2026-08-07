@@ -122,3 +122,51 @@ private func router(
     #expect(canonical.count == 1)
     #expect(canonical.first?.host == "192.168.1.246")
 }
+
+/// Replays how a setup is ACTUALLY written — four upserts with no declared path, exactly as the
+/// store does it — because the keying being right in isolation says nothing about the write path
+/// that has to preserve it.
+@Test func twoRoutersSurviveBeingWrittenTheWayTheStoreWritesThem() {
+    var records: [PTPIPSavedCameraRecord] = []
+    for (host, transport, ap) in [
+        ("172.20.10.2", "Wi-Fi", false),
+        ("10.99.0.20", "Wi-Fi", false),
+        ("192.168.129.66", "Wi-Fi", false),
+        ("usb:demo-zr", "USB-C", false),
+    ] {
+        records = PTPIPSavedCameraRecords.upserting(
+            host: host,
+            displayName: "ZR_6002199",
+            transport: transport,
+            lastSeenAt: Date(timeIntervalSince1970: 1),
+            pairedViaCameraAccessPoint: ap,
+            serialNumber: "6002199",
+            into: records
+        )
+        // The store stamps a derived SSID after every untyped non-USB upsert. Replayed here
+        // because a write path is only as good as the whole of it.
+        if transport != "USB-C", let ssid = CameraWiFiSSID.deriveSSID(fromCameraName: "ZR_6002199")
+        {
+            records = PTPIPSavedCameraRecords.updatingWiFiSSID(
+                host: host, wifiSSID: ssid, in: records)
+        }
+    }
+
+    let routers = records.filter { $0.pathKind == .infrastructure }
+    #expect(routers.count == 2)
+    #expect(Set(routers.map(\.host)) == ["10.99.0.20", "192.168.129.66"])
+}
+
+/// The store canonicalizes on every read AND every write, so the operation has to be idempotent:
+/// a set it has already settled must survive being settled again, unchanged.
+@Test func canonicalizationIsIdempotentForTwoRouters() {
+    let once = PTPIPSavedCameraRecords.canonicalized([
+        router(host: "10.99.0.20", network: nil, seen: 1),
+        router(host: "192.168.129.66", network: nil, seen: 2),
+    ])
+    let twice = PTPIPSavedCameraRecords.canonicalized(once)
+
+    #expect(once.count == 2)
+    #expect(twice.count == 2)
+    #expect(Set(twice.map(\.host)) == Set(once.map(\.host)))
+}

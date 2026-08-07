@@ -852,6 +852,11 @@ enum DemoHarness {
                 store.upsertSavedCamera(
                     host: "10.99.0.20", displayName: "ZR_6002199", transport: "Wi-Fi",
                     onCameraAccessPoint: false, serialNumber: "6002199")
+                // A SECOND router on another subnet — the two-router state is only reachable
+                // headless from here, and it is the one the chip qualifier exists for.
+                store.upsertSavedCamera(
+                    host: "192.168.129.66", displayName: "ZR_6002199", transport: "Wi-Fi",
+                    onCameraAccessPoint: false, serialNumber: "6002199")
                 store.upsertSavedCamera(
                     host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C",
                     serialNumber: "6002199")

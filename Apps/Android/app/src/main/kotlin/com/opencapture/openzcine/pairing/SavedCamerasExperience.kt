@@ -1479,6 +1479,7 @@ internal fun SavedCameraRow(
             group.forEach { record ->
                 SavedCameraSetupChip(
                     record = record,
+                    group = group,
                     isActive = record.id == active.id,
                     isDiscovered = isDiscovered(record),
                     enabled = enabled,
@@ -1524,6 +1525,8 @@ internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCamera
 @Composable
 private fun SavedCameraSetupChip(
     record: SavedCameraRecord,
+    /** The camera's other setups — a chip is only qualified against siblings of its own kind. */
+    group: List<SavedCameraRecord>,
     isActive: Boolean,
     isDiscovered: Boolean,
     enabled: Boolean,
@@ -1564,7 +1567,7 @@ private fun SavedCameraSetupChip(
         ) {
             Box(Modifier.size(6.dp).clip(CircleShape).background(dotColor))
             Text(
-                record.transport.displayName,
+                record.chipLabel(group),
                 color = if (isActive) StartupColors.ink else StartupColors.muted,
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,

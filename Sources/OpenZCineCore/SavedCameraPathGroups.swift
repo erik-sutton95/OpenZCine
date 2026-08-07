@@ -58,4 +58,36 @@ public enum SavedCameraPathGroups {
     public static func pathLabel(for record: PTPIPSavedCameraRecord) -> String {
         record.path?.displayLabel ?? "Wi-Fi"
     }
+
+    /// The chip label for one setup, distinguished when a camera has more than one of its kind.
+    ///
+    /// Only routers can repeat — the access point is the camera's own network, the hotspot is this
+    /// phone, the cable is the cable — and two chips both reading "Router" tell an operator
+    /// nothing about which is the studio and which is the one in the bag.
+    ///
+    /// The qualifier is whatever the record is actually keyed on, so the label can never disagree
+    /// with the identity: the network's name where iOS or Android would give us one, and otherwise
+    /// its subnet, which needs no permission and is the thing that separates them anyway. A lone
+    /// router keeps the bare word — a qualifier nothing is being distinguished FROM is just noise.
+    public static func pathChipLabel(
+        for record: PTPIPSavedCameraRecord,
+        in group: [PTPIPSavedCameraRecord]
+    ) -> String {
+        let base = pathLabel(for: record)
+        guard record.pathKind == .infrastructure,
+            group.filter({ $0.pathKind == .infrastructure }).count > 1,
+            let qualifier = networkQualifier(for: record)
+        else { return base }
+        return "\(base) · \(qualifier)"
+    }
+
+    /// What names this record's network to a person: its SSID, else its subnet as "192.168.1.x".
+    public static func networkQualifier(for record: PTPIPSavedCameraRecord) -> String? {
+        if case .infrastructure(let network?) = record.path,
+            !network.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return network
+        }
+        return CameraDiscovery.subnetBase(for: record.host).map { "\($0).x" }
+    }
 }

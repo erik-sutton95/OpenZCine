@@ -1891,3 +1891,22 @@ final class WatchFrameEncodingTests: XCTestCase {
         XCTAssertGreaterThan(high.count, low.count, "quality is not reaching the encoder")
     }
 }
+
+extension RunnerTests {
+    /// The app target compiles the shared core from its OWN file references, so a rule the SPM
+    /// suite proves is not thereby proven here — and the store the app writes through is this
+    /// target's. Two routers on different subnets are two setups.
+    func testTwoRoutersOnDifferentSubnetsStaySeparateInTheAppTarget() {
+        let records = PTPIPSavedCameraRecords.canonicalized([
+            PTPIPSavedCameraRecord(
+                host: "10.99.0.20", displayName: "ZR_6002199", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 1), serialNumber: "6002199",
+                path: .infrastructure(networkName: nil)),
+            PTPIPSavedCameraRecord(
+                host: "192.168.129.66", displayName: "ZR_6002199", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 2), serialNumber: "6002199",
+                path: .infrastructure(networkName: nil)),
+        ])
+        XCTAssertEqual(records.count, 2, "hosts: \(records.map(\.host))")
+    }
+}

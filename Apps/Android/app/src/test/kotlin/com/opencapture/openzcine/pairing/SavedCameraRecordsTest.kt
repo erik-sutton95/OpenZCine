@@ -6,6 +6,41 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 class SavedCameraRecordsTest {
+    /** Two router chips have to say WHICH router, and one router needs no qualifier at all. */
+    @Test
+    fun `a repeated router chip is qualified by its network`() {
+        fun router(host: String, name: String? = null) =
+            SavedCameraRecord(
+                host = host,
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = null,
+                wifiSsid = null,
+                networkName = name,
+            )
+        val usb =
+            SavedCameraRecord(
+                host = "usb:0000",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.USB_C,
+                lastSeenAtEpochMillis = null,
+                wifiSsid = null,
+            )
+
+        val home = router("192.168.1.246")
+        val portable = router("192.168.129.66")
+        val pair = listOf(home, portable, usb)
+        assertEquals("Router · 192.168.1.x", home.chipLabel(pair))
+        assertEquals("Router · 192.168.129.x", portable.chipLabel(pair))
+        // Nothing else is ever qualified, however the group is shaped.
+        assertEquals("USB-C", usb.chipLabel(pair))
+        // A lone router keeps the bare word.
+        assertEquals("Router", home.chipLabel(listOf(home, usb)))
+        // A readable SSID is the better name and wins.
+        val named = router("192.168.1.246", name = "Studio")
+        assertEquals("Router · Studio", named.chipLabel(listOf(named, portable)))
+    }
+
     /** Unnamed routers on different subnets are different setups — no permission required. */
     @Test
     fun `two unnamed routers on different subnets are two setups`() {

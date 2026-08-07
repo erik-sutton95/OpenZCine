@@ -775,7 +775,7 @@ struct StartupCameraListRow: View {
         } label: {
             HStack(spacing: 6) {
                 setupTabDot(for: path, availability: pathAvailability)
-                Text(SavedCameraPathGroups.pathLabel(for: path))
+                Text(SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths))
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(isActive ? StartupColors.ink : StartupColors.muted)
                     .lineLimit(1)

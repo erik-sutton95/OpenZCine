@@ -95,6 +95,33 @@ public data class SavedCameraRecord(
     /** The compression grade this setup runs at; `null` means never chosen here. See [streamPreset]. */
     val qualityBias: LiveViewQualityBias? = null,
 ) {
+    /**
+     * The chip label for this setup, distinguished when the camera has more than one router.
+     *
+     * Only routers repeat — the access point is the camera's own network, the hotspot is this
+     * phone, the cable is the cable — and two chips both reading "Router" say nothing about which
+     * is the studio and which is the one in the bag. The qualifier is whatever the records are
+     * KEYED on, so a label can never claim a difference the store does not make: the network's
+     * name when we have one, otherwise its subnet. Twin of the core's `pathChipLabel`.
+     */
+    public fun chipLabel(group: List<SavedCameraRecord>): String {
+        val base = transport.displayName
+        if (transport != SavedCameraTransport.INFRASTRUCTURE) return base
+        if (group.count { it.transport == SavedCameraTransport.INFRASTRUCTURE } < 2) return base
+        val qualifier = networkQualifier ?: return base
+        return "$base · $qualifier"
+    }
+
+    /** What names this setup's network to a person: its SSID, else its subnet as "192.168.1.x". */
+    public val networkQualifier: String?
+        get() {
+            networkName?.trim()?.takeIf(String::isNotEmpty)?.let { return it }
+            val octets = host.trim().split(".")
+            if (octets.size != 4) return null
+            if (octets.any { part -> part.toIntOrNull()?.let { it in 0..255 } != true }) return null
+            return octets.take(3).joinToString(".") + ".x"
+        }
+
     /** Stable profile identity. */
     public val id: String
         get() = profileID
