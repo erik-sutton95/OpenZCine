@@ -1381,7 +1381,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     /**
      * View-assist tools the operator pinned to survive clean view (DISP 2).
-     * Empty by default — clean is a bare image out of the box (#256).
+     *
+     * Defaults to [CLEAN_VIEW_DEFAULT_PINNED_TOOLS] rather than nothing: DISP 2 strips the
+     * *chrome*, but an operator on it is still judging a picture.
      */
     public val cleanViewPinnedTools: Set<AssistTool>
         get() = cleanViewPinnedToolsState.value
@@ -1400,10 +1402,15 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .apply()
     }
 
-    /** Clears the clean-view keep list, restoring the stock bare image. */
+    /** Restores the clean-view keep list to the tools DISP 2 ships with. */
     public fun resetCleanViewPins() {
-        cleanViewPinnedToolsState.value = emptySet()
-        preferences.edit().putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, linkedSetOf()).apply()
+        cleanViewPinnedToolsState.value = CLEAN_VIEW_DEFAULT_PINNED_TOOLS
+        preferences.edit()
+            .putStringSet(
+                CLEAN_VIEW_PINNED_TOOLS_KEY,
+                CLEAN_VIEW_DEFAULT_PINNED_TOOLS.mapTo(linkedSetOf()) { it.name },
+            )
+            .apply()
     }
 
 
@@ -1428,11 +1435,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         val defaultOrder = AssistTool.entries.toList()
         assistToolbarOrderState.value = defaultOrder
         visibleAssistToolsState.value = defaultOrder.toSet()
-        cleanViewPinnedToolsState.value = emptySet()
+        cleanViewPinnedToolsState.value = CLEAN_VIEW_DEFAULT_PINNED_TOOLS
         preferences.edit()
             .putString(ASSIST_TOOLBAR_ORDER_KEY, defaultOrder.joinToString(separator = ",") { it.name })
             .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, defaultOrder.mapTo(linkedSetOf()) { it.name })
-            .putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, linkedSetOf())
+            .putStringSet(
+                CLEAN_VIEW_PINNED_TOOLS_KEY,
+                CLEAN_VIEW_DEFAULT_PINNED_TOOLS.mapTo(linkedSetOf()) { it.name },
+            )
             .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
@@ -1583,11 +1593,15 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
      * install: an absent key means the operator never pinned anything, which is
      * exactly the documented default (clean is bare), so no migration is needed.
      */
-    private fun loadCleanViewPinnedTools(): Set<AssistTool> =
-        preferences.getStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, emptySet())
-            ?.mapNotNull(AssistTool::fromStoredName)
-            ?.toSet()
-            .orEmpty()
+    private fun loadCleanViewPinnedTools(): Set<AssistTool> {
+        // An ABSENT key belongs to an operator who never pinned anything, so it decodes to the
+        // stock set rather than to empty. Anyone who did touch the set wrote it — including
+        // writing it empty — and gets back exactly what they picked.
+        val stored =
+            preferences.getStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, null)
+                ?: return CLEAN_VIEW_DEFAULT_PINNED_TOOLS
+        return stored.mapNotNull(AssistTool::fromStoredName).toSet()
+    }
 
     private fun legacyGuideWasVisible(): Boolean = legacyGuideRatio() != null
 
@@ -1841,6 +1855,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
         const val VISIBLE_ASSIST_TOOLS_KEY = "display.assistToolbar.visible.v1"
         const val CLEAN_VIEW_PINNED_TOOLS_KEY = "display.assistToolbar.cleanViewPinned.v1"
+
+        /**
+         * What DISP 2 ships with — shared core's `cleanViewDefaultPinnedTools`. A grade, a focus
+         * aid and the two geometry corrections are what make clean the right picture rather than
+         * a raw one.
+         */
+        val CLEAN_VIEW_DEFAULT_PINNED_TOOLS: Set<AssistTool> =
+            setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.DESQ, AssistTool.MIRROR)
         const val TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY =
             "display.assistToolbar.trafficLights.visibility.migrated.v1"
         const val AUDIO_METERS_VISIBILITY_MIGRATED_KEY =

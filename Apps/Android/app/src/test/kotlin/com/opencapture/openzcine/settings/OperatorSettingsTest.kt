@@ -15,6 +15,38 @@ import kotlin.test.assertTrue
 class OperatorSettingsTest {
     private val store = TestSharedPreferences()
 
+    /** Spelled out rather than read from the source: a test that reads it asserts nothing. */
+    private val stockPins =
+        setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.DESQ, AssistTool.MIRROR)
+
+    @Test
+    fun `clean view ships with the tools that make it a picture`() {
+        val settings = OperatorSettings(store)
+
+        assertEquals(stockPins, settings.cleanViewPinnedTools)
+        assertTrue(settings.isPinnedToCleanView(AssistTool.LUT))
+        assertFalse(settings.isPinnedToCleanView(AssistTool.ZEBRA))
+    }
+
+    @Test
+    fun `an operator who pinned nothing keeps nothing pinned`() {
+        // Absent key means "never chose" and seeds the stock set; an explicitly empty stored set
+        // means "chose nothing" and must survive a reload untouched.
+        OperatorSettings(store).apply { stockPins.forEach(::toggleCleanViewPin) }
+        assertEquals(emptySet(), OperatorSettings(store).cleanViewPinnedTools)
+    }
+
+    @Test
+    fun `resetting the pins restores what DISP 2 ships with`() {
+        val settings = OperatorSettings(store)
+        settings.toggleCleanViewPin(AssistTool.LUT)
+        settings.toggleCleanViewPin(AssistTool.ZEBRA)
+        settings.resetCleanViewPins()
+
+        assertEquals(stockPins, settings.cleanViewPinnedTools)
+        assertEquals(stockPins, OperatorSettings(store).cleanViewPinnedTools)
+    }
+
     @Test
     fun `readouts default visible`() {
         val settings = OperatorSettings(store)
