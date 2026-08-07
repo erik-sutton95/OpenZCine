@@ -200,12 +200,19 @@ struct MetalLiveView: UIViewRepresentable {
                 guard dstSize.width > 0, dstSize.height > 0 else { return }
                 lastDrawableSize = dstSize
 
+                // Taking the bake RETAINS it against reuse, so every exit from here has to hand
+                // it back — including this one, which gives up before presenting anything.
                 guard
                     let baked = baker.bakedTexture(
-                        for: dstSize, pixelFormat: view.colorPixelFormat),
+                        for: dstSize, pixelFormat: view.colorPixelFormat)
+                else { return }
+                guard
                     let drawable = view.currentDrawable,
                     let commandBuffer = commandQueue.makeCommandBuffer()
-                else { return }
+                else {
+                    baker.releaseBakedTexture(baked)
+                    return
+                }
 
                 #if DEBUG
                     captureScope?.begin()
@@ -293,6 +300,12 @@ struct MetalLiveView: UIViewRepresentable {
                             scaler.scaleTransform = nil
                         }
                     }
+                }
+                // Released on COMPLETION, not here: the GPU is still sampling the bake after
+                // `draw(in:)` returns, and freeing it early is the flash all over again.
+                nonisolated(unsafe) let heldBake = baked
+                commandBuffer.addCompletedHandler { [baker] _ in
+                    baker.releaseBakedTexture(heldBake)
                 }
                 commandBuffer.present(drawable)
                 commandBuffer.commit()

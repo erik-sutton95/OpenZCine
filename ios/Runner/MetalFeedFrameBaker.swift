@@ -40,8 +40,16 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     ///
     /// Three deep to match the drawable queue — a present's command buffer can still be in flight
     /// a frame or two after `draw(in:)` returned, so two would leave the oldest at risk.
+    ///
+    /// Depth alone is a probability, not a guarantee: three bakes completing inside one present's
+    /// command buffer bring the cycle back round to the texture that present is still reading. So
+    /// the present holds the texture it was handed and returns it on completion, and a bake never
+    /// takes a held one — see `retainedTextures` and ``releaseBakedTexture(_:)``.
     private var ciRenderTextures: [MTLTexture] = []
     private var nextRenderTexture = 0
+    /// How many presents are still reading each cycled target, keyed by identity. A target with a
+    /// non-zero count is off limits to the baker until every present that took it has completed.
+    private var retainedTextures: [ObjectIdentifier: Int] = [:]
 
     private struct BakedState {
         var texture: MTLTexture?
@@ -105,13 +113,34 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     /// The texture is at **source** resolution cropped to the drawable's aspect, so the caller must
     /// scale it to present — its size is on the texture itself, and only its aspect is guaranteed to
     /// match the drawable.
+    /// The returned texture is RETAINED against reuse until the caller hands it back with
+    /// ``releaseBakedTexture(_:)`` — which must happen on every path, including the ones that give
+    /// up before presenting.
     func bakedTexture(for drawableSize: CGSize, pixelFormat: MTLPixelFormat) -> MTLTexture? {
         stateLock.lock()
         defer { stateLock.unlock() }
         guard bakedState.drawableSize == drawableSize,
-            bakedState.pixelFormat == pixelFormat
+            bakedState.pixelFormat == pixelFormat,
+            let texture = bakedState.texture
         else { return nil }
-        return bakedState.texture
+        retainedTextures[ObjectIdentifier(texture), default: 0] += 1
+        return texture
+    }
+
+    /// Releases a texture taken from ``bakedTexture(for:pixelFormat:)``, freeing it for reuse.
+    ///
+    /// Call from the present command buffer's completion handler, not when `draw(in:)` returns:
+    /// the GPU is still sampling the texture after that.
+    func releaseBakedTexture(_ texture: MTLTexture) {
+        let key = ObjectIdentifier(texture)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let count = retainedTextures[key] else { return }
+        if count <= 1 {
+            retainedTextures[key] = nil
+        } else {
+            retainedTextures[key] = count - 1
+        }
     }
 
     private func runNextBake() {
@@ -217,8 +246,12 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
         }
     }
 
+    /// Picks this bake's target. Locked: `retainedTextures` is written by the present's thread and
+    /// by command-buffer completion handlers, while this runs on the bake worker.
     private func renderTexture(width: Int, height: Int, pixelFormat: MTLPixelFormat) -> MTLTexture?
     {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         let matches =
             ciRenderTextures.count == Self.bakeTextureDepth
             && ciRenderTextures.allSatisfy {
@@ -235,10 +268,25 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
             guard built.count == Self.bakeTextureDepth else { return nil }
             ciRenderTextures = built
             nextRenderTexture = 0
+            // The old targets are gone from the cycle, but a present handed one before the resize
+            // still holds it and still has to be able to give it back.
+            retainedTextures = retainedTextures.filter { key, _ in
+                ciRenderTextures.contains { ObjectIdentifier($0) == key }
+            }
         }
-        let texture = ciRenderTextures[nextRenderTexture % ciRenderTextures.count]
-        nextRenderTexture += 1
-        return texture
+        // Take the next FREE target rather than the next one: a held target is still being read
+        // by a present, and writing it is exactly the flash this cycle exists to prevent. When all
+        // three are held the bake is dropped, which shows the last good frame for another beat —
+        // the right failure, and one the caller already handles.
+        for offset in 0..<ciRenderTextures.count {
+            let index = (nextRenderTexture + offset) % ciRenderTextures.count
+            let texture = ciRenderTextures[index]
+            if retainedTextures[ObjectIdentifier(texture)] == nil {
+                nextRenderTexture = index + 1
+                return texture
+            }
+        }
+        return nil
     }
 
     /// How many bake targets cycle. Matches the drawable queue's depth — see `ciRenderTextures`.
