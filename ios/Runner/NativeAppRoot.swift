@@ -8637,7 +8637,10 @@ final class NativeAppModel {
         let baseline = hasCameraControl ? cameraState : CameraDisplayState.blank
         var next = baseline.applyingCameraProperties(
             cameraPropertySnapshot,
-            mediaStatus: mediaStatus ?? currentMediaStatus())
+            mediaStatus: mediaStatus ?? currentMediaStatus(),
+            // Which side's white balance the WB tile means — the movie and stills modes are
+            // separate camera settings that decode through the same table.
+            photography: isPhotographyMode)
         let labeled = NikonZRRawCropPresentation.label(
             baseLabel: next.resolutionFrameRate,
             rawScreenSize: cameraPropertySnapshot.rawScreenSize,
@@ -11017,7 +11020,8 @@ final class NativeAppModel {
     /// (Preset slots don't; movie additionally has no Flash tune).
     var whiteBalanceTintAvailable: Bool {
         WhiteBalanceTint.tuneProperty(
-            forWBModeLabel: cameraPropertySnapshot.wbMode ?? "Auto",
+            forWBModeLabel: cameraPropertySnapshot.activeWBMode(
+                photography: isPhotographyMode) ?? "Auto",
             photography: isPhotographyMode)
             != nil
     }
@@ -11042,7 +11046,8 @@ final class NativeAppModel {
         guard lastCommittedTint?.ab != ab || lastCommittedTint?.gm != gm else { return }
         guard
             let write = WhiteBalanceTint.write(
-                wbModeLabel: cameraPropertySnapshot.wbMode ?? "Auto",
+                wbModeLabel: cameraPropertySnapshot.activeWBMode(
+                    photography: isPhotographyMode) ?? "Auto",
                 amberBlueCell: ab,
                 greenMagentaCell: gm,
                 photography: isPhotographyMode
@@ -11065,7 +11070,8 @@ final class NativeAppModel {
         guard let session = cameraSession, !isDemoSession else { return }
         guard
             let property = WhiteBalanceTint.tuneProperty(
-                forWBModeLabel: cameraPropertySnapshot.wbMode ?? "Auto",
+                forWBModeLabel: cameraPropertySnapshot.activeWBMode(
+                    photography: isPhotographyMode) ?? "Auto",
                 photography: isPhotographyMode)
         else { return }
         Task { [weak self] in

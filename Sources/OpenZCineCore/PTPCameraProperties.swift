@@ -1774,6 +1774,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         shutterAngle: String? = nil,
         fNumber: String? = nil,
         wbMode: String? = nil,
+        stillWBMode: String? = nil,
         wbKelvin: UInt16? = nil,
         resolution: String? = nil,
         fps: Int? = nil,
@@ -1825,6 +1826,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.shutterAngle = shutterAngle
         self.fNumber = fNumber
         self.wbMode = wbMode
+        self.stillWBMode = stillWBMode
         self.wbKelvin = wbKelvin
         self.resolution = resolution
         self.fps = fps
@@ -1880,7 +1882,20 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public let fNumber: String?
 
     // White balance + recording format.
+    /// The MOVIE white-balance mode (`MovWhiteBalance`).
     public let wbMode: String?
+    /// The STILLS white-balance mode (`WhiteBalance`, 0x5005) — a different camera setting that
+    /// happens to decode through the same table. See ``activeWBMode(photography:)``.
+    public let stillWBMode: String?
+
+    /// The white-balance mode that belongs to the side of the camera currently on screen.
+    ///
+    /// Falls back to the other one only when its own has never been reported, so a body that has
+    /// only ever pushed one of the two still reads out — but a value from the wrong side never
+    /// overwrites a value from the right one.
+    public func activeWBMode(photography: Bool) -> String? {
+        photography ? (stillWBMode ?? wbMode) : (wbMode ?? stillWBMode)
+    }
     public let wbKelvin: UInt16?
     public let resolution: String?
     public let fps: Int?
@@ -2160,8 +2175,12 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                 focusArea: PTPCameraPropertyDecoders.stillFocusArea(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         case .whiteBalance where bytes.count >= 2:
+            // The STILLS white balance (0x5005), kept apart from the movie one. Both used to land
+            // in `wbMode`, last writer winning — so a stills-WB event during the record burst
+            // repainted the movie readout as Auto while the camera's movie WB never moved
+            // (field-reported: the WB tile flips to the Auto glyph on record).
             return replacing(
-                wbMode: PTPCameraPropertyDecoders.whiteBalanceMode(
+                stillWBMode: PTPCameraPropertyDecoders.whiteBalanceMode(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         case .focusMode where bytes.count >= 2:
             return replacing(
@@ -2183,6 +2202,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         shutterAngle: String? = nil,
         fNumber: String? = nil,
         wbMode: String? = nil,
+        stillWBMode: String? = nil,
         wbKelvin: UInt16? = nil,
         resolution: String? = nil,
         fps: Int? = nil,
@@ -2235,6 +2255,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             shutterAngle: shutterAngle ?? self.shutterAngle,
             fNumber: fNumber ?? self.fNumber,
             wbMode: wbMode ?? self.wbMode,
+            stillWBMode: stillWBMode ?? self.stillWBMode,
             wbKelvin: wbKelvin ?? self.wbKelvin,
             resolution: resolution ?? self.resolution,
             fps: fps ?? self.fps,
@@ -2283,7 +2304,8 @@ extension CameraDisplayState {
     /// Returns a monitor-display snapshot updated with the decoded camera properties available so far.
     public func applyingCameraProperties(
         _ properties: PTPCameraPropertySnapshot,
-        mediaStatus: MediaStatus? = nil
+        mediaStatus: MediaStatus? = nil,
+        photography: Bool = false
     )
         -> CameraDisplayState
     {
@@ -2291,7 +2313,8 @@ extension CameraDisplayState {
             CameraValue(
                 label: value.label,
                 value: cameraValue(
-                    label: value.label, existing: value.value, properties: properties),
+                    label: value.label, existing: value.value, properties: properties,
+                    photography: photography),
                 isSettable: value.isSettable
             )
         }
@@ -2323,7 +2346,8 @@ extension CameraDisplayState {
     private func cameraValue(
         label: String,
         existing: String,
-        properties: PTPCameraPropertySnapshot
+        properties: PTPCameraPropertySnapshot,
+        photography: Bool
     ) -> String {
         switch label {
         case "ISO":
@@ -2348,10 +2372,12 @@ extension CameraDisplayState {
         case "WB":
             // Kelvin only in colour-temperature WB mode. Named presets (Sunny, Cloudy, …) show
             // their name — a stale Kelvin reading must never win over a preset selection.
-            if properties.wbMode == "Color temp", let kelvin = properties.wbKelvin {
-                "\(kelvin)K"
+            if let mode = properties.activeWBMode(photography: photography) {
+                mode == "Color temp"
+                    ? (properties.wbKelvin.map { "\($0)K" } ?? mode)
+                    : mode
             } else {
-                properties.wbMode ?? properties.wbKelvin.map { "\($0)K" } ?? existing
+                properties.wbKelvin.map { "\($0)K" } ?? existing
             }
         case "FOCUS":
             properties.focusMode ?? existing
