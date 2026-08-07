@@ -528,17 +528,21 @@ private struct AndroidRawControlCatalog: Sendable {
         usesNikonZRFallbacks: Bool
     ) -> PTPCameraScreenSizeMode? {
         let currentCodec = recognizedCurrentCodec(properties.fileType)
-        let bareTarget = PTPIPClientSession.bareRecordingModeLabel(label)
-        return screenSizes.first { mode in
-            let presented = screenSizeLabel(
+        // Shared-core ordering, not a first(where:) over OR'd comparisons: the loose clause strips
+        // the `[FX]`/`[DX]` tag from both sides, so a picked `[DX]` label used to land on whichever
+        // FX mode came first. See `pickedModeIndex`.
+        let presentationLabels = screenSizes.map { mode in
+            screenSizeLabel(
                 for: mode,
                 currentCodec: currentCodec,
                 usesNikonZRFallbacks: usesNikonZRFallbacks)
-            if presented == label || mode.label == label { return true }
-            guard !bareTarget.isEmpty else { return false }
-            return PTPIPClientSession.bareRecordingModeLabel(mode.label) == bareTarget
-                || PTPIPClientSession.bareRecordingModeLabel(presented) == bareTarget
         }
+        return NikonZRRawCropPresentation.pickedModeIndex(
+            for: label,
+            presentationLabels: presentationLabels,
+            modeLabels: screenSizes.map(\.label)
+        )
+        .map { screenSizes[$0] }
     }
 
     /// Matches a packed raw to a catalog mode by exact bytes, then by decoded WxH+fps.
