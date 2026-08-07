@@ -1462,6 +1462,18 @@ extension RunnerTests {
         XCTAssertEqual(FeedUpscaler.supported(or: .lanczos), .lanczos)
     }
 
+    /// An untouched install starts at the floor, on every device — the picker is how an operator
+    /// spends GPU on the feed, not something they have to find to stop spending it.
+    func testTheDefaultUpscalerIsTheFastFloorEvenWhereBetterOnesExist() {
+        XCTAssertEqual(FeedUpscaler.supported(or: nil), .lanczos)
+        XCTAssertEqual(FeedUpscaler.lanczos.rawValue, "Fast")
+        // A stored choice still wins wherever the device can run it — the default is a starting
+        // point, not a cap.
+        for upscaler in FeedUpscaler.supportedOnThisDevice {
+            XCTAssertEqual(FeedUpscaler.supported(or: upscaler), upscaler)
+        }
+    }
+
     // MARK: - Super-resolution input size
 
     /// The low-latency processor tops out at 960×960, and a Quality-preset ZR feed is 1024×576 —

@@ -778,12 +778,18 @@ enum FeedUpscaler: String, CaseIterable, Sendable {
     /// which are plain MPS kernels every device has.
     static var supportedOnThisDevice: [FeedUpscaler] { allCases.filter(\.isSupportedOnThisDevice) }
 
-    /// `candidate` when this device can run it, otherwise the best default it can run. A stored
-    /// choice outlives the device it was made on: a restore onto older hardware, or a build run in
-    /// the simulator, can name an upscaler that is not there any more.
+    /// `candidate` when this device can run it, otherwise the floor. A stored choice outlives the
+    /// device it was made on: a restore onto older hardware, or a build run in the simulator, can
+    /// name an upscaler that is not there any more.
+    ///
+    /// The floor, not the best available, and that is the default an untouched install gets. Every
+    /// step above Lanczos costs GPU on a path that already shares the die with the decode and the
+    /// effects bake, and the operator who wants that spent has a picker to say so. Starting at the
+    /// cheapest real kernel also means the first thing anyone sees is the honest one — nothing on
+    /// screen is inferred until they ask for it.
     static func supported(or candidate: FeedUpscaler?) -> FeedUpscaler {
         if let candidate, candidate.isSupportedOnThisDevice { return candidate }
-        return spatial.isSupportedOnThisDevice ? .spatial : .lanczos
+        return .lanczos
     }
 
     /// A13+ and a device build. Asking the descriptor costs a `MTLDevice`, so it is asked once.
