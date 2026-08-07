@@ -1008,6 +1008,23 @@ private fun LinkRows(
             SettingsValueText(stringResource(R.string.settings_reconnect_window_value))
         }
     }
+
+    // What this device does to the picture after the camera has sent it — iOS `linkRows`' third
+    // card. Both rows are announcements rather than controls: iOS runs them on VideoToolbox, and
+    // the Android counterpart (Play services' Media Enhancement API) is researched but not built.
+    // See docs/android-feed-enhancement.md. Shown on every device because a promise, unlike an
+    // option, does not have to be gated on what the hardware can run.
+    SettingsRowCard(title = stringResource(R.string.settings_processing)) {
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_feed_upscaler),
+            showTopDivider = false,
+        ) {
+            SettingsValueText(stringResource(R.string.settings_coming_soon))
+        }
+        SettingsInlineRow(title = stringResource(R.string.settings_feed_noise_reduction)) {
+            SettingsValueText(stringResource(R.string.settings_coming_soon))
+        }
+    }
 }
 
 /**

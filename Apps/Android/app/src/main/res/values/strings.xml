@@ -735,6 +735,10 @@
     <string name="settings_health_threshold">Health Threshold</string>
     <string name="settings_reconnect_window">Reconnect Window</string>
     <string name="settings_reconnect_window_value">4 sec</string>
+    <string name="settings_processing">Processing</string>
+    <string name="settings_feed_upscaler">Feed Upscaler</string>
+    <string name="settings_feed_noise_reduction">Feed Noise Reduction</string>
+    <string name="settings_coming_soon">Coming soon</string>
     <string name="settings_connection_action">Connection Action</string>
     <string name="settings_connect_over_wifi">Connect over Wi-Fi</string>
     <string name="settings_transport_demo">Demo session</string>
