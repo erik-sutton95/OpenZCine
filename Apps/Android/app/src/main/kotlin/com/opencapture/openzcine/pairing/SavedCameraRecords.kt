@@ -121,40 +121,80 @@ public object SavedCameraRecords {
             record.copy(host = CAMERA_ACCESS_POINT_HOST)
         }
 
+    /**
+     * Repairs an access-point record that carries a foreign host, returning the one or two setups
+     * it actually described.
+     *
+     * An AP setup lives at the access point's fixed address by definition, so an AP stamp on some
+     * other address describes a session that was never on the camera's own network. Pinning the
+     * host alone — which is all this used to do — threw that address away, and with it the router
+     * setup it always was. The shared core splits instead (`splittingAccessPoint`), and so does
+     * this: the access point keeps the AP's address, the foreign host becomes its own
+     * infrastructure row.
+     *
+     * The two halves must not share a [SavedCameraRecord.profileID]: it is the row's identity, and
+     * two rows answering to one id collide in the card list and in reconnect targeting.
+     */
+    internal fun splitAccessPoint(record: SavedCameraRecord): List<SavedCameraRecord> {
+        if (record.host == CAMERA_ACCESS_POINT_HOST) return listOf(record)
+        val accessPoint =
+            record.copy(
+                host = CAMERA_ACCESS_POINT_HOST,
+                profileID = CAMERA_ACCESS_POINT_HOST,
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+            )
+        // Keeps the host AND the identity it has always answered to; only its claim changes.
+        val infrastructure =
+            record.copy(transport = SavedCameraTransport.INFRASTRUCTURE, wifiSsid = null)
+        return listOf(accessPoint, infrastructure)
+    }
+
     /** Returns normalized, deduplicated records in their original card order. */
     public fun canonicalized(records: List<SavedCameraRecord>): List<SavedCameraRecord> {
         val output = mutableListOf<SavedCameraRecord>()
         for (rawRecord in records) {
-            // Repair before dedupe: an AP setup carrying a foreign host is not the setup it claims
-            // to be, and must not be matched or preferred as one.
-            val record =
-                if (rawRecord.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-                    pinnedToAccessPoint(rawRecord)
+            // NORMALIZE first, then repair, then dedupe. The order matters: the repair decides
+            // whether a host is foreign by comparing it to the access point's address, and a
+            // stored host with stray whitespace only equals that address after trimming. Judging
+            // it raw made every untrimmed AP record look foreign and manufactured a router row
+            // out of nothing.
+            val normalizedRaw = normalized(rawRecord) ?: continue
+            val repaired =
+                if (normalizedRaw.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+                    splitAccessPoint(normalizedRaw)
                 } else {
-                    rawRecord
+                    listOf(normalizedRaw)
                 }
-            val normalized = normalized(record) ?: continue
-            val existingIndex =
-                output.indexOfFirst { existing ->
-                    // A shared address (or the profileID defaulted from it) only means "same
-                    // camera" when the names don't contradict it: every camera-AP Nikon is
-                    // 192.168.1.1, and the bare host match let a newly paired second body swallow
-                    // the first one's record (#293).
-                    (
-                        (
+            for (normalized in repaired) {
+                val existingIndex =
+                    output.indexOfFirst { existing ->
+                        // TRANSPORT FIRST, and that is the whole point: a record IS one camera
+                        // SETUP, keyed by (camera, path). One body's access-point and router
+                        // setups are two rows forever — they routinely share an address, since
+                        // every camera-AP Nikon answers on 192.168.1.1, and matching on the
+                        // address alone swallowed one into the other (the shared core's
+                        // `describesSameSetup`, carried across at last).
+                        if (existing.transport != normalized.transport) {
+                            false
+                        } else if (
                             existing.profileID == normalized.profileID ||
-                                existing.host == normalized.host
-                        ) && namesCompatible(existing.cameraName, normalized.cameraName)
-                    ) ||
-                        (
-                            existing.transport == normalized.transport &&
-                                cameraNamesMatch(existing.cameraName, normalized.cameraName)
-                        )
+                            existing.host == normalized.host
+                        ) {
+                            // A shared address only means "same camera" when the names don't
+                            // contradict it: the bare host match let a newly paired second body
+                            // swallow the first one's record (#293).
+                            namesCompatible(existing.cameraName, normalized.cameraName)
+                        } else {
+                            // Different address, same transport: the cross-host merge that absorbs
+                            // a DHCP move within one setup.
+                            cameraNamesMatch(existing.cameraName, normalized.cameraName)
+                        }
+                    }
+                if (existingIndex < 0) {
+                    output += normalized
+                } else {
+                    output[existingIndex] = preferred(output[existingIndex], normalized)
                 }
-            if (existingIndex < 0) {
-                output += normalized
-            } else {
-                output[existingIndex] = preferred(output[existingIndex], normalized)
             }
         }
         return output

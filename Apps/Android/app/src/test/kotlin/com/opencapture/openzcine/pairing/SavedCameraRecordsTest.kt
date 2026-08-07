@@ -7,6 +7,124 @@ import kotlin.test.assertNull
 
 class SavedCameraRecordsTest {
     /**
+     * A record IS one camera setup, keyed by (camera, path). One body's access-point and router
+     * setups routinely share an address — every camera-AP Nikon answers on 192.168.1.1 — and
+     * matching on the address alone swallowed one into the other.
+     */
+    @Test
+    fun `one camera's setups stay one row each even at a shared address`() {
+        val records =
+            listOf(
+                SavedCameraRecord(
+                    host = "192.168.1.1",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                    lastSeenAtEpochMillis = 1_000,
+                    wifiSsid = "NIKON_ZR_6002199",
+                ),
+                SavedCameraRecord(
+                    host = "192.168.1.1",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 2_000,
+                    wifiSsid = null,
+                ),
+                SavedCameraRecord(
+                    host = "192.168.1.1",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.PHONE_HOTSPOT,
+                    lastSeenAtEpochMillis = 3_000,
+                    wifiSsid = null,
+                ),
+            )
+
+        val canonical = SavedCameraRecords.canonicalized(records)
+
+        assertEquals(3, canonical.size)
+        assertEquals(3, canonical.map { it.transport }.toSet().size)
+    }
+
+    /**
+     * The cross-host merge that absorbs a DHCP move must survive the transport key: the same
+     * router handing out a new address is still ONE setup, not a second one.
+     */
+    @Test
+    fun `a new address on the same transport is still the same setup`() {
+        val records =
+            listOf(
+                SavedCameraRecord(
+                    host = "192.168.1.50",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 1_000,
+                    wifiSsid = null,
+                ),
+                SavedCameraRecord(
+                    host = "192.168.1.77",
+                    cameraName = "ZR_6002199",
+                    transport = SavedCameraTransport.INFRASTRUCTURE,
+                    lastSeenAtEpochMillis = 2_000,
+                    wifiSsid = null,
+                ),
+            )
+
+        val canonical = SavedCameraRecords.canonicalized(records)
+
+        assertEquals(1, canonical.size)
+        assertEquals("192.168.1.77", canonical.first().host)
+    }
+
+    /**
+     * An access-point stamp on a foreign address describes a session that was never on the
+     * camera's own network. Pinning the host alone used to throw that address away with the
+     * router setup it always was; it becomes its own row instead (shared core's
+     * `splittingAccessPoint`).
+     */
+    @Test
+    fun `an access-point record carrying a foreign host splits into both setups`() {
+        val poisoned =
+            SavedCameraRecord(
+                host = "10.0.0.9",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                lastSeenAtEpochMillis = 1_000,
+                wifiSsid = "NIKON_ZR_6002199",
+                customName = "A camera",
+            )
+
+        val canonical = SavedCameraRecords.canonicalized(listOf(poisoned))
+
+        assertEquals(2, canonical.size)
+        val accessPoint =
+            canonical.first { it.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
+        val router = canonical.first { it.transport == SavedCameraTransport.INFRASTRUCTURE }
+        // The access point goes back to the address it lives at by definition.
+        assertEquals("192.168.1.1", accessPoint.host)
+        // The foreign address keeps describing what it always described.
+        assertEquals("10.0.0.9", router.host)
+        // The operator's nickname belongs to the camera, so both halves keep it.
+        assertEquals("A camera", accessPoint.customName)
+        assertEquals("A camera", router.customName)
+        // Two rows answering to one id would collide in the card list and in reconnect targeting.
+        assertEquals(2, canonical.map { it.id }.toSet().size)
+    }
+
+    /** An access-point record already at the access point's address has nothing to hand over. */
+    @Test
+    fun `a healthy access-point record is not split`() {
+        val healthy =
+            SavedCameraRecord(
+                host = "192.168.1.1",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                lastSeenAtEpochMillis = 1_000,
+                wifiSsid = "NIKON_ZR_6002199",
+            )
+
+        assertEquals(1, SavedCameraRecords.canonicalized(listOf(healthy)).size)
+    }
+
+    /**
      * The operator's Router choice must survive persistence — the wizard used to collapse it
      * into PHONE_HOTSPOT at save time, silently reclassifying every router camera (the Android
      * twin of iOS's old "Wi-Fi" transport-string collapse).
@@ -208,9 +326,17 @@ class SavedCameraRecordsTest {
                 lastSeenAtEpochMillis = 1_000L,
                 wifiSsid = "NIKON_ZR_6002199",
             )
-        val repaired = SavedCameraRecords.canonicalized(listOf(poisoned)).single()
+        // The foreign address is no longer discarded — it becomes the router setup it always
+        // described — so the access-point half is taken by transport rather than by `single()`.
+        val canonical = SavedCameraRecords.canonicalized(listOf(poisoned))
+        val repaired =
+            canonical.first { it.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
         assertEquals(SavedCameraRecords.CAMERA_ACCESS_POINT_HOST, repaired.host)
         assertEquals("NIKON_ZR_6002199", repaired.wifiSsid)
+        assertEquals(
+            "192.168.1.246",
+            canonical.first { it.transport == SavedCameraTransport.INFRASTRUCTURE }.host,
+        )
     }
 
     /** A router setup keeps its own address -- the repair must only touch AP-stamped records. */

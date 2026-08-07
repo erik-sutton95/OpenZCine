@@ -130,21 +130,12 @@ class SetupStreamSettingsTest {
     }
 
     /**
-     * KNOWN DIVERGENCE, pinned so it cannot drift further unnoticed.
-     *
-     * iOS keys a setup on (camera, path kind), so one body's access-point and router setups stay
-     * two records even at a shared address — which they routinely have, since every camera-AP
-     * Nikon answers on 192.168.1.1. Android's [SavedCameraRecords.canonicalized] still matches on
-     * host-or-profileID plus a compatible name, WITHOUT requiring the same transport, so the two
-     * collapse into one record here.
-     *
-     * The consequence for stream settings is that a same-host pair shares one setting on Android
-     * where iOS gives it two. It is the shared core's Stage 4 (`CameraPath` keying) not yet
-     * carried across, not something this feature introduced, and it needs the same one-time
-     * migration care iOS's did — tracked separately.
+     * The divergence this used to pin is gone: Android keys a setup on (camera, path) like the
+     * shared core, so one body's same-host access-point and router setups stay two rows — and each
+     * therefore keeps its own stream settings, which is what this file is about.
      */
     @Test
-    fun `android still collapses two same-host setups of one camera into one record`() {
+    fun `two same-host setups of one camera stay two records`() {
         val records =
             listOf(
                 SavedCameraRecord(
@@ -163,7 +154,16 @@ class SetupStreamSettingsTest {
                 ),
             )
 
-        assertEquals(1, SavedCameraRecords.canonicalized(records).size)
+        val canonical = SavedCameraRecords.canonicalized(records)
+
+        assertEquals(2, canonical.size)
+        assertEquals(
+            setOf(
+                SavedCameraTransport.CAMERA_ACCESS_POINT,
+                SavedCameraTransport.INFRASTRUCTURE,
+            ),
+            canonical.map { it.transport }.toSet(),
+        )
     }
 
     @Test
