@@ -2444,8 +2444,16 @@ final class NativeAppModel {
             instruction =
                 "Connect \(connectionProgressDeviceName) with a USB-C cable. We'll connect the moment it's plugged in."
         default:
+            // A router watch armed while this device sits on the CAMERA'S OWN network can never
+            // fulfil: the shape test in `applyDiscoveryResults` rejects every candidate on the
+            // access point, by design — a body on its own AP is not on anybody's router. Said
+            // plainly, because the alternative is what the field hit: a spinner that searches
+            // forever with the camera in plain sight and no hint that the phone is the problem.
+            // The watch stays armed and self-heals the moment the network changes.
             instruction =
-                "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
+                cameraAccessPointEvidence == true
+                ? "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use — we keep looking, and the camera appears once you are both on it."
+                : "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
         }
         connectionStageDetail = instruction
         connectionMessage = instruction
@@ -5068,6 +5076,24 @@ final class NativeAppModel {
                 connectionMessage = "\(intent.anchor.displayTitle) found. Connecting…"
                 connectToCamera(match)
                 return
+            }
+            // Keep the CARD honest as the situation moves, not just at arm time. A router watch
+            // cannot fulfil while this device is on the camera's own network — the shape test
+            // above rejects every candidate there — and the operator watching the spinner has no
+            // way to know their phone is what is in the way. Re-evaluated per pass so switching
+            // networks clears it without re-arming.
+            if intent.kind == .infrastructure, isConnectionProgressPresented,
+                !connectionProgressShowsFailure
+            {
+                let blocked =
+                    "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use — we keep looking, and the camera appears once you are both on it."
+                let searching =
+                    "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
+                let wanted = onCameraAccessPoint ? blocked : searching
+                if connectionStageDetail != wanted {
+                    connectionStageDetail = wanted
+                    connectionMessage = wanted
+                }
             }
             if !cameras.isEmpty {
                 // The diagnosis line for a watch that SEES cameras but fulfills none: name the

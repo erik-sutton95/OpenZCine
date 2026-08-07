@@ -2820,6 +2820,7 @@ struct StartupDiscoveryView: View {
                 StartupEmptyDiscoveryCard(
                     compact: true,
                     transport: model.discoveryTransportFilter,
+                    pairingMethod: model.firstPairTransportMethod,
                     usbAuthorizationDenied: model.isUSBControlAuthorizationDenied
                 )
                 // Indeterminate "something's happening" line in place of the status text.
@@ -2959,6 +2960,10 @@ struct StartupDiscoveredCameraCard: View {
 struct StartupEmptyDiscoveryCard: View {
     var compact = false
     var transport: NativeAppModel.DiscoveryTransportFilter = .wiFi
+    /// The path the operator actually chose, which `transport` cannot answer: its whole vocabulary
+    /// is Wi-Fi versus USB, and three different Wi-Fi paths reach this card expecting three
+    /// different things to happen next.
+    var pairingMethod: NativeAppModel.FirstPairTransportMethod = .phoneHotspot
     /// iOS denied USB camera control — the card leads with the Settings recovery instead of
     /// cable guidance (nothing can ever appear until it's re-allowed).
     var usbAuthorizationDenied = false
@@ -2987,29 +2992,58 @@ struct StartupEmptyDiscoveryCard: View {
             : "Plug the camera into this device with a USB-C cable — it appears here the moment it's detected."
     }
 
+    /// What the operator is waiting for, in the terms of the path they picked.
+    ///
+    /// This used to be one sentence about the phone's hotspot, on the reasoning that the Wi-Fi arm
+    /// could only be the hotspot step — camera-AP pairing ends at the network step, and there was
+    /// no third Wi-Fi path. Router made that false, and the operator who had just been told to put
+    /// both devices on the set's network was then told to wait for the camera to join their phone.
+    private var wiFiTitle: String {
+        switch pairingMethod {
+        case .wiFiNetwork: return "Looking on your network"
+        case .phoneHotspot: return "Waiting for the camera"
+        default: return "Looking for cameras"
+        }
+    }
+
+    private var wiFiHint: String {
+        switch pairingMethod {
+        case .wiFiNetwork:
+            // Nothing to join from here: both ends are already somebody else's guests.
+            return compact
+                ? "The camera appears once it's on this same network."
+                : "Both devices need to be on the same network. The camera appears here a few seconds after it joins."
+        case .phoneHotspot:
+            // The direction matters: the CAMERA joins this phone, the phone joins nothing.
+            return compact
+                ? "Waiting for the camera to join this phone's hotspot."
+                : "The camera appears here a few seconds after it joins this phone's hotspot."
+        case .cameraAccessPoint:
+            // Reachable when a saved AP setup sends the operator back through discovery.
+            return compact
+                ? "Waiting for the camera's own network."
+                : "This device joins the camera's own Wi-Fi — the camera appears once that network is up."
+        default:
+            return compact
+                ? "Waiting for the camera to appear."
+                : "The camera appears here a few seconds after it reaches this device."
+        }
+    }
+
     var body: some View {
         VStack(spacing: compact ? 6 : 10) {
             Image(systemName: isUSB ? "cable.connector" : "dot.radiowaves.left.and.right")
                 .font(.system(size: compact ? 18 : 24, weight: .semibold))
                 .foregroundStyle(StartupColors.accent)
-            Text(isUSB ? usbTitle : "Looking for cameras")
+            Text(isUSB ? usbTitle : wiFiTitle)
                 .font(.system(size: compact ? 13 : 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(StartupColors.ink)
-            Text(
-                isUSB
-                    ? usbHint
-                    // The Wi‑Fi arm renders only on the wizard's Phone Hotspot discovery step
-                    // (camera-AP pairing ends at connectNetwork) — so the hint must describe the
-                    // hotspot direction: the CAMERA joins this phone, the phone joins nothing.
-                    : (compact
-                        ? "Waiting for the camera to join this phone's hotspot."
-                        : "The camera appears here a few seconds after it joins this phone's hotspot.")
-            )
-            .font(.system(size: compact ? 10 : 12, weight: .regular, design: .rounded))
-            .foregroundStyle(StartupColors.muted)
-            .multilineTextAlignment(.center)
-            .lineLimit(compact ? 2 : nil)
-            .minimumScaleFactor(compact ? 0.85 : 1)
+            Text(isUSB ? usbHint : wiFiHint)
+                .font(.system(size: compact ? 10 : 12, weight: .regular, design: .rounded))
+                .foregroundStyle(StartupColors.muted)
+                .multilineTextAlignment(.center)
+                .lineLimit(compact ? 2 : nil)
+                .minimumScaleFactor(compact ? 0.85 : 1)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, compact ? 12 : 18)
