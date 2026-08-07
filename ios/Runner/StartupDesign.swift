@@ -820,7 +820,14 @@ struct StartupCameraListRow: View {
         // it on a phone would be offering something the hardware cannot do.
         var kinds: [CameraPath.Kind] = [.usbC, .cameraAccessPoint, .infrastructure, .phoneHotspot]
         if UVCVideoSource.isSupportedHardware { kinds.append(.hdmiCapture) }
-        return kinds.filter { !saved.contains($0) }
+        return kinds.filter { kind in
+            // Router stays on offer however many are saved: a camera can live on a studio
+            // network, a home one and a location's, and each is its own setup keyed by the
+            // network's name. Every other kind is singular by definition — the access point is
+            // the camera's own network, the hotspot is this phone, the cable is the cable — so
+            // offering a second one would be offering the row that already exists.
+            kind == .infrastructure || !saved.contains(kind)
+        }
     }
 
     @ViewBuilder private var addSetupChip: some View {
@@ -1259,7 +1266,8 @@ struct StartupAddSetupSheet: View {
             return
                 "Put the camera and this device on the same network (a set router, house "
                 + "Wi-Fi). Turn on Connect to PC on the camera with a profile for that "
-                + "network; it appears in the camera list and saves on connect."
+                + "network; it appears in the camera list and saves on connect. Each network "
+                + "you use keeps its own setup, so a studio and a home router are two."
         case .phoneHotspot:
             return
                 "Turn on this device's Personal Hotspot and point a camera network profile "

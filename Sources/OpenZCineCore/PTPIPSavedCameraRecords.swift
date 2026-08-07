@@ -100,7 +100,12 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
     /// Nikon is 192.168.1.1) and one body's AP and router setups can too, so any narrower id
     /// gave SwiftUI duplicate identities the moment both were saved.
     public var id: String {
-        host + "|" + displayName.lowercased() + "|" + (path?.kind.rawValue ?? "")
+        // The network joins the key for the same reason it joins `describesSameSetup`: two router
+        // setups of one camera are two rows, and two rows answering to one id collide in the card
+        // list and in reconnect targeting.
+        var id = host + "|" + displayName.lowercased() + "|" + (path?.kind.rawValue ?? "")
+        if case .infrastructure(let network?) = path { id += "|" + network.lowercased() }
+        return id
     }
 
     /// Whether this camera was saved from a USB-C tethered pairing. USB records carry a
@@ -363,6 +368,18 @@ public enum PTPIPSavedCameraRecords {
         // cross-kind swallow is what poisoned multi-path records. (Both-nil only occurs on
         // records built directly in tests; `canonicalized` types everything first.)
         guard lhs.path?.kind == rhs.path?.kind else { return false }
+        // Within infrastructure, the NETWORK is part of the key: one camera reached from the
+        // studio router and from home is two setups, not one that keeps changing address. Only
+        // two NAMED and different networks separate them — an unnamed one (iOS declined the
+        // Wi-Fi information request, or this is not Wi-Fi at all) joins whatever is there, which
+        // keeps today's single-router behaviour, DHCP absorption included, for everyone whose
+        // network we cannot identify. Anything else would fork a setup on every lease.
+        if case .infrastructure(let lhsNetwork?) = lhs.path,
+            case .infrastructure(let rhsNetwork?) = rhs.path,
+            lhsNetwork != rhsNetwork
+        {
+            return false
+        }
         // A shared address only means "same camera" when the names don't contradict it. Every
         // camera-AP Nikon is 192.168.1.1, so a bare host match let a newly paired second body
         // swallow the first one's record (#293); DHCP reuse does the same on a router. Two

@@ -5182,6 +5182,28 @@ final class NativeAppModel {
     var isOnCameraAccessPointNetwork: Bool { liveCameraAccessPointEvidence == true }
 
     /// The join proof INCLUDED: what an attempt did counts when declaring the path it took.
+    /// The network an infrastructure setup is ON, when this device can read it.
+    ///
+    /// One camera can be reached from several networks — a studio router, a home router, a
+    /// location's Wi-Fi — and each is its own setup. The NAME is what tells them apart. The
+    /// address cannot: `describesSameSetup` merges across hosts within a kind on purpose, because
+    /// that is how a setup survives the router handing it a different address next week, and
+    /// keying on the address would fork one setup on every DHCP lease instead of distinguishing
+    /// two networks.
+    ///
+    /// `nil` when iOS won't tell us (no entitlement, permission refused, or simply not Wi-Fi).
+    /// An unnamed network joins the existing unnamed setup rather than starting a new one — the
+    /// operator keeps today's single-router behaviour, DHCP absorption included, instead of
+    /// collecting a row per lease they cannot tell apart.
+    private var infrastructureNetworkName: String? {
+        guard let ssid = connectedWiFiSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !ssid.isEmpty,
+            // The camera's own network is never an infrastructure network, whatever else is true.
+            !CameraWiFiSSID.isNikonZAccessPoint(ssid)
+        else { return nil }
+        return ssid
+    }
+
     private var cameraAccessPointEvidence: Bool? {
         if sessionJoinedCameraAccessPoint { return true }
         return liveCameraAccessPointEvidence
@@ -5221,7 +5243,7 @@ final class NativeAppModel {
         // record dials an address the camera never answers on, and because the app then believes
         // it is already looking at the AP setup, it suppresses the join that would have fixed it.
         if case .cameraAccessPoint = path, host != CameraDiscovery.nikonZRAccessPointHost {
-            return .infrastructure(networkName: nil)
+            return .infrastructure(networkName: infrastructureNetworkName)
         }
         return path
     }
@@ -5245,7 +5267,7 @@ final class NativeAppModel {
             return .cameraAccessPoint(
                 ssid: cameraAccessPointSSID(host: host, displayName: displayName))
         case false?:
-            return .infrastructure(networkName: nil)
+            return .infrastructure(networkName: infrastructureNetworkName)
         case nil:
             break
         }
@@ -5268,10 +5290,10 @@ final class NativeAppModel {
             case .phoneHotspot: return .phoneHotspot
             case .usbC: return .usbC
             case .hdmiCapture: return .hdmiCapture
-            case .wiFiNetwork: return .infrastructure(networkName: nil)
+            case .wiFiNetwork: return .infrastructure(networkName: infrastructureNetworkName)
             }
         }
-        return .infrastructure(networkName: nil)
+        return .infrastructure(networkName: infrastructureNetworkName)
     }
 
     private func savePairedCamera(
