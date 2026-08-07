@@ -1357,6 +1357,216 @@ extension RunnerTests {
         )
     }
 
+    // MARK: - Hardware JPEG decode
+
+    /// The decoder against a REAL ZR live-view frame, not a synthetic baseline JPEG.
+    ///
+    /// The MockFeed test below passed while the camera's own frames silently fell back to ImageIO
+    /// on device — camera motion-JPEG differs from `UIImage.jpegData` output (subsampling,
+    /// restart markers), and a fallback nobody sees means every feature living on the hardware
+    /// path (the noise filter) quietly never runs. The peaking corpus carries genuine
+    /// LiveViewObjects, so this is the frame class the device actually decodes.
+    func testHardwareJPEGDecodeTakesARealZRLiveViewFrame() throws {
+        #if targetEnvironment(simulator)
+            // The simulator's software VideoToolbox stack is not the device's: it refuses this
+            // frame class while macOS accepts the identical bytes (probed step-by-step, forced
+            // 420v AND native). Device truth comes from the on-feed debug key, which reports the
+            // decode path and the filter's verdict live (`LiveDenoiseSwitch.pipelineReport`).
+            throw XCTSkip("simulator VideoToolbox refuses the ZR frame class")
+        #else
+            let url = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()  // RunnerTests
+                .deletingLastPathComponent()  // ios
+                .appendingPathComponent("Tests/OpenZCineCoreTests/Fixtures/peaking/zr-sweep-12.bin")
+            let object = try Data(contentsOf: url)
+            let soi = try XCTUnwrap(
+                object.firstRange(of: Data([0xFF, 0xD8, 0xFF])), "no JPEG in the fixture")
+            let jpeg = object[soi.lowerBound...]
+            let header = try XCTUnwrap(JPEGPixelBufferDecoder.dimensions(of: jpeg))
+            let decoder = JPEGPixelBufferDecoder()
+            let buffer = try XCTUnwrap(
+                decoder.decode(jpeg),
+                "the hardware decoder refuses a real ZR live-view frame (\(decoder.report))")
+            XCTAssertGreaterThanOrEqual(CVPixelBufferGetWidth(buffer), header.width)
+            XCTAssertGreaterThanOrEqual(CVPixelBufferGetHeight(buffer), header.height)
+        #endif
+    }
+    // MARK: - Hardware JPEG decode
+
+    /// The camera's live view is motion JPEG, and `420v` is what a JPEG already is inside. This
+    /// decoder is the whole reason the super-resolution input needs no colour conversion — so it
+    /// has to actually produce that format, at the right size, with real content in it.
+    func testHardwareJPEGDecodeProducesA420vBufferWithRealPixels() throws {
+        let image = try XCTUnwrap(UIImage(named: "MockFeed"), "MockFeed asset missing")
+        let jpeg = try XCTUnwrap(image.jpegData(compressionQuality: 0.9))
+        let header = try XCTUnwrap(
+            JPEGPixelBufferDecoder.dimensions(of: jpeg), "dimensions must come off the header")
+
+        let buffer = try XCTUnwrap(
+            JPEGPixelBufferDecoder().decode(jpeg), "hardware JPEG decode returned nothing")
+
+        XCTAssertEqual(
+            CVPixelBufferGetPixelFormatType(buffer),
+            JPEGPixelBufferDecoder.pixelFormat,
+            "the decoder must land in the model's own format, not RGB")
+        XCTAssertEqual(CVPixelBufferGetWidth(buffer), header.width)
+        XCTAssertEqual(CVPixelBufferGetHeight(buffer), header.height)
+
+        // A buffer of one constant value is what every failure so far looked like — flat green —
+        // so "it decoded" is not the claim; "it decoded a picture" is.
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let luma = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(buffer, 0))
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        let rows = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let bytes = luma.assumingMemoryBound(to: UInt8.self)
+        var lowest = UInt8.max
+        var highest = UInt8.min
+        for row in stride(from: 0, to: rows, by: 8) {
+            for column in stride(from: 0, to: CVPixelBufferGetWidthOfPlane(buffer, 0), by: 8) {
+                let value = bytes[row * rowBytes + column]
+                lowest = min(lowest, value)
+                highest = max(highest, value)
+            }
+        }
+        XCTAssertGreaterThan(
+            Int(highest) - Int(lowest), 16,
+            "the luma plane is nearly uniform — this decoded to a flat field, not a frame")
+    }
+
+    // MARK: - Feed upscaler availability
+
+    /// The picker lists only what this device can run, and the Lanczos floor is the one thing every
+    /// device can — the simulator, which has neither MetalFX nor VideoToolbox super resolution,
+    /// lists that alone.
+    func testOfferedUpscalersAreAllRunnableAndAlwaysIncludeTheFloor() {
+        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.off))
+        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.lanczos))
+        for upscaler in FeedUpscaler.supportedOnThisDevice {
+            XCTAssertTrue(
+                upscaler.isSupportedOnThisDevice, "\(upscaler) is offered but not runnable")
+        }
+        #if targetEnvironment(simulator)
+            XCTAssertEqual(FeedUpscaler.supportedOnThisDevice, [.off, .lanczos])
+        #endif
+    }
+
+    /// A stored choice outlives the device it was made on. Whatever it names, what comes back is
+    /// something this device actually runs — never a setting that reads as active while the
+    /// renderer quietly does something else.
+    func testAStoredChoiceThisDeviceCannotRunResolvesToOneItCan() {
+        XCTAssertTrue(FeedUpscaler.supported(or: nil).isSupportedOnThisDevice)
+        for upscaler in FeedUpscaler.allCases {
+            XCTAssertTrue(FeedUpscaler.supported(or: upscaler).isSupportedOnThisDevice)
+        }
+        XCTAssertEqual(FeedUpscaler.supported(or: .lanczos), .lanczos)
+    }
+
+    // MARK: - Super-resolution input size
+
+    /// The low-latency processor tops out at 960×960, and a Quality-preset ZR feed is 1024×576 —
+    /// over the ceiling, which is why it offered no scale factor and the option did nothing. A 6%
+    /// shrink clears it and buys a ×2 ML upscale of the result.
+    func testSuperResolutionShrinksABakeThatOutsizesTheProcessor() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (1_024, 576), target: (2_347, 1_320), scale: 0, maximum: (960, 960))
+
+        XCTAssertEqual(input.width, 960)
+        XCTAssertEqual(input.height, 540)
+        // Uniform: the present letterboxes against this aspect, so it must not change.
+        XCTAssertEqual(
+            Double(input.width) / Double(input.height), 1_024.0 / 576.0, accuracy: 0.01)
+    }
+
+    /// Never an upscale — a source already inside the limit is handed over untouched, and
+    /// enlarging before the model would only give it invented detail to sharpen.
+    func testSuperResolutionLeavesASourceInsideTheLimitAlone() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (640, 480), target: (1_280, 960), scale: 2, maximum: (960, 960))
+
+        XCTAssertEqual(input.width, 640)
+        XCTAssertEqual(input.height, 480)
+    }
+
+    /// Height can be the binding limit as easily as width.
+    func testSuperResolutionShrinksToWhicheverDimensionBindsFirst() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (1_000, 2_000), target: (4_000, 8_000), scale: 0, maximum: (1_440, 1_080))
+
+        XCTAssertEqual(input.height, 1_080)
+        XCTAssertEqual(input.width, 540)
+    }
+
+    /// A fixed ×4 against a 2347×1320 panel produced 4096×2304 — 75 MB a surface, three deep,
+    /// and the drawable queue starved until `nextDrawable` timed out on every frame. The input
+    /// has to be sized so the model's OUTPUT lands on the panel, not far past it.
+    func testSuperResolutionShrinksTheInputSoAFixedFactorLandsOnThePanel() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (1_024, 576), target: (2_347, 1_320), scale: 4, maximum: (1_440, 1_080))
+
+        // ×4 of this clears the panel with nothing meaningful left over.
+        XCTAssertEqual(Double(input.width) * 4, 2_347, accuracy: 8)
+        XCTAssertEqual(Double(input.height) * 4, 1_320, accuracy: 8)
+        XCTAssertLessThan(input.width, 1_024)
+    }
+
+    /// When the factor cannot reach the panel even from the whole source, there is nothing to
+    /// give back — the fit enlarges the remainder and the model gets every pixel available.
+    func testSuperResolutionKeepsTheWholeSourceWhenTheFactorCannotReachThePanel() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (960, 540), target: (2_347, 1_320), scale: 2, maximum: (1_440, 1_080))
+
+        XCTAssertEqual(input.width, 960)
+        XCTAssertEqual(input.height, 540)
+    }
+
+    // MARK: - Super-resolution scale selection
+
+    /// The model only offers discrete factors, so the one it runs at has to CLEAR the blow-up the
+    /// present needs — 1024×576 into a 2868×1320 panel is 2.8×, and 2× would leave Lanczos to
+    /// enlarge the model's own output by the rest, which is the whole thing being paid for.
+    func testSuperResolutionScaleClearsTheRatioSoTheFitOnlyShrinks() {
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8), 3)
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2), 2)
+    }
+
+    /// When nothing on offer clears the ratio the largest gets as close as the processor allows —
+    /// a softer last leg beats refusing the model outright.
+    func testSuperResolutionScaleFallsToTheLargestOfferedWhenNoneClearsTheRatio() {
+        XCTAssertEqual(FeedUpscaler.superResolutionScale(offered: [1.5, 2], ratio: 2.8), 2)
+    }
+
+    /// An empty list is the processor saying it does not serve this source size at all.
+    func testSuperResolutionScaleIsNilWhenNoFactorsAreOffered() {
+        XCTAssertNil(FeedUpscaler.superResolutionScale(offered: [], ratio: 2.8))
+    }
+
+    /// Order comes from the processor, not from us — an unsorted list must not pick a factor that
+    /// happens to be first.
+    func testSuperResolutionScaleDoesNotTrustTheOfferedOrder() {
+        XCTAssertEqual(FeedUpscaler.superResolutionScale(offered: [3, 1.5, 2], ratio: 1.6), 2)
+    }
+
+    /// A layout animation walks the drawable through a dozen sizes — a device log caught the
+    /// MetalFX scaler rebuilt five times across one. Changing factor restarts the processor and
+    /// loads an ML model on the draw thread, so a running factor that still clears the ratio is
+    /// kept rather than traded down.
+    func testSuperResolutionScaleKeepsARunningFactorThatStillClearsTheRatio() {
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 1.3, held: 3), 3)
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2, held: 2), 2)
+    }
+
+    /// It is kept, not pinned: once the panel outgrows what the running factor covers, the model
+    /// has to be restarted at one that clears it or the fit goes back to enlarging its output.
+    func testSuperResolutionScaleReplacesARunningFactorThatNoLongerClearsTheRatio() {
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8, held: 2), 3)
+    }
+
     /// The Focus dial is opt-in, and switching the default off must not overrule an operator who
     /// already made the choice — in either direction. The stored key IS the migration: it only
     /// exists once the FOCUS-popup toggle wrote it.

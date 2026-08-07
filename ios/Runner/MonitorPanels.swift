@@ -4354,10 +4354,17 @@ struct OperatorSettingsPanel: View {
                             ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
                 }
             }
+        }
+
+        // The tab was one undifferentiated stack of rows. Three cards instead, because they answer
+        // three different questions: what the link IS, what the camera SENDS, and what this device
+        // DOES with it on the way to the panel.
+        SettingsRowCard(title: "Picture") {
             SettingsInlineRow(
                 title: "Stream Preset",
                 help:
-                    "Combines Nikon live-view stream size and compression grade into three operator-facing choices."
+                    "Combines Nikon live-view stream size and compression grade into three operator-facing choices.",
+                showTopDivider: false
             ) {
                 SettingsSegmented(
                     options: OperatorPreferences.StreamPreset.allCases.map(\.rawValue),
@@ -4389,6 +4396,55 @@ struct OperatorSettingsPanel: View {
                     model.setQualityBias(bias)
                 }
             }
+        }
+
+        // What this device does to the picture after the camera has sent it. Separate from
+        // "Picture" above, which is what the camera is asked to send in the first place.
+        SettingsRowCard(title: "Processing") {
+            // Only what this device can actually run is listed, and the row disappears entirely
+            // when that is just the floor — an option that quietly does nothing is worse than no
+            // option at all.
+            if FeedUpscaler.supportedOnThisDevice.count > 1 {
+                SettingsInlineRow(
+                    title: "Feed Upscaler",
+                    help:
+                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
+                    showTopDivider: false
+                ) {
+                    SettingsSegmented(
+                        options: FeedUpscaler.supportedOnThisDevice.map(\.rawValue),
+                        selected: FeedUpscaleSwitch.shared.upscaler.rawValue,
+                        compact: true
+                    ) { value in
+                        guard let choice = FeedUpscaler(rawValue: value) else { return }
+                        FeedUpscaleSwitch.shared.upscaler = choice
+                    }
+                }
+            }
+            if LiveDenoiseSwitch.isSupportedOnThisDevice,
+                let reason = LiveDenoiseSwitch.decoderReportsUnavailable
+            {
+                // The filter gave up mid-session. Say so where the switch was, rather than leaving
+                // a toggle sitting armed over something that has stopped running.
+                SettingsInlineRow(
+                    title: "Feed Noise Reduction",
+                    help:
+                        "The noise filter turned itself off after the camera sent something it could not take. Reconnecting the camera gives it another go.",
+                    showTopDivider: FeedUpscaler.supportedOnThisDevice.count > 1
+                ) {
+                    SettingsValueText(value: reason)
+                }
+            } else if LiveDenoiseSwitch.isSupportedOnThisDevice {
+                SettingsSwitchInlineRow(
+                    title: "Feed Noise Reduction",
+                    help:
+                        "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames — the blocky structure of a compressed stream stays put — and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
+                    showTopDivider: FeedUpscaler.supportedOnThisDevice.count > 1,
+                    isOn: LiveDenoiseSwitch.shared.enabled
+                ) {
+                    LiveDenoiseSwitch.shared.enabled.toggle()
+                }
+            }
             #if DEBUG
                 SettingsInlineRow(
                     title: "Capture Frames",
@@ -4398,19 +4454,6 @@ struct OperatorSettingsPanel: View {
                     LiveViewCaptureControl()
                 }
             #endif
-            SettingsInlineRow(
-                title: "Health Threshold",
-                help:
-                    "Warn only when latency, heartbeat, or frame delivery stays degraded instead of reacting to a single short spike."
-            ) {
-                SettingsValueText(value: "Balanced")
-            }
-            SettingsInlineRow(
-                title: "Reconnect Window",
-                help: "How long the app waits before surfacing a lost-camera warning."
-            ) {
-                SettingsValueText(value: "4 sec")
-            }
         }
     }
 
@@ -4453,19 +4496,6 @@ struct OperatorSettingsPanel: View {
     /// control reads at a glance and leaves the three sections exactly as they were.
     @ViewBuilder private var displayRows: some View {
         SettingsRowCard {
-            #if DEBUG
-                // Debug builds only: MetalFX exists on hardware alone, so the only way to judge
-                // what it buys is to flip it off against the Lanczos floor on the same live shot.
-                SettingsSwitchInlineRow(
-                    title: "Feed Upscaler (MetalFX)",
-                    help:
-                        "Debug: off drops the feed to the Lanczos floor for an A/B on the same shot.",
-                    showTopDivider: false,
-                    isOn: FeedUpscaleSwitch.shared.usesSpatialUpscaler
-                ) {
-                    FeedUpscaleSwitch.shared.usesSpatialUpscaler.toggle()
-                }
-            #endif
             // Portrait Fit/Fill lives on the feed itself now — the bottom-right corner key on the
             // portrait monitor — not as a settings row.
             SettingsInlineRow(

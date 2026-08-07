@@ -6137,6 +6137,9 @@ final class NativeAppModel {
     }
 
     private func startLiveView(session: NativeCameraSession, skipPropertyBootstrap: Bool = false) {
+        // A processor that gave up during the last session gets another go: the decoder outlives
+        // every session, so without this one refusal disabled the feature until a force-quit.
+        Task { await frameDecoder.resetProcessors() }
         // The picture is on HDMI: a session establishing or recovering underneath must not start
         // pulling camera frames and fight the capture path for the monitor. But the frame loop is
         // not only a picture — its safe point is where every control operation runs — so the pump

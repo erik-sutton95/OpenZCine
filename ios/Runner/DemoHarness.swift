@@ -40,9 +40,29 @@ enum DemoHarness {
     /// `ZC_DEMO_CPU_FEED=1` forces the old `UIImageView` feed path back, for an A/B against the
     /// default GPU-native renderer. See `FeedRenderMode`.
     static let forceCPUFeed = flag("ZC_DEMO_CPU_FEED")
-    /// `ZC_DEMO_FEED_SCALER=lanczos` forces the Lanczos fallback over MetalFX Spatial, for an A/B
-    /// of the feed upscaler on a device that supports both. See `MetalLiveView.Coordinator`.
-    static let forceLanczosFeedScaler = value("ZC_DEMO_FEED_SCALER") == "lanczos"
+    /// `ZC_DEMO_FEED_SCALER=lanczos|metalfx|super` seeds which upscaler the feed starts on, for an
+    /// A/B on a device that supports more than one. Prefix match, so `metal` and `super` do. The
+    /// Display settings row switches it live; this is for a launch that has to start there.
+    /// See `FeedUpscaleSwitch`.
+    static let forcedFeedUpscaler = value("ZC_DEMO_FEED_SCALER").flatMap { raw in
+        FeedUpscaler.allCases.first { $0.rawValue.lowercased().hasPrefix(raw.lowercased()) }
+    }
+    /// `ZC_DEMO_SR_STAGE=input` presents the super-resolution model's INPUT buffer instead of its
+    /// output, converted back the same way.
+    ///
+    /// The two colour legs fail identically from the outside — a buffer nobody wrote reads as flat
+    /// green either way — so this splits them: a picture here means the write leg works and the
+    /// fault is downstream of the model; green here means the write leg is what is silent.
+    static let superResolutionStage = value("ZC_DEMO_SR_STAGE")
+    /// `ZC_DEMO_DENOISE=<0…1>` runs VideoToolbox's temporal noise filter over the live feed at
+    /// that strength. Env rather than a tool because it is unproven: the super-resolution
+    /// processor in the same family completes without error and writes nothing, and this is the
+    /// experiment that says whether that is one broken processor or the whole family.
+    static let liveDenoiseStrength = value("ZC_DEMO_DENOISE").flatMap(Float.init)
+    /// `ZC_DEMO_CPU_DECODE=1` forces the ImageIO decode back, for an A/B against the hardware
+    /// JPEG path. See `FrameDecoder`.
+    static let forcesCPUJPEGDecode = flag("ZC_DEMO_CPU_DECODE")
+
     /// `ZC_DEMO_BLOCK_SMOOTH=<strength>` (0…1) enables variance-gated flat-region smoothing, and
     /// `ZC_DEMO_BLOCK_GATE=<levels>` sets the flatness threshold it disengages at (default 5, in
     /// levels out of 255). `ZC_DEMO_BLOCK_DITHER=<levels>` adds masking noise (try 2–4).
@@ -701,6 +721,20 @@ enum DemoHarness {
                         ]
                     )
                 }
+            }
+            if superResolutionStage == "input" {
+                FeedUpscaleSwitch.presentsSuperResolutionInput = true
+            }
+            if let strength = liveDenoiseStrength {
+                LiveDenoiseSwitch.shared.strength = strength
+                LiveDenoiseSwitch.shared.enabled = strength > 0
+            }
+            if let upscaler = forcedFeedUpscaler {
+                // Outside the AUTOSTART block: the settings row that shows this is reachable
+                // without a demo session, and a real camera session is the point of the A/B.
+                // Through `supported(or:)` like every other entry — naming an upscaler this device
+                // does not have must land somewhere real, not on a setting that reads as active.
+                FeedUpscaleSwitch.shared.upscaler = .supported(or: upscaler)
             }
             if env["ZC_DEMO_OPEN_RED"] != nil {
                 // Demo/screenshot affordance: open the RED download cover on launch (pair with
