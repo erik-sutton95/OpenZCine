@@ -30,7 +30,18 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     private var workerBusy = false
     private let workingColorSpace =
         CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-    private var ciRenderTexture: MTLTexture?
+    /// Bake targets, cycled — never one texture.
+    ///
+    /// The present samples the published texture on the main thread while the baker renders the
+    /// NEXT frame on its own queue, and the two command buffers have no ordering between them. A
+    /// single reused target therefore let the baker overwrite the very texture the present was
+    /// mid-scale on: rare, one frame, and visible as a flash. Cycling means the texture being
+    /// written is never the one just handed out.
+    ///
+    /// Three deep to match the drawable queue — a present's command buffer can still be in flight
+    /// a frame or two after `draw(in:)` returned, so two would leave the oldest at risk.
+    private var ciRenderTextures: [MTLTexture] = []
+    private var nextRenderTexture = 0
 
     private struct BakedState {
         var texture: MTLTexture?
@@ -208,21 +219,30 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
 
     private func renderTexture(width: Int, height: Int, pixelFormat: MTLPixelFormat) -> MTLTexture?
     {
-        if let existing = ciRenderTexture,
-            existing.width == width,
-            existing.height == height,
-            existing.pixelFormat == pixelFormat
-        {
-            return existing
+        let matches =
+            ciRenderTextures.count == Self.bakeTextureDepth
+            && ciRenderTextures.allSatisfy {
+                $0.width == width && $0.height == height && $0.pixelFormat == pixelFormat
+            }
+        if !matches {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: pixelFormat, width: width, height: height, mipmapped: false)
+            descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
+            descriptor.storageMode = .private
+            let built = (0..<Self.bakeTextureDepth).compactMap { _ in
+                device.makeTexture(descriptor: descriptor)
+            }
+            guard built.count == Self.bakeTextureDepth else { return nil }
+            ciRenderTextures = built
+            nextRenderTexture = 0
         }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: pixelFormat, width: width, height: height, mipmapped: false)
-        descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
-        descriptor.storageMode = .private
-        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-        ciRenderTexture = texture
+        let texture = ciRenderTextures[nextRenderTexture % ciRenderTextures.count]
+        nextRenderTexture += 1
         return texture
     }
+
+    /// How many bake targets cycle. Matches the drawable queue's depth — see `ciRenderTextures`.
+    private static let bakeTextureDepth = 3
 
     /// Pixel size of the bake target: the **source** resolution, cropped to the drawable's aspect.
     ///
