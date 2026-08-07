@@ -205,6 +205,16 @@ struct FirstPairWizardStepTests {
         #expect(model.pairingDiscoveryCandidates == [rediscovered])
     }
 
+    /// The two staging tests below only reach their subject if the radio gate lets them through,
+    /// and that gate reads a DEVICE's radio. Every simulator borrows the host's networking, so a
+    /// wired machine — a CI runner — used to answer "off" and fail them while they passed on every
+    /// laptop. Asserting the precondition here means the next time that breaks, the failure names
+    /// the reason instead of pointing at Wi-Fi staging.
+    @Test("A simulator never reports the operator's Wi-Fi radio as switched off")
+    func simulatorAlwaysReportsARadio() {
+        #expect(NativeNetworkInterfaceSnapshot.isWiFiRadioOn())
+    }
+
     @MainActor
     @Test("Manual camera Wi-Fi details stage an exact join without claiming OCR")
     func manualCameraWiFiDetails() {

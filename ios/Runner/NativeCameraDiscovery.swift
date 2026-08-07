@@ -490,18 +490,30 @@ enum NativeNetworkInterfaceSnapshot {
     /// address families, unlike ``localIPv4Addresses()``. Defaults to `true` on probe failure:
     /// never block a join on a broken snapshot.
     static func isWiFiRadioOn() -> Bool {
-        var interfaces: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return true }
-        defer { freeifaddrs(interfaces) }
+        // The probe reads a DEVICE's radio. A simulator has none of its own — it borrows whatever
+        // the host has, so an absent `awdl` says something about the Mac's networking rather than
+        // about any radio an operator could switch. Answering "off" there blocks camera-AP staging
+        // on a machine that is merely wired: exactly what happened on CI, where the runner has no
+        // Wi-Fi at all and two staging tests failed while passing on every developer's laptop.
+        // `ZC_DEMO_WIFI_OFF` remains the way to reach the prompt here, which is why it exists.
+        #if targetEnvironment(simulator)
+            return true
+        #else
+            var interfaces: UnsafeMutablePointer<ifaddrs>?
+            guard getifaddrs(&interfaces) == 0, let first = interfaces else { return true }
+            defer { freeifaddrs(interfaces) }
 
-        var cursor: UnsafeMutablePointer<ifaddrs>? = first
-        while let interface = cursor {
-            defer { cursor = interface.pointee.ifa_next }
-            guard String(cString: interface.pointee.ifa_name).hasPrefix("awdl") else { continue }
-            let flags = Int32(interface.pointee.ifa_flags)
-            if (flags & IFF_UP) != 0, (flags & IFF_RUNNING) != 0 { return true }
-        }
-        return false
+            var cursor: UnsafeMutablePointer<ifaddrs>? = first
+            while let interface = cursor {
+                defer { cursor = interface.pointee.ifa_next }
+                guard String(cString: interface.pointee.ifa_name).hasPrefix("awdl") else {
+                    continue
+                }
+                let flags = Int32(interface.pointee.ifa_flags)
+                if (flags & IFF_UP) != 0, (flags & IFF_RUNNING) != 0 { return true }
+            }
+            return false
+        #endif
     }
 }
 
