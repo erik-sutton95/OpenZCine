@@ -6692,7 +6692,18 @@ final class NativeAppModel {
     private func refreshLinkHealth() {
         let snapshot = CameraLinkHealthScorer.score(currentLinkHealthInputs())
         linkHealth = snapshot.linkHealthScore
-        linkHealthDetail = snapshot.detailCaption
+        // Measured throughput rides with the score because it answers what the score cannot: a
+        // link can hold a healthy round trip and still be too narrow to carry the operator's
+        // preset. That is the everyday 2.4 GHz picture, and without a rate on screen the only
+        // symptom is "it feels slow" with no way to tell whether a smaller preset would help.
+        // USB has no radio to be narrow, so it keeps the plain caption.
+        if cameraSession?.transportKind != .usb,
+            let rate = cameraSession?.linkThroughput.formatted
+        {
+            linkHealthDetail = "\(snapshot.detailCaption) · \(rate)"
+        } else {
+            linkHealthDetail = snapshot.detailCaption
+        }
         // USB-C: frame timing isn't radio quality — show full bars whenever the link is alive.
         let bars =
             cameraSession?.transportKind == .usb

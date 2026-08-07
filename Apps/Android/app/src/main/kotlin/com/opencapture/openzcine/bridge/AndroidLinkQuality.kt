@@ -155,6 +155,11 @@ internal data class LinkHealthInput(
     val isRecoveringStream: Boolean,
     val isUsbTransport: Boolean,
     val resetSignalBars: Boolean,
+    /**
+     * Measured link throughput, or null before the first frame. Appended to the caption because
+     * the score cannot say whether a healthy-latency link is simply too narrow for the preset.
+     */
+    val throughputMegabitsPerSecond: Double? = null,
 )
 
 /** Injectable coarse JNI seam that prevents Kotlin from duplicating health rules. */
@@ -181,6 +186,8 @@ internal object ProductionLinkHealthBridge : LinkHealthBridge {
                 isRecoveringStream = input.isRecoveringStream,
                 isUsbTransport = input.isUsbTransport,
                 resetSignalBars = input.resetSignalBars,
+                throughputMegabitsPerSecond = input.throughputMegabitsPerSecond ?: 0.0,
+                hasThroughput = input.throughputMegabitsPerSecond != null,
             ) ?: return null
         return parseLinkHealthPresentation(payload)
     }

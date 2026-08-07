@@ -382,6 +382,9 @@ final class NativeCameraSession: @unchecked Sendable {
     private var establishmentSummary: String
     private let metricsLock = NSLock()
     private(set) var lastCommandRoundTripMilliseconds: Double?
+    /// Bytes-per-second across frame fetches. Guarded by `metricsLock` with the round-trip average
+    /// above; read through `linkThroughput`.
+    private var throughput = LinkThroughputSampler()
 
     /// The physical link kind carrying this session (drives transport labels in the UI).
     var transportKind: CameraTransportKind { transport.kind }
@@ -390,6 +393,22 @@ final class NativeCameraSession: @unchecked Sendable {
         metricsLock.lock()
         defer { metricsLock.unlock() }
         return lastCommandRoundTripMilliseconds
+    }
+
+    /// Folds one frame transfer into the link's measured throughput.
+    private func recordFrameTransfer(bytes: Int, startedAt: Date) {
+        let seconds = Date().timeIntervalSince(startedAt)
+        metricsLock.lock()
+        throughput.record(bytes: bytes, seconds: seconds)
+        metricsLock.unlock()
+    }
+
+    /// Measured link throughput, or `nil` before the first frame. Same lock as the round-trip
+    /// average: both are written from the streaming path and read from the main actor.
+    var linkThroughput: LinkThroughputSampler {
+        metricsLock.lock()
+        defer { metricsLock.unlock() }
+        return throughput
     }
 
     private func recordCommandRoundTrip(startedAt: Date) {
@@ -675,8 +694,14 @@ final class NativeCameraSession: @unchecked Sendable {
         // measures payload transfer, not command latency — feeding it into the poll pacing made
         // the stride react to picture size as if the link had slowed. Small commands
         // (`pollDeviceEvents`, keep-alive) own the RTT signal.
+        //
+        // It is exactly the right sample for THROUGHPUT, though, which is a different question
+        // nobody was asking. On a narrow link that is the binding constraint — a body can answer a
+        // keep-alive in 30 ms and still need a second and a half to move one frame.
+        let startedAt = Date()
         let result = try await transact(
             operationCode: .getLiveViewImageEx, dataPhase: .dataIn, deadline: deadline)
+        recordFrameTransfer(bytes: result.data.count, startedAt: startedAt)
         guard result.operationResponse.responseCode == .ok else {
             throw NativeCameraSessionError.operationRejected(
                 .getLiveViewImageEx,

@@ -717,7 +717,8 @@
         hasLiveViewFPS: jboolean, targetLiveViewFPS: jdouble,
         secondsSinceLastGoodFrame: jdouble, hasLastGoodFrame: jboolean,
         consecutiveBadFrames: jint, recentCommandFailures: jint,
-        isRecoveringStream: jboolean, isUSBTransport: jboolean, resetSignalBars: jboolean
+        isRecoveringStream: jboolean, isUSBTransport: jboolean, resetSignalBars: jboolean,
+        throughputMegabitsPerSecond: jdouble, hasThroughput: jboolean
     ) -> jstring? {
         guard
             let snapshot = AndroidLinkHealthWire.snapshot(
@@ -731,7 +732,9 @@
                 recentCommandFailures: Int(recentCommandFailures),
                 isRecoveringStream: isRecoveringStream != 0,
                 isUSBTransport: isUSBTransport != 0,
-                resetSignalBars: resetSignalBars != 0),
+                resetSignalBars: resetSignalBars != 0,
+                throughputMegabitsPerSecond:
+                    hasThroughput != 0 ? Double(throughputMegabitsPerSecond) : nil),
             let encoded = AndroidLinkHealthWire.encode(snapshot)
         else { return nil }
         return javaString(env, encoded)

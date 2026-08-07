@@ -652,6 +652,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// measurements independently of `commandLifecycleLock`.
     private let roundTripLock = NSLock()
     private var latestRoundTripMillisecondsStorage: Double?
+    /// Bytes-per-second across frame fetches, under the same lock as the round-trip average.
+    private var throughputStorage = LinkThroughputSampler()
 
     /// Live-view pump state, guarded by `liveViewCondition` (never by
     /// `transactionLock` — the pump holds that per transaction, and stop/join
@@ -4109,7 +4111,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
         var framesSinceDeviceEventPoll = 0
         while !liveViewStopIsRequested() {
             do {
+                // The frame fetch is the only transfer big enough to measure the LINK by: a
+                // keep-alive answers in milliseconds on a link too narrow to carry the operator's
+                // preset. Deliberately not an RTT sample — see `recordRoundTrip`.
+                let transferStartNanos = Self.monotonicNanoseconds()
                 let result = try transactExpectingOK(.getLiveViewImageEx, dataPhase: .dataIn)
+                recordFrameTransfer(
+                    bytes: result.data.count,
+                    seconds: Double(Self.monotonicNanoseconds() &- transferStartNanos) / 1e9)
                 let frame = try PTPLiveViewObject.frame(from: result.data)
                 focusFrameCondition.lock()
                 latestLiveViewFocus = frame.focus
@@ -4207,6 +4216,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
         roundTripLock.lock()
         defer { roundTripLock.unlock() }
         return latestRoundTripMillisecondsStorage
+    }
+
+    /// Measured link throughput, or `nil` before the first frame of this session.
+    public func latestLinkThroughputMegabitsPerSecond() -> Double? {
+        roundTripLock.lock()
+        defer { roundTripLock.unlock() }
+        return throughputStorage.megabitsPerSecond
+    }
+
+    private func recordFrameTransfer(bytes: Int, seconds: Double) {
+        roundTripLock.lock()
+        throughputStorage.record(bytes: bytes, seconds: seconds)
+        roundTripLock.unlock()
     }
 
     private func recordRoundTrip(startNanoseconds: UInt64, endNanoseconds: UInt64) {

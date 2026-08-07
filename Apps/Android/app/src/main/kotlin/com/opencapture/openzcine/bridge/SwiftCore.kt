@@ -454,6 +454,8 @@ object SwiftCore {
         isRecoveringStream: Boolean,
         isUsbTransport: Boolean,
         resetSignalBars: Boolean,
+        throughputMegabitsPerSecond: Double,
+        hasThroughput: Boolean,
     ): String?
 
     /**

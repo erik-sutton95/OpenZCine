@@ -14,6 +14,11 @@ private let transportLogger = Logger(
 // serialized by `transactionGate` (`AsyncSerialGate`); socket I/O is serialized on each
 // `PTPIPSocket`'s own dispatch queue.
 final class PTPIPTransport: CameraTransport, @unchecked Sendable {
+    /// How many times the idle limit a single transaction may run before it is killed regardless
+    /// of still-arriving bytes. Generous on purpose: the ceiling is a backstop against a body that
+    /// trickles forever, not a second opinion on whether a slow link is worth waiting for.
+    static let idleDeadlineCeilingMultiple: Double = 4
+
     private init(
         host: String,
         command: PTPIPSocket,
@@ -170,10 +175,34 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
         // reconnects. Live-view fetches pass a finite deadline too: the LiveViewWatchdog only
         // evaluates BETWEEN completed frames, so an unbounded fetch that never returns would hold
         // the gate forever and deaden every other command.
+        //
+        // The bound is IDLE time, not elapsed time. On a narrow or congested link — 2.4 GHz with a
+        // neighbour's network on the same channel is the everyday case — one 100 KB frame can
+        // legitimately take several seconds while bytes arrive the whole way. An elapsed-time
+        // bound reads that as death and closes a perfectly live session, which is how ordinary
+        // interference became a dropped connection. A transfer still being DELIVERED is not
+        // stalled, however slow; one that has gone silent for the limit is.
+        //
+        // The absolute ceiling exists because "still trickling" is not the same as "will finish":
+        // a body dribbling a byte a second would otherwise hold the gate forever.
+        command.markReceiveActivity()
         let deadlineTask: Task<Void, Never>? = deadline.map { limit in
             Task { [command] in
-                try? await Task.sleep(for: limit)
-                if !Task.isCancelled { command.close() }
+                let startedAt = CFAbsoluteTimeGetCurrent()
+                let limitSeconds =
+                    Double(limit.components.seconds)
+                    + Double(limit.components.attoseconds) / 1e18
+                let ceilingSeconds = limitSeconds * Self.idleDeadlineCeilingMultiple
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if Task.isCancelled { return }
+                    let idle = command.secondsSinceLastReceive ?? 0
+                    let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
+                    if idle >= limitSeconds || elapsed >= ceilingSeconds {
+                        command.close()
+                        return
+                    }
+                }
             }
         }
         defer { deadlineTask?.cancel() }
@@ -354,6 +383,30 @@ final class PTPIPSocket: @unchecked Sendable {
     /// attempt can never proceed to a live init on a channel nobody owns.
     private var interruptRequested = false
     private var readBuffer = PTPIPReadBuffer()
+    /// When this socket last took delivery of any bytes, in `CFAbsoluteTimeGetCurrent` terms.
+    ///
+    /// The transaction deadline reads it to tell a SLOW transfer from a STOPPED one. Its own lock,
+    /// not `descriptorLock`: it is written on the socket queue for every recv and read from the
+    /// deadline task, and it must never contend with descriptor teardown.
+    private let receiveClockLock = NSLock()
+    private var lastReceiveAt: TimeInterval = 0
+
+    /// Seconds since this socket last received anything, or `nil` if it never has.
+    var secondsSinceLastReceive: TimeInterval? {
+        receiveClockLock.lock()
+        defer { receiveClockLock.unlock() }
+        guard lastReceiveAt > 0 else { return nil }
+        return CFAbsoluteTimeGetCurrent() - lastReceiveAt
+    }
+
+    /// Starts the idle clock without a delivery, so a transfer that has not yet produced its first
+    /// byte is measured from when it was ASKED for rather than from an unrelated earlier read.
+    func markReceiveActivity() {
+        receiveClockLock.lock()
+        lastReceiveAt = CFAbsoluteTimeGetCurrent()
+        receiveClockLock.unlock()
+    }
+
     /// Reused `recv` scratch (serial-queue-owned) — see `receiveOnQueue` for why.
     private var receiveScratch: [UInt8] = []
 
@@ -614,6 +667,9 @@ final class PTPIPSocket: @unchecked Sendable {
                 Darwin.recv(descriptor, rawBuffer.baseAddress, maximumLength, 0)
             }
             if received > 0 {
+                // Every delivery restarts the idle clock: this is what lets the transaction
+                // deadline distinguish a link that is slow from one that has stopped.
+                markReceiveActivity()
                 return receiveScratch.withUnsafeBytes { rawBuffer in
                     Data(bytes: rawBuffer.baseAddress!, count: received)
                 }
