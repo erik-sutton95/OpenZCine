@@ -16,6 +16,15 @@ public enum VideoSourceKind: String, CaseIterable, Codable, Equatable, Identifia
 
     public var id: String { rawValue }
 
+    /// The sources an operator can actually PICK.
+    ///
+    /// Relay is a state this device is put into by joining another device's broadcast, not a
+    /// choice on a settings row — there is nothing to relay from until a broadcaster exists, and
+    /// tapping it could never establish one. Listing it offered a control that could not work.
+    public static var operatorSelectableCases: [VideoSourceKind] {
+        allCases.filter { $0 != .relay }
+    }
+
     public var title: String {
         switch self {
         case .cameraLiveView: "Camera"

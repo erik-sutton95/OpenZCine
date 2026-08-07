@@ -4289,13 +4289,21 @@ struct OperatorSettingsPanel: View {
         }
     }
 
+    /// Picture sources this device can actually offer: the operator-selectable ones, minus HDMI
+    /// where there is no UVC hardware to carry it.
+    private var selectableVideoSources: [VideoSourceKind] {
+        VideoSourceKind.operatorSelectableCases.filter {
+            $0 != .hdmiCapture || UVCVideoSource.isSupportedHardware
+        }
+    }
+
     @ViewBuilder private var linkRows: some View {
         SettingsDashScale(
             title: "Link Health",
             caption: linkHealthCaption,
             score: model.linkHealth)
 
-        SettingsRowCard {
+        SettingsRowCard(title: "Connection") {
             SettingsInlineRow(
                 title: "Current Transport",
                 help:
@@ -4304,20 +4312,22 @@ struct OperatorSettingsPanel: View {
             ) {
                 SettingsValueText(value: transportLabel)
             }
-            // HDMI capture needs an iPad — iOS doesn't expose UVC devices to apps — so the whole
-            // control stays away on iPhone rather than offering a switch that can't succeed.
-            if UVCVideoSource.isSupportedHardware, model.monitorAvailability.offersSourceSwitch {
+            // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
+            // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
+            // offering a single choice is a readout pretending to be a control. Stating the rule
+            // this way also means any future source that narrows the list hides it too.
+            if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
                 SettingsInlineRow(
                     title: "Picture Source",
                     help:
                         "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
                 ) {
                     SettingsSegmented(
-                        options: VideoSourceKind.allCases.map(\.title),
+                        options: selectableVideoSources.map(\.title),
                         selected: model.videoSource.title
                     ) { value in
                         guard
-                            let kind = VideoSourceKind.allCases.first(where: { $0.title == value })
+                            let kind = selectableVideoSources.first(where: { $0.title == value })
                         else { return }
                         model.selectVideoSource(kind)
                     }
