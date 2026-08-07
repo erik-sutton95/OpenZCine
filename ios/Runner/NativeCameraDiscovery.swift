@@ -202,19 +202,36 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         // address) beyond what was passed in, and every last probe candidate must respect the
         // served-camera exclusion.
         let priorityChunk = split.priority.filter { !excluded.contains($0) }
+        // Where to look, nearest-first, from the real prefix rather than a guess at it. Our own
+        // subnet stays first and resolves in one round; the neighbours behind it are what reach a
+        // camera the old plan could not see at all.
+        let plannedSubnets = SubnetScanPlan.orderedSubnets(
+            interfaces: scanInterfaces.map {
+                LocalIPv4Interface(name: $0.name, address: $0.address, netmask: $0.netmask)
+            },
+            savedHosts: priorityHosts
+        )
+        let localAddressSet = Set(localAddresses.compactMap(PTPIPPairedHosts.normalizedHost))
+        let sweepHosts =
+            plannedSubnets
+            .flatMap(CameraDiscovery.fastHosts(inSubnet:))
+            .filter { !excluded.contains($0) && !localAddressSet.contains($0) }
         let candidateChunks =
-            [priorityChunk].filter { !$0.isEmpty }
-            + split.remaining.filter { !excluded.contains($0) }.chunked(into: 128)
+            [priorityChunk].filter { !$0.isEmpty } + sweepHosts.chunked(into: 254)
         // Sweep-pass witness. Counts only for the hosts — a /24 listing would drown the Console —
         // but the INTERFACES are named, and that is the fact the counts cannot carry: a sweep
         // that finds nothing looks identical whether the camera is absent or this device is
         // simply on a different network from it. "hosts=256, found nothing" answers neither
         // question; "en0 192.168.1.42" answers both the moment you know where the camera is.
         let interfaceWitness =
-            scanInterfaces.map { "\($0.name) \($0.address)" }.joined(separator: ", ")
+            scanInterfaces.map {
+                let prefix = SubnetScanPlan.prefixLength(netmask: $0.netmask).map { "/\($0)" }
+                return "\($0.name) \($0.address)\(prefix ?? "")"
+            }.joined(separator: ", ")
         logConnection(
             "discovery sweep pass hosts=\(candidateChunks.reduce(0) { $0 + $1.count }) "
-                + "excluded=\(excluded.count) on=[\(interfaceWitness)]")
+                + "excluded=\(excluded.count) on=[\(interfaceWitness)] "
+                + "subnets=[\(plannedSubnets.joined(separator: " "))]")
 
         if scanInterfaces.isEmpty {
             let bridgeAddresses = allLocalInterfaces.filter { $0.name.hasPrefix("bridge") }
@@ -234,9 +251,40 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         }
 
         var discovered: [DiscoveredCamera] = []
-        for chunk in candidateChunks {
+        for (index, chunk) in candidateChunks.enumerated() {
+            // The priority chunk is a handful of addresses a camera has really answered on, so it
+            // goes straight to the Init that names them — one round trip for the common case.
+            // Everything after it is a blind subnet, and blind subnets take the two-pass route.
+            let hostsToIdentify: [String]
+            if index == 0, !priorityChunk.isEmpty {
+                hostsToIdentify = chunk
+            } else {
+                // PASS ONE, wide and mute: connect to the PTP port and hang up, sending no PTP
+                // bytes. This is what makes a wide search affordable and safe at once — the old
+                // sweep aimed a real Init at all 254 hosts of one subnet, which is both slower and
+                // more disturbance than this is across a dozen.
+                hostsToIdentify = await withTaskGroup(of: String?.self) { group in
+                    for host in chunk {
+                        group.addTask {
+                            await PTPIPTransport.probePortOpen(host: host) ? host : nil
+                        }
+                    }
+                    var open: [String] = []
+                    for await host in group {
+                        if let host { open.append(host) }
+                    }
+                    return open.sorted()
+                }
+                if !hostsToIdentify.isEmpty {
+                    logConnection(
+                        "discovery sweep port-open [\(hostsToIdentify.joined(separator: " "))]")
+                }
+            }
+            guard !hostsToIdentify.isEmpty else { continue }
+            // PASS TWO, narrow: the Init that separates a camera from anything else listening on
+            // 15740, against the few hosts that answered rather than every address in the plan.
             let chunkResults = await withTaskGroup(of: DiscoveredCamera?.self) { group in
-                for host in chunk {
+                for host in hostsToIdentify {
                     group.addTask {
                         try? await self.probe(host: host, guid: guid)
                     }
@@ -587,6 +635,9 @@ enum NativeNetworkInterfaceSnapshot {
 private struct NativeLocalIPv4Interface: Sendable {
     let name: String
     let address: String
+    /// The prefix the OS actually assigned. Read and then discarded for years, which is why a
+    /// device on a wide subnet only ever searched 1/256th of its own link.
+    let netmask: String?
 }
 
 private func nativeLocalIPv4Interfaces() -> [NativeLocalIPv4Interface] {
@@ -606,7 +657,12 @@ private func nativeLocalIPv4Interfaces() -> [NativeLocalIPv4Interface] {
             from: socketAddress, length: socklen_t(socketAddress.pointee.sa_len))
         {
             let name = String(cString: interface.pointee.ifa_name)
-            addresses.append(NativeLocalIPv4Interface(name: name, address: address))
+            // `getifaddrs` has always handed us the netmask beside the address; nothing read it.
+            let netmask = interface.pointee.ifa_netmask.flatMap {
+                ipv4Address(from: $0, length: socklen_t($0.pointee.sa_len))
+            }
+            addresses.append(
+                NativeLocalIPv4Interface(name: name, address: address, netmask: netmask))
         }
     }
     return addresses

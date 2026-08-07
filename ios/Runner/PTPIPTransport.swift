@@ -113,6 +113,40 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
     /// Minimal Init handshake on the command channel only, used by subnet discovery to identify a
     /// PTP-IP responder without opening a session. Returns the camera name, a placeholder for a
     /// responder that refused the handshake, or nil when nothing answered.
+    /// Whether anything is listening on this host's PTP-IP port — connect, observe, close.
+    ///
+    /// The cheap half of discovery, and the reason a search can now be wide. `probeCameraName`
+    /// below sends a real `InitCommandRequest`, which is a PTP conversation the body must answer;
+    /// running that against a whole subnet is what kept the sweep pinned to a single /24, because
+    /// an Init aimed at a camera sitting in pairing mode knocks it out of it. This sends NO PTP
+    /// bytes at all. It cannot tell a camera from anything else on 15740 — that is what the Init
+    /// pass is for, against the handful of hosts that answer here.
+    ///
+    /// [verify-on-HW: that a bare connect-and-close leaves a ZR in pairing mode undisturbed. It is
+    /// strictly less than the Init this code already aims at 254 hosts every sweep, but the
+    /// pairing-mode sensitivity is real and was found the hard way.]
+    static func probePortOpen(
+        host rawHost: String,
+        timeoutMilliseconds: UInt64 = 250
+    ) async -> Bool {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return false }
+        let socket = PTPIPSocket(
+            host: host,
+            port: UInt16(ptpIPPort),
+            label: "reachability",
+            timeoutMilliseconds: timeoutMilliseconds
+        )
+        do {
+            try await socket.start()
+            socket.close()
+            return true
+        } catch {
+            socket.close()
+            return false
+        }
+    }
+
     static func probeCameraName(
         host rawHost: String,
         guid: Data,
