@@ -8,7 +8,7 @@ arc and the streaming overhaul (`5bddeb7`, `321ac95`).
 
 ## Topology
 
-```
+```text
 Camera ── PTP/IP or USB ──> Broadcaster ── TCP (length-prefixed) ──> Viewer A
    (one initiator, ever)        │  one HEVC encode, fan-out          Viewer B …
                                 └── Bonjour _openzcine-mon._tcp

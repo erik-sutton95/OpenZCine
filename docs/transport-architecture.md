@@ -3,6 +3,7 @@
 Status: IMPLEMENTED 2026-08-02 (Stages 0–5; per-stage commits 2b12197 → 6a68aa0 → ab3b92a →
 b7d16b3). The core enum shipped as **`CameraPath`** — `CameraTransport` was already taken by the
 session-layer wire-transport protocol. Deviations from the plan, deliberate:
+
 - The iOS "connector" isolation landed as typed dispatch at the seams plus the already-isolated
   machinery modules (`WiFiJoinCoordinator` = the AP connector's join engine,
   `USBCameraDeviceBrowser` = the USB attach lifecycle, `NativeCameraDiscovery` = discovery),
@@ -29,7 +30,7 @@ symptom of one structural fact: **the app does not remember which way it talks t
 re-derives it, after the fact, from artifacts.**
 
 | Patch | What it fixed | What it could not fix |
-|---|---|---|
+| --- | --- | --- |
 | `1ddf832` evidence field | Records gained `pairedViaCameraAccessPoint` | The tri-state (`true/false/nil`) was born ambiguous: most connects cannot read the SSID, so most records carry `nil` |
 | `807bcc6` two more holes | Post-confirm gap; legacy twin records | Evidence still arrived late, on the wrong record, or never |
 | `a0864f1` session latch | Recovery stopped reconfiguring Wi-Fi on non-AP sessions | Had to LATCH topology at establishment precisely because records could not be trusted to know it |
@@ -97,7 +98,7 @@ SSID, infrastructure from its host) — which un-poisons every install like the 
 
 ### iOS connectors
 
-```
+```swift
 protocol CameraConnector {
     func reachability(for setup: CameraSetup) -> SetupAvailability   // drives the row chip
     func prepare(_ setup: CameraSetup) async throws                  // e.g. AP join — ONLY here
@@ -166,7 +167,7 @@ The list keeps its shape — one ROW per camera — and the paths become first-c
 ## Migration stages (each shippable, each hardware-checkpointed)
 
 | Stage | Content | Status |
-|---|---|---|
+| --- | --- | --- |
 | 0 ✅ | Stopgaps shipped 2026-08-02: declined-join session mute; hangup→re-pair fallback | shipped (81e0db5) |
 | 1 ✅ | Core `CameraPath` + records-as-setups keyed by (camera, kind) + one-time migration with the poison SPLIT; save sites stamp the declared path | shipped (2b12197) |
 | 2 ✅ | Join policy kind-gated (only a declared AP setup can produce a join target); `proactiveJoinTarget` deleted; exclusion chains deleted; labels/hints/subtitles read the path | shipped (6a68aa0) |
@@ -199,7 +200,7 @@ before the next stage starts.
   message text (`SavedCamerasExperience.kt:459`). All deleted by typed transports and typed
   establishment errors.
 
-**Where each platform actually stands**
+### Where each platform actually stands
 
 - Android is CLOSER than expected: it has a typed wizard enum (`PairingPath`, 5 cases) AND a
   typed persisted enum (`SavedCameraTransport`) — but the persisted one has only 3 cases, and
@@ -212,7 +213,7 @@ before the next stage starts.
   the discovery source. Everything downstream is reconstruction. `cameraAccessPointSSID`
   (`NativeAppRoot.swift:3760`) is the natural seam for the AP connector.
 
-**Live divergences found by the sweep (fixed/known)**
+### Live divergences found by the sweep (fixed/known)
 
 1. ✅ FIXED in this commit: Android's discovery filter excluded `10/8` while the shared core
    deliberately includes it for set routers (its comment claimed the core agreed — stale). A

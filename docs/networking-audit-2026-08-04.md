@@ -41,6 +41,7 @@ reason. Line numbers are as of the audit pass and drift with edits.
 > wiring were deleted on both platforms.
 
 ### Cross-platform ladder + congestion
+
 - **iOS H3 — the adaptive ladder was inert.** `refreshLinkHealth()` (the 1 s tick) never called
   `applyThermalStreamStepDownIfNeeded()`; the only steady-state applier was a property
   round-robin visit ~10+ minutes out under congestion. One line: the tick now applies the cap.
@@ -55,6 +56,7 @@ reason. Line numbers are as of the audit pass and drift with edits.
   request. Widened to 0..5; parser test now round-trips all six values (it used to PIN the bug).
 
 ### Session lifecycle (iOS)
+
 - **H1/H5 — drops outside the monitor were dropped on the floor.** `beginSessionRecovery`
   guarded on `isMonitorPresented`, so "live view never started", ready-page drops, and
   keep-alive ×3 all detected death and then did nothing. Guard is now `isCameraControlSession`.
@@ -78,6 +80,7 @@ reason. Line numbers are as of the audit pass and drift with edits.
   instead of re-sending the frozen frame forever.
 
 ### Relay (iOS)
+
 - **Crash fix in tonight's own dual-browse**: duplicate service names (one result per
   interface under `includePeerToPeer`) hit `Dictionary(uniqueKeysWithValues:)` — a hard trap
   on the main actor. Now merges with a shield-preferring uniquer.
@@ -93,6 +96,7 @@ reason. Line numbers are as of the audit pass and drift with edits.
   its async teardown can't race the real broadcast into an "(2)" mDNS rename.
 
 ### Android transport
+
 - Socket parity: **SO_KEEPALIVE (10/5/4) + SO_RCVBUF 512 KiB** (half-open AP drops detected;
   per-frame JPEG bursts no longer stall the default receive window).
 - **S2#3** — a dead Wi-Fi event drain now tears the session down for ONE clean reconnect
@@ -111,7 +115,8 @@ reason. Line numbers are as of the audit pass and drift with edits.
 
 ## DEFERRED — ranked queue for follow-up nights
 
-**High value, medium effort**
+### High value, medium effort
+
 1. **iOS H4 — abandoned establishment attempts can't be force-closed** → two live command
    channels at a one-initiator body (the wedge mechanism). Needs an early transport handle
    (`inFlightTransport`) the 30 s abandon path can close. The most important remaining item.
@@ -169,7 +174,8 @@ reason. Line numbers are as of the audit pass and drift with edits.
 19. Contract pins: add `maximumPayloadBytes` + protocol `version` to the cross-platform
     vector tests (TXT keys + service type were pinned tonight).
 
-**Targeted tests the auditors recommended**
+### Targeted tests the auditors recommended
+
 - `AsyncSerialGate` stress test (N tasks, random cancellation — the single most load-bearing
   primitive; traced correct, untested).
 - Storm-guard convergence through the `.neverStarted` reconnect path.

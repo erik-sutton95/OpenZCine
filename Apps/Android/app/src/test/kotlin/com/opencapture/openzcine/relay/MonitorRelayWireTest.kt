@@ -117,11 +117,11 @@ class MonitorRelayWireTest {
                 JSONObject(
                     """
                     {"recordState":"recording","resolutionFrameRate":"6K · 25p","codec":"R3D NE",
-                     "media":"CFexpress","liveFPS":"25.0","cameraBatteryPercent":76,
-                     "cameraName":"ZR_6002199","lens":"NIKKOR Z 24-70","temperature":"OK",
-                     "values":[{"label":"ISO","value":"800"}],
-                     "mediaStatus":{"gigabytesFree":412,"percentFree":81,"minutesRemaining":96},
-                     "isRecording":true,"allowsControlRequests":false}
+                    "media":"CFexpress","liveFPS":"25.0","cameraBatteryPercent":76,
+                    "cameraName":"ZR_6002199","lens":"NIKKOR Z 24-70","temperature":"OK",
+                    "values":[{"label":"ISO","value":"800"}],
+                    "mediaStatus":{"gigabytesFree":412,"percentFree":81,"minutesRemaining":96},
+                    "isRecording":true,"allowsControlRequests":false}
                     """
                 )
             )
@@ -136,8 +136,8 @@ class MonitorRelayWireTest {
                 JSONObject(
                     """
                     {"recordState":"standby","resolutionFrameRate":"","codec":"","media":"",
-                     "liveFPS":"","cameraBatteryPercent":0,"cameraName":"","lens":"",
-                     "temperature":"","values":[],"isRecording":false}
+                    "liveFPS":"","cameraBatteryPercent":0,"cameraName":"","lens":"",
+                    "temperature":"","values":[],"isRecording":false}
                     """
                 )
             )
@@ -189,8 +189,8 @@ class MonitorRelayWireTest {
                 JSONObject(
                     """
                     {"isRecording":false,"codec":1,"isKeyframe":true,
-                     "parameterSets":["QAE=","QgE="],
-                     "timecode":{"on":true,"hour":0,"minute":0,"second":1,"frame":12}}
+                    "parameterSets":["QAE=","QgE="],
+                    "timecode":{"on":true,"hour":0,"minute":0,"second":1,"frame":12}}
                     """
                 )
             )
