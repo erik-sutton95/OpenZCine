@@ -266,6 +266,11 @@ struct MonitorInfoBar: View {
     private struct InfoBarContent: View {
         @Environment(NativeAppModel.self) private var model
 
+        private var isPhotography: Bool {
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: model.cameraPropertySnapshot.captureSelector)
+        }
+
         // The portrait bar honours the same per-cell switches as the landscape deck. It used to
         // honour none of them — hiding MEDIA or the timecode in Settings changed nothing here,
         // and the battery read the policy directly so the Edit view could not force-mount it.
@@ -274,7 +279,13 @@ struct MonitorInfoBar: View {
             ZStack {
                 // Storage/minutes centered on the SCREEN, not the leftover space (spec §1): a bare
                 // Text in the ZStack centers within the full bar width regardless of siblings.
-                if model.chromeSectionMounts(.mediaReadout) {
+                //
+                // Cinema only, and photography carries no MEDIA cell at all — the same call the
+                // landscape deck makes. Shots remaining is the number a stills operator is
+                // actually counting down, and it is measured from the space this would report, so
+                // the two side by side are one fact twice. Storage stays a tap away on the SHOTS
+                // readout for whoever wants the gigabytes.
+                if model.chromeSectionMounts(.mediaReadout), !isPhotography {
                     Text(model.mediaReadout)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(LiveDesign.muted)
@@ -282,13 +293,43 @@ struct MonitorInfoBar: View {
                         .chromeEditable(.mediaReadout, editing: editing)
                 }
 
-                HStack {
+                HStack(spacing: 10) {
                     // Must read `liveTimecode` (not `cameraState.timecode`) — per-frame telemetry
                     // is held separately so the HUD struct is not invalidated every tick.
                     // A nested leaf observes that property so only this text re-renders.
+                    //
+                    // Photography makes the same swap the landscape deck already makes: the shots
+                    // counter takes the timecode slot, and size and quality follow it. A stills
+                    // body runs no timecode, so the slot was reading a frozen 00:00:00:00 — and
+                    // the two readouts that do matter between frames lived only in landscape.
                     if model.chromeSectionMounts(.timecodeReadout) {
-                        PortraitInfoBarTimecode()
-                            .chromeEditable(.timecodeReadout, editing: editing)
+                        if isPhotography {
+                            PortraitInfoBarShots()
+                                .chromeEditable(.timecodeReadout, editing: editing)
+                        } else {
+                            PortraitInfoBarTimecode()
+                                .chromeEditable(.timecodeReadout, editing: editing)
+                        }
+                    }
+                    if isPhotography {
+                        // Same pickers the landscape cells open, so the drop-down anchors to
+                        // whichever cell published its frame last — one mechanism, both shells.
+                        if model.chromeSectionMounts(.resolutionReadout) {
+                            PortraitInfoBarPickerCell(
+                                picker: .stillSize,
+                                value: model.stillSizeAreaDisplay ?? "—"
+                            )
+                            .accessibilityLabel("Image area and size")
+                            .chromeEditable(.resolutionReadout, editing: editing)
+                        }
+                        if model.chromeSectionMounts(.codecReadout) {
+                            PortraitInfoBarPickerCell(
+                                picker: .stillQuality,
+                                value: model.cameraPropertySnapshot.stillQualityCompactLabel ?? "—"
+                            )
+                            .accessibilityLabel("Image quality")
+                            .chromeEditable(.codecReadout, editing: editing)
+                        }
                     }
 
                     Spacer(minLength: 8)
@@ -314,6 +355,99 @@ struct MonitorInfoBar: View {
                 isCamera: true,
                 isCharging: model.cameraBatteryCharging,
                 layout: .inline
+            )
+        }
+    }
+
+    /// Portrait top-bar shots counter — the photography twin of ``PortraitInfoBarTimecode``, in
+    /// the same 15pt monospaced face so the two swap without the bar's rhythm changing.
+    ///
+    /// Tap-toggles to the storage form, exactly as the landscape deck's version does, and for the
+    /// same reason: photography carries no separate MEDIA cell, so this is where the gigabytes
+    /// live. One `photoPillShowsStorage` drives both, so the choice follows a rotation.
+    private struct PortraitInfoBarShots: View {
+        @Environment(NativeAppModel.self) private var model
+
+        var body: some View {
+            Button {
+                model.photoPillShowsStorage.toggle()
+            } label: {
+                readout
+                    .font(.system(size: 15, weight: .regular, design: .monospaced))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.zcTapTarget)
+            // Pin the cell's geometry so the width change when the readout flips cannot relayout
+            // it out from under an in-flight tap (the same trap as the landscape MEDIA cell).
+            .geometryGroup()
+            .layoutPriority(1)
+        }
+
+        private var readout: Text {
+            if model.photoPillShowsStorage, let status = model.cameraState.mediaStatus {
+                return Text("\(status.gigabytesFree) GB").foregroundStyle(LiveDesign.text)
+                    + Text(" \(status.percentFree)%")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+            let remaining = model.cameraPropertySnapshot.shotsRemaining
+            return Text(remaining.map(Self.compactCount) ?? "—")
+                .foregroundStyle(LiveDesign.text)
+                + Text(" SHOTS")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(LiveDesign.muted)
+        }
+
+        /// Four digits is the most a card ever shows before this reads as a wall of numerals.
+        private static func compactCount(_ count: Int) -> String {
+            guard count > 9999 else { return String(count) }
+            return String(format: "%.1fk", Double(count) / 1000)
+        }
+    }
+
+    /// A tappable stills readout in the portrait bar: the value in the bar's own type, the label
+    /// under it, opening the same picker as its landscape twin.
+    ///
+    /// It publishes its frame to `topBarPickerFrames` for exactly the reason the landscape cell
+    /// does — `topPickerBody` anchors the drop-down beneath whichever cell is on screen, and a
+    /// portrait cell that published nothing would drop its picker into the top-left corner.
+    private struct PortraitInfoBarPickerCell: View {
+        @Environment(NativeAppModel.self) private var model
+        let picker: CameraPicker
+        let value: String
+
+        var body: some View {
+            let isActive = model.activePanel == .picker(picker)
+            Button {
+                if model.activePanel == nil {
+                    model.showPicker(picker)
+                } else if isActive {
+                    model.dismissActivePanel()
+                } else {
+                    model.switchPicker(to: picker)
+                }
+            } label: {
+                Text(value)
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.text)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.zcTapTarget)
+            .geometryGroup()
+            .background(
+                GeometryReader { proxy in
+                    let frame = proxy.frame(in: .global)
+                    Color.clear
+                        .onAppear { model.topBarPickerFrames[picker] = frame }
+                        .onChange(of: frame) { _, newFrame in
+                            model.topBarPickerFrames[picker] = newFrame
+                        }
+                        .onDisappear { model.topBarPickerFrames[picker] = nil }
+                }
             )
         }
     }
@@ -375,6 +509,8 @@ struct MonitorCaptureStrip: View {
     /// Portrait-only: the row's natural (scale-1) width, measured off-screen so the fitted row
     /// can derive its scale on any device width.
     @State private var naturalRowWidth: CGFloat = 0
+    /// Which edges of the scrolled row still have cells beyond them.
+    @State private var scrollEdges = ScrollEdgeFades(leading: false, trailing: true)
 
     var body: some View {
         Group {
@@ -480,10 +616,17 @@ struct MonitorCaptureStrip: View {
         .onTapGesture {}
     }
 
-    /// The five settings, scaled so the row spans the bar edge-to-edge on any device width:
-    /// scale = what makes cells + minimum gaps fill the width, capped at scale 1 (the vertical
-    /// max) — past the cap the leftover width becomes spacing (Pro Max, iPad). The natural
-    /// scale-1 row is measured hidden so the math holds for any cell set or future widths.
+    /// The settings row, spread across the bar when they fit and scrolled at full size when they
+    /// do not. The natural scale-1 row is measured hidden so the maths holds for any cell set or
+    /// future widths.
+    ///
+    /// Five cinema readouts fit any phone, so they spread edge-to-edge and the leftover width
+    /// becomes spacing (Pro Max, iPad). Photography brings NINE — mode, ISO, shutter, iris, drive,
+    /// focus, white balance, meter, profile — and shrinking those to fit turned every value into
+    /// something an operator has to lean in to read. A shorter row of full-size cells that scrolls
+    /// beats a complete row nobody can read at arm's length, so past the point where they fit, the
+    /// cells stay their own size and the bar scrolls, with the same edge fades and gold chevrons
+    /// the assist toolbar uses for exactly the same "there is more this way" job.
     private var fittedRow: some View {
         GeometryReader { proxy in
             let values = stripValues
@@ -491,20 +634,59 @@ struct MonitorCaptureStrip: View {
             let gaps = n - 1
             let cellsNatural = max(1, naturalRowWidth - Self.baseSpacing * gaps)
             let fitScale = (proxy.size.width - Self.minSpacing * gaps) / cellsNatural
-            let scale = min(Self.maxScale, max(Self.minScale, fitScale))
-            let spacing =
-                gaps > 0
-                ? max(Self.minSpacing, (proxy.size.width - cellsNatural * scale) / gaps)
-                : 0
-            HStack(spacing: spacing) {
-                ForEach(values) { item in
-                    CaptureSettingButton(value: item, scale: scale)
+            Group {
+                if fitScale >= Self.maxScale {
+                    let spacing =
+                        gaps > 0
+                        ? max(Self.minSpacing, (proxy.size.width - cellsNatural) / gaps)
+                        : 0
+                    HStack(spacing: spacing) {
+                        ForEach(values) { item in
+                            CaptureSettingButton(value: item)
+                        }
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                } else {
+                    scrolledRow(values: values)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
                 }
             }
-            .frame(width: proxy.size.width, height: proxy.size.height)
             .opacity(naturalRowWidth > 0 ? 1 : 0)  // one measurement pass before first paint
         }
         .background(naturalRowMeasurer)
+    }
+
+    /// Full-size cells in a horizontal scroller, edges faded and chevroned while there is more
+    /// that way. Transcribed from `MonitorAssistStrip.horizontalBody` — same treatment, same
+    /// tolerances, because it answers the same question about the same kind of overflowing row.
+    private func scrolledRow(values: [CameraValue]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Self.baseSpacing) {
+                ForEach(values) { item in
+                    CaptureSettingButton(value: item)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxHeight: .infinity)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .mask(scrollEdges.gradient)
+        .overlay(alignment: .leading) { scrollChevron(.leading) }
+        .overlay(alignment: .trailing) { scrollChevron(.trailing) }
+        .animation(.easeInOut(duration: 0.18), value: scrollEdges)
+        .modifier(ScrollEdgeReporter(edges: $scrollEdges))
+    }
+
+    private func scrollChevron(_ edge: HorizontalEdge) -> some View {
+        Image(systemName: edge == .leading ? "chevron.left" : "chevron.right")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(LiveDesign.accent)
+            .shadow(color: .black.opacity(0.65), radius: 4)
+            // Breathing room, as on the assist strip: without it the glyph sits on top of the
+            // last visible value rather than beside it.
+            .padding(.horizontal, 5)
+            .opacity((edge == .leading ? scrollEdges.leading : scrollEdges.trailing) ? 1 : 0)
+            .allowsHitTesting(false)
     }
 
     /// Off-screen scale-1 row whose width feeds `fittedRow`'s math. Hidden and non-interactive.
@@ -1782,17 +1964,27 @@ struct MonitorShell: View {
         // Command wants a full-height control grid regardless of the persisted aspect; `.fit16x9`
         // for the zone maths yields the topBar→systemBar span it needs.
         let persistedAspect = model.preferences.portraitFeedAspect
-        // Photography always lays out as fit: the stills frame is 3:2/1:1/16:9 per image area
-        // (passed as the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
+        // Photography lays out as fit: the stills frame is 3:2/1:1/16:9 per image area (passed as
+        // the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
+        //
+        // A VERTICAL body is the exception, and the reason is that vertical fill does not crop:
+        // the picture pillarboxes inside the frame rather than over-widening (see
+        // `feedContentWidth`), so the objection above does not apply to it. What fit gives a 2:3
+        // still instead is a feed tall enough to push its own stacked bands off the screen — the
+        // toolbar clips at the right edge, the shutter lands on top of the DRIVE tile, and the
+        // white-balance row falls off the bottom entirely. Fill is the layout that fits, and it is
+        // the one video already uses for the same body position.
         let isPhotography = model.isPhotographyMode
         // Vertical mode (body on its side) always lays out as FILL: the fill zones are exactly
         // the vertical viewer — feed spanning topBar→systemBar (the 9:16 picture pillarboxes
         // inside), the floating vertical assist rail, and the capture bar over the feed's
         // bottom edge — where fit's stacked toolbar/tile bands would strand the controls.
         let isVerticalFeed = model.liveFeedRotation.isVertical
+        // Vertical is tested before photography, so a vertically held stills body reaches fill.
         let zoneAspect: PortraitFeedAspect =
-            model.displayMode == .command || isPhotography
-            ? .fit16x9 : isVerticalFeed ? .fill : persistedAspect
+            model.displayMode == .command
+            ? .fit16x9
+            : isVerticalFeed ? .fill : isPhotography ? .fit16x9 : persistedAspect
         // The stacked-scopes zone must bill only what `PortraitScopesStack` will actually render
         // (photography drops cinema-only scopes; clean drops everything unpinned) — a zone sized
         // to the unfiltered count leaves a dead band between the feed and the toolbar.
@@ -1818,7 +2010,11 @@ struct MonitorShell: View {
             }()
         )
         let feed = map.feed
-        let isFill = (persistedAspect == .fill || isVerticalFeed) && !isPhotography
+        // A vertical body is fill in BOTH modes; only the persisted cinema choice is photography's
+        // to be excluded from. Must agree with `zoneAspect` above — this flag drives the rail, the
+        // floating scopes and the capture strip, and disagreeing with the zone map is how the
+        // controls end up in a lane the layout did not reserve.
+        let isFill = isVerticalFeed || (persistedAspect == .fill && !isPhotography)
         // Fill's capture bar is chrome like the landscape strip: the zone is only a layout frame,
         // the per-DISP Camera Values switch decides the mount — and, through this one binding, the
         // clearances every key that stacks above the bar derives from it.

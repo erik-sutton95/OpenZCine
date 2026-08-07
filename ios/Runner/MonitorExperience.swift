@@ -1786,6 +1786,36 @@ private enum AssistHaptics {
     }
 }
 
+/// Keeps a ``ScrollEdgeFades`` in step with a horizontal scroller's real position.
+///
+/// The tolerances are not arbitrary. A `GlassPanel`'s leading and trailing padding is reported as
+/// content width, so a row sitting flush at its end still claims ~23pt of scrollable slack — a
+/// trailing chevron would never clear. The leading edge carries no such slack, so a few points is
+/// enough there. Below iOS 18 there is no cheap way to observe scroll geometry, so both edges hint
+/// permanently: a chevron that over-promises beats a row that looks complete when it is not.
+struct ScrollEdgeReporter: ViewModifier {
+    @Binding var edges: ScrollEdgeFades
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .onScrollGeometryChange(for: ScrollEdgeFades.self) { geometry in
+                    let remaining =
+                        geometry.contentSize.width - geometry.containerSize.width
+                        - geometry.contentOffset.x
+                    return ScrollEdgeFades(
+                        leading: geometry.contentOffset.x > 6,
+                        trailing: remaining > 28
+                    )
+                } action: { _, fades in
+                    edges = fades
+                }
+        } else {
+            content.onAppear { edges = ScrollEdgeFades(leading: true, trailing: true) }
+        }
+    }
+}
+
 /// Tracks which edges of the assist toolbar fade out to hint at off-screen tools.
 struct ScrollEdgeFades: Equatable {
     var leading: Bool

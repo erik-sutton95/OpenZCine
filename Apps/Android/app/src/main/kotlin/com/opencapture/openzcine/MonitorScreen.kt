@@ -1448,9 +1448,15 @@ internal fun MonitorScreen(
         // Zone/chrome layout: vertical mode always lays out as FILL, matching iOS — the fill
         // zones are exactly the vertical viewer (feed spanning the bands, floating assist rail,
         // capture bar over the feed bottom); fit's stacked bands would strand the controls.
+        //
+        // That holds for a stills body too, and only the PERSISTED cinema choice is photography's
+        // to be excluded from. Vertical fill does not crop — the picture pillarboxes inside the
+        // frame (see `portraitRasterFill` below) — so the reason photography avoids fill does not
+        // apply here, while fit hands a 2:3 still a feed tall enough to push its own stacked bands
+        // off the screen: clipped toolbar, shutter over the DRIVE tile, white balance gone.
         val isPortraitFill =
-            isPortrait && !isCommand && !isPhotographyMode &&
-                (isVerticalFeed || portraitAspect.fillsViewport)
+            isPortrait && !isCommand &&
+                (isVerticalFeed || (portraitAspect.fillsViewport && !isPhotographyMode))
         // Raster/overlay fit: the rotated 9:16 picture pillarboxes inside the fill frame —
         // aspect-filling it would centre-crop the top and bottom of the vertical shot.
         val portraitRasterFill = isPortraitFill && !isVerticalFeed
@@ -2481,6 +2487,9 @@ internal fun MonitorScreen(
                     },
                     onShutterLongPress = shutterLongPressToggle,
                     onCaptureBarBounds = { measuredCaptureBar = it },
+                    // Same store the landscape deck's cells write to, so the stills drop-downs
+                    // anchor under whichever bar is on screen.
+                    onTopPillBounds = { kind, frame -> measuredTopPills[kind] = frame },
                     onOpenCommandControl = {
                         activeAssistOptions = null
                         activeMonitorPickerKind = null
@@ -3784,6 +3793,8 @@ private fun PortraitChrome(
     onOpenAssistOptions: (AssistTool, Rect) -> Unit,
     /** Publishes each badgeable element's drawn bounds while the Edit view is open. */
     onChromeEditBounds: (ChromeSection, Rect) -> Unit = { _, _ -> },
+    /** Anchors a stills readout's drop-down under the cell, as the landscape deck's cells do. */
+    onTopPillBounds: ((MonitorPickerKind, ZoneFrame) -> Unit)? = null,
 ) {
     val isPhotography = prefersPhotographyChrome(cameraProperties)
     val context = LocalContext.current
@@ -3826,6 +3837,19 @@ private fun PortraitChrome(
             showsBattery = mounts(ChromeSection.BATTERY_INDICATORS),
             cameraBatteryPercent = cameraReadouts.batteryPercent,
             cameraExternalPower = cameraReadouts.externalPower,
+            // Stills readouts ride the same per-cell switches as their landscape twins: SIZE on
+            // RESOLUTION_READOUT, QUALITY on CODEC_READOUT (iOS `InfoBarContent`).
+            isPhotography = isPhotography,
+            shotsRemaining = cameraProperties.shotsRemaining,
+            stillSize =
+                cameraProperties.stillSizeAreaLabel() ?: cameraProperties.stillSizeCompactLabel(),
+            stillQuality = cameraProperties.stillQualityCompactLabel(),
+            showsStillSize = mounts(ChromeSection.RESOLUTION_READOUT),
+            showsStillQuality = mounts(ChromeSection.CODEC_READOUT),
+            activePicker = activeMonitorPicker,
+            pickersEnabled = availability.canDriveCamera && !locked,
+            onOpenPicker = onOpenMonitorPicker,
+            onPillBounds = onTopPillBounds,
             modifier =
                 Modifier.zone(zones.infoBar)
                     .chromeEditable(
@@ -4188,11 +4212,28 @@ private fun PortraitInfoBar(
     showsTimecode: Boolean = true,
     showsMedia: Boolean = true,
     showsBattery: Boolean = true,
+    isPhotography: Boolean = false,
+    shotsRemaining: Int? = null,
+    stillSize: String? = null,
+    stillQuality: String? = null,
+    showsStillSize: Boolean = true,
+    showsStillQuality: Boolean = true,
+    activePicker: MonitorPickerKind? = null,
+    pickersEnabled: Boolean = false,
+    onOpenPicker: (MonitorPickerKind) -> Unit = {},
+    onPillBounds: ((MonitorPickerKind, ZoneFrame) -> Unit)? = null,
+    photoStorage: CameraStorageStatus? = null,
+    photoPillShowsStorage: Boolean = false,
+    onTogglePhotoPill: () -> Unit = {},
 ) {
     val cameraBattery =
         monitorBatteryPresentation(cameraBatteryPercent, cameraExternalPower)
     Box(modifier.background(LiveDesign.glass).padding(horizontal = 16.dp)) {
-        if (showsMedia) {
+        // Screen-centred storage, cinema only — photography carries no MEDIA cell at all, the
+        // same call the landscape deck makes. Shots remaining is the number a stills operator
+        // counts down, and it is measured from the space this reports, so the two side by side
+        // are one fact twice. Storage stays a tap away on the SHOTS readout (iOS `InfoBarContent`).
+        if (showsMedia && !isPhotography) {
             Text(
                 media,
                 style = chromeStyle(13f, FontWeight.Medium),
@@ -4201,13 +4242,57 @@ private fun PortraitInfoBar(
                 modifier = Modifier.align(Alignment.Center),
             )
         }
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Photography makes the same swap the landscape deck already makes: the shots counter
+            // takes the timecode slot, size and quality follow it. A stills body runs no timecode,
+            // so the slot was parking a frozen 00:00:00:00 (iOS `PortraitInfoBarShots`).
             if (showsTimecode) {
-                RetainedCameraTimecodeReadout(
-                    retention = timecodeRetention,
-                    sessionState = sessionState,
-                    sizeSp = 15f,
-                )
+                if (isPhotography) {
+                    // The landscape deck's own readout at the portrait bar's size — one
+                    // shots/storage rule, one toggle, two sizes (iOS `PortraitInfoBarShots`).
+                    ShotsRemainingReadout(
+                        shotsRemaining = shotsRemaining,
+                        storage = photoStorage,
+                        showsStorage = photoPillShowsStorage,
+                        onToggle = onTogglePhotoPill,
+                        sizeSp = 15f,
+                        labelSp = 11f,
+                    )
+                } else {
+                    RetainedCameraTimecodeReadout(
+                        retention = timecodeRetention,
+                        sessionState = sessionState,
+                        sizeSp = 15f,
+                    )
+                }
+            }
+            if (isPhotography) {
+                if (showsStillSize) {
+                    PortraitStillReadout(
+                        value = stillSize ?: "—",
+                        active = activePicker == MonitorPickerKind.SIZE,
+                        onClick = { if (pickersEnabled) onOpenPicker(MonitorPickerKind.SIZE) },
+                        onBoundsInRoot =
+                            onPillBounds?.let { report ->
+                                { frame: ZoneFrame -> report(MonitorPickerKind.SIZE, frame) }
+                            },
+                    )
+                }
+                if (showsStillQuality) {
+                    PortraitStillReadout(
+                        value = stillQuality ?: "—",
+                        active = activePicker == MonitorPickerKind.QUALITY,
+                        onClick = { if (pickersEnabled) onOpenPicker(MonitorPickerKind.QUALITY) },
+                        onBoundsInRoot =
+                            onPillBounds?.let { report ->
+                                { frame: ZoneFrame -> report(MonitorPickerKind.QUALITY, frame) }
+                            },
+                    )
+                }
             }
             Spacer(Modifier.weight(1f))
             if (showsBattery) {
@@ -4235,6 +4320,46 @@ private fun PortraitInfoBar(
             }
         }
     }
+}
+
+/**
+ * A tappable stills readout in the portrait bar: the value in the bar's own type, opening the same
+ * picker as its landscape twin (iOS `PortraitInfoBarPickerCell`).
+ *
+ * It reports its bounds for the same reason the landscape pill does — the drop-down anchors under
+ * whichever cell is on screen, and a portrait cell that reported nothing would drop its picker in
+ * the corner.
+ */
+@Composable
+private fun PortraitStillReadout(
+    value: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    onBoundsInRoot: ((ZoneFrame) -> Unit)?,
+) {
+    val density = LocalDensity.current
+    Text(
+        value,
+        style = chromeStyle(13f, FontWeight.Medium, mono = true),
+        color = if (active) LiveDesign.accent else LiveDesign.text,
+        maxLines = 1,
+        modifier =
+            Modifier.chromeClickable(onClick = onClick)
+                .onGloballyPositioned { coordinates ->
+                    val report = onBoundsInRoot ?: return@onGloballyPositioned
+                    val bounds = coordinates.boundsInRoot()
+                    with(density) {
+                        report(
+                            ZoneFrame(
+                                bounds.left.toDp().value,
+                                bounds.top.toDp().value,
+                                bounds.width.toDp().value,
+                                bounds.height.toDp().value,
+                            ),
+                        )
+                    }
+                },
+    )
 }
 
 /** Canvas stand-in for SF `dot.viewfinder` (the focus-reset affordance). */

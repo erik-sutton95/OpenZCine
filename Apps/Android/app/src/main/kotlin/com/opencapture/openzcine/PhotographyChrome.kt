@@ -174,6 +174,10 @@ internal fun ShotsRemainingReadout(
     storage: CameraStorageStatus? = null,
     showsStorage: Boolean = false,
     onToggle: (() -> Unit)? = null,
+    /** 20sp in the landscape deck; the portrait bar runs at its own 15sp timecode size. */
+    sizeSp: Float = 20f,
+    /** The " SHOTS" / "%" suffix, sized against [sizeSp]. */
+    labelSp: Float = 12f,
 ) {
     val storageForm = showsStorage && storage != null && storage.totalCapacityBytes > 0
     Text(
@@ -185,7 +189,7 @@ internal fun ShotsRemainingReadout(
                 withStyle(
                     SpanStyle(
                         color = LiveDesign.muted,
-                        fontSize = 12.sp,
+                        fontSize = labelSp.sp,
                         fontWeight = FontWeight.SemiBold,
                     ),
                 ) {
@@ -199,13 +203,13 @@ internal fun ShotsRemainingReadout(
                 withStyle(
                     SpanStyle(
                         color = LiveDesign.muted,
-                        fontSize = 12.sp,
+                        fontSize = labelSp.sp,
                         fontWeight = FontWeight.SemiBold,
                     ),
                 ) { append(" SHOTS") }
             }
         },
-        style = chromeStyle(20f, FontWeight.Medium, mono = true),
+        style = chromeStyle(sizeSp, FontWeight.Medium, mono = true),
         maxLines = 1,
         softWrap = false,
         modifier =

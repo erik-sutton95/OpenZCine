@@ -1027,7 +1027,7 @@ private fun LocalFramingAssistConfiguration.isToolEnabled(tool: AssistTool): Boo
 
 /** Gold edge chevron hinting at off-screen tools (iOS `scrollChevron`). */
 @Composable
-private fun ScrollChevron(leading: Boolean, visible: Boolean, modifier: Modifier = Modifier) {
+internal fun ScrollChevron(leading: Boolean, visible: Boolean, modifier: Modifier = Modifier) {
     Canvas(
         modifier
             .padding(horizontal = 5.dp)

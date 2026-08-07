@@ -1258,10 +1258,57 @@ internal fun MonitorCaptureStrip(
                 changeHint = changeHint,
             )
         }
-        if (maxContentWidth != null) {
-            FitScale(maxContentWidth - 24.dp) { cells() }
-        } else {
-            cells()
+        // Five cinema readouts fit any phone. Photography brings NINE — mode, ISO, shutter, iris,
+        // drive, focus, white balance, meter, profile — and scaling those to fit turned every
+        // value into something an operator has to lean in to read. A shorter row of full-size
+        // cells that scrolls beats a complete row nobody can read at arm's length, so the cells
+        // keep their size and the bar scrolls, with the assist toolbar's own edge fades and gold
+        // chevrons doing the same "there is more this way" job (iOS `scrolledRow`).
+        //
+        // `horizontalScroll` needs no width measurement to make that call: a row narrower than the
+        // band simply does not scroll, so the fitting case lands exactly where it did.
+        val scroll = rememberScrollState()
+        val leadingFade = scroll.canScrollBackward
+        val trailingFade = scroll.canScrollForward
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+            Row(
+                Modifier.fillMaxHeight()
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        val fade = size.width * 0.09f
+                        if (leadingFade) {
+                            drawRect(
+                                Brush.horizontalGradient(
+                                    0f to Color.Transparent, 1f to Color.Black, endX = fade,
+                                ),
+                                size = Size(fade, size.height),
+                                blendMode = BlendMode.DstIn,
+                            )
+                        }
+                        if (trailingFade) {
+                            drawRect(
+                                Brush.horizontalGradient(
+                                    0f to Color.Black, 1f to Color.Transparent,
+                                    startX = size.width - fade, endX = size.width,
+                                ),
+                                topLeft = Offset(size.width - fade, 0f),
+                                size = Size(fade, size.height),
+                                blendMode = BlendMode.DstIn,
+                            )
+                        }
+                    }
+                    .horizontalScroll(scroll),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                cells()
+            }
+            ScrollChevron(
+                leading = true, visible = leadingFade, Modifier.align(Alignment.CenterStart),
+            )
+            ScrollChevron(
+                leading = false, visible = trailingFade, Modifier.align(Alignment.CenterEnd),
+            )
         }
     }
 }
