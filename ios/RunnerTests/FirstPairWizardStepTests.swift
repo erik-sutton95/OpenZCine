@@ -129,12 +129,19 @@ struct FirstPairWizardStepTests {
             NativeAppModel.FirstPairCard.wireless.options == [
                 .cameraAccessPoint, .phoneHotspot, .wiFiNetwork,
             ])
-        #expect(NativeAppModel.FirstPairCard.cableLink.options == [.usbC, .hdmiCapture])
-        // Every path is reachable, and from one card only.
+        // HDMI capture is UVC-on-iPad, so on a phone it is absent rather than shown-and-disabled —
+        // the cable card is the one place the offered set depends on the hardware.
+        #expect(
+            NativeAppModel.FirstPairCard.cableLink.options
+                == (UVCVideoSource.isSupportedHardware ? [.usbC, .hdmiCapture] : [.usbC]))
+        // Every path this device can offer is reachable, and from one card only.
         let grouped = NativeAppModel.FirstPairCard.allCases.flatMap(\.options)
-        #expect(Set(grouped) == Set(NativeAppModel.FirstPairTransportMethod.allCases))
-        #expect(grouped.count == NativeAppModel.FirstPairTransportMethod.allCases.count)
-        for method in NativeAppModel.FirstPairTransportMethod.allCases {
+        let offerable = NativeAppModel.FirstPairTransportMethod.allCases.filter {
+            $0 != .hdmiCapture || UVCVideoSource.isSupportedHardware
+        }
+        #expect(Set(grouped) == Set(offerable))
+        #expect(grouped.count == offerable.count)
+        for method in offerable {
             #expect(NativeAppModel.FirstPairCard.card(for: method).options.contains(method))
         }
     }
