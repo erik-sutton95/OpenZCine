@@ -357,6 +357,18 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["stillToneMode"] == "HLG")
     }
 
+    @Test func wireCarriesBothWhiteBalanceSidesSoTheShellCanPickOne() {
+        let readback = AndroidCameraPropertyReadback(
+            result: .accepted,
+            properties: PTPCameraPropertySnapshot(wbMode: "Sunny", stillWBMode: "Auto1"),
+            storage: nil)
+        let fields = wireFields(AndroidCameraPropertyReadbackWire.encode(readback))
+        // The readback cannot know which side is on screen, so it sends both and Kotlin's
+        // `activeWhiteBalanceMode(photography:)` chooses — same rule as `activeWBMode`.
+        #expect(fields["whiteBalanceMode"] == "Sunny")
+        #expect(fields["stillWhiteBalanceMode"] == "Auto1")
+    }
+
     @Test func browseFailureCleanupReleasesOnlyItsOwnershipGeneration() throws {
         let server = try FakeZRServer()
         defer { server.stop() }

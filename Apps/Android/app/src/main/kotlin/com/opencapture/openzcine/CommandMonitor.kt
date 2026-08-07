@@ -368,7 +368,10 @@ internal fun commandDashboardPresentation(
                 snapshot.shutterAngle.monitorValueOrNull()
                     ?: snapshot.shutterSpeed.monitorValueOrNull()
         }
-    val whiteBalanceMode = snapshot.whiteBalanceMode.monitorValueOrNull()
+    // The cinema dashboard wants the MOVIE side; the accessor only falls back to the stills one
+    // for a body that has never pushed a movie value at all.
+    val whiteBalanceMode =
+        snapshot.activeWhiteBalanceMode(photography = false).monitorValueOrNull()
     val whiteBalanceKelvin = snapshot.whiteBalanceKelvin?.takeIf { it > 0 }
     val whiteBalance =
         if (whiteBalanceMode == COLOR_TEMPERATURE_MODE) {
@@ -994,10 +997,10 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.IRIS -> snapshot.iris == label
         CameraControl.WHITE_BALANCE ->
             if (label.endsWith("K")) {
-                snapshot.whiteBalanceMode == COLOR_TEMPERATURE_MODE &&
+                snapshot.activeWhiteBalanceMode(photography = false) == COLOR_TEMPERATURE_MODE &&
                     snapshot.whiteBalanceKelvin?.let { "${it}K" } == label
             } else {
-                snapshot.whiteBalanceMode == label
+                snapshot.activeWhiteBalanceMode(photography = false) == label
             }
         CameraControl.FOCUS_MODE -> snapshot.focusMode == label
         CameraControl.FOCUS_AREA -> snapshot.focusArea == label

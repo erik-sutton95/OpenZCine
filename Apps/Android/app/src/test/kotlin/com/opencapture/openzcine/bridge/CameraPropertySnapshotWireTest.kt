@@ -176,6 +176,36 @@ class CameraPropertySnapshotWireTest {
         assertTrue(decoded.snapshot.storageSlots.isEmpty())
     }
 
+    @Test
+    fun keepsTheMovieAndStillsWhiteBalanceApart() {
+        val decoded =
+            CameraPropertySnapshotWire.decode(
+                validPayload() + "\nwhiteBalanceMode\tSunny\nstillWhiteBalanceMode\tAuto1",
+            )
+
+        assertTrue(decoded.isValid)
+        // Two different camera settings that decode through the same table: the cinema readout
+        // must not repaint when a stills WB event lands mid-take.
+        assertEquals("Sunny", decoded.snapshot.activeWhiteBalanceMode(photography = false))
+        assertEquals("Auto1", decoded.snapshot.activeWhiteBalanceMode(photography = true))
+    }
+
+    @Test
+    fun aBodyThatOnlyReportsOneWhiteBalanceSideStillReadsOut() {
+        val movieOnly =
+            CameraPropertySnapshotWire.decode(validPayload() + "\nwhiteBalanceMode\tSunny").snapshot
+        assertEquals("Sunny", movieOnly.activeWhiteBalanceMode(photography = true))
+
+        val stillsOnly =
+            CameraPropertySnapshotWire.decode(
+                validPayload() + "\nstillWhiteBalanceMode\tAuto1",
+            ).snapshot
+        assertEquals("Auto1", stillsOnly.activeWhiteBalanceMode(photography = false))
+
+        assertNull(CameraPropertySnapshotWire.decode(validPayload()).snapshot
+            .activeWhiteBalanceMode(photography = false))
+    }
+
     private fun validPayload(): String =
         listOf(
             "result\taccepted",

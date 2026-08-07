@@ -81,6 +81,7 @@ internal object CameraPropertySnapshotWire {
             shutterAngle = value.optionalString("shutterAngle"),
             iris = value.optionalString("iris"),
             whiteBalanceMode = value.optionalString("whiteBalanceMode"),
+            stillWhiteBalanceMode = value.optionalString("stillWhiteBalanceMode"),
             whiteBalanceKelvin = value.optionalInt("whiteBalanceKelvin"),
             resolution = value.optionalString("resolution"),
             frameRate = value.optionalInt("frameRate"),
