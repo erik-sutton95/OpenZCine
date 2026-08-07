@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -444,6 +446,12 @@ fun LiveFeedView(
     lutLibrary: AndroidLutLibrary? = null,
     effectsPresentationState: LiveFeedEffectsPresentationState? = null,
     aspectFill: Boolean = false,
+    /**
+     * Flips the picture left-to-right, for a camera pointed back at the person watching it. A
+     * display transform only: the recording, the scopes, and every camera-reported coordinate stay
+     * in the true orientation (iOS `MonitorAssistTool.mirror`).
+     */
+    mirrored: Boolean = false,
     preferComposablePresentation: Boolean = false,
 ) {
     val applicationContext = LocalContext.current.applicationContext
@@ -528,7 +536,7 @@ fun LiveFeedView(
         if (nextPlan == null) return@LaunchedEffect
         // Atomic present-path swap: push GPU uniforms first, then Compose state.
         if (!preferComposablePresentation) {
-            gpuBackend.updatePlan(nextPlan, aspectFill)
+            gpuBackend.updatePlan(nextPlan, aspectFill, mirrored)
         }
         renderPlan = nextPlan
         val nextBaker =
@@ -556,7 +564,7 @@ fun LiveFeedView(
     SideEffect {
         val plan = renderPlan
         if (!preferComposablePresentation && plan != null && !gpuBackend.renderFailed) {
-            gpuBackend.updatePlan(plan, aspectFill)
+            gpuBackend.updatePlan(plan, aspectFill, mirrored)
         }
     }
     // SurfaceView is a separate buffer — Kyant layerBackdrop cannot sample it.
@@ -671,7 +679,7 @@ fun LiveFeedView(
             modifier = modifier,
             update = {
                 val plan = renderPlan
-                if (plan != null) gpuBackend.updatePlan(plan, aspectFill)
+                if (plan != null) gpuBackend.updatePlan(plan, aspectFill, mirrored)
             },
             onRelease = { view -> gpuBackend.detach(view) },
         )
@@ -692,7 +700,16 @@ fun LiveFeedView(
                     sourceHeight = androidBitmap.height,
                     aspectFill = aspectFill,
                 ) ?: return@Canvas
-            drawIntoCanvas { canvas ->
+            // The Compose path mirrors with a scale about the picture's own centre — the same flip
+            // the two GPU backends do by folding their sampling coordinate. Each renderer applies
+            // it itself because a SurfaceView cannot be transformed from Compose.
+            val pivot =
+                Offset(
+                    content.left + content.width / 2f,
+                    content.top + content.height / 2f,
+                )
+            val paintFeed: DrawScope.() -> Unit = {
+                drawIntoCanvas { canvas ->
                 if (agslRenderer != null &&
                     Build.VERSION.SDK_INT >= 33 &&
                     decodedLiveFeedColorMode(androidBitmap) == LiveFeedColorMode.SDR
@@ -714,7 +731,13 @@ fun LiveFeedView(
                             content.top + content.height,
                         )
                     canvas.nativeCanvas.drawBitmap(androidBitmap, null, dst, feedBlitPaint)
+                    }
                 }
+            }
+            if (mirrored) {
+                scale(scaleX = -1f, scaleY = 1f, pivot = pivot) { paintFeed() }
+            } else {
+                paintFeed()
             }
         }
     }

@@ -71,6 +71,42 @@ class FocusFeedGesturesTest {
     }
 
     @Test
+    fun `mirrored feed folds the tap back into the camera's unflipped space`() {
+        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        requireNotNull(content)
+        fun geometry(mirrored: Boolean) =
+            requireNotNull(
+                focusFeedGeometry(
+                    content = content,
+                    horizontalPresentationScale = 1f,
+                    viewport = LiveOverlayRect(0f, 0f, 1_000f, 1_000f),
+                    coordinateWidth = 1_920,
+                    coordinateHeight = 1_080,
+                    generation = 1,
+                    mirrored = mirrored,
+                ),
+            )
+
+        // Tapping the operator's left edge points at the camera's right one, and vice versa. Only
+        // x moves: the mirror is horizontal.
+        assertEquals(
+            FocusFeedCoordinate(1_919, 0),
+            geometry(mirrored = true).cameraCoordinateAt(FocusFeedPixelPoint(0f, 219f)),
+        )
+        assertEquals(
+            FocusFeedCoordinate(0, 1_079),
+            geometry(mirrored = true).cameraCoordinateAt(FocusFeedPixelPoint(1_000f, 782f)),
+        )
+        // The centre is its own mirror, so both geometries agree there.
+        assertEquals(
+            geometry(mirrored = false).cameraCoordinateAt(FocusFeedPixelPoint(500f, 500.5f)),
+            geometry(mirrored = true).cameraCoordinateAt(FocusFeedPixelPoint(500f, 500.5f)),
+        )
+        // A mirrored tap still has to land on the picture — the letterbox stays rejected.
+        assertNull(geometry(mirrored = true).cameraCoordinateAt(FocusFeedPixelPoint(500f, 218f)))
+    }
+
+    @Test
     fun `photo full-height frame maps corner and band-edge taps in range`() {
         // The photography feed container IS the letterboxed 3:2 image
         // (photographyFeedFrame): container aspect == source aspect, so the

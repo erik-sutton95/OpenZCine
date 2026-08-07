@@ -2042,6 +2042,7 @@ internal fun MonitorScreen(
                         focusMetadataAvailable
                     },
                     generation = liveFeedPresentation.focusGestureGeometryGeneration,
+                    mirrored = renderedFraming.mirrorEnabled,
                 )
             } else {
                 focusFeedViewportGeometry(
@@ -2346,6 +2347,9 @@ internal fun MonitorScreen(
                         lutLibrary = lutLibrary,
                         effectsPresentationState = liveFeedEffectsPresentation,
                         aspectFill = portraitRasterFill,
+                        // Reads the DISP-filtered set, not the raw config, so clean view honours
+                        // the pin exactly as every other framing tool does.
+                        mirrored = renderedFraming.mirrorEnabled,
                         // SurfaceView graded feed is invisible to Kyant
                         // layerBackdrop — FULL glass must present via Compose. A rotated
                         // (vertical) feed must too: SurfaceView buffers composite outside

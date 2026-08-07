@@ -92,7 +92,15 @@ class PlaybackAssistStateTest {
 
         assertEquals(
             AssistTool.entries.toSet() -
-                setOf(AssistTool.AUDIO, AssistTool.LEVEL, AssistTool.EV, AssistTool.PLAY),
+                setOf(
+                    AssistTool.AUDIO,
+                    AssistTool.LEVEL,
+                    AssistTool.EV,
+                    AssistTool.PLAY,
+                    // A left-to-right flip is on or it is not, so it has no options panel to open
+                    // — same call as iOS `MonitorAssistTool.hasConfiguration`.
+                    AssistTool.MIRROR,
+                ),
             configurable,
         )
         assertFalse(hasPlaybackAssistOptions(AssistTool.AUDIO))

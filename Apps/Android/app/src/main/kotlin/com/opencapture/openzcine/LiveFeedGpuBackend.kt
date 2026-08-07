@@ -27,7 +27,7 @@ internal interface LiveFeedGpuBackend {
 
     fun detach(view: View)
 
-    fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean)
+    fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean)
 
     fun submitFrame(frame: Bitmap)
 
@@ -129,8 +129,8 @@ internal class GlesLiveFeedBackend : LiveFeedGpuBackend {
         state.detach(surface)
     }
 
-    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean) {
-        if (plan != null) state.update(plan, aspectFill) else state.clear()
+    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) {
+        if (plan != null) state.update(plan, aspectFill, mirrored) else state.clear()
     }
 
     override fun submitFrame(frame: Bitmap) {
@@ -215,7 +215,7 @@ internal class VulkanLiveFeedBackend(
         if (!disposed) VulkanLiveFeedNative.detachSurface(session)
     }
 
-    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean) {
+    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) {
         if (disposed) return
         if (plan == null) {
             VulkanLiveFeedNative.clearPlan(session)
@@ -244,6 +244,7 @@ internal class VulkanLiveFeedBackend(
                 plan.configuration.midtoneCode,
                 plan.configuration.midtoneColor,
                 aspectFill,
+                mirrored,
                 plan.splitComparison != null,
                 plan.splitComparison == FeedSplitOrientation.VERTICAL,
             )
@@ -328,6 +329,7 @@ internal object VulkanLiveFeedNative {
         zebraMidtone: Float,
         zebraMidtoneColor: FloatArray,
         aspectFill: Boolean,
+        mirrored: Boolean,
         splitOn: Boolean,
         splitVertical: Boolean,
     ): Boolean

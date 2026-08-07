@@ -124,6 +124,32 @@ class LiveFrameMetadataOverlaysTest {
     }
 
     @Test
+    fun `mirrored focus boxes fold across the feed the way the picture does`() {
+        val content = requireNotNull(liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080))
+        val feed = requireNotNull(liveOverlayFeedRect(content, horizontalPresentationScale = 1f))
+        val focus =
+            LiveFocusInfo(
+                coordinateWidth = 1_920,
+                coordinateHeight = 1_080,
+                result = LiveFocusResult.FOCUSED,
+                subjectDetectionActive = false,
+                trackingAFActive = false,
+                selectedBoxIndex = null,
+                boxes = listOf(LiveFocusBox(centerX = 480, centerY = 270, width = 384, height = 216)),
+            )
+        val box = focus.boxes.single()
+        val plain = requireNotNull(liveFocusBoxRect(focus, box, feed))
+        val mirrored = requireNotNull(liveFocusBoxRect(focus, box, feed, mirrored = true))
+
+        // A box a quarter in from the camera's left lands a quarter in from the operator's right.
+        assertEquals(feed.right - plain.right, mirrored.left - feed.left, absoluteTolerance = 0.01f)
+        // Size and vertical placement are untouched — the fold is horizontal only.
+        assertEquals(plain.width, mirrored.width, absoluteTolerance = 0.01f)
+        assertEquals(plain.top, mirrored.top, absoluteTolerance = 0.01f)
+        assertEquals(plain.height, mirrored.height, absoluteTolerance = 0.01f)
+    }
+
+    @Test
     fun `vertical desqueeze keeps focus and level geometry centred in the rendered feed`() {
         val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
         assertNotNull(content)

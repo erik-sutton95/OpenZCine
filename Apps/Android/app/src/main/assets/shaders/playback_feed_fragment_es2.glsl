@@ -7,6 +7,9 @@ uniform sampler2D uLut;
 uniform sampler2D uLimitsPaintCube;
 uniform sampler2D uLimitsWeightCube;
 uniform float uFlipInputY;
+// Horizontal flip for a camera pointed back at the operator: 1 mirrors, 0 does not. Folds the
+// SAMPLING coordinate, so the picture and every effect read through it flip together.
+uniform float uMirror;
 uniform float uLutSize;
 // 50/50 Log-vs-LUT comparison: 1 = on, and 1 = a vertical boundary (Log left, LUT right)
 // against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
@@ -240,8 +243,18 @@ void main() {
     // `source` stays the raw fetch: zebra, false colour and the limits paint MEASURE it, and a
     // measurement must describe the frame the camera sent, not a reconstruction of it. iOS keeps
     // the same separation by upscaling at present time, after the bake the scopes read.
-    vec3 source = sampleSource(vTexSamplingCoord);
-    vec3 displaySource = sampleSourceForDisplay(vTexSamplingCoord);
+    // Folded ONCE, here, and used for every read in SOURCE space — the picture and the peaking
+    // mask alike. Folding inside `sampleSource` instead would flip the picture while the mask
+    // stayed put, and the strokes would land on the wrong side of the frame.
+    //
+    // Display-space questions keep the raw coordinate: the split boundary is about where a pixel
+    // lands for the operator, and the zebra stripe is screen geometry.
+    vec2 sourceCoordinate = vec2(
+        mix(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.x, uMirror),
+        vTexSamplingCoord.y
+    );
+    vec3 source = sampleSource(sourceCoordinate);
+    vec3 displaySource = sampleSourceForDisplay(sourceCoordinate);
     vec3 color =
         splitIsGradedSide(vTexSamplingCoord) ? grade(displaySource) : displaySource;
 
@@ -256,7 +269,7 @@ void main() {
         // soften the very thing the closing exists to keep continuous.
         vec2 sourceSize = max(uSourceSize, vec2(1.0));
         vec2 texel = 1.0 / sourceSize;
-        vec2 centre = (floor(vTexSamplingCoord * sourceSize) + 0.5) * texel;
+        vec2 centre = (floor(sourceCoordinate * sourceSize) + 0.5) * texel;
         float stroke = peakingClosedStroke(centre, texel);
         // The hairline is NOT closed, matching iOS: morphology is two more passes, and a
         // hairline drawn under the stroke gains almost nothing from being continuous.

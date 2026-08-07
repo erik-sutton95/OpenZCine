@@ -137,6 +137,7 @@ internal fun renderedFramingAssists(
         levelEnabled = configuration.levelEnabled && keeps(AssistTool.LEVEL),
         evMeterEnabled = configuration.evMeterEnabled && keeps(AssistTool.EV),
         desqueezeEnabled = configuration.desqueezeEnabled && keeps(AssistTool.DESQ),
+        mirrorEnabled = configuration.mirrorEnabled && keeps(AssistTool.MIRROR),
     )
 }
 
