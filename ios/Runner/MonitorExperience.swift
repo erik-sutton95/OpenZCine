@@ -508,8 +508,11 @@ struct LiveFeedModule: View {
         }
         // The zoom goes LAST and wraps the WHOLE stack, not the raster — see `Magnification`. The
         // AF box and focus ring are siblings of the raster, so scaling the raster alone would
-        // leave them behind at unmagnified positions over a magnified picture. (Gesture locations
-        // report in the pre-transform space, so tap-to-focus keeps landing on the source pixel.)
+        // leave them behind at unmagnified positions over a magnified picture. Gesture locations
+        // do NOT follow: the focus gestures attach outside this transform, so a tap reports where
+        // the finger landed in the FRAME, not which source pixel sits under it — field-verified
+        // (zoomed tap moved the AF point to the unzoomed position). `unzoomedFeedPoint` inverts
+        // this same transform on the way into `setFocusPoint`.
         .modifier(
             FeedZoomTransform(
                 transform: liveZoomTransform(size: CGSize(width: width, height: height))
@@ -581,8 +584,25 @@ struct LiveFeedModule: View {
         // out of the feed gesture.
         SpatialTapGesture()
             .onEnded { value in
-                model.setFocusPoint(at: value.location, feedSize: size)
+                model.setFocusPoint(
+                    at: unzoomedFeedPoint(value.location, size: size), feedSize: size)
             }
+    }
+
+    /// Maps a tap from the frame's space back to the unzoomed picture's.
+    ///
+    /// The focus gestures attach OUTSIDE `FeedZoomTransform`, so on a pinched-in feed a tap
+    /// reports the finger's frame position while the subject under it sits somewhere else in
+    /// source space. The render's forward transform is `P = center + (C - center)*scale + offset`
+    /// (center-anchored scale, then offset); this is that, solved for `C`. Derived from the live
+    /// transform rather than the committed state so a tap mid-gesture still lands true.
+    private func unzoomedFeedPoint(_ point: CGPoint, size: CGSize) -> CGPoint {
+        let transform = liveZoomTransform(size: size)
+        guard transform.scale > 1.0001 else { return point }
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        return CGPoint(
+            x: center.x + (point.x - center.x - transform.offset.width) / transform.scale,
+            y: center.y + (point.y - center.y - transform.offset.height) / transform.scale)
     }
 }
 
