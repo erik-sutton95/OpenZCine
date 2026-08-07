@@ -50,7 +50,11 @@ public enum CameraPath: Codable, Equatable, Hashable, Sendable {
     public var displayLabel: String {
         switch self {
         case .cameraAccessPoint: return "Camera AP"
-        case .infrastructure: return "Router"
+        // "Wi-Fi", not "Router": the operator picks a NETWORK, and the box serving it is not
+        // their concern — a mesh, a phone acting as one, a set's house Wi-Fi all read the same
+        // way from here. The camera's own access point and this phone's hotspot keep their own
+        // names, so nothing is ambiguous about which Wi-Fi is meant.
+        case .infrastructure: return "Wi-Fi"
         case .phoneHotspot: return "Hotspot"
         case .usbC: return "USB-C"
         case .hdmiCapture: return "HDMI"

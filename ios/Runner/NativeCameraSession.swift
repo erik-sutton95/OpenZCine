@@ -231,6 +231,14 @@ final class NativeCameraConnectionStore {
         )
     }
 
+    func updateSavedCameraSetupName(
+        host: String, pathKind: CameraPath.Kind?, setupName: String?
+    ) {
+        saveSavedCameras(
+            PTPIPSavedCameraRecords.updatingSetupName(
+                host: host, pathKind: pathKind, setupName: setupName, in: savedCameras()))
+    }
+
     func forgetPairing(host: String) {
         saveSavedCameras(PTPIPSavedCameraRecords.removing(host, from: savedCameras()))
     }

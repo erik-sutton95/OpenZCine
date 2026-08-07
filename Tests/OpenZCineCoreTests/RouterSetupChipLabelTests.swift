@@ -16,30 +16,47 @@ private func setup(
     let accessPoint = setup(host: "192.168.1.1", path: .cameraAccessPoint(ssid: "NIKON_ZR_02199"))
 
     let group = [router, accessPoint]
-    #expect(SavedCameraPathGroups.pathChipLabel(for: router, in: group) == "Router")
+    #expect(SavedCameraPathGroups.pathChipLabel(for: router, in: group) == "Wi-Fi")
     #expect(SavedCameraPathGroups.pathChipLabel(for: accessPoint, in: group) == "Camera AP")
 }
 
-/// Two of them, and the chips have to say which is which — the field report: "I have two Router
-/// setups I can't tell apart".
-@Test func tworRoutersAreQualifiedByTheirNetwork() {
+/// Two of them, and the chips have to say which is which — but SHORT, because this is a chip row
+/// on a phone and four addresses is a swipe to read.
+@Test func repeatedWiFiSetupsAreNumbered() {
     let home = setup(host: "192.168.1.246", path: .infrastructure(networkName: nil))
     let portable = setup(host: "192.168.129.66", path: .infrastructure(networkName: nil))
 
-    let group = [home, portable]
-    #expect(SavedCameraPathGroups.pathChipLabel(for: home, in: group) == "Router · 192.168.1.x")
-    #expect(
-        SavedCameraPathGroups.pathChipLabel(for: portable, in: group) == "Router · 192.168.129.x")
+    // Numbered by subnet, not by the group's recency order — otherwise connecting to one would
+    // renumber the other under the operator.
+    let group = [portable, home]
+    #expect(SavedCameraPathGroups.pathChipLabel(for: home, in: group) == "Wi-Fi (1)")
+    #expect(SavedCameraPathGroups.pathChipLabel(for: portable, in: group) == "Wi-Fi (2)")
+    #expect(SavedCameraPathGroups.pathChipLabel(for: home, in: group.reversed()) == "Wi-Fi (1)")
 }
 
-/// A readable SSID is the better name, and the label uses it wherever the identity does.
-@Test func aNamedNetworkNamesItsChip() {
-    let studio = setup(host: "192.168.1.246", path: .infrastructure(networkName: "Studio"))
-    let home = setup(host: "192.168.129.66", path: .infrastructure(networkName: "Home"))
+/// The point of the number is that the operator can replace it with a word that means something.
+@Test func anOperatorsOwnNameWinsOverEverything() {
+    var studio = setup(host: "192.168.1.246", path: .infrastructure(networkName: nil))
+    studio.setupName = "Studio"
+    let van = setup(host: "192.168.129.66", path: .infrastructure(networkName: nil))
 
-    let group = [studio, home]
-    #expect(SavedCameraPathGroups.pathChipLabel(for: studio, in: group) == "Router · Studio")
-    #expect(SavedCameraPathGroups.pathChipLabel(for: home, in: group) == "Router · Home")
+    let group = [studio, van]
+    #expect(SavedCameraPathGroups.pathChipLabel(for: studio, in: group) == "Studio")
+    // Its sibling keeps its number rather than being renumbered around the named one.
+    #expect(SavedCameraPathGroups.pathChipLabel(for: van, in: group) == "Wi-Fi (2)")
+
+    // A name on a LONE setup replaces the plain word too — naming is not only for duplicates.
+    var cable = setup(host: "usb:0000", path: .usbC)
+    cable.setupName = "Rig cable"
+    #expect(SavedCameraPathGroups.pathChipLabel(for: cable, in: [cable]) == "Rig cable")
+}
+
+/// The network's own name stays out of the chip and answers "which network IS this" elsewhere —
+/// a row subtitle, or the placeholder when renaming.
+@Test func theNetworkNameIsAvailableWithoutCrowdingTheChip() {
+    let studio = setup(host: "192.168.1.246", path: .infrastructure(networkName: "Studio"))
+    #expect(SavedCameraPathGroups.networkQualifier(for: studio) == "Studio")
+    #expect(SavedCameraPathGroups.pathChipLabel(for: studio, in: [studio]) == "Wi-Fi")
 }
 
 /// Only routers repeat. Nothing else should ever grow a qualifier, however the group is shaped.

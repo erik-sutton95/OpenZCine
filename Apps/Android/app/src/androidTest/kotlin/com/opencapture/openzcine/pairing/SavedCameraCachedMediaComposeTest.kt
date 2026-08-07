@@ -43,6 +43,7 @@ class SavedCameraCachedMediaComposeTest {
                         onRemove = {},
                         onAddSetup = {},
                         onForgetSetup = {},
+                onRenameSetup = {},
                     )
                 }
             }

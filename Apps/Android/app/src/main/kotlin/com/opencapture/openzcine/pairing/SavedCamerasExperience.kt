@@ -193,6 +193,10 @@ public fun SavedCamerasExperience(
     var removalTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
     var renameTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
     var addSetupTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
+    // Naming ONE setup, distinct from `renameTarget` above, which names the camera and titles its
+    // whole row.
+    var renameSetupTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
+    var renameSetupDraft by remember { mutableStateOf("") }
     // An armed add-setup watch (iOS pendingSetupIntent): the sheet's no-match buttons arm it,
     // and the first discovery on that path connects — the tap was consent given in advance.
     var armedSetupWatch by
@@ -872,6 +876,10 @@ public fun SavedCamerasExperience(
                                     )
                                 )
                             },
+                            onRenameSetup = { record ->
+                                renameSetupTarget = record
+                                renameSetupDraft = record.setupName.orEmpty()
+                            },
                             nearbyBroadcasts = nearbyBroadcasts,
                             onWatchBroadcast = gatedWatchBroadcast,
                             networkFiltersDiscovery = networkFiltersDiscovery,
@@ -913,6 +921,10 @@ public fun SavedCamerasExperience(
                                             record.host, record.cameraName, cameras
                                         )
                                     )
+                                },
+                                onRenameSetup = { record ->
+                                    renameSetupTarget = record
+                                    renameSetupDraft = record.setupName.orEmpty()
                                 },
                                 nearbyBroadcasts = nearbyBroadcasts,
                                 onWatchBroadcast = gatedWatchBroadcast,
@@ -1054,6 +1066,54 @@ public fun SavedCamerasExperience(
             message = R.string.watch_on_camera_ap_message,
         )
     }
+    renameSetupTarget?.let { record ->
+        val network = record.networkQualifier
+        AlertDialog(
+            onDismissRequest = { renameSetupTarget = null },
+            title = { Text(stringResource(R.string.saved_rename_setup_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (network != null) {
+                            // The network, not the number: "which one is this" is the question a
+                            // person renaming a setup is actually holding, and the chip
+                            // deliberately does not answer it.
+                            stringResource(R.string.saved_rename_setup_body, network)
+                        } else {
+                            stringResource(R.string.saved_rename_setup_body_plain)
+                        },
+                        color = StartupColors.muted,
+                        fontSize = 13.sp,
+                    )
+                    OutlinedTextField(
+                        value = renameSetupDraft,
+                        onValueChange = { renameSetupDraft = it },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.saved_rename_setup_hint)) },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRecordsChanged(
+                        SavedCameraRecords.updatingSetupName(
+                            host = record.host,
+                            transport = record.transport,
+                            setupName = renameSetupDraft,
+                            records = cameras,
+                        )
+                    )
+                    renameSetupTarget = null
+                }) { Text(stringResource(android.R.string.ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameSetupTarget = null }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
+
     addSetupTarget?.let { group ->
         val anchor = group.first()
         SavedCameraAddSetupDialog(
@@ -1153,6 +1213,7 @@ private fun SavedCameraList(
     onRemove: (List<SavedCameraRecord>) -> Unit,
     onAddSetup: (List<SavedCameraRecord>) -> Unit,
     onForgetSetup: (SavedCameraRecord) -> Unit,
+    onRenameSetup: (SavedCameraRecord) -> Unit,
     nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast>,
     onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit,
     networkFiltersDiscovery: Boolean,
@@ -1278,6 +1339,7 @@ private fun SavedCameraList(
                         onRemove = { onRemove(group) },
                         onAddSetup = { onAddSetup(group) },
                         onForgetSetup = onForgetSetup,
+                        onRenameSetup = onRenameSetup,
                     )
                 }
             }
@@ -1368,6 +1430,7 @@ internal fun SavedCameraRow(
     onRemove: () -> Unit,
     onAddSetup: () -> Unit,
     onForgetSetup: (SavedCameraRecord) -> Unit,
+    onRenameSetup: (SavedCameraRecord) -> Unit,
 ) {
     val activeDiscovered = isDiscovered(active)
     val availabilityColor = if (activeDiscovered) StartupColors.ready else StartupColors.dim
@@ -1486,6 +1549,7 @@ internal fun SavedCameraRow(
                     canForget = group.size > 1,
                     onConnect = { onConnect(record) },
                     onForget = { onForgetSetup(record) },
+                    onRename = { onRenameSetup(record) },
                 )
             }
             if (missingSetupKinds(group).isNotEmpty()) {
@@ -1533,6 +1597,7 @@ private fun SavedCameraSetupChip(
     canForget: Boolean,
     onConnect: () -> Unit,
     onForget: () -> Unit,
+    onRename: () -> Unit,
 ) {
     var forgetExpanded by remember { mutableStateOf(false) }
     val dotColor = if (isDiscovered) StartupColors.ready else StartupColors.dim
@@ -1578,12 +1643,21 @@ private fun SavedCameraSetupChip(
             expanded = forgetExpanded,
             onDismissRequest = { forgetExpanded = false },
         ) {
+            // "Wi-Fi (2)" is a placeholder, not a name. The operator knows which is the studio
+            // and which is the van; this is where they say so, and the chip wears it after.
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.saved_rename_setup)) },
+                onClick = {
+                    forgetExpanded = false
+                    onRename()
+                },
+            )
             DropdownMenuItem(
                 text = {
                     Text(
                         stringResource(
                             R.string.saved_forget_setup,
-                            record.transport.displayName,
+                            record.chipLabel(group),
                         )
                     )
                 },

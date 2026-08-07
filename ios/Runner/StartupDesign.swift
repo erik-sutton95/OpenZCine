@@ -628,6 +628,10 @@ struct StartupCameraListRow: View {
     /// Every saved path of this body (the active one included), most recently seen first.
     /// One record = one path; with a single path the row reads exactly as it always has.
     var paths: [PTPIPSavedCameraRecord] = []
+    /// The setup whose name is being edited, and the text field's contents. Separate from the
+    /// camera rename above: that one names the BODY and lands on every path.
+    @State private var renamingSetup: PTPIPSavedCameraRecord?
+    @State private var setupNameText = ""
     /// Availability resolver for sibling paths — the list owns discovery state.
     var availabilityFor: ((PTPIPSavedCameraRecord) -> SavedCameraAvailability)? = nil
 
@@ -704,6 +708,34 @@ struct StartupCameraListRow: View {
         } message: {
             Text("Give this camera a name you'll recognize.")
         }
+        .alert(
+            "Rename setup",
+            isPresented: Binding(
+                get: { renamingSetup != nil },
+                set: { if !$0 { renamingSetup = nil } })
+        ) {
+            TextField("Name", text: $setupNameText)
+            Button("Cancel", role: .cancel) { renamingSetup = nil }
+            Button("Save") { commitSetupRename() }
+        } message: {
+            // The network, not the number: "which one is this" is the question a person renaming
+            // a setup is actually holding, and the chip deliberately does not answer it.
+            Text(setupRenameMessage)
+        }
+    }
+
+    private var setupRenameMessage: String {
+        guard let renamingSetup else { return "" }
+        guard let network = SavedCameraPathGroups.networkQualifier(for: renamingSetup) else {
+            return "Name this setup so you can tell it apart at a glance."
+        }
+        return "This one is on \(network). Name it so you can tell it apart at a glance."
+    }
+
+    private func commitSetupRename() {
+        guard let renamingSetup else { return }
+        model.updateSavedCameraSetupName(setup: renamingSetup, name: setupNameText)
+        self.renamingSetup = nil
     }
 
     @ViewBuilder private var menuActions: some View {
@@ -714,13 +746,30 @@ struct StartupCameraListRow: View {
             Label("Rename", systemImage: "pencil")
         }
         if allPaths.count > 1 {
+            // A camera can hold several Wi-Fi setups now, and "Wi-Fi (2)" is a placeholder, not a
+            // name. The operator knows which is the studio and which is the van; this is where
+            // they say so, and the chip wears it from then on.
+            Menu {
+                ForEach(allPaths) { path in
+                    Button {
+                        renamingSetup = path
+                        setupNameText = path.setupName ?? ""
+                    } label: {
+                        Label(
+                            SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths),
+                            systemImage: "pencil")
+                    }
+                }
+            } label: {
+                Label("Rename a Setup", systemImage: "tag")
+            }
             Menu {
                 ForEach(allPaths) { path in
                     Button(role: .destructive) {
                         model.forgetPairing(host: path.host)
                     } label: {
                         Label(
-                            "Forget \(SavedCameraPathGroups.pathLabel(for: path)) path",
+                            "Forget \(SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths))",
                             systemImage: "minus.circle")
                     }
                 }
@@ -1249,7 +1298,7 @@ struct StartupAddSetupSheet: View {
     private func title(for kind: CameraPath.Kind) -> String {
         switch kind {
         case .cameraAccessPoint: return "Camera access point"
-        case .infrastructure: return "Router / shared network"
+        case .infrastructure: return "Wi-Fi network"
         case .phoneHotspot: return "This device's hotspot"
         case .usbC: return "USB-C cable"
         case .hdmiCapture: return "HDMI capture"

@@ -32,7 +32,7 @@ public enum class SavedCameraTransport(
      * operator's Router choice survives persistence instead of collapsing into
      * "hotspot" (the Android twin of iOS's old "Wi-Fi" string collapse).
      */
-    INFRASTRUCTURE("infrastructure", "Router"),
+    INFRASTRUCTURE("infrastructure", "Wi-Fi"),
 
     /** A physically attached and permissioned USB PTP camera. */
     USB_C("usb-c", "USB-C");
@@ -91,6 +91,12 @@ public data class SavedCameraRecord(
      * setup is already there, which is what every operator had before this existed.
      */
     val networkName: String? = null,
+    /**
+     * The operator's own name for THIS setup — "Studio", "Van". Distinct from [customName], which
+     * names the CAMERA and titles its whole row: naming one of a body's setups must not rename
+     * the body.
+     */
+    val setupName: String? = null,
     val streamPreset: LiveViewStreamPreset? = null,
     /** The compression grade this setup runs at; `null` means never chosen here. See [streamPreset]. */
     val qualityBias: LiveViewQualityBias? = null,
@@ -105,22 +111,38 @@ public data class SavedCameraRecord(
      * name when we have one, otherwise its subnet. Twin of the core's `pathChipLabel`.
      */
     public fun chipLabel(group: List<SavedCameraRecord>): String {
+        setupName?.trim()?.takeIf(String::isNotEmpty)?.let { return it }
         val base = transport.displayName
         if (transport != SavedCameraTransport.INFRASTRUCTURE) return base
-        if (group.count { it.transport == SavedCameraTransport.INFRASTRUCTURE } < 2) return base
-        val qualifier = networkQualifier ?: return base
-        return "$base · $qualifier"
+        val siblings = group.filter { it.transport == SavedCameraTransport.INFRASTRUCTURE }
+        if (siblings.size < 2) return base
+        // A NUMBER, not the address: this is a chip row on a phone and four addresses is a swipe
+        // to read. Ordered by SUBNET rather than the group's own order, which is sorted by
+        // recency — numbering by position would renumber every chip on connecting to another.
+        val ordered = siblings.sortedBy { subnetBase(it.host) ?: it.host }
+        val index = ordered.indexOfFirst { it.id == id }
+        if (index < 0) return base
+        return "$base (${index + 1})"
     }
 
-    /** What names this setup's network to a person: its SSID, else its subnet as "192.168.1.x". */
+    /**
+     * What names this setup's network to a person: its SSID, else its subnet as "192.168.1.x".
+     *
+     * Not the chip — that stays short — but the honest answer to "which network IS this", for a
+     * row subtitle or the placeholder when renaming.
+     */
     public val networkQualifier: String?
         get() {
             networkName?.trim()?.takeIf(String::isNotEmpty)?.let { return it }
-            val octets = host.trim().split(".")
-            if (octets.size != 4) return null
-            if (octets.any { part -> part.toIntOrNull()?.let { it in 0..255 } != true }) return null
-            return octets.take(3).joinToString(".") + ".x"
+            return subnetBase(host)?.plus(".x")
         }
+
+    private fun subnetBase(value: String): String? {
+        val octets = value.trim().split(".")
+        if (octets.size != 4) return null
+        if (octets.any { part -> part.toIntOrNull()?.let { it in 0..255 } != true }) return null
+        return octets.take(3).joinToString(".")
+    }
 
     /** Stable profile identity. */
     public val id: String
@@ -323,6 +345,27 @@ public object SavedCameraRecords {
         }
     }
 
+    /**
+     * Names one setup, keyed by (host, transport) like the stream settings — a body's setups share
+     * a camera, and renaming the studio Wi-Fi must not rename the one in the van. A blank name
+     * clears back to the generated label.
+     */
+    public fun updatingSetupName(
+        host: String,
+        transport: SavedCameraTransport,
+        setupName: String?,
+        records: List<SavedCameraRecord>,
+    ): List<SavedCameraRecord> {
+        val normalizedHost = normalizedHost(host) ?: return canonicalized(records)
+        return canonicalized(records).map { record ->
+            if (record.host != normalizedHost || record.transport != transport) {
+                record
+            } else {
+                record.copy(setupName = normalizedTag(setupName))
+            }
+        }
+    }
+
     /** Removes the profile identified by [host]. Wi-Fi credentials remain private to their store. */
     public fun removing(
         host: String,
@@ -360,6 +403,7 @@ public object SavedCameraRecords {
             cameraName = cameraName,
             wifiSsid = normalizedTag(record.wifiSsid),
             networkName = normalizedTag(record.networkName),
+            setupName = normalizedTag(record.setupName),
             customName = normalizedTag(record.customName),
         )
     }
@@ -426,6 +470,7 @@ public object SavedCameraRecords {
             // settings, so without this the operator's choice for this setup would survive
             // exactly until the next time they connected to it.
             networkName = preferred.networkName ?: fallback.networkName,
+            setupName = preferred.setupName ?: fallback.setupName,
             streamPreset = preferred.streamPreset ?: fallback.streamPreset,
             qualityBias = preferred.qualityBias ?: fallback.qualityBias,
             // The existing card owns reconnect state and any offline-media
@@ -550,6 +595,7 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
                     // bridge and reordering an enum there must not silently re-read every
                     // operator's saved setups as a different setting.
                     .put(NETWORK_NAME_KEY, record.networkName)
+                    .put(SETUP_NAME_KEY, record.setupName)
                     .put(STREAM_PRESET_KEY, record.streamPreset?.name)
                     .put(QUALITY_BIAS_KEY, record.qualityBias?.name),
             )
@@ -579,6 +625,7 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
             // An unreadable value reads as "never chosen" rather than dropping the whole record:
             // a setting is not worth losing a paired camera over.
             networkName = value.optString(NETWORK_NAME_KEY).takeIf(String::isNotBlank),
+            setupName = value.optString(SETUP_NAME_KEY).takeIf(String::isNotBlank),
             streamPreset =
                 value.optString(STREAM_PRESET_KEY).takeIf(String::isNotBlank)?.let { name ->
                     LiveViewStreamPreset.entries.firstOrNull { it.name == name }
@@ -601,6 +648,7 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
         const val CUSTOM_NAME_KEY = "custom-name"
         const val PROFILE_ID_KEY = "profile-id"
         const val NETWORK_NAME_KEY = "network-name"
+        const val SETUP_NAME_KEY = "setup-name"
         const val STREAM_PRESET_KEY = "stream-preset"
         const val QUALITY_BIAS_KEY = "quality-bias"
     }

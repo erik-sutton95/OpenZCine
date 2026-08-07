@@ -536,7 +536,7 @@ final class NativeAppModel {
             case .phoneHotspot: "Phone's Hotspot"
             case .usbC: "USB-C"
             case .hdmiCapture: "HDMI capture"
-            case .wiFiNetwork: "Router"
+            case .wiFiNetwork: "Wi-Fi"
             }
         }
 
@@ -550,7 +550,7 @@ final class NativeAppModel {
             case .hdmiCapture: "HDMI"
             case .cameraAccessPoint: "Camera AP"
             case .phoneHotspot: "Phone Hotspot"
-            case .wiFiNetwork: "Router"
+            case .wiFiNetwork: "Wi-Fi"
             }
         }
 
@@ -3229,6 +3229,14 @@ final class NativeAppModel {
         } else {
             connectToCamera()
         }
+    }
+
+    /// Names ONE setup. Blank clears it back to the generated label.
+    func updateSavedCameraSetupName(setup: PTPIPSavedCameraRecord, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        NativeCameraConnectionStore.shared.updateSavedCameraSetupName(
+            host: setup.host, pathKind: setup.pathKind, setupName: trimmed.isEmpty ? nil : trimmed)
+        refreshSavedCameras()
     }
 
     func connectSavedCamera(_ camera: PTPIPSavedCameraRecord) {

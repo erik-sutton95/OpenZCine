@@ -83,10 +83,10 @@ private func record(
     }
     #expect(label(record(host: "usb:demo", transport: "USB-C")) == "USB-C")
     #expect(label(record(host: "172.20.10.2")) == "Hotspot")
-    #expect(label(record(host: "10.99.0.20", ap: false)) == "Router")
+    #expect(label(record(host: "10.99.0.20", ap: false)) == "Wi-Fi")
     #expect(label(record(host: "192.168.1.1", ap: true)) == "Camera AP")
     // No evidence ever → the migration lands it on infrastructure, and the chip says so.
-    #expect(label(record(host: "192.168.1.1")) == "Router")
+    #expect(label(record(host: "192.168.1.1")) == "Wi-Fi")
 }
 
 /// The serial survives the canonicalizing merge the way the evidence field does: an update

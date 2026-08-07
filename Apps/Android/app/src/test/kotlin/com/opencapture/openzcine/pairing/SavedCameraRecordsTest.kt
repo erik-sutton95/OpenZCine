@@ -6,9 +6,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 class SavedCameraRecordsTest {
-    /** Two router chips have to say WHICH router, and one router needs no qualifier at all. */
+    /** Repeated Wi-Fi setups are numbered short, and an operator's own name beats the number. */
     @Test
-    fun `a repeated router chip is qualified by its network`() {
+    fun `a repeated wifi chip is numbered and renameable`() {
         fun router(host: String, name: String? = null) =
             SavedCameraRecord(
                 host = host,
@@ -29,16 +29,46 @@ class SavedCameraRecordsTest {
 
         val home = router("192.168.1.246")
         val portable = router("192.168.129.66")
-        val pair = listOf(home, portable, usb)
-        assertEquals("Router · 192.168.1.x", home.chipLabel(pair))
-        assertEquals("Router · 192.168.129.x", portable.chipLabel(pair))
-        // Nothing else is ever qualified, however the group is shaped.
+        // Numbered by SUBNET, not by list order — the list is sorted by recency, and numbering by
+        // position would renumber every chip on connecting to another.
+        val pair = listOf(portable, home, usb)
+        assertEquals("Wi-Fi (1)", home.chipLabel(pair))
+        assertEquals("Wi-Fi (2)", portable.chipLabel(pair))
+        // Nothing else is ever numbered, however the group is shaped.
         assertEquals("USB-C", usb.chipLabel(pair))
-        // A lone router keeps the bare word.
-        assertEquals("Router", home.chipLabel(listOf(home, usb)))
-        // A readable SSID is the better name and wins.
-        val named = router("192.168.1.246", name = "Studio")
-        assertEquals("Router · Studio", named.chipLabel(listOf(named, portable)))
+        // A lone one keeps the bare word.
+        assertEquals("Wi-Fi", home.chipLabel(listOf(home, usb)))
+        // The operator's own name beats everything, on a lone setup too.
+        val named = home.copy(setupName = "Studio")
+        assertEquals("Studio", named.chipLabel(listOf(named, portable)))
+        assertEquals("Studio", named.chipLabel(listOf(named)))
+        // And the network still answers "which one IS this" away from the chip.
+        assertEquals("192.168.129.x", portable.networkQualifier)
+    }
+
+    /** Renaming one setup must not touch its siblings. */
+    @Test
+    fun `renaming a setup leaves the camera's other setups alone`() {
+        val home =
+            SavedCameraRecord(
+                host = "192.168.1.246",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = 1_000,
+                wifiSsid = null,
+            )
+        val portable = home.copy(host = "192.168.129.66", lastSeenAtEpochMillis = 2_000)
+
+        val updated =
+            SavedCameraRecords.updatingSetupName(
+                host = "192.168.1.246",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                setupName = "Studio",
+                records = listOf(home, portable),
+            )
+
+        assertEquals("Studio", updated.first { it.host == "192.168.1.246" }.setupName)
+        assertNull(updated.first { it.host == "192.168.129.66" }.setupName)
     }
 
     /** Unnamed routers on different subnets are different setups — no permission required. */
@@ -339,7 +369,9 @@ class SavedCameraRecordsTest {
             SavedCameraTransport.INFRASTRUCTURE,
             SavedCameraTransport.fromPersistedValue("infrastructure"),
         )
-        assertEquals("Router", SavedCameraTransport.INFRASTRUCTURE.displayName)
+        // "Wi-Fi", not "Router": the operator picks a NETWORK, and the box serving it is
+        // not their concern. Camera AP and Hotspot keep their own names.
+        assertEquals("Wi-Fi", SavedCameraTransport.INFRASTRUCTURE.displayName)
         // Unknown or legacy blobs keep their historical hotspot landing.
         assertEquals(
             SavedCameraTransport.PHONE_HOTSPOT,

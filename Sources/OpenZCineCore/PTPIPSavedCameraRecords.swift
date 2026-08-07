@@ -39,7 +39,8 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         serialNumber: String? = nil,
         path: CameraPath? = nil,
         streamPreset: OperatorPreferences.StreamPreset? = nil,
-        qualityBias: OperatorPreferences.QualityBias? = nil
+        qualityBias: OperatorPreferences.QualityBias? = nil,
+        setupName: String? = nil
     ) {
         self.host = host
         self.displayName = displayName
@@ -51,6 +52,7 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
         self.path = path
         self.streamPreset = streamPreset
         self.qualityBias = qualityBias
+        self.setupName = setupName
     }
 
     public var host: String  // IP address, hostname, or `usb:<device-id>` key
@@ -78,6 +80,12 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
     /// to belongs to the path: the camera's own access point is a different link from a cable,
     /// and one global key meant a bias dropped for the AP followed the operator onto USB-C.
     public var streamPreset: OperatorPreferences.StreamPreset?
+    /// The operator's own name for THIS setup — "Studio", "Van", "Mum's house".
+    ///
+    /// Distinct from `presentation.customName`, which names the CAMERA and titles its whole row:
+    /// naming one of a body's setups must not rename the body. `nil` falls back to the generated
+    /// label, which is what most setups will wear forever.
+    public var setupName: String?
     /// The compression grade this setup runs at; `nil` means never chosen here. See
     /// ``streamPreset``.
     public var qualityBias: OperatorPreferences.QualityBias?
@@ -313,6 +321,26 @@ public enum PTPIPSavedCameraRecords {
         }
     }
 
+    /// Names one setup, keyed by (host, path kind) like the stream settings — a body's setups
+    /// share a camera, and renaming the studio router must not rename the one in the van.
+    /// A blank name clears back to the generated label.
+    public static func updatingSetupName(
+        host rawHost: String,
+        pathKind: CameraPath.Kind?,
+        setupName: String?,
+        in records: [PTPIPSavedCameraRecord]
+    ) -> [PTPIPSavedCameraRecord] {
+        guard let host = PTPIPPairedHosts.normalizedHost(rawHost) else {
+            return canonicalized(records)
+        }
+        return canonicalized(records).map { record in
+            guard record.host == host, record.pathKind == pathKind else { return record }
+            var updated = record
+            updated.setupName = normalizedOptionalTag(setupName)
+            return updated
+        }
+    }
+
     public static func removing(
         _ rawHost: String,
         displayName: String? = nil,
@@ -357,7 +385,8 @@ public enum PTPIPSavedCameraRecords {
             // rebuild runs on every read. A field missing from here is a field the store quietly
             // erases the next time anything touches the list.
             streamPreset: record.streamPreset,
-            qualityBias: record.qualityBias
+            qualityBias: record.qualityBias,
+            setupName: normalizedOptionalTag(record.setupName)
         )
     }
 
@@ -472,6 +501,9 @@ public enum PTPIPSavedCameraRecords {
         }
         if merged.qualityBias == nil {
             merged.qualityBias = fallback.qualityBias
+        }
+        if merged.setupName == nil {
+            merged.setupName = fallback.setupName
         }
         if merged.presentation == nil {
             merged.presentation = fallback.presentation
