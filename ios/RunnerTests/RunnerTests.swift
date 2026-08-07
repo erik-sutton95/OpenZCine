@@ -882,6 +882,50 @@ final class RunnerTests: XCTestCase {
 }
 
 extension RunnerTests {
+    /// The anchor is the operator's own level, not mid-scale. Arming the shutter used to set every
+    /// phone to half volume — remote or not — and drag whatever they were listening to with it.
+    /// All the mechanism needs is a step of room each way, which nearly every real setting has.
+    func testTheVolumeAnchorLeavesAnOrdinaryLevelExactlyWhereItIs() {
+        // Anything with a step of headroom either side is its own anchor: nothing to hear.
+        for volume in stride(from: Float(0.0625), through: Float(0.9375), by: 0.0625) {
+            XCTAssertEqual(
+                BluetoothShutterMonitor.anchor(forCurrentVolume: volume), volume, accuracy: 0.0001,
+                "volume \(volume) should not be moved")
+        }
+        // Only the rails move, and only by the one step a press needs to be visible.
+        XCTAssertEqual(
+            BluetoothShutterMonitor.anchor(forCurrentVolume: 0), 0.0625, accuracy: 0.0001)
+        XCTAssertEqual(
+            BluetoothShutterMonitor.anchor(forCurrentVolume: 1), 0.9375, accuracy: 0.0001)
+        // Both rails keep room to MOVE, which is the whole reason the anchor exists: a press
+        // either way from the anchored value lands somewhere detectably different.
+        for rail in [Float(0), Float(1)] {
+            let anchored = BluetoothShutterMonitor.anchor(forCurrentVolume: rail)
+            XCTAssertGreaterThan(anchored, 0)
+            XCTAssertLessThan(anchored, 1)
+        }
+    }
+
+    /// The decision travels with whatever anchor the session took, not a hardcoded half.
+    func testTheTriggerDecisionFollowsTheOperatorsOwnAnchor() {
+        let t0: TimeInterval = 100
+        let anchor: Float = 0.25
+        XCTAssertFalse(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.25, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor),
+            "the anchor's own echo is never a press")
+        XCTAssertTrue(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.3125, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
+        XCTAssertTrue(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.1875, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
+        // 0.5 is just a volume now — at this anchor it is a press, not a resting place.
+        XCTAssertTrue(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
+    }
+
     /// The Bluetooth-shutter volume decision: any move off the mid-scale anchor triggers (shutter
     /// remotes send volume-up or volume-down depending on model), but not within the debounce
     /// window after a trigger nor within the echo window after a programmatic re-anchor; the
@@ -891,27 +935,27 @@ extension RunnerTests {
         // Presses in BOTH directions, well clear of both windows → trigger.
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.5625, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.4375, now: t0, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.4375, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
         // The anchor echo (same value) never triggers.
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
         // Inside the debounce window after a trigger → suppressed; after it → fires again.
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.3, lastTriggerAt: t0, lastAnchorAt: t0))
+                newVolume: 0.5625, now: t0 + 0.3, lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
                 newVolume: 0.5625,
                 now: t0 + BluetoothShutterMonitor.debounceInterval + 0.01,
-                lastTriggerAt: t0, lastAnchorAt: t0))
+                lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
         // Right after a programmatic re-anchor, a rise is its echo → suppressed.
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0))
+                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5))
     }
 
     /// KVO is the primary detector and the private notification is a rail fallback. On releases
@@ -920,28 +964,29 @@ extension RunnerTests {
         let firstEventAt: TimeInterval = 200
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: firstEventAt, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.5625, now: firstEventAt, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5
+            ))
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
                 newVolume: 0.5625,
                 now: firstEventAt + 0.01,
                 lastTriggerAt: firstEventAt,
-                lastAnchorAt: firstEventAt))
+                lastAnchorAt: firstEventAt, anchor: 0.5))
     }
 
     func testBluetoothShutterReportsWhyVolumeEventsAreIgnored() {
         let t0: TimeInterval = 300
         XCTAssertEqual(
             BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0),
+                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5),
             .atAnchor)
         XCTAssertEqual(
             BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: t0, lastAnchorAt: 0),
+                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: t0, lastAnchorAt: 0, anchor: 0.5),
             .debounced)
         XCTAssertEqual(
             BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0),
+                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5),
             .selfInflicted)
     }
 
