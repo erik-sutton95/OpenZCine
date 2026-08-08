@@ -253,9 +253,10 @@ import Testing
 }
 
 @Test func hotspotDiscoveryLightsOnlyTheHotspotSetup() {
-    // A body found over the phone's hotspot (fixed 172.20.10.x subnet) must light the
-    // Hotspot setup and never the Router one — and a router-network discovery must not
-    // light the Hotspot setup.
+    // A body found on the phone's live hotspot subnet must light the Hotspot setup and never
+    // the Router one — and a router-network discovery must not light the Hotspot setup.
+    // The hotspot /24 is supplied from the live bridge interface, not a fixed global range.
+    let hotspotBases = ["172.20.10"]
     let router = PTPIPSavedCameraRecord(
         host: "192.168.1.20",
         displayName: "ZR_6002199",
@@ -266,7 +267,7 @@ import Testing
     let hotspot = PTPIPSavedCameraRecord(
         host: "172.20.10.2",
         displayName: "ZR_6002199",
-        transport: "Wi-Fi",
+        transport: "iPhone Hotspot",
         lastSeenAt: Date(),
         path: .phoneHotspot
     )
@@ -275,16 +276,20 @@ import Testing
 
     #expect(
         SavedCameraAvailabilityPolicy.resolve(
-            camera: router, discoveredCameras: [overHotspot], connectedHost: nil) == .offline)
+            camera: router, discoveredCameras: [overHotspot], connectedHost: nil,
+            hotspotSubnetBases: hotspotBases) == .offline)
     #expect(
         SavedCameraAvailabilityPolicy.resolve(
-            camera: hotspot, discoveredCameras: [overHotspot], connectedHost: nil)
+            camera: hotspot, discoveredCameras: [overHotspot], connectedHost: nil,
+            hotspotSubnetBases: hotspotBases)
             == .available(overHotspot))
     #expect(
         SavedCameraAvailabilityPolicy.resolve(
-            camera: hotspot, discoveredCameras: [overRouter], connectedHost: nil) == .offline)
+            camera: hotspot, discoveredCameras: [overRouter], connectedHost: nil,
+            hotspotSubnetBases: hotspotBases) == .offline)
     #expect(
         SavedCameraAvailabilityPolicy.resolve(
-            camera: router, discoveredCameras: [overRouter], connectedHost: nil)
+            camera: router, discoveredCameras: [overRouter], connectedHost: nil,
+            hotspotSubnetBases: hotspotBases)
             == .available(overRouter))
 }

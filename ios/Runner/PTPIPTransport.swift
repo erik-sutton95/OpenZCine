@@ -125,11 +125,43 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
     /// [verify-on-HW: that a bare connect-and-close leaves a ZR in pairing mode undisturbed. It is
     /// strictly less than the Init this code already aims at 254 hosts every sweep, but the
     /// pairing-mode sensitivity is real and was found the hard way.]
-    static func probePortOpen(
-        host rawHost: String,
-        timeoutMilliseconds: UInt64 = 250
-    ) async -> Bool {
-        await probePort(host: rawHost, timeoutMilliseconds: timeoutMilliseconds).isOpen
+    /// Dials `hosts` on the PTP port, `width` at a time, and reports what each one did.
+    ///
+    /// The ONE mute sweep. It existed twice — once in the generic discovery service and once in
+    /// the infrastructure finder — as two copies of the same sliding window with the same
+    /// constants written out twice. Two copies of a scan is two scans to keep in step, and the
+    /// half that falls behind is the half that stops finding cameras.
+    ///
+    /// The window is bounded rather than firing a whole /24 at once: 254 simultaneous connects
+    /// are 254 blocked sockets and an ARP request for every address nobody holds.
+    static func scanPorts(
+        hosts: [String],
+        width: Int = InfrastructureDiscovery.sweepConcurrency,
+        timeoutMilliseconds: UInt64 = InfrastructureDiscovery.blindSweepTimeoutMilliseconds
+    ) async -> [String: HostProbeVerdict] {
+        await withTaskGroup(of: (String, HostProbeVerdict).self) { group in
+            var pending = hosts.makeIterator()
+            var inFlight = 0
+            while inFlight < max(1, width), let host = pending.next() {
+                group.addTask {
+                    (host, await probePort(host: host, timeoutMilliseconds: timeoutMilliseconds))
+                }
+                inFlight += 1
+            }
+            var verdicts: [String: HostProbeVerdict] = [:]
+            for await (host, verdict) in group {
+                verdicts[host] = verdict
+                if let next = pending.next() {
+                    group.addTask {
+                        (
+                            next,
+                            await probePort(host: next, timeoutMilliseconds: timeoutMilliseconds)
+                        )
+                    }
+                }
+            }
+            return verdicts
+        }
     }
 
     /// The same probe, keeping WHY it failed.
@@ -146,9 +178,9 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
     static func probePort(
         host rawHost: String,
         timeoutMilliseconds: UInt64 = 250
-    ) async -> (isOpen: Bool, verdict: String) {
+    ) async -> HostProbeVerdict {
         let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty else { return (false, "empty") }
+        guard !host.isEmpty else { return .unreachableOther }
         let socket = PTPIPSocket(
             host: host,
             port: UInt16(ptpIPPort),
@@ -158,20 +190,20 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
         do {
             try await socket.start()
             socket.close()
-            return (true, "open")
+            return .open
         } catch {
             let code = socket.lastErrno
             socket.close()
-            if case NativeCameraSessionError.timeout = error { return (false, "timeout") }
+            if case NativeCameraSessionError.timeout = error { return .timeout }
             switch code {
-            case 0: return (false, "other")
-            case ECONNREFUSED: return (false, "refused")
-            case EHOSTUNREACH: return (false, "no-route")
-            case ENETUNREACH: return (false, "no-network")
-            case ETIMEDOUT, ETIME: return (false, "timeout")
-            case EMFILE, ENFILE: return (false, "no-fds")
-            case EACCES, EPERM: return (false, "denied")
-            default: return (false, "errno-\(code)")
+            case ECONNREFUSED: return .refused
+            case EHOSTUNREACH: return .noRoute
+            case ENETUNREACH: return .noNetwork
+            case ETIMEDOUT, ETIME: return .timeout
+            case EACCES, EPERM: return .denied
+            // Everything else — including running out of descriptors — says something about
+            // THIS device, never about the host. It must never count as evidence either way.
+            default: return .unreachableOther
             }
         }
     }

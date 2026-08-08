@@ -824,7 +824,8 @@ final class NativeAppModel {
     /// views — the timer that was supposed to reveal the card could never start, which left a
     /// stalled attempt 1 as a permanent RECOV chip with no card and no way out.
     private(set) var sessionRecoveryCardGraceElapsed = false
-    var cameraHost = "192.168.1.1"
+    /// Last dialled / connected host. Empty until a real address is known — never a guessed IP.
+    var cameraHost = ""
     var connectionMessage = "Join your camera's Wi‑Fi network, then come back here to connect."
     var connectedIdentity: NativeCameraIdentity?
     var discoveredCameras: [DiscoveredCamera] = []
@@ -1073,11 +1074,19 @@ final class NativeAppModel {
         let kind: CameraPath.Kind
     }
     var pendingSetupIntent: PendingSetupIntent?
+    /// Last infrastructure search miss (Wi‑Fi path). Drives card copy and the manual-host escape.
+    var lastInfrastructureMiss: InfrastructureMissReason?
+    /// Consecutive empty infrastructure finder passes while a Wi‑Fi search is armed.
+    var infrastructureSearchEmptyStreak = 0
+    /// Operator entered a camera IP from the body's network screen (industry PTP-IP escape hatch).
+    var isManualCameraHostEntryPresented = false
+    var manualCameraHostDraft = ""
     /// Add-setup sheet actions that PRESENT something (the AP join cover, the credential
     /// scanner) must run after the sheet has actually gone — SwiftUI silently drops a
     /// fullScreenCover presented while a sheet is mid-dismissal, which read as the sheet's
     /// buttons doing nothing. The sheet stashes the action; its onDismiss runs it.
     @ObservationIgnored var pendingAddSetupAction: (() -> Void)?
+    @ObservationIgnored private let infrastructureCameraFinder = InfrastructureCameraFinder()
 
     /// Runs and clears the stashed add-setup action; called from the sheet's onDismiss.
     func runPendingAddSetupAction() {
@@ -2949,18 +2958,18 @@ final class NativeAppModel {
         }
     }
 
-    /// The known address for a camera-AP SSID: a saved AP setup's host first, else the
-    /// Nikon convention for factory-named AP SSIDs. Nil for custom SSIDs with no record —
-    /// those genuinely need discovery.
+    /// A saved dialable address for a camera-AP SSID, if one was learned on a previous connect.
+    /// Never invents a global AP IP — nil means rediscover on the live link after join.
     private func cameraAPDirectHost(ssid: String) -> String? {
-        if let saved = savedCameras.first(where: { record in
-            if case .cameraAccessPoint(let recorded?) = record.path { return recorded == ssid }
-            return false
-        }) {
-            return saved.host
-        }
-        return CameraWiFiSSID.isNikonZAccessPoint(ssid)
-            ? CameraDiscovery.nikonZRAccessPointHost : nil
+        guard
+            let saved = savedCameras.first(where: { record in
+                if case .cameraAccessPoint(let recorded?) = record.path {
+                    return recorded == ssid
+                }
+                return false
+            }), CameraDiscovery.isDialableHost(saved.host)
+        else { return nil }
+        return saved.host
     }
 
     /// Dials one known host through the single-flighted connect until it lands or attempts run
@@ -3296,8 +3305,21 @@ final class NativeAppModel {
         pairedReconnectSawCameraLeave = false
         pairedReconnectFastPathTask?.cancel()
         pairedReconnectFastPathTask = nil
+        // A pairing the operator walked away from leaves no row behind. Only a row THIS pairing
+        // created, and only while nothing ever connected through it — a live session means the
+        // setup earned its place whatever the card is doing.
+        if let created = pairingCreatedRecordHost, !isConnected {
+            logConnection("pairing abandoned — removing unconfirmed setup host=\(created)")
+            NativeCameraConnectionStore.shared.forgetPairing(host: created)
+            savedCameras = NativeCameraConnectionStore.shared.savedCameras()
+        }
+        pairingCreatedRecordHost = nil
         // An armed setup watch dies with its card for the same reason.
         pendingSetupIntent = nil
+        lastInfrastructureMiss = nil
+        infrastructureSearchEmptyStreak = 0
+        isManualCameraHostEntryPresented = false
+        manualCameraHostDraft = ""
         let failedAttempt = connectionProgressShowsFailure
         dismissConnectionProgress()
         guard !failedAttempt else { return }
@@ -3727,6 +3749,8 @@ final class NativeAppModel {
                 pendingPairedReconnectSSID = nil
                 lastPairedRejoinAttemptAt = nil
                 pairedReconnectSawCameraLeave = false
+                // The pairing produced a working session, so its row has earned its place.
+                pairingCreatedRecordHost = nil
                 connectionProgressDeviceName = ConnectionProgressCopy.resolveDisplayName(
                     rawName: session.identity.displayName,
                     savedCamera: savedCameras.first {
@@ -4277,6 +4301,15 @@ final class NativeAppModel {
     private var pairingContinuation: CheckedContinuation<Bool, Never>?
     private var pendingPairingSaveCandidate: PendingPairingSaveCandidate?
     private var acceptedPairingForCurrentAttempt = false
+
+    /// The saved-camera row this pairing brought into existence, until a connection justifies it.
+    ///
+    /// The record is written the moment the camera drops the connection after accepting the code,
+    /// because the reconnect that follows needs a record to find. If the operator gives up before
+    /// that reconnect lands, what is left is a camera they never connected to, on a setup that
+    /// does not work — cleared on a successful connect, removed on Cancel. Nil whenever the host
+    /// already had a setup, so an abandoned re-pair can never delete a working one.
+    private var pairingCreatedRecordHost: String?
     /// Host the app just paired and is waiting to rejoin the network with its new profile, so the
     /// discovery loop can reconnect to it automatically once it reappears.
     private var pendingPairedReconnectHost: String?
@@ -4520,7 +4553,72 @@ final class NativeAppModel {
         guard !isConnected, !isDemoSession else { return }
         stopDiscoveryLoop(keepRelayBrowsing: true)
         let guid = NativeCameraConnectionStore.shared.guid()
-        let cameras =
+        let cameras = await runDiscoveryPass(guid: guid)
+        logSetupWatchPass(cameras: cameras)
+        applyDiscoveryResults(cameras)
+        startDiscoveryLoop(resetResults: false)
+    }
+
+    /// Whether this discovery surface should use the isolated infrastructure finder (continuous
+    /// Bonjour + patient directed probes + occupancy-first local sweep) instead of the generic
+    /// multi-path `discover` pipeline.
+    private var usesInfrastructureFinder: Bool {
+        if pendingSetupIntent?.kind == .infrastructure { return true }
+        if shouldShowFirstPairWizard, firstPairTransportMethod == .wiFiNetwork,
+            firstPairWizardStep == .discoverAndPair
+        {
+            return true
+        }
+        return false
+    }
+
+    /// Hosts worth a directed probe on the **infrastructure / Wi‑Fi** path only.
+    ///
+    /// A saved Camera AP record often still carries `192.168.1.1` (or another AP-network
+    /// address). That is not a target for "both on house Wi‑Fi" search — dialling it only
+    /// burns patience on the gateway. Include infrastructure (and dialling) hosts only.
+    private var infrastructureDirectedCandidates: [String] {
+        var hosts: [String] = []
+        for camera in savedCameras {
+            switch camera.path?.kind {
+            case .infrastructure, .none:
+                // Untyped legacy: still a dialable last-known if on this LAN.
+                if CameraDiscovery.isDialableHost(camera.host) { hosts.append(camera.host) }
+            case .cameraAccessPoint, .phoneHotspot, .usbC, .hdmiCapture:
+                break
+            }
+        }
+        if isEstablishingConnection, CameraDiscovery.isDialableHost(cameraHost) {
+            hosts.append(cameraHost)
+        }
+        // Manual entry / last failed dial while an infrastructure watch is armed.
+        if pendingSetupIntent?.kind == .infrastructure,
+            CameraDiscovery.isDialableHost(cameraHost)
+        {
+            hosts.append(cameraHost)
+        }
+        return hosts.filter { CameraDiscovery.isDialableHost($0) }
+    }
+
+    /// One discovery pass: infrastructure finder when the Wi‑Fi path is armed, else generic.
+    private func runDiscoveryPass(guid: Data) async -> [DiscoveredCamera] {
+        if usesInfrastructureFinder {
+            let report = await infrastructureCameraFinder.search(
+                guid: guid,
+                directedCandidates: infrastructureDirectedCandidates,
+                excludedHosts: hostsServedByVisibleBroadcasts(),
+                onCameraAccessPoint: cameraAccessPointEvidence == true,
+                localNetworkDenied: false,
+                status: { [weak self] message in
+                    self?.connectionMessage = StartupConnectionCopy.friendly(message)
+                }
+            )
+            applyInfrastructureSearchReport(report)
+            return report.cameras
+        }
+        lastInfrastructureMiss = nil
+        infrastructureSearchEmptyStreak = 0
+        return
             (try? await discoveryService.discover(
                 guid: guid,
                 priorityHosts: discoveryPriorityHosts,
@@ -4534,9 +4632,54 @@ final class NativeAppModel {
                 },
                 onRelayPresences: { [weak self] hits in self?.applyRelayPresences(hits) }
             )) ?? []
-        logSetupWatchPass(cameras: cameras)
-        applyDiscoveryResults(cameras)
-        startDiscoveryLoop(resetResults: false)
+    }
+
+    /// Applies typed infrastructure search outcomes to the connect card and miss streak.
+    private func applyInfrastructureSearchReport(_ report: InfrastructureSearchReport) {
+        if report.foundCamera {
+            lastInfrastructureMiss = nil
+            infrastructureSearchEmptyStreak = 0
+            return
+        }
+        lastInfrastructureMiss = report.miss
+        infrastructureSearchEmptyStreak += 1
+        guard let miss = report.miss else { return }
+        let cameraName: String? = {
+            if let title = pendingSetupIntent?.anchor.displayTitle, !title.isEmpty { return title }
+            return connectionProgressDeviceName.isEmpty ? nil : connectionProgressDeviceName
+        }()
+        let copy = InfrastructureDiscovery.operatorCopy(for: miss, cameraName: cameraName)
+        if isConnectionProgressPresented, !connectionProgressShowsFailure {
+            connectionStageDetail = copy
+            connectionMessage = copy
+        } else if shouldShowFirstPairWizard {
+            connectionMessage = copy
+        }
+    }
+
+    /// Whether the manual host entry control should show (Wi‑Fi search stalled with a typed miss).
+    var showsManualCameraHostEntry: Bool {
+        usesInfrastructureFinder
+            && infrastructureSearchEmptyStreak >= 2
+            && lastInfrastructureMiss != nil
+            && lastInfrastructureMiss != .onCameraAccessPoint
+            && lastInfrastructureMiss != .localNetworkDenied
+    }
+
+    /// Connect using an address the operator read off the camera's network screen.
+    func connectToManualCameraHost(_ rawHost: String) {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalized = PTPIPPairedHosts.normalizedHost(host),
+            !DiscoveredCamera.isUSBHostKey(normalized)
+        else {
+            connectionMessage = "Enter a valid IPv4 address from the camera network screen."
+            return
+        }
+        isManualCameraHostEntryPresented = false
+        manualCameraHostDraft = ""
+        logConnection("infra-search manual host=\(normalized)")
+        let camera = DiscoveredCamera(ip: normalized, name: nil, source: .manual)
+        connectToCamera(camera)
     }
 
     /// Every address a discovery pass should be dialling, and where each came from.
@@ -4564,7 +4707,8 @@ final class NativeAppModel {
         if isEstablishingConnection, !cameraHost.isEmpty, !hosts.contains(cameraHost) {
             hosts.append(cameraHost)
         }
-        return hosts
+        // Never queue virtual keys (usb:, ap:) or empty strings as TCP peers.
+        return hosts.filter { CameraDiscovery.isDialableHost($0) }
     }
 
     private func logDiscoveryPriorityHosts() {
@@ -4700,27 +4844,8 @@ final class NativeAppModel {
             isMonitorPresented = false
             connectionMessage = "Looking for cameras on your network…"
 
-            let cameras: [DiscoveredCamera]
-            do {
-                cameras = try await discoveryService.discover(
-                    guid: guid,
-                    priorityHosts: discoveryPriorityHosts,
-                    excludedHosts: { [weak self] in
-                        self?.hostsServedByVisibleBroadcasts() ?? []
-                    },
-                    probesCameras: discoveryProbesCameras,
-                    browsesUSB: discoveryBrowsesUSB,
-                    status: { [weak self] message in
-                        self?.connectionMessage = StartupConnectionCopy.friendly(message)
-                    },
-                    onRelayPresences: { [weak self] hits in self?.applyRelayPresences(hits) }
-                )
-                logSetupWatchPass(cameras: cameras)
-            } catch {
-                cameras = []
-                connectionMessage =
-                    "Still looking. Turn on Connect to PC on the camera, then join its Wi‑Fi or your iPhone hotspot."
-            }
+            let cameras = await runDiscoveryPass(guid: guid)
+            logSetupWatchPass(cameras: cameras)
 
             guard !Task.isCancelled, discoveryLoopGeneration == generation else { break }
             applyDiscoveryResults(cameras)
@@ -4752,12 +4877,25 @@ final class NativeAppModel {
     /// only earns an AP chase with POSITIVE proof: this attempt applied the AP Wi-Fi config, or
     /// the established session declared the camera-AP path.
     private func cameraAccessPointSSID(host: String, displayName: String?) -> String? {
-        guard sessionJoinedCameraAccessPoint || establishedSessionUsedCameraAP else { return nil }
+        // A readable SSID that looks like a camera's own network is PROOF, and it does not matter
+        // who put this phone there. This branch used to sit behind the join gate below, so an
+        // operator who joined the camera's Wi-Fi by hand resolved to nil — and nil is what the
+        // rejoin chase guards on, so it returned at its first line and the confirm-on-camera
+        // screen waited for ever with no prompt (field log: `paired-reconnect armed
+        // host=192.168.1.1 ssid=unresolvable`, two lines under `connectedSSID=NIKON_ZR_02199`).
         if let ssid = connectedWiFiSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
             CameraWiFiSSID.isNikonZAccessPoint(ssid)
         {
             return ssid
         }
+        // Everything past here INFERS an access-point SSID rather than observing one, so it stays
+        // behind positive evidence: inferring one on a router or hotspot setup is the path-isolation
+        // bug this gate exists for. Live evidence counts alongside our own join — being on the
+        // camera's network is the fact that matters, not who arranged it.
+        guard
+            sessionJoinedCameraAccessPoint || establishedSessionUsedCameraAP
+                || liveCameraAccessPointEvidence == true
+        else { return nil }
         if let displayName, let derived = CameraWiFiSSID.deriveSSID(fromCameraName: displayName) {
             return derived
         }
@@ -5006,8 +5144,27 @@ final class NativeAppModel {
                     try? await Task.sleep(for: .milliseconds(250))
                     continue
                 }
+                // TWO readings, because one of them usually refuses to answer. iOS hands back an
+                // SSID only for a network THIS app configured, so on a phone that joined the
+                // camera by hand — or that has wandered back to a home network — `currentWiFiSSID`
+                // is nil, and the entire restart signal used to be nil with it. That is why this
+                // path felt less reliable than every other one: the others ask the camera, and
+                // this one asked iOS a question it mostly declines.
+                //
+                // A mute dial at the access point's own address answers the same question without
+                // asking iOS anything, and it is the same evidence the rest of the app runs on.
+                // It sends no PTP bytes, so unlike an Init it cannot disturb a body still sitting
+                // on its Confirm screen. Off the camera's network that address is somebody's
+                // router, which refuses rather than accepts — a refusal is not an answer here.
                 let current = await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
-                if let current, current.caseInsensitiveCompare(ssid) == .orderedSame {
+                let ssidSaysCameraNetwork =
+                    current.map { $0.caseInsensitiveCompare(ssid) == .orderedSame } ?? false
+                let hostSaysCameraNetwork =
+                    await PTPIPTransport.probePort(
+                        host: host,
+                        timeoutMilliseconds: InfrastructureDiscovery.blindSweepTimeoutMilliseconds
+                    ) == .open
+                if ssidSaysCameraNetwork || hostSaysCameraNetwork {
                     sawCameraNetwork = true
                     // Pre-confirm, the phone is often STILL on the camera's old AP — dialing
                     // then grabs the lingering pre-confirm session (what `sawCameraLeave`
@@ -5118,7 +5275,9 @@ final class NativeAppModel {
             let onCameraAccessPoint = cameraAccessPointEvidence == true
             let shapeFits: (DiscoveredCamera) -> Bool = { [onCameraAccessPoint] in
                 let viaHotspot = CameraStartupPolicy.usesIPhoneHotspot(
-                    host: $0.ip, transport: "")
+                    host: $0.ip,
+                    transport: "",
+                    hotspotSubnetBases: NativeNetworkInterfaceSnapshot.hotspotSubnetBases())
                 switch intent.kind {
                 case .usbC, .hdmiCapture:
                     return $0.source == .usb
@@ -5152,22 +5311,20 @@ final class NativeAppModel {
                 connectToCamera(match)
                 return
             }
-            // Keep the CARD honest as the situation moves, not just at arm time. A router watch
-            // cannot fulfil while this device is on the camera's own network — the shape test
-            // above rejects every candidate there — and the operator watching the spinner has no
-            // way to know their phone is what is in the way. Re-evaluated per pass so switching
-            // networks clears it without re-arming.
+            // Keep the CARD honest as the situation moves, not just at arm time. Prefer a typed
+            // infrastructure miss (hostsVisibleNoPTP, Local Network, …) already written by the
+            // finder — overwriting that with generic "Searching…" erased the diagnosis that
+            // makes an empty Wi‑Fi search actionable.
             if intent.kind == .infrastructure, isConnectionProgressPresented,
                 !connectionProgressShowsFailure
             {
-                let blocked =
-                    "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use — we keep looking, and the camera appears once you are both on it."
-                let searching =
-                    NativeNetworkInterfaceSnapshot.currentScanSubnetLabel().map {
-                        "Searching \($0), the network this device is on. On the camera: Network menu → Connect to computer → pair with a profile for that same network."
-                    }
-                    ?? "Looking for \(connectionProgressDeviceName) on this network. On the camera: Network menu → Connect to computer → pair with this network's profile."
-                let wanted = onCameraAccessPoint ? blocked : searching
+                // One source for this sentence. The fallbacks used to carry their own prose —
+                // longer, and drifting from the typed copy the moment either was edited.
+                let wanted = InfrastructureDiscovery.operatorCopy(
+                    for: lastInfrastructureMiss
+                        ?? (onCameraAccessPoint ? .onCameraAccessPoint : .cameraNotFound),
+                    cameraName: connectionProgressDeviceName.isEmpty
+                        ? nil : connectionProgressDeviceName)
                 if connectionStageDetail != wanted {
                     connectionStageDetail = wanted
                     connectionMessage = wanted
@@ -5254,6 +5411,14 @@ final class NativeAppModel {
 
     private func savePendingPairingCamera() {
         guard let candidate = pendingPairingSaveCandidate else { return }
+        // Remember whether this row is one we are ABOUT to create, so an abandoned pairing can
+        // take it back out again. A host that already had a setup is not ours to remove — the
+        // operator has a working record there and a failed re-pair must never cost them it.
+        let normalized = PTPIPPairedHosts.normalizedHost(candidate.host)
+        let alreadySaved = savedCameras.contains {
+            PTPIPPairedHosts.normalizedHost($0.host) == normalized
+        }
+        pairingCreatedRecordHost = alreadySaved ? nil : candidate.host
         savePairedCamera(
             host: candidate.host,
             displayName: candidate.displayName,
@@ -5284,6 +5449,19 @@ final class NativeAppModel {
     /// "unknown", which resolves to not-on-AP. That is the safe direction: a dark AP chip still
     /// connects when tapped, and its connect is the one that offers the join.
     var isOnCameraAccessPointNetwork: Bool { liveCameraAccessPointEvidence == true }
+
+    /// Addresses that belong to a saved camera-AP setup, normalized.
+    ///
+    /// Reachable ONLY from the camera's own network. Off it the same address is somebody's
+    /// router — 192.168.1.1 by convention on both — so a host answering there proves nothing
+    /// about where the camera is, and must never satisfy a setup of another kind.
+    var savedCameraAccessPointHosts: Set<String> {
+        Set(
+            savedCameras
+                .filter { $0.path?.kind == .cameraAccessPoint }
+                .compactMap { PTPIPPairedHosts.normalizedHost($0.host) }
+        )
+    }
 
     /// The join proof INCLUDED: what an attempt did counts when declaring the path it took.
     /// The network an infrastructure setup is ON, when this device can read it.
@@ -5338,15 +5516,10 @@ final class NativeAppModel {
         host: String, displayName: String?, setup: PTPIPSavedCameraRecord? = nil
     ) -> CameraPath {
         let path = resolvedPathForSave(host: host, displayName: displayName, setup: setup)
-        // ONE invariant, enforced once, over every source of evidence above: an access-point
-        // setup lives at the AP's fixed address. A camera reached at any other address was not
-        // reached over its own access point, however strong the evidence looks — and the evidence
-        // goes stale in exactly the case that matters. After the post-pairing rejoin the join flag
-        // is still set while the camera has come back on the HOUSE network, so the session that
-        // finally lands there was being stamped as an AP setup carrying a router address. That
-        // record dials an address the camera never answers on, and because the app then believes
-        // it is already looking at the AP setup, it suppresses the join that would have fixed it.
-        if case .cameraAccessPoint = path, host != CameraDiscovery.nikonZRAccessPointHost {
+        // ONE invariant: positive proof we are NOT on the camera's own network demotes an
+        // access-point stamp to infrastructure. (Join flags go stale after post-pairing rejoin
+        // on house Wi‑Fi.) There is no universal camera-AP IP — SSID/session evidence decides.
+        if case .cameraAccessPoint = path, cameraAccessPointEvidence == false {
             return .infrastructure(networkName: infrastructureNetworkName)
         }
         return path
@@ -5356,7 +5529,11 @@ final class NativeAppModel {
         host: String, displayName: String?, setup: PTPIPSavedCameraRecord?
     ) -> CameraPath {
         if host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) { return .usbC }
-        if CameraStartupPolicy.usesIPhoneHotspot(host: host, transport: "") {
+        if CameraStartupPolicy.usesIPhoneHotspot(
+            host: host,
+            transport: "",
+            hotspotSubnetBases: NativeNetworkInterfaceSnapshot.hotspotSubnetBases()
+        ) {
             return .phoneHotspot
         }
         if sessionJoinedCameraAccessPoint {
@@ -5573,6 +5750,13 @@ final class NativeAppModel {
     }
 
     private func transitionToSavedCameraNetworkCheck(message: String) {
+        // The one transition on the AP path that said nothing. A field log stopped dead after
+        // "auto-accept pairing challenge received" and gave no hint that the flow had handed off
+        // to the confirm-and-rejoin wait at all — the next line was a sweep of a different
+        // network entirely, minutes later.
+        logConnection(
+            "paired-reconnect armed host=\(pendingPairedReconnectHost ?? "none") "
+                + "ssid=\(pendingPairedReconnectSSID ?? "unresolvable")")
         startupMode = .savedCameras
         isMonitorPresented = false
         connectedIdentity = nil

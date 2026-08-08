@@ -82,7 +82,7 @@ private func record(
         SavedCameraPathGroups.pathLabel(for: PTPIPSavedCameraRecords.typed(legacy)[0])
     }
     #expect(label(record(host: "usb:demo", transport: "USB-C")) == "USB-C")
-    #expect(label(record(host: "172.20.10.2")) == "Hotspot")
+    #expect(label(record(host: "10.0.0.2", transport: "iPhone Hotspot")) == "Hotspot")
     #expect(label(record(host: "10.99.0.20", ap: false)) == "Wi-Fi")
     #expect(label(record(host: "192.168.1.1", ap: true)) == "Camera AP")
     // No evidence ever → the migration lands it on infrastructure, and the chip says so.

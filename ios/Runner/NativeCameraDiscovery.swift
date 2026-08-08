@@ -202,25 +202,15 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         // address) beyond what was passed in, and every last probe candidate must respect the
         // served-camera exclusion.
         let priorityChunk = split.priority.filter { !excluded.contains($0) }
-        // Where to look, nearest-first, from the real prefix rather than a guess at it. Our own
-        // subnet stays first and resolves in one round; the neighbours behind it are what reach a
-        // camera the old plan could not see at all.
-        let plannedSubnets = SubnetScanPlan.orderedSubnets(
-            interfaces: scanInterfaces.map {
-                LocalIPv4Interface(name: $0.name, address: $0.address, netmask: $0.netmask)
-            },
-            savedHosts: priorityHosts
-        )
         let localAddressSet = Set(localAddresses.compactMap(PTPIPPairedHosts.normalizedHost))
-        // The subnets this device is actually standing in are always swept; the rest of the ladder
-        // is earned, one rung per empty pass, so the common case costs exactly what it did before
-        // the ladder existed.
-        let localSubnets = Set(
-            scanInterfaces.compactMap { CameraDiscovery.subnetBase(for: $0.address) })
-        let networkSignature = scanInterfaces.map(\.address).sorted().joined(separator: ",")
-        let budget = Self.subnetBudget(
-            signature: networkSignature, localCount: max(1, localSubnets.count))
-        let sweptSubnets = Array(plannedSubnets.prefix(budget))
+        // The subnets this device is standing in, and only those. A widening ladder used to reach
+        // out to twelve /24s here; the one path where a neighbouring subnet was ever plausible now
+        // has its own finder, so every rung this could still climb was on the camera's own access
+        // point or the phone's hotspot — both single-subnet by construction, and neither with
+        // anywhere to widen TO.
+        let sweptSubnets = Array(
+            Set(scanInterfaces.compactMap { CameraDiscovery.subnetBase(for: $0.address) })
+        ).sorted()
         let sweepHosts =
             sweptSubnets
             .flatMap(CameraDiscovery.fastHosts(inSubnet:))
@@ -240,7 +230,7 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         logConnection(
             "discovery sweep pass hosts=\(candidateChunks.reduce(0) { $0 + $1.count }) "
                 + "excluded=\(excluded.count) on=[\(interfaceWitness)] "
-                + "subnets=[\(sweptSubnets.joined(separator: " "))] of \(plannedSubnets.count)")
+                + "subnets=[\(sweptSubnets.joined(separator: " "))]")
 
         if scanInterfaces.isEmpty {
             let bridgeAddresses = allLocalInterfaces.filter { $0.name.hasPrefix("bridge") }
@@ -269,47 +259,24 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                 hostsToIdentify = chunk
             } else {
                 // PASS ONE, wide and mute: connect to the PTP port and hang up, sending no PTP
-                // bytes. This is what makes a wide search affordable and safe at once — the old
-                // sweep aimed a real Init at all 254 hosts of one subnet, which is both slower and
-                // more disturbance than this is across a dozen.
-                let scan = await withTaskGroup(of: (String, Bool, String).self) { group in
-                    // A bounded window, not the whole chunk at once — see `sweepScanWidth` for why
-                    // patience, not width, is what finds a camera on Wi-Fi.
-                    var pending = chunk.makeIterator()
-                    var inFlight = 0
-                    while inFlight < Self.sweepScanWidth, let host = pending.next() {
-                        group.addTask { await Self.scanOutcome(host: host) }
-                        inFlight += 1
-                    }
-                    var open: [String] = []
-                    var tally: [String: Int] = [:]
-                    var alive: [String] = []
-                    for await (host, isOpen, verdict) in group {
-                        if isOpen { open.append(host) }
-                        tally[verdict, default: 0] += 1
-                        // Which addresses are OCCUPIED, not just how many. A host that refuses is
-                        // a device that exists and is not the camera; a host that times out or has
-                        // no route is an address nobody holds. The counts cannot say whether the
-                        // camera's own address is in the first group — and that is the whole
-                        // question when a sweep comes back empty on a network you can see it on.
-                        if !Self.unoccupiedVerdicts.contains(verdict) { alive.append(host) }
-                        if let next = pending.next() {
-                            group.addTask { await Self.scanOutcome(host: next) }
-                        }
-                    }
-                    return (open: open.sorted(), tally: tally, alive: alive.sorted())
-                }
-                hostsToIdentify = scan.open
+                // bytes. This is what makes a wide search affordable and safe at once — a real
+                // Init aimed at a body sitting in pairing mode knocks it out of pairing.
+                let verdicts = await PTPIPTransport.scanPorts(hosts: chunk)
+                let scan = InfrastructureSweepTally.from(verdicts: verdicts)
+                hostsToIdentify = scan.openHosts
                 // Always, not only on a hit: a sweep that opens nothing is exactly the case that
                 // needs explaining, and the tally is what separates "nothing is listening" from
-                // "we never reached anything".
+                // "we never reached anything". `occupiedHosts` names WHICH addresses are held,
+                // because the counts alone cannot say whether the camera's own is among them.
                 let tally =
-                    scan.tally.sorted { $0.key < $1.key }
-                    .map { "\($0.key)=\($0.value)" }
-                    .joined(separator: " ")
+                    [
+                        "open=\(scan.openCount)", "refused=\(scan.refusedCount)",
+                        "timeout=\(scan.timeoutCount)", "no-route=\(scan.noRouteCount)",
+                        "denied=\(scan.deniedCount)", "other=\(scan.otherCount)",
+                    ].joined(separator: " ")
                 logConnection(
-                    "discovery sweep scan open=[\(scan.open.joined(separator: " "))] \(tally) "
-                        + "alive=[\(scan.alive.prefix(24).joined(separator: " "))]")
+                    "discovery sweep scan open=[\(scan.openHosts.joined(separator: " "))] \(tally) "
+                        + "occupied=[\(scan.occupiedHosts.prefix(24).joined(separator: " "))]")
             }
             guard !hostsToIdentify.isEmpty else { continue }
             // PASS TWO, narrow: the Init that separates a camera from anything else listening on
@@ -336,8 +303,6 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
             }
         }
 
-        Self.recordSweepOutcome(
-            signature: networkSignature, foundCamera: !discovered.isEmpty)
         return discovered
     }
 
@@ -422,71 +387,6 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         }
         if error is CancellationError { return "cancelled" }
         return "\(nsError.domain)-\(nsError.code)"
-    }
-
-    /// How many hosts the mute scan dials at once, and how long each is given to answer.
-    ///
-    /// The bound was 250 ms, and a ZR on Wi-Fi cannot answer in 250 ms. Measured on hardware
-    /// 2026-08-04 for the presence probe: an idle body takes ~1.0–1.2 s to answer a dial, because
-    /// its radio is in power-save and only listens on its beacon cadence. So the sweep asked the
-    /// whole subnet a question and hung up before the camera was awake to hear it — every pass,
-    /// however plainly the camera was sitting there. `probeHostAlive` already allows 1.5 s for the
-    /// same body for the same reason; this is that number, not a new guess.
-    ///
-    /// The width bound comes with it: 254 simultaneous 1.5 s connects would be 254 blocked sockets
-    /// and 254 near-simultaneous ARP requests for addresses nobody holds. 48 is under libdispatch's
-    /// worker cap, so the window is what limits the burst rather than the thread pool's mood.
-    ///
-    /// ponytail: a /24 now costs ~8 s instead of ~1 s. That is the local subnet, swept first and
-    /// the one that matters; if the widened ladder's wall clock ever hurts, give the speculative
-    /// subnets the impatient bound and keep this one for the subnets we stand in.
-    private static let sweepScanWidth = 48
-    private static let sweepScanTimeoutMilliseconds: UInt64 = 1_500
-
-    /// Verdicts that mean nobody holds the address, as opposed to somebody holding it and not
-    /// answering on 15740.
-    private static let unoccupiedVerdicts: Set<String> = ["timeout", "no-route", "no-network"]
-
-    private static func scanOutcome(host: String) async -> (String, Bool, String) {
-        let outcome = await PTPIPTransport.probePort(
-            host: host, timeoutMilliseconds: sweepScanTimeoutMilliseconds)
-        return (host, outcome.isOpen, outcome.verdict)
-    }
-
-    /// How many consecutive sweeps have found nothing, per network.
-    ///
-    /// The widening ladder is a FALLBACK, not a default. A camera is nearly always on the subnet
-    /// this device is standing in, and paying twelve subnets on every pass to cover the case where
-    /// it is not made the common case twelve times slower — the field verdict on the first cut was
-    /// "took forever", with the camera one address away on our own /24 the whole time.
-    ///
-    /// Keyed by the interface signature so walking onto a different network starts the ladder over
-    /// rather than inheriting the last one's despair.
-    private static let sweepWideningSlot = OSAllocatedUnfairLock(
-        initialState: (signature: "", emptyPasses: 0))
-
-    /// How many subnets this pass may sweep: the local ones always, plus one more for each empty
-    /// pass past the grace period.
-    private static func subnetBudget(signature: String, localCount: Int) -> Int {
-        sweepWideningSlot.withLock { state in
-            if state.signature != signature {
-                state.signature = signature
-                state.emptyPasses = 0
-            }
-            let grace = 2
-            let widened = max(0, state.emptyPasses - grace)
-            return min(SubnetScanPlan.maximumSubnets, max(localCount, localCount + widened))
-        }
-    }
-
-    private static func recordSweepOutcome(signature: String, foundCamera: Bool) {
-        sweepWideningSlot.withLock { state in
-            if state.signature != signature {
-                state.signature = signature
-                state.emptyPasses = 0
-            }
-            state.emptyPasses = foundCamera ? 0 : state.emptyPasses + 1
-        }
     }
 
     /// Grants at most one full-subnet presence sweep per 30 s across every discovery entry
@@ -677,6 +577,21 @@ enum NativeNetworkInterfaceSnapshot {
         nativeLocalIPv4Interfaces().map(\.address)
     }
 
+    /// /24 bases of this device's Personal Hotspot (bridge*) interfaces, when up.
+    /// Used to classify discoveries as hotspot without a fixed IP range.
+    static func hotspotSubnetBases() -> [String] {
+        var bases: [String] = []
+        var seen: Set<String> = []
+        for iface in nativeLocalIPv4Interfaces() where iface.name.hasPrefix("bridge") {
+            guard let base = CameraDiscovery.subnetBase(for: iface.address),
+                !seen.contains(base)
+            else { continue }
+            seen.insert(base)
+            bases.append(base)
+        }
+        return bases
+    }
+
     /// The Wi-Fi network this device is scanning, as an operator-readable subnet ("192.168.1.x").
     ///
     /// The name would be better, and iOS often refuses to give it — the field logs are full of
@@ -737,7 +652,7 @@ enum NativeNetworkInterfaceSnapshot {
     }
 }
 
-private struct NativeLocalIPv4Interface: Sendable {
+struct NativeLocalIPv4Interface: Sendable {
     let name: String
     let address: String
     /// The prefix the OS actually assigned. Read and then discarded for years, which is why a
@@ -745,7 +660,9 @@ private struct NativeLocalIPv4Interface: Sendable {
     let netmask: String?
 }
 
-private func nativeLocalIPv4Interfaces() -> [NativeLocalIPv4Interface] {
+/// Live IPv4 interfaces for discovery and infrastructure search (shared by
+/// `NativeCameraDiscoveryService` and `InfrastructureCameraFinder`).
+func nativeLocalIPv4Interfaces() -> [NativeLocalIPv4Interface] {
     var interfaces: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&interfaces) == 0, let first = interfaces else { return [] }
     defer { freeifaddrs(interfaces) }

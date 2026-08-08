@@ -183,7 +183,49 @@ struct ConnectionProgressSheet: View {
                     .foregroundStyle(.secondary)
             }
             .font(.body)
+            // Industry escape hatch: after a typed empty infrastructure search, the operator
+            // can type the address shown on the camera's network screen.
+            if model.showsManualCameraHostEntry || model.isManualCameraHostEntryPresented {
+                manualHostEntry
+            }
             cancelButton
+        }
+    }
+
+    @ViewBuilder private var manualHostEntry: some View {
+        @Bindable var model = model
+        VStack(spacing: 10) {
+            if model.isManualCameraHostEntryPresented {
+                TextField("Camera IP (e.g. 192.168.1.246)", text: $model.manualCameraHostDraft)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.numbersAndPunctuation)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    model.connectToManualCameraHost(model.manualCameraHostDraft)
+                } label: {
+                    Text("Connect to this address")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(
+                    model.manualCameraHostDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty)
+            } else {
+                Button {
+                    model.isManualCameraHostEntryPresented = true
+                } label: {
+                    Text("Enter address from camera")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .accessibilityHint(
+                    "Opens a field for the IP shown on the camera network menu")
+            }
         }
     }
 

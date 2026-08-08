@@ -425,7 +425,7 @@ import Testing
 /// cross-path leak the typed setups exist to prevent.
 @Test func apSetupStillJoinsWhenTheCameraIsDiscoveredOnAnotherNetwork() {
     let record = PTPIPSavedCameraRecord(
-        host: CameraDiscovery.nikonZRAccessPointHost,
+        host: "192.168.1.50",
         displayName: "ZR_6002199",
         transport: "Wi-Fi",
         lastSeenAt: nil,
@@ -445,18 +445,17 @@ import Testing
     #expect(target?.ssid == "NIKON_ZR_6002199")
 }
 
-/// …and must NOT re-offer it when the camera is discovered at the access point's own address,
-/// which is what "already on the camera's AP" looks like when iOS refuses to name the network.
-@Test func apSetupDoesNotRejoinWhenTheCameraAnswersOnTheAccessPointItself() {
+/// …and must NOT re-offer it when we already know we are on the camera's AP SSID.
+@Test func apSetupDoesNotRejoinWhenAlreadyOnTheCameraAccessPointSSID() {
     let record = PTPIPSavedCameraRecord(
-        host: CameraDiscovery.nikonZRAccessPointHost,
+        host: "192.168.1.50",
         displayName: "ZR_6002199",
         transport: "Wi-Fi",
         lastSeenAt: nil,
         path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
     )
     let onAccessPoint = DiscoveredCamera(
-        ip: CameraDiscovery.nikonZRAccessPointHost,
+        ip: "192.168.1.50",
         name: "ZR_6002199",
         source: .bonjour
     )
@@ -467,6 +466,6 @@ import Testing
             localAddresses: ["192.168.1.88"],
             savedCamera: record,
             discoveredCamera: onAccessPoint,
-            connectedSSID: nil
+            connectedSSID: "NIKON_ZR_6002199"
         ) == nil)
 }

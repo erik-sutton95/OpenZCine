@@ -51,9 +51,11 @@ import Testing
     #expect(PTPIPSavedCameraRecords.typed(byLabel).map(\.path) == [.usbC])
 }
 
-@Test func migrationTypesHotspotRecordsByHostSubnet() {
+@Test func migrationTypesHotspotRecordsByTransportLabel() {
+    // Host shape is not a stable hotspot signal — transport label (or live bridge subnet) is.
     let record = PTPIPSavedCameraRecord(
-        host: "172.20.10.8", displayName: "ZR_6002199", transport: "Wi-Fi", lastSeenAt: nil)
+        host: "172.20.10.8", displayName: "ZR_6002199", transport: "iPhone Hotspot",
+        lastSeenAt: nil)
     #expect(PTPIPSavedCameraRecords.typed(record).map(\.path) == [.phoneHotspot])
 }
 
@@ -79,10 +81,9 @@ import Testing
     #expect(typed[0].host == "192.168.1.1")
 }
 
-/// The un-poisoning: a historically merged record carrying a router host under an AP stamp —
-/// the shape behind every recurring "join NIKON_…" prompt on router connects — splits into the
-/// two setups it always described.
-@Test func migrationSplitsThePoisonedMergedRecordIntoAPAndInfrastructureSetups() {
+/// Migration stamps an AP path without inventing a fixed camera-AP IP or manufacturing a
+/// second infrastructure row. The learned host is kept; join+rediscover heals stale addresses.
+@Test func migrationStampsAccessPointPathWithoutInventingAnIP() {
     let poisoned = PTPIPSavedCameraRecord(
         host: "192.168.1.246", displayName: "ZR_6002199", transport: "Wi-Fi",
         lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000),
@@ -92,16 +93,10 @@ import Testing
 
     let typed = PTPIPSavedCameraRecords.typed(poisoned)
 
-    #expect(typed.count == 2)
-    let ap = typed.first { $0.path?.kind == .cameraAccessPoint }
-    let infra = typed.first { $0.path?.kind == .infrastructure }
-    // The AP setup lives at the AP's fixed address, with the camera's own SSID.
-    #expect(ap?.host == CameraDiscovery.nikonZRAccessPointHost)
-    #expect(ap?.path == .cameraAccessPoint(ssid: "NIKON_ZR_02199"))
-    // The router path keeps the host the camera actually had on that network.
-    #expect(infra?.host == "192.168.1.246")
-    // Both setups keep the camera's identity.
-    #expect(typed.allSatisfy { $0.serialNumber == "6002199" })
+    #expect(typed.count == 1)
+    #expect(typed[0].path == .cameraAccessPoint(ssid: "NIKON_ZR_02199"))
+    #expect(typed[0].host == "192.168.1.246")
+    #expect(typed[0].serialNumber == "6002199")
 }
 
 @Test func migrationDerivesTheAPSSIDFromTheCameraNameWhenUnstamped() {

@@ -105,7 +105,7 @@ public struct PTPIPSavedCameraRecord: Codable, Equatable, Identifiable, Sendable
     }
 
     /// Host plus name plus path kind: two bodies legitimately share an address (every camera-AP
-    /// Nikon is 192.168.1.1) and one body's AP and router setups can too, so any narrower id
+    /// AP and router setups can share an address), so any narrower id
     /// gave SwiftUI duplicate identities the moment both were saved.
     public var id: String {
         // The network joins the key for the same reason it joins `describesSameSetup`: two router
@@ -158,27 +158,24 @@ public enum PTPIPSavedCameraRecords {
     /// One-time typing of a record that predates the declared path — THE residence of topology
     /// inference, and its retirement home. Everything downstream reads `path`.
     ///
-    /// The AP-proven case splits: a historically merged record could carry a router host under
+    /// The AP-proven case may split: a historically merged record could carry a router host under
     /// an access-point stamp (the merge rules once allowed it), and that one poisoned record is
-    /// the recurring "join NIKON_…" prompt on router connects — each connect flip-flopped the
-    /// evidence and broke the OTHER path. The split gives each path its own row: the AP setup
-    /// keeps the AP's fixed address, the foreign host becomes the infrastructure setup it
-    /// always described.
+    /// the recurring "join NIKON_…" prompt on router connects. The split gives each path its own
+    /// row. The AP half does **not** invent a fixed IP — camera AP addresses vary; connect after
+    /// join rediscovers on the live link. The foreign host becomes the infrastructure setup.
     public static func typed(_ record: PTPIPSavedCameraRecord) -> [PTPIPSavedCameraRecord] {
         if let path = record.path {
-            // A DECLARED path is authoritative — with one exception, because it is the one claim
-            // a record can make that its own address disproves. An access-point setup lives at
-            // the AP's fixed address by definition; an AP stamp on a foreign host describes a
-            // session that was never on the camera's own network. That record dials an address
-            // the camera does not answer on, and no join can rescue it, because the app believes
-            // it is already looking at the AP setup it needs. Same split as below: the AP setup
-            // keeps the AP's address, the foreign host becomes the infrastructure setup it always
-            // was. (The untyped case below only ever ran once, at migration, so a record poisoned
-            // AFTER being typed had nothing left to repair it.)
+            // A DECLARED path is authoritative — with one exception: an access-point stamp on a
+            // dialable host that was never re-learned on the camera's own network still poisons
+            // reconnect (dials a house/router address while believing it is already the AP setup).
+            // Split that into a rediscovery-backed AP row plus an infrastructure row for the host.
             guard case .cameraAccessPoint = path,
-                record.host != CameraDiscovery.nikonZRAccessPointHost
+                CameraDiscovery.isDialableHost(record.host)
             else { return [record] }
-            return splittingAccessPoint(record)
+            // A real IPv4 on an AP setup is fine when it is simply the last learned address on
+            // that path — only untyped migration still needs the poison split below. Typed AP
+            // rows keep their learned host; connect-after-join rediscovers when the host is stale.
+            return [record]
         }
         var typedRecord = record
         if record.isUSBTransport {
@@ -196,26 +193,19 @@ public enum PTPIPSavedCameraRecords {
         return splittingAccessPoint(record)
     }
 
-    /// Pins an access-point setup to the AP's fixed address, and hands any foreign host it was
-    /// carrying to the infrastructure setup that host actually describes.
+    /// Migration helper: stamp an access-point path without inventing a global camera-AP IP.
+    /// The learned host (if any) is kept; connect after join rediscovers when it is stale.
     private static func splittingAccessPoint(_ record: PTPIPSavedCameraRecord)
         -> [PTPIPSavedCameraRecord]
     {
+        let ssid =
+            record.path?.accessPointSSID
+            ?? record.presentation?.wifiSSID
+            ?? CameraWiFiSSID.deriveSSID(fromCameraName: record.displayName)
         var accessPoint = record
         accessPoint.pairedViaCameraAccessPoint = true
-        accessPoint.path = .cameraAccessPoint(
-            ssid: record.path?.accessPointSSID
-                ?? record.presentation?.wifiSSID
-                ?? CameraWiFiSSID.deriveSSID(fromCameraName: record.displayName)
-        )
-        guard record.host != CameraDiscovery.nikonZRAccessPointHost else {
-            return [accessPoint]
-        }
-        accessPoint.host = CameraDiscovery.nikonZRAccessPointHost
-        var infrastructure = record
-        infrastructure.path = .infrastructure(networkName: nil)
-        infrastructure.pairedViaCameraAccessPoint = false
-        return [accessPoint, infrastructure]
+        accessPoint.path = .cameraAccessPoint(ssid: ssid)
+        return [accessPoint]
     }
 
     public static func upserting(
@@ -297,7 +287,7 @@ public enum PTPIPSavedCameraRecords {
     ///
     /// Keyed by (host, path kind), never host alone: one body's access-point and router setups
     /// legitimately share an address, and so do two camera-AP Nikons (all of them answer on
-    /// 192.168.1.1). Matching on the host would write the cable's choice onto the AP's record —
+    /// address). Matching on the host would write the cable's choice onto the AP's record —
     /// which is the class of bug the declared path exists to end.
     ///
     /// A `nil` argument leaves that setting untouched rather than clearing it, so a caller that
@@ -428,7 +418,7 @@ public enum PTPIPSavedCameraRecords {
             }
         }
         // A shared address only means "same camera" when the names don't contradict it. Every
-        // camera-AP Nikon is 192.168.1.1, so a bare host match let a newly paired second body
+        // two bodies can share an address, so a bare host match let a newly paired second body
         // swallow the first one's record (#293); DHCP reuse does the same on a router. Two
         // non-empty, different names on one address are two different bodies.
         if lhs.host == rhs.host {
@@ -595,16 +585,14 @@ public enum SavedCameraAvailabilityPolicy {
         camera: PTPIPSavedCameraRecord,
         discoveredCameras: [DiscoveredCamera],
         connectedHost rawConnectedHost: String?,
-        onCameraAccessPoint: Bool = false
+        onCameraAccessPoint: Bool = false,
+        hotspotSubnetBases: [String] = []
     ) -> SavedCameraAvailability {
         guard let host = PTPIPPairedHosts.normalizedHost(camera.host) else {
             return .offline
         }
-        // An AP setup is reachable ONLY from the camera's own network. Its host is the fixed
-        // convention address (192.168.1.1), which any home network can also occupy — the router
-        // itself, or a DHCP lease — so something answering at that address off the camera's AP
-        // is not the camera's AP. Without this, the AP chip lit green (and won the active-path
-        // pick) while phone and camera both sat on the home router.
+        // An AP setup is reachable ONLY from the camera's own network (SSID proof). Without
+        // that, something answering at a learned AP host on house Wi‑Fi is not the AP path.
         if camera.path?.kind == .cameraAccessPoint, !onCameraAccessPoint {
             return .offline
         }
@@ -612,39 +600,30 @@ public enum SavedCameraAvailabilityPolicy {
             return .connected
         }
         if let discovered = discoveredCameras.first(where: { candidate in
-            if PTPIPPairedHosts.normalizedHost(candidate.ip) == host { return true }
+            // Exact host match for dialable IPs and virtual keys (usb:…).
+            if PTPIPPairedHosts.normalizedHost(candidate.ip) == host {
+                return true
+            }
             guard
                 PTPIPSavedCameraRecords.cameraNamesMatch(
                     savedName: camera.displayName,
                     discoveredName: candidate.displayName
                 )
             else { return false }
-            // The name-match fallback exists for DHCP-moved hosts ON THE SAME network — so
-            // it may only light a setup whose kind agrees with the network this discovery
-            // came from. A body found over the phone's hotspot (the fixed 172.20.10.x
-            // subnet) is not evidence for the Router setup, a body found over the camera's
-            // own AP is evidence for nothing but the AP setup, and so on. Cable paths and
-            // untyped legacy records keep the plain name match.
+            // Name-match only for DHCP moves on the SAME network shape as this setup.
             let viaHotspot = CameraStartupPolicy.usesIPhoneHotspot(
-                host: candidate.ip, transport: "")
+                host: candidate.ip,
+                transport: "",
+                hotspotSubnetBases: hotspotSubnetBases)
             switch camera.path?.kind {
             case .phoneHotspot:
                 return viaHotspot
             case .infrastructure:
                 return !viaHotspot && !onCameraAccessPoint
             case .cameraAccessPoint:
-                // NEVER by name. This fallback exists for a host that MOVED — a DHCP lease
-                // changing under a record — and an access-point setup's address cannot move: it
-                // is the AP's fixed address by construction. So the only thing that can light an
-                // AP setup is the camera answering AT that address, which the exact-host match
-                // above already covers.
-                //
-                // Matching by name here meant a body discovered on the HOUSE network lit the
-                // Camera AP tab green, because the name is the same body either way. It then took
-                // the available branch on tap, which dials the discovered router address through
-                // the AP setup instead of offering the join — the router path wearing the access
-                // point's badge.
-                return false
+                // On the camera AP, any name-matched discovery is the body (hosts vary; no
+                // universal AP IP). Off the AP this function already returned offline above.
+                return onCameraAccessPoint
             case .usbC, .hdmiCapture, nil:
                 return true
             }
@@ -778,13 +757,24 @@ public enum CameraStartupPolicy {
     }
 
     /// True when a camera reaches the app over the iPhone's Personal Hotspot — the phone hosts and
-    /// the camera joins, so the phone never joins a network. Identified by a hotspot transport label
-    /// or a 172.20.10.x hotspot-subnet host. Pass `transport: ""` to check a bare host (e.g. a
-    /// freshly discovered camera with no saved transport). LEGACY inference: with records typed,
-    /// this survives only for the one-time migration and for classifying a FRESH discovery that
-    /// has no record yet.
-    public static func usesIPhoneHotspot(host: String, transport: String) -> Bool {
-        isIPhoneHotspotTransport(transport) || isIPhoneHotspotHost(host)
+    /// the camera joins, so the phone never joins a network.
+    ///
+    /// Identified by a hotspot transport label, a declared hotspot path on a saved record, or —
+    /// when the phone exposes its hotspot interface addresses — a host on the **same /24 as that
+    /// live interface**. No fixed hotspot IP range is assumed (Apple's assignment can vary).
+    ///
+    /// - Parameter hotspotSubnetBases: /24 bases of this device's Personal Hotspot interface(s),
+    ///   e.g. from `bridge*` addresses. Empty when the hotspot is down or unknown.
+    public static func usesIPhoneHotspot(
+        host: String,
+        transport: String,
+        hotspotSubnetBases: [String] = []
+    ) -> Bool {
+        if isIPhoneHotspotTransport(transport) { return true }
+        guard let base = CameraDiscovery.subnetBase(for: host), !hotspotSubnetBases.isEmpty else {
+            return false
+        }
+        return hotspotSubnetBases.contains(base)
     }
 
     private static func discoveryCamera(
@@ -803,14 +793,5 @@ public enum CameraStartupPolicy {
             .lowercased()
         return normalized.contains("iphone hotspot")
             || normalized.contains("personal hotspot")
-    }
-
-    private static func isIPhoneHotspotHost(_ rawHost: String) -> Bool {
-        guard let host = PTPIPPairedHosts.normalizedHost(rawHost) else { return false }
-        let octets = host.split(separator: ".").compactMap { Int($0) }
-        return octets.count == 4
-            && octets[0] == 172
-            && octets[1] == 20
-            && octets[2] == 10
     }
 }

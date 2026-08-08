@@ -197,6 +197,24 @@ final class WiFiJoinCoordinator {
             configuration = NEHotspotConfiguration(ssid: ssid)
         }
         configuration.joinOnce = false
+
+        // Remove the installed configuration FIRST, or this whole function is a no-op.
+        //
+        // Applying a configuration for an SSID that already has one is not a rejoin request as
+        // far as iOS is concerned — it is already configured, so the apply resolves without
+        // re-associating, and iOS certainly will not walk away from a working home network with
+        // internet on its own account. The operator sees no prompt and stays exactly where they
+        // are. Field report: confirm on the camera, camera restarts its access point, phone falls
+        // back to home Wi-Fi, and every ten seconds this reapplied into silence.
+        //
+        // Removing first makes the next apply a genuine join, which is what draws the system
+        // alert and actually moves the phone. Safe here because the caller only reaches this
+        // branch having established, by SSID *or* by dialling the access point, that we are not
+        // on the camera's network — so there is no live association to tear down.
+        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
+        Self.hotspotLogger.info(
+            "reapply join ssid=\(ssid, privacy: .private(mask: .hash)) hasPassword=\(password?.isEmpty == false)"
+        )
         // One hop to the main actor for the whole result: this closure is nonisolated, and two
         // separate `Task { @MainActor }` bodies would each send `self` across, which Swift 6
         // rejects as a race with the other.

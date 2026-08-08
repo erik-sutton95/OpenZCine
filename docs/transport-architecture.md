@@ -112,6 +112,12 @@ protocol CameraConnector {
   the scanner. Recovery may rejoin the AP. Owns the `NIKON_*` SSID vocabulary exclusively.
 - `InfrastructureConnector` — discovery on the current network (Bonjour + subnet probe), waits
   out drops, NEVER touches Wi-Fi configuration. Owns the "wrong network" hint.
+  **Shipped 2026-08-08 as `InfrastructureCameraFinder` + core `InfrastructureDiscovery`:**
+  continuous `_ptp._tcp` browse for the search lifetime, patient directed probes (3×2 s) on
+  hosts already on the local subnet, occupancy-first local /24 mute sweep (1.5 s, width 48,
+  two passes), typed `InfrastructureMissReason` → operator copy, manual host entry after two
+  empty passes. Idle camera list still uses passive/liveness discovery so it never Inits a
+  body another device holds.
 - `HotspotConnector` — hosts nothing, joins nothing; waits for the camera to appear on the
   hotspot subnet; recovery waits for the camera to rejoin.
 - `USBConnector` — ImageCaptureCore attach lifecycle.

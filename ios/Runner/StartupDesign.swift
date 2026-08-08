@@ -345,7 +345,10 @@ struct StartupSavedCamerasView: View {
                                 camera: record,
                                 discoveredCameras: model.discoveredCameras,
                                 connectedHost: model.connectedIdentity?.host,
-                                onCameraAccessPoint: model.isOnCameraAccessPointNetwork
+                                onCameraAccessPoint: model.isOnCameraAccessPointNetwork,
+                                hotspotSubnetBases:
+                                    NativeNetworkInterfaceSnapshot
+                                    .hotspotSubnetBases()
                             )
                         }
                         if let active = SavedCameraPathGroups.activePath(
@@ -1202,11 +1205,23 @@ struct StartupAddSetupSheet: View {
         case .usbC:
             return model.discoveredCameras.first { $0.source == .usb }
         case .infrastructure:
-            // On the camera's own AP this body is discovered — over a network the router
+            // On the camera's own AP this body is discovered — over a network the Wi-Fi
             // setup can't use. Same rule as the availability chips: no route, no match.
             guard !model.isOnCameraAccessPointNetwork else { return nil }
+            let accessPointHosts = model.savedCameraAccessPointHosts
             return model.discoveredCameras.first { discovered in
-                discovered.source != .usb
+                // A camera-AP record's host is an address on the CAMERA's own network —
+                // 192.168.1.1 by convention, which is also the commonest home-router address
+                // there is. Something answering there is either the camera on its access
+                // point (a different setup) or the operator's router, and the liveness dial
+                // this row can come from — a kernel RST — cannot tell those apart. Either
+                // way it is never the Wi-Fi setup being added. Left in, a saved Camera AP
+                // setup put "Connect Now" on the Wi-Fi row of a camera that was nowhere on
+                // this network, and the connect it offered dialled the router.
+                guard let host = PTPIPPairedHosts.normalizedHost(discovered.ip),
+                    !accessPointHosts.contains(host)
+                else { return false }
+                return discovered.source != .usb
                     && CameraStartupPolicy.savedCamera(
                         forDiscovered: discovered, in: [camera]) != nil
             }

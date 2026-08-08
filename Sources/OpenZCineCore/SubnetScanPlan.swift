@@ -31,61 +31,13 @@ public struct LocalIPv4Interface: Sendable, Equatable {
 /// Order is everything, because the sweep stops at the first camera it finds. Nearest first, from
 /// where the evidence already points.
 public enum SubnetScanPlan: Sendable {
-    /// Hard ceiling on how many /24s one plan may name.
-    ///
-    /// A /16 holds 256 of them and blind-probing all of it is minutes of radio for a device that
-    /// is nearly always within a step or two of where we are standing. The cap keeps a widening
-    /// search bounded; the ORDER is what makes it find things.
-    public static let maximumSubnets = 12
-
-    /// The /24 bases to sweep, nearest-first, deduplicated.
-    ///
-    /// - Parameters:
-    ///   - interfaces: This device's live IPv4 interfaces, netmask included where known.
-    ///   - savedHosts: Addresses cameras have answered on before — the strongest evidence there
-    ///     is about where this operator's gear lives, and worth a whole subnet each.
-    public static func orderedSubnets(
-        interfaces: [LocalIPv4Interface],
-        savedHosts: [String] = [],
-        limit: Int = maximumSubnets
-    ) -> [String] {
-        var ordered: [String] = []
-        var seen: Set<String> = []
-        func append(_ base: String?) {
-            guard let base, !seen.contains(base), ordered.count < limit else { return }
-            seen.insert(base)
-            ordered.append(base)
-        }
-
-        let scannable = interfaces.filter { isDefaultScanIPv4($0.address) }
-
-        // 1. The subnets this device is standing in. Always first: a camera on our own link needs
-        //    no routing to answer, and this is the case that resolves in half a second.
-        for interface in scannable {
-            append(CameraDiscovery.subnetBase(for: interface.address))
-        }
-
-        // 2. Subnets a camera has actually answered on before. Evidence beats proximity — a saved
-        //    host two hundred third-octets away is still somewhere this rig has really worked.
-        for host in savedHosts where isDefaultScanIPv4(host) {
-            append(CameraDiscovery.subnetBase(for: host))
-        }
-
-        // 3. Outward from each interface, alternating up and down. Inside the interface's own
-        //    prefix these are literally on-link; outside it they are the routed neighbours a
-        //    consumer router will usually carry us to. Same ladder either way — the difference is
-        //    only how likely each rung is to answer, and the sweep stops at the first that does.
-        for interface in scannable {
-            guard let octets = ipv4Octets(interface.address) else { continue }
-            for step in 1...limit {
-                for candidate in [octets[2] + step, octets[2] - step]
-                where (0...255).contains(candidate) {
-                    append("\(octets[0]).\(octets[1]).\(candidate)")
-                }
-            }
-        }
-        return ordered
-    }
+    // The widening ladder that used to live here — twelve /24s, nearest-first, one more rung
+    // per empty pass — is gone. It was written for a camera reachable on a neighbouring subnet,
+    // and it ended up running ONLY on the camera's own access point and the phone's hotspot,
+    // because the one path where a neighbour was plausible got its own finder that deliberately
+    // refuses to widen. Both remaining paths are single-subnet by construction, so every rung
+    // past the first was radio time that could not find anything. What is left is the prefix
+    // arithmetic, which is a fact about the link rather than a plan.
 
     /// How many trailing addresses of a /24 the interface's own prefix actually covers.
     ///
@@ -135,9 +87,5 @@ public enum SubnetScanPlan: Sendable {
         let octets = parts.compactMap { Int($0) }
         guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else { return nil }
         return octets
-    }
-
-    private static func isDefaultScanIPv4(_ address: String) -> Bool {
-        CameraDiscovery.isSupportedScanInterface(name: "", address: address)
     }
 }

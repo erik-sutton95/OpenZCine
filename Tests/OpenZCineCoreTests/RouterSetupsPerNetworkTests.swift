@@ -129,7 +129,8 @@ private func router(
 @Test func twoRoutersSurviveBeingWrittenTheWayTheStoreWritesThem() {
     var records: [PTPIPSavedCameraRecord] = []
     for (host, transport, ap) in [
-        ("172.20.10.2", "Wi-Fi", false),
+        // Personal Hotspot is a separate path (transport label), not a third router.
+        ("10.0.0.2", "iPhone Hotspot", false),
         ("10.99.0.20", "Wi-Fi", false),
         ("192.168.129.66", "Wi-Fi", false),
         ("usb:demo-zr", "USB-C", false),
