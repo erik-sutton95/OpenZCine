@@ -3,6 +3,7 @@ package com.opencapture.openzcine.pairing
 import android.content.Context
 import android.content.SharedPreferences
 import com.opencapture.openzcine.settings.LiveViewQualityBias
+import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import java.util.Locale
 import org.json.JSONArray
@@ -160,57 +161,23 @@ public data class SavedCameraRecord(
  * multiplying visible camera cards.
  */
 public object SavedCameraRecords {
-    /** Every Nikon camera access point hands out this address to itself. */
-    public const val CAMERA_ACCESS_POINT_HOST: String = "192.168.1.1"
-
     /**
-     * Pins a camera-AP setup to the access point's fixed address.
-     *
-     * An access-point setup lives at that address by definition, so an AP stamp on any other host
-     * describes a session that was never on the camera's own network. Such a record dials an
-     * address the camera does not answer on, and cannot be rescued by a join — the app believes it
-     * already holds the AP setup it needs. "+ Add setup -> Camera access point" builds its record
-     * by copying the row it was invoked from, which is exactly how a router address gets an AP
-     * stamp.
+     * Ensures a camera-AP setup does not invent a global IP. Dialable hosts are kept as the last
+     * learned address; non-dialable / foreign rows get a pending key and rediscover after join.
      */
-    public fun pinnedToAccessPoint(record: SavedCameraRecord): SavedCameraRecord =
-        if (record.host == CAMERA_ACCESS_POINT_HOST) {
-            record
-        } else {
-            record.copy(host = CAMERA_ACCESS_POINT_HOST)
-        }
-
-    /**
-     * Repairs an access-point record that carries a foreign host, returning the one or two setups
-     * it actually described.
-     *
-     * An AP setup lives at the access point's fixed address by definition, so an AP stamp on some
-     * other address describes a session that was never on the camera's own network. Pinning the
-     * host alone — which is all this used to do — threw that address away, and with it the router
-     * setup it always was. The shared core splits instead (`splittingAccessPoint`), and so does
-     * this: the access point keeps the AP's address, the foreign host becomes its own
-     * infrastructure row.
-     *
-     * The two halves must not share a [SavedCameraRecord.profileID]: it is the row's identity, and
-     * two rows answering to one id collide in the card list and in reconnect targeting.
-     */
-    internal fun splitAccessPoint(record: SavedCameraRecord): List<SavedCameraRecord> {
-        if (record.host == CAMERA_ACCESS_POINT_HOST) return listOf(record)
-        val accessPoint =
-            record.copy(
-                host = CAMERA_ACCESS_POINT_HOST,
-                profileID = CAMERA_ACCESS_POINT_HOST,
-                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
-            )
-        // Keeps the host AND the identity it has always answered to; only its claim changes.
-        val infrastructure =
-            record.copy(
-                transport = SavedCameraTransport.INFRASTRUCTURE,
-                wifiSsid = null,
-                networkName = null,
-            )
-        return listOf(accessPoint, infrastructure)
+    public fun pinnedToAccessPoint(record: SavedCameraRecord): SavedCameraRecord {
+        if (CameraDiscovery.isDialableHost(record.host)) return record
+        val key = CameraDiscovery.pendingAccessPointHostKey(record.wifiSsid)
+        return record.copy(host = key, profileID = key)
     }
+
+    /**
+     * Normalizes an access-point record without inventing a fixed IP or manufacturing a second
+     * infrastructure row. Dialable hosts stay as last-learned addresses; other hosts become a
+     * pending key and rediscover after join.
+     */
+    internal fun splitAccessPoint(record: SavedCameraRecord): List<SavedCameraRecord> =
+        listOf(pinnedToAccessPoint(record))
 
     /** Returns normalized, deduplicated records in their original card order. */
     public fun canonicalized(records: List<SavedCameraRecord>): List<SavedCameraRecord> {
@@ -234,8 +201,8 @@ public object SavedCameraRecords {
                         // TRANSPORT FIRST, and that is the whole point: a record IS one camera
                         // SETUP, keyed by (camera, path). One body's access-point and router
                         // setups are two rows forever — they routinely share an address, since
-                        // every camera-AP Nikon answers on 192.168.1.1, and matching on the
-                        // address alone swallowed one into the other (the shared core's
+                        // one body's AP and router setups can share an address, and matching
+                        // on the address alone swallowed one into the other (the shared core's
                         // `describesSameSetup`, carried across at last).
                         if (existing.transport != normalized.transport) {
                             false
@@ -319,7 +286,7 @@ public object SavedCameraRecords {
      *
      * Keyed by (host, transport), never host alone: one body's access-point and router setups
      * legitimately share an address, and so do two camera-AP Nikons (all of them answer on
-     * 192.168.1.1). Matching on the host would write the cable's choice onto the AP's record.
+     * address). Matching on the host would write the cable's choice onto the AP's record.
      *
      * A `null` argument leaves that setting untouched rather than clearing it, so a caller that
      * knows only one of the two does not have to read the other back first. Twin of the shared
@@ -381,11 +348,21 @@ public object SavedCameraRecords {
         }
     }
 
-    /** True when two camera-assigned names are trustworthy identity matches. */
-    /** The phone-hotspot subnet is fixed (172.20.10.x) — the host shape names the network. */
-    public fun isPhoneHotspotHost(host: String): Boolean {
+    /**
+     * Whether [host] sits on a live Personal Hotspot / tether subnet of this device.
+     *
+     * Pass the /24 bases of this device's hotspot interface(s). Empty when the hotspot is down —
+     * there is no global hotspot IP range to assume.
+     */
+    public fun isPhoneHotspotHost(
+        host: String,
+        hotspotSubnetBases: Collection<String> = emptyList(),
+    ): Boolean {
+        if (hotspotSubnetBases.isEmpty()) return false
         val octets = host.trim().split(".").mapNotNull { it.toIntOrNull() }
-        return octets.size == 4 && octets[0] == 172 && octets[1] == 20 && octets[2] == 10
+        if (octets.size != 4) return false
+        val base = "${octets[0]}.${octets[1]}.${octets[2]}"
+        return hotspotSubnetBases.contains(base)
     }
 
     public fun cameraNamesMatch(lhs: String, rhs: String): Boolean {

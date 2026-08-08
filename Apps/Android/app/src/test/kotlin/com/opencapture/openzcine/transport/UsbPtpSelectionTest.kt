@@ -91,7 +91,7 @@ class UsbPtpSelectionTest {
 
     @Test
     fun `stable USB keys are deterministic scoped and never expose serial`() {
-        val first = requireNotNull(UsbCameraHostKey.derive(0x04B0, 0x1234, "ZR-serial-123"))
+        val first = UsbCameraHostKey.derive(0x04B0, 0x1234, "ZR-serial-123")
         val same = UsbCameraHostKey.derive(0x04B0, 0x1234, "ZR-serial-123")
         val otherProduct = UsbCameraHostKey.derive(0x04B0, 0x4321, "ZR-serial-123")
 
@@ -101,7 +101,24 @@ class UsbPtpSelectionTest {
         assertEquals(36, first.length)
         assertTrue(first.matches(Regex("usb:[0-9a-f]{32}")))
         assertFalse(first.contains("ZR-serial-123"))
-        assertNull(UsbCameraHostKey.derive(0x04B0, 0x1234, "  "))
+    }
+
+    /// A ROM that will not read the USB serial descriptor is not a camera we cannot identify.
+    /// Returning null here dropped the camera out of the pairing list the moment permission was
+    /// granted (Redmi K90 Ultra, Android 16).
+    @Test
+    fun `a camera with no readable serial still gets a stable key of its own`() {
+        val blank = UsbCameraHostKey.derive(0x04B0, 0x1234, "  ")
+        val missing = UsbCameraHostKey.derive(0x04B0, 0x1234, null)
+        val otherModel = UsbCameraHostKey.derive(0x04B0, 0x4321, null)
+        val withSerial = UsbCameraHostKey.derive(0x04B0, 0x1234, "ZR-serial-123")
+
+        assertEquals(blank, missing)
+        assertTrue(missing.matches(Regex("usb:[0-9a-f]{32}")))
+        assertNotEquals(missing, otherModel)
+        // Serial-less and serial-bearing keys for the same model must never collide, or one
+        // camera would be two setups depending on whether the descriptor happened to read.
+        assertNotEquals(missing, withSerial)
     }
 
     @Test

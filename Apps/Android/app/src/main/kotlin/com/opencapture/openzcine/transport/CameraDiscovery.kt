@@ -70,9 +70,8 @@ interface NsdBrowser {
 
 /**
  * Camera discovery over mDNS/NSD, mirroring the iOS Bonjour browse
- * (`ios/Runner/NativeCameraDiscovery.swift`): the ZR advertises `_ptp._tcp`,
- * and in camera-AP mode it always sits at a fixed address
- * ([NIKON_ZR_ACCESS_POINT_HOST]) with no mDNS required.
+ * (`ios/Runner/NativeCameraDiscovery.swift`): the ZR advertises `_ptp._tcp`.
+ * Camera-AP mode rediscovers on the live link after join — no fixed AP IP.
  */
 class CameraDiscovery(private val browser: NsdBrowser) {
     /**
@@ -109,17 +108,34 @@ class CameraDiscovery(private val browser: NsdBrowser) {
         const val PTP_IP_PORT: Int = 15740
 
         /**
-         * Fixed camera address when the phone joins the ZR's own access
-         * point — mirrors `CameraDiscovery.nikonZRAccessPointHost` in the
-         * shared Swift core.
-         */
-        const val NIKON_ZR_ACCESS_POINT_HOST: String = "192.168.1.1"
-
-        /**
          * Prefix of the camera's own access-point SSID (e.g. `NIKON_ZR_01234`)
          * — mirrors `CameraWiFiSSID.nikonAccessPointPrefix` in the shared core.
          */
         const val NIKON_ZR_SSID_PREFIX: String = "NIKON_ZR_"
+
+        /**
+         * Non-dialable host key for an access-point setup with no learned address.
+         * Mirrors Swift `CameraDiscovery.pendingAccessPointHostPrefix`.
+         */
+        const val PENDING_ACCESS_POINT_HOST_PREFIX: String = "ap:"
+
+        fun pendingAccessPointHostKey(ssid: String?): String {
+            val trimmed = ssid?.trim().orEmpty()
+            return if (trimmed.isNotEmpty()) {
+                PENDING_ACCESS_POINT_HOST_PREFIX + trimmed
+            } else {
+                PENDING_ACCESS_POINT_HOST_PREFIX + "pending"
+            }
+        }
+
+        fun isAccessPointHostKey(host: String): Boolean =
+            host.startsWith(PENDING_ACCESS_POINT_HOST_PREFIX)
+
+        fun isDialableHost(host: String): Boolean {
+            if (host.isBlank() || isAccessPointHostKey(host)) return false
+            if (host.startsWith("usb:", ignoreCase = true)) return false
+            return isSupportedPtpIpDiscoveryHost(host)
+        }
 
         /**
          * Whether an NSD-resolved host is usable by the current PTP-IP stack.
@@ -152,12 +168,5 @@ class CameraDiscovery(private val browser: NsdBrowser) {
                 (values[0] == 192 && values[1] == 168)
         }
 
-        /** Direct-host camera for the camera-AP case; no mDNS browse needed. */
-        fun accessPointCamera(): DiscoveredCamera =
-            DiscoveredCamera(
-                name = "Nikon ZR",
-                host = NIKON_ZR_ACCESS_POINT_HOST,
-                port = PTP_IP_PORT,
-            )
     }
 }

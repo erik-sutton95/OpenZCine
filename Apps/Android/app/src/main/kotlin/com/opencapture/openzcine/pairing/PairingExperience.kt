@@ -92,6 +92,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -675,15 +676,16 @@ public fun PairingExperience(
 
     fun reconnectHost(record: SavedCameraRecord): String =
         when (record.transport) {
-            SavedCameraTransport.CAMERA_ACCESS_POINT ->
-                CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST
+            SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
             SavedCameraTransport.INFRASTRUCTURE,
             ->
                 cameras.firstOrNull { camera ->
                     camera.host == record.host ||
                         SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
-                }?.host ?: record.host
+                }?.host
+                    ?: record.host.takeIf { CameraDiscovery.isDialableHost(it) }
+                    ?: record.host
             SavedCameraTransport.USB_C -> record.host
         }
 
@@ -1085,8 +1087,21 @@ public fun PairingExperience(
                     // Association can finish before the camera answers PTP-IP
                     // Init; match the saved-reconnect settle before handshaking.
                     delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
-                    // Camera-AP mode: the ZR always answers on the fixed AP host.
-                    connect(CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST)
+                    // Discover on the live link — no fixed camera-AP IP.
+                    val host =
+                        cameras.firstOrNull()?.host
+                            ?: withTimeoutOrNull(3_000) {
+                                environment.hotspotCameras.first { it.isNotEmpty() }.first().host
+                            }
+                    if (host != null) {
+                        connect(host)
+                    } else {
+                        onDiagnosticPhase("failed.noCameraOnAp")
+                        phase =
+                            PairingPhase.Error(
+                                resources.getString(R.string.pairing_error_wifi_join)
+                            )
+                    }
                 } else {
                     onDiagnosticPhase("failed.wifiJoin")
                     phase =
@@ -1215,7 +1230,11 @@ public fun PairingExperience(
     }
 
     if (script?.autoConnect == true) {
-        LaunchedEffect(script) { connect(CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST) }
+        // Demo scripts pass a host via the discovery list; never invent an IP.
+        LaunchedEffect(script) {
+            val host = cameras.firstOrNull()?.host ?: return@LaunchedEffect
+            connect(host)
+        }
     }
     if (script?.joinPopup != null) {
         LaunchedEffect(script) {

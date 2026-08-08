@@ -216,9 +216,6 @@ public class AndroidUsbPtpCameraSource(
                 "This USB device does not expose the complete PTP camera interface OpenZCine needs.",
             )
         val hostKey = stableHostKey(device)
-            ?: return UsbPtpOpenResult.Rejected(
-                "This camera did not provide a stable USB identity. Reconnect it or use Wi‑Fi pairing.",
-            )
         val connection = usbManager.openDevice(device)
             ?: return UsbPtpOpenResult.Rejected(
                 "Android could not open this USB camera. Disconnect it, approve access again, and retry.",
@@ -336,11 +333,32 @@ public class AndroidUsbPtpCameraSource(
     private fun refresh(excludingToken: String? = null) {
         synchronized(lifecycleLock) {
             if (closed) return
+            val attached = usbManager.deviceList.values.filter { it.deviceName != excludingToken }
             mutableCameras.value =
-                usbManager.deviceList.values
-                    .filter { it.deviceName != excludingToken }
+                attached
                     .mapNotNull(::camera)
                     .sortedBy(UsbPtpCamera::displayName)
+            // Why the list is what it is, per attached device. An empty list and a device the
+            // selector rejected look identical on screen — both read "Waiting for camera on
+            // USB-C" — and a field report of the wizard waiting for ever with the cable in and
+            // permission granted could not be told apart from a cable that was never plugged in.
+            // One line per pass says which.
+            android.util.Log.i(
+                USB_DIAG_TAG,
+                "usb refresh devices=${attached.size} cameras=${mutableCameras.value.size} " +
+                    attached.joinToString(" ") { device ->
+                        val ptp = descriptorSelection(device) != null
+                        val permitted = usbManager.hasPermission(device)
+                        val serial =
+                            if (permitted) {
+                                runCatching { device.serialNumber }.getOrNull().isNullOrBlank().not()
+                            } else {
+                                null
+                            }
+                        "[${device.deviceName} vid=${device.vendorId} pid=${device.productId} " +
+                            "ptp=$ptp permitted=$permitted serial=$serial]"
+                    },
+            )
         }
     }
 
@@ -408,7 +426,7 @@ public class AndroidUsbPtpCameraSource(
             .map(usbInterface::getEndpoint)
             .first { it.address == address }
 
-    private fun stableHostKey(device: UsbDevice): String? =
+    private fun stableHostKey(device: UsbDevice): String =
         UsbCameraHostKey.derive(
             vendorId = device.vendorId,
             productId = device.productId,

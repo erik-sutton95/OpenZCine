@@ -567,12 +567,10 @@ class SavedCameraRecordsTest {
         val canonical = SavedCameraRecords.canonicalized(listOf(poisoned))
         val repaired =
             canonical.first { it.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
-        assertEquals(SavedCameraRecords.CAMERA_ACCESS_POINT_HOST, repaired.host)
+        // Learned dialable host is kept — never rewritten to a global camera-AP IP.
+        assertEquals("192.168.1.246", repaired.host)
         assertEquals("NIKON_ZR_6002199", repaired.wifiSsid)
-        assertEquals(
-            "192.168.1.246",
-            canonical.first { it.transport == SavedCameraTransport.INFRASTRUCTURE }.host,
-        )
+        assertEquals(1, canonical.size)
     }
 
     /** A router setup keeps its own address -- the repair must only touch AP-stamped records. */

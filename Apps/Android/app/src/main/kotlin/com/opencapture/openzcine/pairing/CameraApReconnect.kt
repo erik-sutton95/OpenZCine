@@ -34,7 +34,7 @@ internal const val CAMERA_AP_PTP_PROBE_TIMEOUT_MILLIS: Int = 600
  * Never throws — failures mean "not ready yet".
  */
 internal fun probePtpIpReachable(
-    host: String = CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST,
+    host: String,
     port: Int = CameraDiscovery.PTP_IP_PORT,
     timeoutMillis: Int = CAMERA_AP_PTP_PROBE_TIMEOUT_MILLIS,
 ): Boolean =
@@ -57,7 +57,8 @@ internal fun probePtpIpReachable(
 internal suspend fun awaitCameraApReadyAfterConfirm(
     awaitReassociation: suspend (timeoutMillis: Long) -> Boolean,
     isProcessBound: () -> Boolean,
-    host: String = CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST,
+    /** Learned dialable host to probe; null skips TCP probes (no fixed AP IP). */
+    host: String? = null,
     timeoutMillis: Long = FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS,
 ): Boolean =
     coroutineScope {
@@ -66,12 +67,14 @@ internal suspend fun awaitCameraApReadyAfterConfirm(
             async(Dispatchers.IO) {
                 awaitReassociation(timeoutMillis)
             }
+        val probeHost = host?.takeIf { CameraDiscovery.isDialableHost(it) }
         val probe =
             async(Dispatchers.IO) {
+                if (probeHost == null) return@async false
                 // Only treat a probe as success when we still own a process bind,
                 // otherwise a phantom route can exit the wait early.
                 while (isActive && System.nanoTime() < deadline) {
-                    if (isProcessBound() && probePtpIpReachable(host)) return@async true
+                    if (isProcessBound() && probePtpIpReachable(probeHost)) return@async true
                     delay(CAMERA_AP_PTP_PROBE_INTERVAL_MILLIS)
                 }
                 false
@@ -81,7 +84,9 @@ internal suspend fun awaitCameraApReadyAfterConfirm(
                 reassociation.onAwait { ok ->
                     if (ok) {
                         probe.cancel()
-                        awaitPtpPortBriefly(host, maxWaitMillis = 2_000L)
+                        // Only settle against an address we actually have. With no learned AP
+                        // host there is nothing to dial — reassociation is the whole signal.
+                        probeHost?.let { awaitPtpPortBriefly(it, maxWaitMillis = 2_000L) }
                         true
                     } else {
                         probe.await()
@@ -133,11 +138,14 @@ internal suspend fun reconnectCameraApAfterConfirm(
     connectSavedProfile: suspend () -> Boolean,
     onPhaseReconnecting: () -> Unit,
     alwaysForceJoinFirst: Boolean = true,
+    /** Optional learned dialable host for PTP readiness; null skips the fixed-IP probe. */
+    probeHost: String? = null,
     timeoutMillis: Long = FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS,
 ): Boolean =
     withTimeoutOrNull(timeoutMillis) {
         var consecutiveInitFailures = 0
         var didInitialForceJoin = false
+        val dialableProbe = probeHost?.takeIf { CameraDiscovery.isDialableHost(it) }
         while (true) {
             onPhaseReconnecting()
             if (rejoinSsid != null) {
@@ -175,8 +183,10 @@ internal suspend fun reconnectCameraApAfterConfirm(
                     delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                 }
             }
-            // Prefer waiting for the port before a full Init attempt.
-            if (!withContext(Dispatchers.IO) { probePtpIpReachable() }) {
+            // Prefer waiting for the port before a full Init attempt when we know a host.
+            if (dialableProbe != null &&
+                !withContext(Dispatchers.IO) { probePtpIpReachable(dialableProbe) }
+            ) {
                 delay(CAMERA_AP_PTP_PROBE_INTERVAL_MILLIS)
                 consecutiveInitFailures =
                     if (isProcessBound()) consecutiveInitFailures else 0

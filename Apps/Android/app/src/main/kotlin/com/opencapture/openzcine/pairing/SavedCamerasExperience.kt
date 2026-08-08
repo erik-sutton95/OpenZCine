@@ -234,14 +234,15 @@ public fun SavedCamerasExperience(
     }
 
     fun resolvedHost(record: SavedCameraRecord): String {
-        if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-            return CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST
-        }
         if (record.transport == SavedCameraTransport.USB_C) return record.host
-        return discoveredCameras.firstOrNull { camera ->
-            camera.host == record.host ||
-                SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
-        }?.host ?: record.host
+        // Prefer a live discovery match; never invent a fixed camera-AP IP.
+        val discovered =
+            discoveredCameras.firstOrNull { camera ->
+                camera.host == record.host ||
+                    SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
+            }?.host
+        if (discovered != null) return discovered
+        return if (CameraDiscovery.isDialableHost(record.host)) record.host else record.host
     }
 
     fun createStrictSavedProfileSession(record: SavedCameraRecord): CameraSession? =

@@ -139,10 +139,10 @@ class CameraDiscoveryTest {
     }
 
     @Test
-    fun `access point camera targets the fixed ZR host`() {
-        assertEquals(
-            DiscoveredCamera("Nikon ZR", "192.168.1.1", 15740),
-            CameraDiscovery.accessPointCamera(),
-        )
+    fun `pending access point host keys are not dialable`() {
+        val key = CameraDiscovery.pendingAccessPointHostKey("NIKON_ZR_01234")
+        assertTrue(CameraDiscovery.isAccessPointHostKey(key))
+        assertFalse(CameraDiscovery.isDialableHost(key))
+        assertTrue(CameraDiscovery.isDialableHost("192.168.1.246"))
     }
 }
