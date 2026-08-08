@@ -81,6 +81,10 @@ import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.AndroidUsbPtpCameraSource
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
+import com.opencapture.openzcine.transport.InfrastructureCameraFinder
+import com.opencapture.openzcine.transport.InfrastructureDiscovery
+import com.opencapture.openzcine.transport.InfrastructureMissReason
+import com.opencapture.openzcine.transport.InfrastructureSearchReport
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpCameraSource
@@ -126,6 +130,20 @@ public class PairingEnvironment(
     public val releaseCameraAp: () -> Unit,
     /** NSD camera discovery on the hotspot subnet (phone-hotspot path only). */
     public val hotspotCameras: Flow<List<DiscoveredCamera>>,
+    /**
+     * One Wi‑Fi-path search pass: patient directed dials, then an occupancy sweep of the subnets
+     * this device stands in, and a typed reason when it finds nothing (Wi‑Fi path only).
+     *
+     * mDNS alone cannot carry this path. A body waiting on its Connect-to-computer screen
+     * announces nothing, so before this seam a camera on a Wi‑Fi network Android had never paired
+     * with simply could not be found — the same camera and network that worked on iPhone.
+     */
+    public val searchInfrastructure:
+        suspend (directed: List<String>, knownNames: Map<String, String>) -> InfrastructureSearchReport =
+        { directed, knownNames ->
+            InfrastructureCameraFinder()
+                .search(directedCandidates = directed, knownNames = knownNames)
+        },
     /** Builds a saved-camera session that may recover a rejected legacy profile by pairing. */
     public val createSession: (host: String) -> CameraSession,
     /** Builds a strict saved-profile session after Nikon has accepted a pairing request. */
@@ -596,6 +614,15 @@ internal const val CAMERA_AP_CONNECT_RETRY_DELAY_MILLIS: Long = 1_500L
 /** How often the USB discover step re-enumerates while waiting for a camera. */
 internal const val USB_DISCOVER_POLL_INTERVAL_MILLIS: Long = 1_500L
 
+/**
+ * Pause between Wi‑Fi search passes.
+ *
+ * A pass already spends seconds dialling, and the camera it is looking for may still be
+ * finishing its own network setup — so the gap is for the operator's benefit, not the radio's:
+ * long enough that a miss reason stays on screen to be read.
+ */
+internal const val WIFI_SEARCH_PASS_INTERVAL_MILLIS: Long = 2_000L
+
 private fun PairingPhase.isBusy(): Boolean =
     this !is PairingPhase.Idle && this !is PairingPhase.Error
 
@@ -663,6 +690,8 @@ public fun PairingExperience(
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     var hdmiCaptureReady by remember { mutableStateOf(false) }
+    /** Why the last Wi‑Fi search pass found nothing, when it found nothing. */
+    var wifiSearchMiss by remember { mutableStateOf<InfrastructureMissReason?>(null) }
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
     val handedOff = remember { mutableStateOf(false) }
@@ -1221,6 +1250,36 @@ public fun PairingExperience(
                         delay(USB_DISCOVER_POLL_INTERVAL_MILLIS)
                     }
                 }
+                PairingPath.WIFI_NETWORK -> {
+                    usbCameras = emptyList()
+                    // mDNS stays live for the whole step — a body sometimes announces briefly —
+                    // but it is not the mechanism. A body sitting on its Connect-to-computer
+                    // screen announces nothing at all, which is why this path needs a search.
+                    launch {
+                        environment.hotspotCameras.collect { found ->
+                            if (found.isNotEmpty()) {
+                                cameras = found
+                                wifiSearchMiss = null
+                            }
+                        }
+                    }
+                    while (isActive) {
+                        val report =
+                            environment.searchInfrastructure(
+                                emptyList(),
+                                cameras.associate { it.host to it.name },
+                            )
+                        if (report.foundCamera) {
+                            cameras = report.cameras
+                            wifiSearchMiss = null
+                        } else {
+                            // A miss with a REASON. "Still searching" for ever is what an operator
+                            // got before, on a network the app could already prove was silent.
+                            wifiSearchMiss = report.miss
+                        }
+                        delay(WIFI_SEARCH_PASS_INTERVAL_MILLIS)
+                    }
+                }
                 else -> {
                     usbCameras = emptyList()
                     environment.hotspotCameras.collect { cameras = it }
@@ -1314,6 +1373,7 @@ public fun PairingExperience(
                             cameraPermissionDenied = cameraPermissionDenied,
                             cameras = cameras,
                             usbCameras = usbCameras,
+                            wifiSearchMiss = wifiSearchMiss,
                             onRequestPermission = ::requestPairingPermission,
                             onRequestCameraPermission = ::requestCameraPermission,
                             onChoose = { path ->
@@ -1354,6 +1414,7 @@ public fun PairingExperience(
                             cameraPermissionDenied = cameraPermissionDenied,
                             cameras = cameras,
                             usbCameras = usbCameras,
+                            wifiSearchMiss = wifiSearchMiss,
                             onRequestPermission = ::requestPairingPermission,
                             onRequestCameraPermission = ::requestCameraPermission,
                             onChoose = { path ->
@@ -1668,6 +1729,7 @@ private fun StepCard(
     onConnectCamera: (DiscoveredCamera) -> Unit,
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
     hdmiCaptureReady: Boolean,
+    wifiSearchMiss: InfrastructureMissReason? = null,
     onStartHdmiMonitor: () -> Unit,
     onOpenWatcherList: (() -> Unit)?,
     compact: Boolean,
@@ -1726,6 +1788,7 @@ private fun StepCard(
                         onConnectUsbCamera = onConnectUsbCamera,
                         hdmiCaptureReady = hdmiCaptureReady,
                         onStartHdmiMonitor = onStartHdmiMonitor,
+                        wifiSearchMiss = wifiSearchMiss,
                     )
             }
         }
@@ -2278,6 +2341,7 @@ private fun DiscoverBody(
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
     hdmiCaptureReady: Boolean,
     onStartHdmiMonitor: () -> Unit,
+    wifiSearchMiss: InfrastructureMissReason? = null,
 ) {
     if (path == PairingPath.USB_C) {
         UsbDiscoverBody(usbCameras, onConnectUsbCamera)
@@ -2319,7 +2383,13 @@ private fun DiscoverBody(
             EmptyDiscoveryCard(
                 glyph = StartupGlyphKind.ANTENNA,
                 title = stringResource(R.string.pairing_looking_for_cameras),
-                detail = stringResource(R.string.pairing_waiting_hotspot_detail),
+                // A diagnosis the moment the search has one. "Still looking" is honest only
+                // while nothing is known; once a sweep has proved the subnet silent, or proved
+                // it busy with nothing serving PTP, saying "still looking" withholds the one
+                // thing the operator could act on.
+                detail =
+                    wifiSearchMiss?.let { InfrastructureDiscovery.operatorCopy(it) }
+                        ?: stringResource(R.string.pairing_waiting_hotspot_detail),
             )
         } else {
             for (camera in cameras) {

@@ -131,6 +131,19 @@ class CameraDiscovery(private val browser: NsdBrowser) {
         fun isAccessPointHostKey(host: String): Boolean =
             host.startsWith(PENDING_ACCESS_POINT_HOST_PREFIX)
 
+        /**
+         * The `a.b.c` of a dotted IPv4 address, or null when it is not one.
+         *
+         * Mirrors Swift `CameraDiscovery.subnetBase(for:)`. A /24 is an assumption, and a
+         * deliberate one: it is what a sweep enumerates and what tells two Wi‑Fi setups apart.
+         * The real prefix is a separate question, asked only when a diagnosis needs it.
+         */
+        fun subnetBase(host: String): String? {
+            val trimmed = host.trim()
+            if (!isSupportedPtpIpDiscoveryHost(trimmed)) return null
+            return trimmed.substringBeforeLast('.').takeIf { it.count { ch -> ch == '.' } == 2 }
+        }
+
         fun isDialableHost(host: String): Boolean {
             if (host.isBlank() || isAccessPointHostKey(host)) return false
             if (host.startsWith("usb:", ignoreCase = true)) return false
