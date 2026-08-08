@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,10 +17,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -85,6 +91,8 @@ public fun ConnectionProgressPopup(
     onConnect: () -> Unit,
     onDismiss: () -> Unit,
     onShareDiagnostics: (() -> Unit)? = null,
+    /** A corrected scanned key, so a misread character can be fixed before connecting. */
+    onKeyEdited: (String) -> Unit = {},
 ) {
     val failed = phase is ConnectionPopupPhase.Failed
     Box(
@@ -132,12 +140,28 @@ public fun ConnectionProgressPopup(
             when (phase) {
                 is ConnectionPopupPhase.ReadyToJoin -> {
                     if (phase.key != null && phase.keyFromScan) {
-                        Text(
-                            phase.key,
-                            color = PopupColors.title,
-                            fontSize = 17.sp,
-                            fontFamily = FontFamily.Monospace,
-                            textAlign = TextAlign.Center,
+                        // EDITABLE, and it used to be a read-only Text. OCR misreads a character
+                        // now and then (0/O, 1/l, 5/S, 8/B is the whole story), and the caption
+                        // asked the operator to check it matches while giving them no way to act
+                        // when it did not — a field report is someone who could SEE the wrong
+                        // character and could only cancel or connect with a key they knew was
+                        // wrong. iOS twin in `ConnectionProgressSheet.joinActions`.
+                        var edited by remember(phase.key) { mutableStateOf(phase.key) }
+                        BasicTextField(
+                            value = edited,
+                            onValueChange = {
+                                edited = it
+                                onKeyEdited(it)
+                            },
+                            singleLine = true,
+                            textStyle =
+                                LocalTextStyle.current.copy(
+                                    color = PopupColors.title,
+                                    fontSize = 17.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    textAlign = TextAlign.Center,
+                                ),
+                            cursorBrush = SolidColor(PopupColors.title),
                             modifier =
                                 Modifier.fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))

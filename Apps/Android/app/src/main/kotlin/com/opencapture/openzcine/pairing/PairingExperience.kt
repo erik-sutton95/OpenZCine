@@ -654,6 +654,8 @@ public fun PairingExperience(
     // Device title for the connect popup (SSID while joining, camera name after).
     var connectingName by remember { mutableStateOf<String?>(null) }
     var cameraWifiScannerPresented by remember { mutableStateOf(false) }
+    /** A scanned key the operator corrected; null while the scan's own value still stands. */
+    var correctedScanKey by remember { mutableStateOf<String?>(null) }
     var wifiOffPromptVisible by remember { mutableStateOf(false) }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
@@ -1371,9 +1373,12 @@ public fun PairingExperience(
                 phase = popup,
                 onConnect = {
                     (phase as? PairingPhase.ReadyToJoin)?.let { staged ->
-                        joinCameraAp(staged.ssid, staged.key)
+                        // The CORRECTED key when the operator fixed a misread character,
+                        // otherwise the one the scan produced.
+                        joinCameraAp(staged.ssid, correctedScanKey ?: staged.key)
                     }
                 },
+                onKeyEdited = { correctedScanKey = it },
                 onDismiss = ::cancelWork,
                 onShareDiagnostics =
                     onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },

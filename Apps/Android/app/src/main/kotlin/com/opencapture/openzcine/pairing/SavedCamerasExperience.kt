@@ -195,6 +195,8 @@ public fun SavedCamerasExperience(
     var addSetupTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
     // Naming ONE setup, distinct from `renameTarget` above, which names the camera and titles its
     // whole row.
+    /** A scanned key the operator corrected; null while the scan's own value still stands. */
+    var correctedScanKey by remember { mutableStateOf<String?>(null) }
     var renameSetupTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
     var renameSetupDraft by remember { mutableStateOf("") }
     // An armed add-setup watch (iOS pendingSetupIntent): the sheet's no-match buttons arm it,
@@ -761,7 +763,8 @@ public fun SavedCamerasExperience(
         beginReconnectWork(
             record = staged.record,
             cameraApSsid = staged.ssid,
-            cameraApKey = staged.key,
+            // The CORRECTED key when the operator fixed a misread character, otherwise the scan's.
+            cameraApKey = correctedScanKey ?: staged.key,
         )
     }
 
@@ -971,6 +974,7 @@ public fun SavedCamerasExperience(
                     ),
                 phase = popup,
                 onConnect = ::confirmCameraApJoin,
+                onKeyEdited = { correctedScanKey = it },
                 onDismiss = ::cancelWork,
                 onShareDiagnostics =
                     onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },

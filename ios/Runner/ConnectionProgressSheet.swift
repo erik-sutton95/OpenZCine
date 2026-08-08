@@ -188,7 +188,8 @@ struct ConnectionProgressSheet: View {
     /// First-time credential entry (scan or scanned-key confirm) plus the Connect action.
     @ViewBuilder
     private var joinActions: some View {
-        VStack(spacing: 12) {
+        @Bindable var model = model
+        return VStack(spacing: 12) {
             if model.cameraWiFiJoinNeedsPassword, !model.cameraWiFiJoinHasPasswordDraft {
                 // First-time connect: scan the camera screen, with manual entry available there.
                 Button {
@@ -208,10 +209,21 @@ struct ConnectionProgressSheet: View {
                     .multilineTextAlignment(.center)
             } else {
                 if model.cameraWiFiJoinKeyFromScan {
-                    // Scanned key: shown read-only so a stray tap can't clear or mangle it.
-                    Text(model.cameraWiFiJoinPasswordDraft)
+                    // EDITABLE, and it used to be a read-only `Text` — "so a stray tap can't
+                    // clear or mangle it", which protected the wrong thing. OCR misreads a
+                    // character now and then (0/O, 1/l, 5/S, 8/B are the whole story), and the
+                    // caption asks the operator to check it matches while giving them no way to
+                    // act when it does not: a field report is someone who could SEE the wrong
+                    // character and could only cancel or connect with a key they knew was wrong.
+                    //
+                    // The original worry is answered by the field's own behaviour rather than by
+                    // refusing input — a `TextField` seeded with the scan keeps its text until
+                    // someone deliberately edits it, and nothing here clears on focus.
+                    TextField("Camera key", text: $model.cameraWiFiJoinPasswordDraft)
                         .font(.body.monospaced())
-                        .foregroundStyle(.primary)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.plain)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
@@ -219,7 +231,9 @@ struct ConnectionProgressSheet: View {
                             Color(.secondarySystemBackground),
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
-                    Text("Scanned from camera screen — check it matches.")
+                        .accessibilityLabel("Camera Wi-Fi key")
+                        .accessibilityHint("Scanned from the camera screen. Edit it if it misread.")
+                    Text("Scanned from the camera screen — tap to fix it if a character misread.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if model.cameraWiFiJoinHasPasswordDraft {
