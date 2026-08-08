@@ -92,7 +92,9 @@ import Testing
         connectedHost: nil
     )
 
-    #expect(prompt == .enableIPhoneHotspot(camera))
+    var typed = camera
+    typed.path = .phoneHotspot
+    #expect(prompt == .enableIPhoneHotspot(typed))
 }
 
 @Test func startupPolicyDoesNotPromptForHotspotWhenSavedCameraIsAvailable() {
@@ -127,7 +129,9 @@ import Testing
         connectedHost: nil
     )
 
-    #expect(prompt == .enableIPhoneHotspot(camera))
+    var typed = camera
+    typed.path = .phoneHotspot
+    #expect(prompt == .enableIPhoneHotspot(typed))
 }
 
 @Test func startupPolicyWaitsForCameraWhenIPhoneHotspotBridgeIsActive() {
@@ -145,7 +149,9 @@ import Testing
         isIPhoneHotspotBridgeActive: true
     )
 
-    #expect(prompt == .waitForIPhoneHotspotCamera(camera))
+    var typed = camera
+    typed.path = .phoneHotspot
+    #expect(prompt == .waitForIPhoneHotspotCamera(typed))
 }
 
 @Test func startupPolicyHidesSavedCameraFromPairingDiscoveryByHost() {

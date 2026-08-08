@@ -14,6 +14,11 @@ public enum PTPIPPacketType: UInt32, Equatable, Sendable {
     case data = 0x0A
     case cancel = 0x0B
     case endData = 0x0C
+    /// Liveness ping. The responder may probe the event channel and treats a missing
+    /// `probeResponse` as a dead initiator — grounds to close the whole session. Both probe
+    /// packets are header-only.
+    case probeRequest = 0x0D
+    case probeResponse = 0x0E
     case unknown = 0xFFFF_FFFF
 }
 

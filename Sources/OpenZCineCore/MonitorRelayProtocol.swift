@@ -55,6 +55,10 @@ public enum MonitorRelayProtocol {
         case releaseControl = 0x11
         /// Viewer → host: a camera command, honoured only from the control holder.
         case command = 0x12
+        /// Host → viewer: the join was refused (wrong or missing passcode). Sent instead of
+        /// state/frames; the viewer surfaces the reason and, when `passcodeRequired`, asks for
+        /// the code and rejoins.
+        case joinDenied = 0x05
     }
 
     /// Maximum payload a single message may carry.
@@ -63,14 +67,81 @@ public enum MonitorRelayProtocol {
     /// protocol produces and exists purely so a desynchronised or hostile stream cannot make the
     /// reader allocate without bound.
     public static let maximumPayloadBytes = 8 * 1024 * 1024
+
+    /// Bonjour TXT key carrying the camera host this broadcast serves. The body accepts one
+    /// initiator, so every device that can SEE a broadcast must keep its own discovery probes
+    /// off that address — a foreign Init against a served camera drops the broadcaster's
+    /// session. Advertised (rather than sent in-session) so the exclusion protects the camera
+    /// from devices that merely have the camera list open, not only from joined watchers.
+    public static let servedCameraTXTKey = "ch"
+
+    /// Bonjour TXT key distinguishing a joinable broadcast from a "camera in use" beacon.
+    /// Absent or any value other than `"0"` means watchable (older builds advertise no key).
+    /// A beacon exists so the `ch=` probe shield protects a held camera even when the operator
+    /// is not sharing — the sharing-off knock storm.
+    public static let watchableTXTKey = "w"
+
+    /// Fixed unicast presence port: any device holding or sharing a camera answers one TCP
+    /// connection here with a single ``RelayPresence`` JSON line and closes. Discovery's
+    /// subnet sweep checks it beside the camera probe — unicast survives the multicast
+    /// filtering managed networks apply between wireless clients (which silently eats mDNS),
+    /// so presence keeps the broadcast list and the probe shield alive there. It is also the
+    /// detector: a presence answer from a device Bonjour never reported is PROOF the network
+    /// filters discovery, and the operator is told.
+    public static let presenceTCPPort: UInt16 = 15741
 }
 
-/// Host → viewer introduction.
+/// One-line unicast answer from a device holding or sharing a camera (see
+/// `MonitorRelayProtocol.presenceTCPPort`). Keys are deliberately terse and contract-pinned on
+/// both platforms: `v` version, `n` device name, `w` 1 = joinable broadcast / 0 = in-use
+/// beacon, `ch` served camera host, `p` relay listener port when joinable.
+public struct RelayPresence: Codable, Equatable, Sendable {
+    public var v: Int
+    public var n: String
+    public var w: Int
+    public var ch: String?
+    public var p: Int?
+
+    public init(name: String, watchable: Bool, servedCameraHost: String?, relayPort: Int?) {
+        self.v = 1
+        self.n = name
+        self.w = watchable ? 1 : 0
+        self.ch = servedCameraHost
+        self.p = relayPort
+    }
+
+    public var isWatchable: Bool { w != 0 }
+
+    /// Encodes the single wire line, newline-terminated.
+    public func encodedLine() -> Data {
+        // Codable JSON of this flat struct cannot fail; the newline is the frame delimiter.
+        var data = (try? JSONEncoder().encode(self)) ?? Data()
+        data.append(0x0A)
+        return data
+    }
+
+    /// Decodes a received line (with or without the trailing newline); nil for garbage or a
+    /// version this build does not speak.
+    public static func decode(_ data: Data) -> RelayPresence? {
+        let trimmed = data.last == 0x0A ? data.dropFirst(0).dropLast() : data[...]
+        guard let presence = try? JSONDecoder().decode(RelayPresence.self, from: Data(trimmed)),
+            presence.v == 1, !presence.n.isEmpty
+        else { return nil }
+        return presence
+    }
+}
+
+/// Host → viewer introduction — and viewer → host, where it may carry the watcher passcode.
 public struct MonitorRelayHello: Codable, Equatable, Sendable {
-    public init(version: Int, hostName: String, cameraName: String?) {
+    public init(
+        version: Int, hostName: String, cameraName: String?, passcode: String? = nil,
+        codecs: [String]? = nil
+    ) {
         self.version = version
         self.hostName = hostName
         self.cameraName = cameraName
+        self.passcode = passcode
+        self.codecs = codecs
     }
 
     public let version: Int
@@ -78,6 +149,28 @@ public struct MonitorRelayHello: Codable, Equatable, Sendable {
     public let hostName: String
     /// The camera the host is holding, when it has one.
     public let cameraName: String?
+    /// Viewer → host only: the watcher passcode, when the broadcast requires one. Optional on
+    /// the wire so payloads from before the field decode unchanged.
+    public let passcode: String?
+    /// Viewer → host only: frame codecs this viewer can decode (`"hevc"`, `"jpeg"`). Absent —
+    /// including every payload from before the field — means everything, so old watchers keep
+    /// their HEVC stream. A device whose HEVC decoders reject the stream (low-end hardware
+    /// without Main10, software decoders that error on it) rejoins declaring `["jpeg"]` and
+    /// the host serves it JPEG instead: codec negotiation, not per-chipset whack-a-mole.
+    public let codecs: [String]?
+
+    /// Whether this viewer accepts HEVC frames (absent codec list = yes, legacy behavior).
+    public var acceptsHEVC: Bool { codecs?.contains("hevc") ?? true }
+}
+
+/// Host → viewer join refusal.
+public struct MonitorRelayJoinDenied: Codable, Equatable, Sendable {
+    public init(reason: String, passcodeRequired: Bool) {
+        self.reason = reason
+        self.passcodeRequired = passcodeRequired
+    }
+    public let reason: String
+    public let passcodeRequired: Bool
 }
 
 /// Host → viewer camera readouts. Mirrors the fields the monitor chrome renders rather than
@@ -105,7 +198,8 @@ public struct MonitorRelayState: Codable, Equatable, Sendable {
         temperature: String,
         values: [Value],
         mediaStatus: MediaStatus?,
-        isRecording: Bool
+        isRecording: Bool,
+        allowsControlRequests: Bool? = nil
     ) {
         self.recordState = recordState
         self.resolutionFrameRate = resolutionFrameRate
@@ -119,6 +213,7 @@ public struct MonitorRelayState: Codable, Equatable, Sendable {
         self.values = values
         self.mediaStatus = mediaStatus
         self.isRecording = isRecording
+        self.allowsControlRequests = allowsControlRequests
     }
 
     public let recordState: RecordState
@@ -133,6 +228,9 @@ public struct MonitorRelayState: Codable, Equatable, Sendable {
     public let values: [Value]
     public let mediaStatus: MediaStatus?
     public let isRecording: Bool
+    /// Whether the host accepts watcher control requests. Optional on the wire (older hosts
+    /// don't send it); absent means allowed — the pre-policy behavior.
+    public var allowsControlRequests: Bool?
 }
 
 /// The readings that belong to one specific frame, sent alongside it.
@@ -195,7 +293,7 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
     public init(
         timecode: Timecode?, isRecording: Bool, focus: Focus?, levelRoll: Double?,
         levelPitch: Double?, sound: Sound?, codec: Int = MonitorRelayProtocol.FrameCodec.jpeg,
-        isKeyframe: Bool = true, parameterSets: [Data]? = nil
+        isKeyframe: Bool = true, parameterSets: [Data]? = nil, rotation: Int? = nil
     ) {
         self.timecode = timecode
         self.isRecording = isRecording
@@ -206,6 +304,7 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
         self.codec = codec
         self.isKeyframe = isKeyframe
         self.parameterSets = parameterSets
+        self.rotation = rotation
     }
 
     public let timecode: Timecode?
@@ -222,13 +321,17 @@ public struct MonitorRelayFrameMetadata: Codable, Equatable, Sendable {
     /// HEVC parameter sets (VPS/SPS/PPS), present on keyframes so a joiner can build a decoder
     /// from the stream alone — there is no side channel to fetch them from.
     public let parameterSets: [Data]?
+    /// The body's own orientation for this frame (`PTPLiveViewRotation` raw value), so a
+    /// watcher rotates the picture upright exactly like the broadcaster. Optional on the wire —
+    /// absent from older hosts means landscape, the historical behavior.
+    public let rotation: Int?
 
     /// Returns a copy carrying the encoder's output description.
     public func carryingVideo(codec: Int, isKeyframe: Bool, parameterSets: [Data]?) -> Self {
         Self(
             timecode: timecode, isRecording: isRecording, focus: focus, levelRoll: levelRoll,
             levelPitch: levelPitch, sound: sound, codec: codec, isKeyframe: isKeyframe,
-            parameterSets: parameterSets)
+            parameterSets: parameterSets, rotation: rotation)
     }
 }
 

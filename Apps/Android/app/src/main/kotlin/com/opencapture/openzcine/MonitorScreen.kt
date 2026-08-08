@@ -6,6 +6,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -44,7 +46,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -62,6 +66,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -82,6 +87,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.WindowInsets
@@ -115,8 +121,11 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
+import com.opencapture.openzcine.core.LiveFeedRotation
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.openzcine.core.MonitorDataAvailability
+import com.opencapture.openzcine.relay.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.media.LiveAssistOptionsOverlay
 import com.opencapture.openzcine.media.retainLiveAssistOptions
@@ -128,9 +137,8 @@ import com.opencapture.openzcine.settings.CaptureLayoutMode
 import com.opencapture.openzcine.settings.ChromeSection
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.labelResource
-import com.opencapture.openzcine.settings.magnificationAnchor
-import com.opencapture.openzcine.settings.magnificationAnchorBoxIndex
 import com.opencapture.openzcine.settings.OperatorSettings
+import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
 import com.opencapture.openzcine.wear.WearRecordCommandSafety
 import com.opencapture.openzcine.wear.androidWatchRelayState
@@ -195,6 +203,36 @@ internal fun LandscapeSettingsRecoveryButton(
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
 internal fun Modifier.zone(frame: ZoneFrame): Modifier =
     offset(frame.x.dp, frame.y.dp).size(frame.width.dp, frame.height.dp)
+
+/**
+ * Lays the feed stack out in the camera's own frame — sides swapped when the body is vertical —
+ * and rotates it upright into the container (the Android half of iOS `rotatedFeedImage`).
+ * Compose maps pointer input back through the layer, so gestures, AF overlays, and punch-in
+ * anchors inside keep operating in the camera's pre-rotation space with no coordinate changes.
+ */
+internal fun Modifier.liveFeedBodyRotation(rotation: LiveFeedRotation): Modifier =
+    if (rotation == LiveFeedRotation.LANDSCAPE) {
+        this
+    } else {
+        layout { measurable, constraints ->
+                val swap = rotation.isVertical
+                val placeable =
+                    measurable.measure(
+                        if (swap && constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+                            Constraints.fixed(constraints.maxHeight, constraints.maxWidth)
+                        } else {
+                            constraints
+                        },
+                    )
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.place(
+                        (constraints.maxWidth - placeable.width) / 2,
+                        (constraints.maxHeight - placeable.height) / 2,
+                    )
+                }
+            }
+            .graphicsLayer { rotationZ = rotation.displayDegreesClockwise }
+    }
 
 /**
  * The iPhone Dynamic Island's landscape leading safe-area inset, in points/dp —
@@ -310,6 +348,18 @@ internal fun MonitorScreen(
     linkHealth: AndroidLinkHealthMonitor? = null,
     activeTransportIsUsb: Boolean = false,
     isDemoSession: Boolean = false,
+    /**
+     * What the monitor can truthfully display given who owns the camera — the iOS
+     * `monitorAvailability` gate. A relay watcher passes `watcher(holdsControl)`: readings keep
+     * flowing, but record/media/pickers/batteries unmount until it holds the control token.
+     */
+    availability: MonitorDataAvailability = MonitorDataAvailability.OWNING,
+    /**
+     * A watcher's camera readouts, forwarded by the broadcasting host (iOS `applyRelayState`).
+     * Non-null only on the watch surface; feeds the top-bar pills so they never show the
+     * retention preview seeds as if a camera reported them.
+     */
+    relayedState: MonitorRelayWire.State? = null,
     liveViewGuideController: LiveViewGuideController? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
@@ -319,6 +369,11 @@ internal fun MonitorScreen(
     recoveryStateOverride: MonitorRecoveryState? = null,
     /** Closed diagnostics breadcrumbs for the MF drive failure surfaces. */
     onDriveDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
+    /**
+     * A relay watcher holds this broadcast's control token — local camera controls stand
+     * down (grayed, non-writing) until the operator revokes or the watcher gives it back.
+     */
+    controlsSurrendered: Boolean = false,
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -352,7 +407,15 @@ internal fun MonitorScreen(
     val initialMonitorPropertiesReady by session.initialMonitorPropertiesReady.collectAsState()
     val commandRoundTripMilliseconds by
         session.latestCommandRoundTripMilliseconds.collectAsState()
-    val cameraReadouts = remember(cameraProperties) { monitorCameraReadouts(cameraProperties) }
+    val cameraReadouts =
+        remember(cameraProperties, relayedState) {
+            monitorCameraReadouts(cameraProperties).let { readouts ->
+                // A watcher's camera battery arrives over the relay, not from a session of its
+                // own (iOS `applyRelayState`).
+                relayedState?.let { readouts.copy(batteryPercent = it.cameraBatteryPercent) }
+                    ?: readouts
+            }
+        }
     val phoneBatteryReadout = rememberPhoneBatteryReadout()
     val exposureAssistCameraInput =
         remember(
@@ -470,7 +533,11 @@ internal fun MonitorScreen(
     val displayModeOrder =
         photographyDisplayModeOrder(
             operatorSettings.enabledDisplayModeOrder,
-            photography = prefersPhotographyChrome(cameraProperties),
+            // Command is entirely a camera-control surface — a session with no camera behind it
+            // (a watcher without the control token) drops it from the cycle rather than offering
+            // an empty dashboard (iOS `displayOrder`).
+            hidesCommand =
+                prefersPhotographyChrome(cameraProperties) || !availability.cameraControls,
         )
     val effectiveDisplayMode =
         displayMode.takeIf(displayModeOrder::contains) ?: displayModeOrder.first()
@@ -682,6 +749,7 @@ internal fun MonitorScreen(
             effectiveShutterLocked,
             cameraProperties.isoAuto,
             cameraProperties.exposureMode,
+            relayedState,
         ) {
             monitorCaptureSettings(
                 commandPresentation,
@@ -689,7 +757,11 @@ internal fun MonitorScreen(
                 shutterLockedOnCamera = effectiveShutterLocked,
                 isoAuto = cameraProperties.isoAuto,
                 exposureMode = cameraProperties.exposureMode,
-            )
+            ).let { settings ->
+                // A watcher's strip shows the broadcaster's values (iOS `applyRelayState`);
+                // no local session ever fills these cells.
+                relayedState?.let { relayCaptureSettings(settings, it.values) } ?: settings
+            }
         }
     val topPillPickers =
         remember(commandPresentation, stringResolver) {
@@ -741,7 +813,8 @@ internal fun MonitorScreen(
         sessionState is CameraSessionState.Connected &&
             !locked &&
             !liveViewGuideVisible &&
-            !mediaOwnsCommandChannel
+            !mediaOwnsCommandChannel &&
+            !controlsSurrendered
     LaunchedEffect(sessionState, activeMonitorPickerKind, activeMonitorPicker) {
         if (sessionState !is CameraSessionState.Connected ||
             (activeMonitorPickerKind != null && activeMonitorPicker == null)
@@ -850,7 +923,7 @@ internal fun MonitorScreen(
             }
             if (
                 request.control == CameraControl.ISO &&
-                    IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto)
+                    IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto, codecForISO)
             ) {
                 desiredControlWrites[CameraControl.ISO_AUTO] =
                     CommandControlRequest(
@@ -1358,9 +1431,35 @@ internal fun MonitorScreen(
         // Photography always lays out as fit too — its feed is the still image
         // area (3:2/1:1/16:9), and a 16:9 centre-crop "fill" of a still makes no
         // sense (iOS `isFill = persistedAspect == .fill && !isPhotography`).
+        // Body rotation from the live-view header (vertical mode). Screen-scoped state because
+        // zone layout reads it well before the frame collectors are declared; the timecode
+        // collector (open in every DISP mode) writes it, and a source change resets it.
+        var liveFeedRotation by remember { mutableStateOf(LiveFeedRotation.LANDSCAPE) }
+        // Whether the body runs timecode at all — the live-view header's own status byte, held
+        // apart from the retained counter on purpose. Chrome that only asks "is there a timecode"
+        // must not observe the counter: that ticks every frame and would re-render the whole top
+        // bar at feed rate (the reason `MonitorTimecodeRetention` is leaf-observed). Bodies with
+        // no timecode hardware pin the status byte to zero forever, and that is exactly the signal
+        // that hides the readout instead of parking a frozen 00:00:00:00 on set. The same collector
+        // that owns `liveFeedRotation` latches it, and a source change resets it.
+        var cameraReportsTimecode by remember { mutableStateOf(false) }
+        val isVerticalFeed = liveFeedRotation.isVertical
         val portraitAspect = operatorSettings.portraitFeedAspect
+        // Zone/chrome layout: vertical mode always lays out as FILL, matching iOS — the fill
+        // zones are exactly the vertical viewer (feed spanning the bands, floating assist rail,
+        // capture bar over the feed bottom); fit's stacked bands would strand the controls.
+        //
+        // That holds for a stills body too, and only the PERSISTED cinema choice is photography's
+        // to be excluded from. Vertical fill does not crop — the picture pillarboxes inside the
+        // frame (see `portraitRasterFill` below) — so the reason photography avoids fill does not
+        // apply here, while fit hands a 2:3 still a feed tall enough to push its own stacked bands
+        // off the screen: clipped toolbar, shutter over the DRIVE tile, white balance gone.
         val isPortraitFill =
-            isPortrait && !isCommand && !isPhotographyMode && portraitAspect.fillsViewport
+            isPortrait && !isCommand &&
+                (isVerticalFeed || (portraitAspect.fillsViewport && !isPhotographyMode))
+        // Raster/overlay fit: the rotated 9:16 picture pillarboxes inside the fill frame —
+        // aspect-filling it would centre-crop the top and bottom of the vertical shot.
+        val portraitRasterFill = isPortraitFill && !isVerticalFeed
 
         // One authoritative mode filter, mirroring core `MonitorChromePolicy`: clean (DISP 2) is a
         // bare image unless the operator pinned a tool to it, and it strips the deck/rails/bands
@@ -1379,8 +1478,12 @@ internal fun MonitorScreen(
         val editingThisMode =
             chromeEditorMode != null && chromeEditorMode == effectiveDisplayMode
         val mounts: (ChromeSection) -> Boolean = { section ->
-            (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) ||
-                chrome[section].value
+            // A section with nothing feeding it hides whatever the operator set — a readout with
+            // no source still looks like an instrument (iOS `sectionHasASource`). The edit view's
+            // force-mount cannot override a missing source either.
+            availability.hasSource(section, cameraReportsTimecode, isPhotographyMode) &&
+                ((editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) ||
+                    chrome[section].value)
         }
         val statusBarVisible = mounts(ChromeSection.STATUS_BAR)
         val assistToolbarVisible = mounts(ChromeSection.ASSIST_TOOLBAR)
@@ -1477,13 +1580,16 @@ internal fun MonitorScreen(
         val scopeCount = portraitScopes.size
         // Photography passes its still image-area ratio (3:2/1:1/16:9) so the
         // portrait fit feed renders whole under the top bar; video keeps 16:9.
+        // A vertically held body inverts the displayed ratio (shared core clamps
+        // the resulting tall feed above the stacked bands).
         val portraitFeedAspectRatio =
-            if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f
+            (if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f)
+                .let { if (isVerticalFeed) 1f / it else it }
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
                 isPortrait, effectiveDisplayMode, isPortraitFill, scopeCount, bottomBarHeight,
-                portraitFeedAspectRatio,
+                portraitFeedAspectRatio, availability.canDriveCamera,
             ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
@@ -1500,6 +1606,7 @@ internal fun MonitorScreen(
                         mirrored = false,
                         bottomBarHeight = bottomBarHeight,
                         portraitFeedAspectRatio = portraitFeedAspectRatio,
+                        canDriveCamera = availability.canDriveCamera,
                     ),
                 )
             }
@@ -1585,6 +1692,9 @@ internal fun MonitorScreen(
         val readoutRetention =
             remember(session, timecodeOwner) { MonitorReadoutRetention(timecodeOwner) }
         LaunchedEffect(cameraProperties) { readoutRetention.update(cameraProperties) }
+        // A watcher's pills show what the host formatted, never the retention's preview seeds
+        // masquerading as a reporting camera (iOS `applyRelayState`).
+        LaunchedEffect(relayedState) { relayedState?.let(readoutRetention::applyRelayed) }
         val fpsSampler = remember(session, timecodeOwner) { MonitorFrameRateSampler() }
         var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
         val topBarMedia =
@@ -1666,12 +1776,28 @@ internal fun MonitorScreen(
         // the stream open in every DISP mode while decode/scopes/audio still stand down.
         val timecodeFrameSource = monitorTimecodeFrameSource(activeFrameSource)
         LaunchedEffect(timecodeFrameSource, timecodeRetention) {
-            val source = timecodeFrameSource ?: return@LaunchedEffect
+            val source = timecodeFrameSource
+            if (source == null) {
+                // No stream, no body rotation, no timecode status: never leave a stale vertical
+                // layout — or a stale "this body runs TC" claim — up.
+                liveFeedRotation = LiveFeedRotation.LANDSCAPE
+                cameraReportsTimecode = false
+                return@LaunchedEffect
+            }
             source.frames
                 .conflate()
                 .collect { frame ->
                     withContext(Dispatchers.Main.immediate) {
                         timecodeRetention.accept(frame.timecode)
+                        // Only the status bit, and only on a change: the counter beside it ticks
+                        // every frame and must never reach the chrome that reads this.
+                        val reportsTimecode = frame.timecode?.on == true
+                        if (cameraReportsTimecode != reportsTimecode) {
+                            cameraReportsTimecode = reportsTimecode
+                        }
+                        if (liveFeedRotation != frame.rotation) {
+                            liveFeedRotation = frame.rotation
+                        }
                     }
                 }
         }
@@ -1692,6 +1818,9 @@ internal fun MonitorScreen(
         val liveFeedEffectsPresentation =
             remember(monitorFrameSource) { LiveFeedEffectsPresentationState() }
         var feedPointerSize by remember(monitorFrameSource) { mutableStateOf(IntSize.Zero) }
+        // The drawn picture inside that zone (letterboxed when the feed's aspect differs),
+        // which is what bounds the zoom pan. Filled in where the content rect is resolved.
+        var feedPictureSize by remember(monitorFrameSource) { mutableStateOf(0f to 0f) }
         val audioMetersEnabled = assist.audioMetersEnabled
         // Mode-filtered render inputs (#256): the operator's stored on/off state is untouched, so
         // leaving clean restores everything exactly.
@@ -1707,18 +1836,47 @@ internal fun MonitorScreen(
         LaunchedEffect(operatorSettings.splitComparisonEnabled.value) {
             if (operatorSettings.splitComparisonEnabled.value) splitComparisonMuted = false
         }
-        // The punch-in is session-only for the same reason: it is a focus check, not a setting, and
-        // a monitor that reopens already magnified is a monitor that lies about the framing.
-        var magnificationActive by remember { mutableStateOf(false) }
-        // Switching the tool off clears the punch-in. Leaving it armed behind a disabled tool is
-        // how the key and the transform desynchronise — a magnified feed with no visible control
-        // that explains it (shared core `Magnification.activeAfterDisabling`).
-        LaunchedEffect(operatorSettings.magnificationEnabled.value) {
-            if (!operatorSettings.magnificationEnabled.value) magnificationActive = false
+        // The zoom is session-only: it is a focus check, not a setting, and a monitor that reopens
+        // already magnified is a monitor that lies about the framing.
+        var committedZoom by remember { mutableStateOf(FeedZoom.NONE) }
+        // Read at composition scope ONLY through this boolean. `committedZoom` itself changes on
+        // every pointer event of a gesture, and reading it here would recompose the whole monitor
+        // tree each time — which is what made the gesture feel laggy. The transform is read in the
+        // graphicsLayer lambda instead, so a gesture costs a redraw and not a recomposition.
+        val isFeedZoomed by remember { derivedStateOf { committedZoom.isZoomed } }
+        // The same instrument the playback viewer uses (`MediaStillViewer`): Compose's own
+        // multitouch transform, which resolves centroid, zoom and pan together per event. Rolling
+        // this by hand off the feed's pointer arbiter gave a noticeably worse gesture.
+        val feedTransformState =
+            rememberTransformableState { centroid, zoomChange, panChange, _ ->
+                val width = feedPointerSize.width.toFloat()
+                val height = feedPointerSize.height.toFloat()
+                if (width > 0f && height > 0f) {
+                    // The picture, not the zone: a letterboxed feed must not be draggable until
+                    // its black bars invade.
+                    val picture = feedPictureSize
+                    committedZoom =
+                        feedZoomAfterTransform(
+                            committed = committedZoom,
+                            zoomChange = zoomChange,
+                            centroidX = centroid.x,
+                            centroidY = centroid.y,
+                            panChangeX = panChange.x,
+                            panChangeY = panChange.y,
+                            width = width,
+                            height = height,
+                            pictureWidth = picture.first.takeIf { it > 0f } ?: width,
+                            pictureHeight = picture.second.takeIf { it > 0f } ?: height,
+                        )
+                }
+            }
+        // A pinch released just about 1x settles back to the whole frame, as playback does.
+        LaunchedEffect(feedTransformState) {
+            snapshotFlow { feedTransformState.isTransformInProgress }
+                .collect { inProgress ->
+                    if (!inProgress) committedZoom = feedZoomSettled(committedZoom)
+                }
         }
-        // Read off `renderedFraming`, so a DISP mode that suppresses the tool drops the punch-in
-        // with it — the same rule that takes the key away.
-        val punchIn = renderedFraming.magnificationScale(magnificationActive)
         val renderedEffects =
             renderedFeedEffects(
                 assist.effects.copy(
@@ -1759,19 +1917,23 @@ internal fun MonitorScreen(
                     recording || recordCommandPending || pendingRecordTarget != null,
             )
         val railMounts: (ChromeSection) -> Boolean = { section ->
-            if (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) {
-                true
-            } else {
-                when (section) {
-                    ChromeSection.LOCK_BUTTON -> railPlan.lock
-                    ChromeSection.BATTERY_INDICATORS -> railPlan.batteries
-                    ChromeSection.RAIL_DISP -> railPlan.disp
-                    ChromeSection.RAIL_RECORD -> railPlan.record
-                    ChromeSection.RAIL_MEDIA -> railPlan.media
-                    ChromeSection.RAIL_SETTINGS -> railPlan.settings
-                    else -> mounts(section)
+            // Availability outranks the rail plan's self-restore guarantees: a watcher without
+            // control must not get the record button forced back on by the broadcaster's own
+            // recording state riding in over the relay.
+            availability.hasSource(section, cameraReportsTimecode, isPhotographyMode) &&
+                if (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) {
+                    true
+                } else {
+                    when (section) {
+                        ChromeSection.LOCK_BUTTON -> railPlan.lock
+                        ChromeSection.BATTERY_INDICATORS -> railPlan.batteries
+                        ChromeSection.RAIL_DISP -> railPlan.disp
+                        ChromeSection.RAIL_RECORD -> railPlan.record
+                        ChromeSection.RAIL_MEDIA -> railPlan.media
+                        ChromeSection.RAIL_SETTINGS -> railPlan.settings
+                        else -> mounts(section)
+                    }
                 }
-            }
         }
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
         // Photography's landscape feed: the still image-area's shape centred in
@@ -1848,30 +2010,19 @@ internal fun MonitorScreen(
         // portrait fill centre-crops the image and every feed-aligned overlay
         // through the same content-rect resolver. Command unmounts the feed.
         val feedFocus = liveFeedPresentation.focus
-        // Read fresh each frame, so moving the focus point — by tap or on the body — takes the
-        // magnified view with it. Centre when there is no box to aim at.
-        val punchInAnchor =
-            magnificationAnchorBoxIndex(
-                    boxCount = feedFocus?.boxes?.size ?: 0,
-                    selectedBoxIndex = feedFocus?.selectedBoxIndex,
-                )
-                .let { index -> index?.let { feedFocus?.boxes?.get(it) } }
-                .let { box ->
-                    magnificationAnchor(
-                        boxCenterX = box?.centerX,
-                        boxCenterY = box?.centerY,
-                        coordinateWidth = feedFocus?.coordinateWidth ?: 0,
-                        coordinateHeight = feedFocus?.coordinateHeight ?: 0,
-                    )
-                }
         val feedContent =
             liveFeedContentRect(
                 containerWidth = feedPointerSize.width.toFloat(),
                 containerHeight = feedPointerSize.height.toFloat(),
                 sourceWidth = liveFeedPresentation.sourceWidth,
                 sourceHeight = liveFeedPresentation.sourceHeight,
-                aspectFill = isPortraitFill,
+                aspectFill = portraitRasterFill,
             )
+        // Publish the drawn picture's size so the zoom pan bounds on it rather than on the zone.
+        LaunchedEffect(feedContent) {
+            feedPictureSize =
+                feedContent?.let { it.width.toFloat() to it.height.toFloat() } ?: (0f to 0f)
+        }
         val focusMetadataAvailable =
             sessionState is CameraSessionState.Connected &&
                 monitorFrameSource != null &&
@@ -1897,6 +2048,7 @@ internal fun MonitorScreen(
                         focusMetadataAvailable
                     },
                     generation = liveFeedPresentation.focusGestureGeometryGeneration,
+                    mirrored = renderedFraming.mirrorEnabled,
                 )
             } else {
                 focusFeedViewportGeometry(
@@ -1985,6 +2137,9 @@ internal fun MonitorScreen(
         }
         val focusResetVisible =
             focusResetAvailable(feedFocus, focusPointLocked) &&
+                // A watcher has no focus-box source to recenter (iOS `.focusBox` mount rule):
+                // the relayed session reads Connected, so the availability gate must lead.
+                availability.hasSource(ChromeSection.FOCUS_BOX) &&
                 sessionState is CameraSessionState.Connected &&
                 !locked &&
                 !mediaOwnsCommandChannel &&
@@ -2051,18 +2206,6 @@ internal fun MonitorScreen(
                         },
                     )
                     .clipToBounds()
-                    // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
-                    // AF box and focus ring are siblings of it, so scaling the raster alone would
-                    // leave them behind at unmagnified positions over a magnified picture. Inside
-                    // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
-                    // of the gestures so Compose maps a touch back through the scale and
-                    // tap-to-focus still lands on the pixel under the finger.
-                    .graphicsLayer {
-                        scaleX = punchIn
-                        scaleY = punchIn
-                        transformOrigin = TransformOrigin(punchInAnchor.first, punchInAnchor.second)
-                    }
-                    .onSizeChanged { feedPointerSize = it }
                     // Canvas content is not exposed as an accessibility node
                     // by every Android view bridge. The feed container is the
                     // stable, descriptive region for TalkBack and UI tests.
@@ -2078,16 +2221,64 @@ internal fun MonitorScreen(
                             }
                         }
                     }
-                    .testTag("monitor_live_feed")
+                    .testTag("monitor_live_feed"),
+                contentAlignment = Alignment.Center,
+            ) {
+            Box(
+                // Vertical mode first: the whole feed stack — raster, AF boxes, punch-in,
+                // gestures — lays out in the camera's own frame and rotates upright as one,
+                // inside the zone clip.
+                Modifier.liveFeedBodyRotation(liveFeedRotation)
+                    // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
+                    // AF box and focus ring are siblings of it, so scaling the raster alone would
+                    // leave them behind at unmagnified positions over a magnified picture. Inside
+                    // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
+                    // of the gestures so Compose maps a touch back through the scale and
+                    // tap-to-focus still lands on the pixel under the finger.
+                    // OUTSIDE the zoom layer, as the playback viewer's is. Inside it, Compose maps
+                    // pointer positions back through the scale before reporting them, so a finger
+                    // travelling D pixels arrives as D/scale and the picture tracks at a fraction
+                    // of the finger — worse the further you zoom.
+                    //
+                    // Pinch always transforms; a one-finger drag only pans once zoomed, so an
+                    // unzoomed drag still reaches the DISP swipe in the arbiter below.
+                    .transformable(
+                        state = feedTransformState,
+                        canPan = { committedZoom.isZoomed },
+                    )
+                    .graphicsLayer {
+                        // A CENTER-anchored scale then the offset, in that order — the pair every
+                        // formula in FeedZoom is written against. Anchoring on the AF box instead
+                        // (as the retired MAG tool did) would make the pinch pivot somewhere the
+                        // operator's fingers are not.
+                        //
+                        // Read inside this lambda on purpose: graphicsLayer defers its state reads
+                        // to the draw phase, so a gesture redraws without recomposing.
+                        val zoom = committedZoom
+                        scaleX = zoom.scale
+                        scaleY = zoom.scale
+                        transformOrigin = TransformOrigin.Center
+                        translationX = zoom.offsetX
+                        translationY = zoom.offsetY
+                    }
+                    .onSizeChanged { feedPointerSize = it }
+                    // Stays INSIDE the layer: tap-to-focus wants its coordinates mapped back
+                    // through the scale so a tap lands on the pixel under the finger.
                     .focusFeedGestures(
                         geometry = feedGestureGeometry,
                         context = focusGestureContext,
                         isPortrait = isPortrait,
+                        isZoomed = isFeedZoomed,
                         onHoldingChanged = { focusLockHolding = it },
-                        onAction = handleFocusFeedAction,
-                        onPortraitPinch = { zoom ->
-                            portraitAspectAfterPinch(zoom, portraitAspect)?.let { next ->
-                                operatorSettings.portraitFeedAspect = next
+                        // A zoom or a pan must never move the focus box. The arbiter lives inside
+                        // the zoom layer, so its coordinates are divided by the scale: a 200px pan
+                        // at 4x reaches it as 50px, lands under its tap threshold, and would be
+                        // read as a tap-to-focus. Deferring to the transform while it is running
+                        // settles it by intent rather than by tuning a threshold against a moving
+                        // coordinate space. A discrete tap starts no transform and still focuses.
+                        onAction = { action ->
+                            if (!feedTransformState.isTransformInProgress) {
+                                handleFocusFeedAction(action)
                             }
                         },
                     ),
@@ -2161,16 +2352,23 @@ internal fun MonitorScreen(
                         cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
                         effectsPresentationState = liveFeedEffectsPresentation,
-                        aspectFill = isPortraitFill,
+                        aspectFill = portraitRasterFill,
+                        // Reads the DISP-filtered set, not the raw config, so clean view honours
+                        // the pin exactly as every other framing tool does.
+                        mirrored = renderedFraming.mirrorEnabled,
                         // SurfaceView graded feed is invisible to Kyant
-                        // layerBackdrop — FULL glass must present via Compose.
-                        preferComposablePresentation = glass.tier == GlassTier.FULL,
+                        // layerBackdrop — FULL glass must present via Compose. A rotated
+                        // (vertical) feed must too: SurfaceView buffers composite outside
+                        // the Compose layer and never rotate with it.
+                        preferComposablePresentation =
+                            glass.tier == GlassTier.FULL ||
+                                liveFeedRotation != LiveFeedRotation.LANDSCAPE,
                     )
                     // Presentation-only texture: after the camera frame/effect renderer, before
                     // every geometry-bearing assist. Scopes continue sampling monitorFrameSource.
                     FeedTextureOverlay(
                         presentationState = liveFeedPresentation,
-                        aspectFill = isPortraitFill,
+                        aspectFill = portraitRasterFill,
                         horizontalPresentationScale = localFraming.horizontalPresentationScale,
                         verticalPresentationScale = localFraming.verticalPresentationScale,
                     )
@@ -2183,7 +2381,7 @@ internal fun MonitorScreen(
                 LocalFramingAssistOverlay(
                     configuration = renderedFraming,
                     presentationState = liveFeedPresentation,
-                    aspectFill = isPortraitFill,
+                    aspectFill = portraitRasterFill,
                     splitComparison = renderedEffects.activeSplitComparison,
                 )
                 LiveFrameMetadataOverlay(
@@ -2191,7 +2389,7 @@ internal fun MonitorScreen(
                     configuration = renderedFraming,
                     cleanMode = isClean,
                     isPortrait = isPortrait,
-                    aspectFill = isPortraitFill,
+                    aspectFill = portraitRasterFill,
                     isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
@@ -2213,6 +2411,8 @@ internal fun MonitorScreen(
                     evIndicatorSixths = cameraProperties.evIndicatorSixths,
                     evIndicatorLit = cameraProperties.evIndicatorLit,
                 )
+            }
+                // Outside the rotated stack: reads as screen chrome, never sideways text.
                 LiveFeedColorModeNotice(
                     colorMode = liveFeedPresentation.colorMode,
                     effectsActive = !renderedEffects.isIdentity,
@@ -2229,9 +2429,11 @@ internal fun MonitorScreen(
                     viewportHeight = viewportHeight,
                     isCommand = isCommand,
                     isFill = isPortraitFill,
+                    availability = availability,
                     locked = locked,
                     recording = recording,
                     timecodeRetention = timecodeRetention,
+                    cameraReportsTimecode = cameraReportsTimecode,
                     sessionState = sessionState,
                     // iOS portrait centers the same toggle-aware, retention-held
                     // media readout the landscape pill shows.
@@ -2285,6 +2487,9 @@ internal fun MonitorScreen(
                     },
                     onShutterLongPress = shutterLongPressToggle,
                     onCaptureBarBounds = { measuredCaptureBar = it },
+                    // Same store the landscape deck's cells write to, so the stills drop-downs
+                    // anchor under whichever bar is on screen.
+                    onTopPillBounds = { kind, frame -> measuredTopPills[kind] = frame },
                     onOpenCommandControl = {
                         activeAssistOptions = null
                         activeMonitorPickerKind = null
@@ -2309,6 +2514,7 @@ internal fun MonitorScreen(
                     CommandDashboard(
                         recording = recording,
                         timecodeRetention = timecodeRetention,
+                        showsTimecode = cameraReportsTimecode,
                         sessionState = sessionState,
                         presentation = commandPresentation,
                         controlsEnabled = commandControlsEnabled,
@@ -2858,12 +3064,70 @@ internal fun MonitorScreen(
             }
         }
 
+        // Fit/Fill quick key (iOS parity): the feed frame's own bottom-right corner control — the
+        // explicit aspect toggle beside the pinch, replacing any settings-row picker. Mounted only
+        // where the choice is real: photography forces fit, a vertical feed forces fill, command
+        // has no feed; lock and the Edit view hide every on-feed affordance. The reset/50-50
+        // stack seats one slot higher while it shows, through the shared lane inset below.
+        val aspectToggleVisible =
+            isPortrait && !isCommand && !isPhotographyMode && !isVerticalFeed &&
+                !locked && chromeEditorMode == null
+        val bottomChromeInsetDp = with(density) { levelGaugeBottomChromeInset.toDp().value }
+        val onFeedLaneInset =
+            bottomChromeInsetDp +
+                (
+                    if (aspectToggleVisible) {
+                        FOCUS_RESET_BUTTON_SIZE_DP + FOCUS_RESET_PANEL_GAP_DP
+                    } else {
+                        0f
+                    }
+                )
+        if (aspectToggleVisible) {
+            val fillsViewport = operatorSettings.portraitFeedAspect.fillsViewport
+            val toggleFrame =
+                focusResetButtonBaseFrame(
+                    feed = zones.feed,
+                    isPortrait = true,
+                    bottomChromeInset = bottomChromeInsetDp,
+                )
+            val toggleDescription =
+                stringResource(
+                    if (fillsViewport) {
+                        R.string.portrait_aspect_fit
+                    } else {
+                        R.string.portrait_aspect_fill
+                    },
+                )
+            Box(
+                Modifier
+                    .zone(toggleFrame)
+                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    .border(1.dp, LiveDesign.hairline, CircleShape)
+                    .chromeClickable {
+                        operatorSettings.portraitFeedAspect =
+                            if (fillsViewport) {
+                                PortraitFeedAspect.FIT_16_9
+                            } else {
+                                PortraitFeedAspect.FILL
+                            }
+                    }
+                    .testTag("portrait_aspect_toggle")
+                    .semantics { contentDescription = toggleDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                // iOS full-screen arrows in a 40pt black circle.
+                FullScreenArrowsGlyph(
+                    LiveDesign.text,
+                    expand = !fillsViewport,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+
         // Keep the reset affordance above every movable scope/reference panel. The pure placement
         // policy mirrors iOS and this later composition order remains reachable even if a viewport
         // is too crowded to provide a geometrically clear slot.
         if (focusResetVisible) {
-            val bottomChromeInset =
-                with(density) { levelGaugeBottomChromeInset.toDp().value }
             // Photography's letterboxed feed frame (not the zone map's full-bleed rect):
             // its leading edge clears the vertical assist rail's lane by construction, so
             // the affordance seats beside the rail like iOS instead of under it.
@@ -2871,7 +3135,7 @@ internal fun MonitorScreen(
                 focusResetButtonBaseFrame(
                     feed = effectiveFeed,
                     isPortrait = isPortrait,
-                    bottomChromeInset = bottomChromeInset,
+                    bottomChromeInset = onFeedLaneInset,
                 )
             val resetFrame =
                 focusResetButtonClearFrame(
@@ -2925,13 +3189,11 @@ internal fun MonitorScreen(
             !locked &&
             chromeEditorMode == null
         ) {
-            val bottomChromeInset =
-                with(density) { levelGaugeBottomChromeInset.toDp().value }
             val keyFrame =
                 splitComparisonKeyFrame(
                     feed = effectiveFeed,
                     isPortrait = isPortrait,
-                    bottomChromeInset = bottomChromeInset,
+                    bottomChromeInset = onFeedLaneInset,
                     focusResetMounted = focusResetVisible,
                     widthDp = SPLIT_KEY_WIDTH_DP,
                     heightDp = SPLIT_KEY_HEIGHT_DP,
@@ -2958,47 +3220,8 @@ internal fun MonitorScreen(
                 )
             }
         }
-        // Punch-in quick key, opposite the recenter/50-50 lane so it never lifts or shifts as those
-        // two come and go. One tap in, one tap out — reopening a popup to leave a magnified view
-        // would defeat the point of a focus check. The accent state is read off the same flag that
-        // drives the transform, so the two cannot disagree.
-        if (renderedFraming.magnificationEnabled && !locked && chromeEditorMode == null) {
-            val bottomChromeInset = with(density) { levelGaugeBottomChromeInset.toDp().value }
-            val factorLabel = operatorSettings.magnificationFactor.label
-            val magnifyDescription =
-                stringResource(
-                    if (magnificationActive) R.string.magnification_key_exit
-                    else R.string.magnification_key_enter,
-                    factorLabel,
-                )
-            Box(
-                Modifier
-                    .zone(
-                        magnificationKeyFrame(
-                            feed = effectiveFeed,
-                            isPortrait = isPortrait,
-                            bottomChromeInset = bottomChromeInset,
-                        ),
-                    )
-                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                    .border(
-                        1.dp,
-                        if (magnificationActive) LiveDesign.accent else LiveDesign.hairline,
-                        CircleShape,
-                    )
-                    .chromeClickable { magnificationActive = !magnificationActive }
-                    .testTag("magnification_key")
-                    .semantics { contentDescription = magnifyDescription },
-                contentAlignment = Alignment.Center,
-            ) {
-                // iOS `plus.magnifyingglass` / `minus.magnifyingglass` in a 40pt black circle.
-                MagnifyKeyGlyph(
-                    tint = if (magnificationActive) LiveDesign.accent else LiveDesign.text,
-                    active = magnificationActive,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
+        // The punch-in quick key is retired with the MAG tool it drove: zoom is direct
+        // manipulation now, so the feed itself is the control and a key would have nothing to say.
         } // end sceneLayer (feed + chrome under popups)
 
         if (!isCommand && !isClean) {
@@ -3117,7 +3340,12 @@ internal fun MonitorScreen(
         MonitorRecoveryOverlay(
             state = recoveryStateOverride ?: sessionRecoveryState,
             cameraName = recoveryStateOverride?.let { "Nikon ZR" } ?: lastConnectedCameraName,
-            onRetry = { sessionRecoveryRetryTicket += 1 },
+            onRetry = {
+                // Operator intent clears the storm ledger: the retry is not a drop, and the
+                // next pause should take a fresh cluster of drops to earn (iOS parity).
+                ProductionSessionRetryScheduleBridge.resetDropStormGuard()
+                sessionRecoveryRetryTicket += 1
+            },
             onBackToOperatorMenu = onBackToOperatorMenu,
         )
         // Registered HERE, not inside the options popup: launching the document picker pauses
@@ -3524,9 +3752,12 @@ private fun PortraitChrome(
     isCommand: Boolean,
     /** Whether non-critical chrome mounts; clean view (DISP 2) strips it all (#256). */
     isFill: Boolean,
+    availability: MonitorDataAvailability,
     locked: Boolean,
     recording: Boolean,
     timecodeRetention: MonitorTimecodeRetention,
+    /** Live-view header timecode status; a body that runs none gets no readout and no hero band. */
+    cameraReportsTimecode: Boolean,
     sessionState: CameraSessionState,
     cameraReadouts: MonitorCameraReadouts,
     assist: AssistState,
@@ -3562,6 +3793,8 @@ private fun PortraitChrome(
     onOpenAssistOptions: (AssistTool, Rect) -> Unit,
     /** Publishes each badgeable element's drawn bounds while the Edit view is open. */
     onChromeEditBounds: (ChromeSection, Rect) -> Unit = { _, _ -> },
+    /** Anchors a stills readout's drop-down under the cell, as the landscape deck's cells do. */
+    onTopPillBounds: ((MonitorPickerKind, ZoneFrame) -> Unit)? = null,
 ) {
     val isPhotography = prefersPhotographyChrome(cameraProperties)
     val context = LocalContext.current
@@ -3578,9 +3811,12 @@ private fun PortraitChrome(
     val chrome = operatorSettings.chrome(displayMode, captureLayoutMode)
     val chromeEditorMode = operatorSettings.chromeEditorMode
     val mounts: (ChromeSection) -> Boolean = { section ->
-        (chromeEditorMode == displayMode &&
-            chromeEditorMode != null &&
-            section.isConfigurableIn(displayMode)) || chrome[section].value
+        // Same source gate as landscape: no feeding data, no instrument (iOS
+        // `sectionHasASource`).
+        availability.hasSource(section, cameraReportsTimecode, isPhotography) &&
+            ((chromeEditorMode == displayMode &&
+                chromeEditorMode != null &&
+                section.isConfigurableIn(displayMode)) || chrome[section].value)
     }
     val railPlan =
         operatorSettings.sideRailPlan(
@@ -3601,6 +3837,19 @@ private fun PortraitChrome(
             showsBattery = mounts(ChromeSection.BATTERY_INDICATORS),
             cameraBatteryPercent = cameraReadouts.batteryPercent,
             cameraExternalPower = cameraReadouts.externalPower,
+            // Stills readouts ride the same per-cell switches as their landscape twins: SIZE on
+            // RESOLUTION_READOUT, QUALITY on CODEC_READOUT (iOS `InfoBarContent`).
+            isPhotography = isPhotography,
+            shotsRemaining = cameraProperties.shotsRemaining,
+            stillSize =
+                cameraProperties.stillSizeAreaLabel() ?: cameraProperties.stillSizeCompactLabel(),
+            stillQuality = cameraProperties.stillQualityCompactLabel(),
+            showsStillSize = mounts(ChromeSection.RESOLUTION_READOUT),
+            showsStillQuality = mounts(ChromeSection.CODEC_READOUT),
+            activePicker = activeMonitorPicker,
+            pickersEnabled = availability.canDriveCamera && !locked,
+            onOpenPicker = onOpenMonitorPicker,
+            onPillBounds = onTopPillBounds,
             modifier =
                 Modifier.zone(zones.infoBar)
                     .chromeEditable(
@@ -3685,11 +3934,14 @@ private fun PortraitChrome(
 
     // Controls zone: fit-mode live tiles, or a command dashboard that keeps
     // the system rail fixed while its primary and secondary settings scroll.
-    zones.controlsGrid?.takeIf { it.height > 0 }?.let { grid ->
+    // Every tile is a camera control — a watcher without the token gets the
+    // feed's dead space back instead of a grid of dashes.
+    zones.controlsGrid?.takeIf { it.height > 0 && availability.cameraControls }?.let { grid ->
         if (isCommand) {
             PortraitCommandDashboard(
                 presentation = commandPresentation,
                 timecodeRetention = timecodeRetention,
+                showsTimecode = cameraReportsTimecode,
                 sessionState = sessionState,
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
@@ -3794,20 +4046,22 @@ private fun PortraitChrome(
     // switch; the opaque glass draws only when the band still carries one, because an empty band
     // over the letterbox is just a black stripe.
     val railMounts: (ChromeSection) -> Boolean = { section ->
-        if (chromeEditorMode == displayMode && chromeEditorMode != null &&
-            section.isConfigurableIn(displayMode)
-        ) {
-            true
-        } else {
-            when (section) {
-                ChromeSection.LOCK_BUTTON -> railPlan.lock
-                ChromeSection.RAIL_DISP -> railPlan.disp
-                ChromeSection.RAIL_RECORD -> railPlan.record
-                ChromeSection.RAIL_MEDIA -> railPlan.media
-                ChromeSection.RAIL_SETTINGS -> railPlan.settings
-                else -> mounts(section)
+        // Availability outranks the plan's guarantees, exactly like landscape.
+        availability.hasSource(section, cameraReportsTimecode, isPhotography) &&
+            if (chromeEditorMode == displayMode && chromeEditorMode != null &&
+                section.isConfigurableIn(displayMode)
+            ) {
+                true
+            } else {
+                when (section) {
+                    ChromeSection.LOCK_BUTTON -> railPlan.lock
+                    ChromeSection.RAIL_DISP -> railPlan.disp
+                    ChromeSection.RAIL_RECORD -> railPlan.record
+                    ChromeSection.RAIL_MEDIA -> railPlan.media
+                    ChromeSection.RAIL_SETTINGS -> railPlan.settings
+                    else -> mounts(section)
+                }
             }
-        }
     }
     if (!railPlan.isEmpty || chromeEditorMode == displayMode) {
         // Opaque band behind the system controls through the physical bottom
@@ -3823,39 +4077,95 @@ private fun PortraitChrome(
             ).background(LiveDesign.glass),
         )
     }
-    Row(
+    // Record anchors DEAD-CENTRE as an overlay; the side clusters spread through their own
+    // weighted halves. The old single equal-gap flow re-centred the whole row whenever a
+    // neighbour unmounted -- clean view drops the lock, and record walked visibly
+    // off-centre (iOS `portraitBody` carries the same rule).
+    Box(
         Modifier.zone(zones.systemCluster),
-        verticalAlignment = Alignment.CenterVertically,
+        contentAlignment = Alignment.Center,
     ) {
-        Spacer(Modifier.weight(1f))
-        if (railMounts(ChromeSection.LOCK_BUTTON)) {
-            LockButton(
-                locked,
-                Modifier.size(40.dp).chromeEditable(
-                    ChromeSection.LOCK_BUTTON,
-                    chromeEditorMode,
-                    operatorSettings,
-                    onChromeEditBounds,
-                ),
-                onClick = onLock,
-            )
-            Spacer(Modifier.weight(1f))
-        }
-        if (railMounts(ChromeSection.RAIL_DISP)) {
-            DispButton(
-                activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
-                modeCount = enabledDisplayModeOrder.size,
-                isLiveActive = displayMode == MonitorDisplayMode.LIVE,
-                modifier =
-                    Modifier.size(width = 74.dp, height = 44.dp).chromeEditable(
-                        ChromeSection.RAIL_DISP,
-                        chromeEditorMode,
-                        operatorSettings,
-                        onChromeEditBounds,
-                    ),
-                onClick = onDisp,
-            )
-            Spacer(Modifier.weight(1f))
+        Row(
+            Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spacer(Modifier.weight(1f))
+                if (railMounts(ChromeSection.LOCK_BUTTON)) {
+                    LockButton(
+                        locked,
+                        Modifier.size(40.dp).chromeEditable(
+                            ChromeSection.LOCK_BUTTON,
+                            chromeEditorMode,
+                            operatorSettings,
+                            onChromeEditBounds,
+                        ),
+                        onClick = onLock,
+                    )
+                    Spacer(Modifier.weight(1f))
+                }
+                if (railMounts(ChromeSection.RAIL_DISP)) {
+                    DispButton(
+                        activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
+                        modeCount = enabledDisplayModeOrder.size,
+                        isLiveActive = displayMode == MonitorDisplayMode.LIVE,
+                        modifier =
+                            Modifier.size(width = 74.dp, height = 44.dp).chromeEditable(
+                                ChromeSection.RAIL_DISP,
+                                chromeEditorMode,
+                                operatorSettings,
+                                onChromeEditBounds,
+                            ),
+                        onClick = onDisp,
+                    )
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+            if (railMounts(ChromeSection.RAIL_RECORD)) {
+                // Centre lane kept clear under the overlaid record button.
+                Spacer(Modifier.width(83.dp))
+            }
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spacer(Modifier.weight(1f))
+                if (railMounts(ChromeSection.RAIL_MEDIA)) {
+                    AuxCircleButton(
+                        Modifier.size(63.dp).chromeEditable(
+                            ChromeSection.RAIL_MEDIA,
+                            chromeEditorMode,
+                            operatorSettings,
+                            onChromeEditBounds,
+                        ),
+                        onClick = onOpenMedia,
+                    ) { glyphModifier, tint ->
+                        if (isPhotography) {
+                            PhotoGlyph(tint, glyphModifier)
+                        } else {
+                            MediaStackGlyph(tint, glyphModifier)
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                }
+                if (railMounts(ChromeSection.RAIL_SETTINGS)) {
+                    AuxCircleButton(
+                        Modifier.size(63.dp).chromeEditable(
+                            ChromeSection.RAIL_SETTINGS,
+                            chromeEditorMode,
+                            operatorSettings,
+                            onChromeEditBounds,
+                        ),
+                        onClick = onOpenSettings,
+                    ) { glyphModifier, tint ->
+                        GearGlyph(tint, glyphModifier)
+                    }
+                    Spacer(Modifier.weight(1f))
+                }
+            }
         }
         if (railMounts(ChromeSection.RAIL_RECORD)) {
             val recordModifier =
@@ -3882,39 +4192,6 @@ private fun PortraitChrome(
                     onClick = onRecord,
                 )
             }
-            Spacer(Modifier.weight(1f))
-        }
-        if (railMounts(ChromeSection.RAIL_MEDIA)) {
-            AuxCircleButton(
-                Modifier.size(63.dp).chromeEditable(
-                    ChromeSection.RAIL_MEDIA,
-                    chromeEditorMode,
-                    operatorSettings,
-                    onChromeEditBounds,
-                ),
-                onClick = onOpenMedia,
-            ) { glyphModifier, tint ->
-                if (isPhotography) {
-                    PhotoGlyph(tint, glyphModifier)
-                } else {
-                    MediaStackGlyph(tint, glyphModifier)
-                }
-            }
-            Spacer(Modifier.weight(1f))
-        }
-        if (railMounts(ChromeSection.RAIL_SETTINGS)) {
-            AuxCircleButton(
-                Modifier.size(63.dp).chromeEditable(
-                    ChromeSection.RAIL_SETTINGS,
-                    chromeEditorMode,
-                    operatorSettings,
-                    onChromeEditBounds,
-                ),
-                onClick = onOpenSettings,
-            ) { glyphModifier, tint ->
-                GearGlyph(tint, glyphModifier)
-            }
-            Spacer(Modifier.weight(1f))
         }
     }
 }
@@ -3935,11 +4212,28 @@ private fun PortraitInfoBar(
     showsTimecode: Boolean = true,
     showsMedia: Boolean = true,
     showsBattery: Boolean = true,
+    isPhotography: Boolean = false,
+    shotsRemaining: Int? = null,
+    stillSize: String? = null,
+    stillQuality: String? = null,
+    showsStillSize: Boolean = true,
+    showsStillQuality: Boolean = true,
+    activePicker: MonitorPickerKind? = null,
+    pickersEnabled: Boolean = false,
+    onOpenPicker: (MonitorPickerKind) -> Unit = {},
+    onPillBounds: ((MonitorPickerKind, ZoneFrame) -> Unit)? = null,
+    photoStorage: CameraStorageStatus? = null,
+    photoPillShowsStorage: Boolean = false,
+    onTogglePhotoPill: () -> Unit = {},
 ) {
     val cameraBattery =
         monitorBatteryPresentation(cameraBatteryPercent, cameraExternalPower)
     Box(modifier.background(LiveDesign.glass).padding(horizontal = 16.dp)) {
-        if (showsMedia) {
+        // Screen-centred storage, cinema only — photography carries no MEDIA cell at all, the
+        // same call the landscape deck makes. Shots remaining is the number a stills operator
+        // counts down, and it is measured from the space this reports, so the two side by side
+        // are one fact twice. Storage stays a tap away on the SHOTS readout (iOS `InfoBarContent`).
+        if (showsMedia && !isPhotography) {
             Text(
                 media,
                 style = chromeStyle(13f, FontWeight.Medium),
@@ -3948,13 +4242,57 @@ private fun PortraitInfoBar(
                 modifier = Modifier.align(Alignment.Center),
             )
         }
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Photography makes the same swap the landscape deck already makes: the shots counter
+            // takes the timecode slot, size and quality follow it. A stills body runs no timecode,
+            // so the slot was parking a frozen 00:00:00:00 (iOS `PortraitInfoBarShots`).
             if (showsTimecode) {
-                RetainedCameraTimecodeReadout(
-                    retention = timecodeRetention,
-                    sessionState = sessionState,
-                    sizeSp = 15f,
-                )
+                if (isPhotography) {
+                    // The landscape deck's own readout at the portrait bar's size — one
+                    // shots/storage rule, one toggle, two sizes (iOS `PortraitInfoBarShots`).
+                    ShotsRemainingReadout(
+                        shotsRemaining = shotsRemaining,
+                        storage = photoStorage,
+                        showsStorage = photoPillShowsStorage,
+                        onToggle = onTogglePhotoPill,
+                        sizeSp = 15f,
+                        labelSp = 11f,
+                    )
+                } else {
+                    RetainedCameraTimecodeReadout(
+                        retention = timecodeRetention,
+                        sessionState = sessionState,
+                        sizeSp = 15f,
+                    )
+                }
+            }
+            if (isPhotography) {
+                if (showsStillSize) {
+                    PortraitStillReadout(
+                        value = stillSize ?: "—",
+                        active = activePicker == MonitorPickerKind.SIZE,
+                        onClick = { if (pickersEnabled) onOpenPicker(MonitorPickerKind.SIZE) },
+                        onBoundsInRoot =
+                            onPillBounds?.let { report ->
+                                { frame: ZoneFrame -> report(MonitorPickerKind.SIZE, frame) }
+                            },
+                    )
+                }
+                if (showsStillQuality) {
+                    PortraitStillReadout(
+                        value = stillQuality ?: "—",
+                        active = activePicker == MonitorPickerKind.QUALITY,
+                        onClick = { if (pickersEnabled) onOpenPicker(MonitorPickerKind.QUALITY) },
+                        onBoundsInRoot =
+                            onPillBounds?.let { report ->
+                                { frame: ZoneFrame -> report(MonitorPickerKind.QUALITY, frame) }
+                            },
+                    )
+                }
             }
             Spacer(Modifier.weight(1f))
             if (showsBattery) {
@@ -3982,6 +4320,46 @@ private fun PortraitInfoBar(
             }
         }
     }
+}
+
+/**
+ * A tappable stills readout in the portrait bar: the value in the bar's own type, opening the same
+ * picker as its landscape twin (iOS `PortraitInfoBarPickerCell`).
+ *
+ * It reports its bounds for the same reason the landscape pill does — the drop-down anchors under
+ * whichever cell is on screen, and a portrait cell that reported nothing would drop its picker in
+ * the corner.
+ */
+@Composable
+private fun PortraitStillReadout(
+    value: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    onBoundsInRoot: ((ZoneFrame) -> Unit)?,
+) {
+    val density = LocalDensity.current
+    Text(
+        value,
+        style = chromeStyle(13f, FontWeight.Medium, mono = true),
+        color = if (active) LiveDesign.accent else LiveDesign.text,
+        maxLines = 1,
+        modifier =
+            Modifier.chromeClickable(onClick = onClick)
+                .onGloballyPositioned { coordinates ->
+                    val report = onBoundsInRoot ?: return@onGloballyPositioned
+                    val bounds = coordinates.boundsInRoot()
+                    with(density) {
+                        report(
+                            ZoneFrame(
+                                bounds.left.toDp().value,
+                                bounds.top.toDp().value,
+                                bounds.width.toDp().value,
+                                bounds.height.toDp().value,
+                            ),
+                        )
+                    }
+                },
+    )
 }
 
 /** Canvas stand-in for SF `dot.viewfinder` (the focus-reset affordance). */
@@ -4020,6 +4398,52 @@ private fun DotViewfinderGlyph(
         cornerPath(w - corner, 0f, w, 0f, w, corner)
         cornerPath(w, h - corner, w, h, w - corner, h)
         cornerPath(corner, h, 0f, h, 0f, h - corner)
+    }
+}
+
+/**
+ * The portrait Fit/Fill key's glyph: iOS `arrow.up.left.and.arrow.down.right` when [expand] is
+ * true (fit, tapping fills), `arrow.down.right.and.arrow.up.left` otherwise.
+ */
+@Composable
+private fun FullScreenArrowsGlyph(
+    tint: androidx.compose.ui.graphics.Color,
+    expand: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val stroke = size.minDimension * 0.11f
+        val head = size.minDimension * 0.26f
+        val inset = size.minDimension * 0.06f
+        val mid = size.minDimension * 0.42f
+        fun arrow(tipX: Float, tipY: Float, tailX: Float, tailY: Float) {
+            val path = androidx.compose.ui.graphics.Path().apply {
+                moveTo(tailX, tailY)
+                lineTo(tipX, tipY)
+                // L-shaped barbs run back toward the tail along each axis.
+                moveTo(tipX + (if (tailX > tipX) head else -head), tipY)
+                lineTo(tipX, tipY)
+                lineTo(tipX, tipY + (if (tailY > tipY) head else -head))
+            }
+            drawPath(
+                path,
+                tint,
+                style =
+                    androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = stroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    ),
+            )
+        }
+        val w = size.width
+        val h = size.height
+        if (expand) {
+            arrow(inset, inset, mid, mid)
+            arrow(w - inset, h - inset, w - mid, h - mid)
+        } else {
+            arrow(mid, mid, inset, inset)
+            arrow(w - mid, h - mid, w - inset, h - inset)
+        }
     }
 }
 
@@ -4085,12 +4509,47 @@ internal fun batteryRowStackFrame(anchor: ZoneFrame, lock: ZoneFrame): ZoneFrame
  */
 internal fun photographyDisplayModeOrder(
     order: List<MonitorDisplayMode>,
-    photography: Boolean,
+    hidesCommand: Boolean,
 ): List<MonitorDisplayMode> {
-    if (!photography) return order
+    if (!hidesCommand) return order
     return order.filterNot { it == MonitorDisplayMode.COMMAND }
         .ifEmpty { listOf(MonitorDisplayMode.LIVE) }
 }
+
+/**
+ * Whether anything is actually feeding [section] right now — the Kotlin twin of iOS
+ * `sectionHasASource`. Chrome the operator switched on still hides when nothing can fill it:
+ * a readout with no source behind it still looks like an instrument, and the capture strip in
+ * particular offers pickers that would write to a camera that cannot hear them. Only readouts
+ * fed by the camera appear here; the assist toolbar, lock, FPS chip and rail utilities keep
+ * working on any picture source.
+ */
+internal fun MonitorDataAvailability.hasSource(
+    section: ChromeSection,
+    /**
+     * The live-view header's timecode status bit. Bodies with no timecode hardware pin it to zero
+     * forever, and the readout hides rather than showing a frozen 00:00:00:00. Defaulted for
+     * callers asking about a section that has nothing to do with the timecode slot.
+     */
+    cameraReportsTimecode: Boolean = true,
+    isPhotographyMode: Boolean = false,
+): Boolean =
+    when (section) {
+        ChromeSection.CAMERA_VALUES,
+        ChromeSection.CODEC_READOUT,
+        ChromeSection.MEDIA_READOUT,
+        ChromeSection.RESOLUTION_READOUT,
+        ChromeSection.BATTERY_INDICATORS,
+        -> cameraControls
+        ChromeSection.REC_READOUT, ChromeSection.RAIL_RECORD -> recordControl
+        ChromeSection.RAIL_MEDIA -> mediaBrowser
+        // Photography rents this slot for the SHOTS counter, which has nothing to do with
+        // timecode — gate that on the camera link, not on the body's timecode status.
+        ChromeSection.TIMECODE_READOUT ->
+            if (isPhotographyMode) cameraControls else cameraTimecode && cameraReportsTimecode
+        ChromeSection.FOCUS_BOX -> focusBoxes
+        else -> true
+    }
 
 /** The next mode after [current] in the effective DISP order, wrapping. */
 internal fun nextDisplayModeInOrder(

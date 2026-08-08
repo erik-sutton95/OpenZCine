@@ -150,11 +150,27 @@ final class WiFiJoinCoordinator {
 
     /// Fire-and-forget re-apply of a known camera network's hotspot config. Pulls the phone back
     /// onto the camera AP after a pairing-triggered AP restart (the camera drops and re-raises its
-    /// Wi‑Fi), when the credentials are already saved. No wait — discovery confirms the return, and
-    /// re-applying a network this app already configured does not re-prompt the operator.
+    /// Wi‑Fi), when the credentials are already saved. No wait — discovery confirms the return.
+    /// Every apply is operator-visible, so callers pay for cadence: see ``reapplyInFlightSince``.
+    /// SSIDs whose re-apply the operator has declined. iOS shows a system "Wants to Join" alert
+    /// for every apply, so a re-apply loop that ignores a Cancel becomes the cancel-storm
+    /// ("cancel, cancel, cancel…"). One decline ends the chase for that network until an
+    /// explicit operator-initiated join clears it.
+    private var declinedReapplySSIDs: Set<String> = []
+
+    /// When the outstanding re-apply started, or nil when none is. iOS serialises applies anyway;
+    /// what this prevents is the queue of alerts a caller builds by ticking faster than one
+    /// association attempt takes to fail.
+    private var reapplyInFlightSince: Date?
+
+    /// Clears the decline latch — call from a deliberate, operator-initiated join.
+    func clearReapplyDecline(ssid rawSSID: String) {
+        declinedReapplySSIDs.remove(rawSSID.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     func reapplyCameraNetwork(ssid rawSSID: String) {
         let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !ssid.isEmpty else { return }
+        guard !ssid.isEmpty, !declinedReapplySSIDs.contains(ssid) else { return }
         Task { [weak self] in await self?.performReapply(ssid: ssid) }
     }
 
@@ -164,6 +180,15 @@ final class WiFiJoinCoordinator {
         // Discovery is the final arbiter of the return, so there is nothing to do here.
         if await isConnected(toSSID: ssid) { return }
 
+        // An apply aimed at an access point that is not broadcasting yet — a camera still
+        // rebooting after its Confirm — spends around fifteen seconds trying before iOS gives up
+        // with "Unable to connect". Applies from a caller's next tick do not shorten that; they
+        // queue behind it and each buys the operator another alert and another failure, which is
+        // how one rebooting camera produced a run of them. One attempt at a time. The elapsed
+        // check is a self-heal: a lost callback must not disarm the chase for good.
+        if let started = reapplyInFlightSince, Date().timeIntervalSince(started) < 30 { return }
+        reapplyInFlightSince = Date()
+
         let password = CameraWiFiCredentialStore.password(forSSID: ssid)
         let configuration: NEHotspotConfiguration
         if let password, !password.isEmpty {
@@ -172,18 +197,33 @@ final class WiFiJoinCoordinator {
             configuration = NEHotspotConfiguration(ssid: ssid)
         }
         configuration.joinOnce = false
-        NEHotspotConfigurationManager.shared.apply(configuration) { error in
-            guard let error else { return }
-            // A best-effort reapply races the camera's pairing-triggered AP restart. iOS answers
-            // `.alreadyAssociated` when the phone is already back on the network and `.internal`
-            // (code 8) when the config can't be applied right now — also on the simulator, which
-            // has no Wi‑Fi radio. Neither is actionable, so keep them out of the error stream.
-            if Self.isBenignReapplyError(error) {
-                Self.hotspotLogger.info(
-                    "NEHotspotConfiguration reapply ssid=\(ssid, privacy: .private(mask: .hash)) deferred to discovery (\(error.localizedDescription, privacy: .private(mask: .hash)))"
-                )
-            } else {
-                Self.logHotspotError(error, context: "reapply ssid=\(ssid)")
+        // One hop to the main actor for the whole result: this closure is nonisolated, and two
+        // separate `Task { @MainActor }` bodies would each send `self` across, which Swift 6
+        // rejects as a race with the other.
+        NEHotspotConfigurationManager.shared.apply(configuration) { @Sendable [weak self] error in
+            Task { @MainActor in
+                self?.reapplyInFlightSince = nil
+                guard let error else { return }
+                // An operator Cancel on the system alert is a decision, not a transient failure:
+                // latch it so the chase stops instead of re-prompting on the next tick.
+                if (error as NSError).code == NEHotspotConfigurationError.userDenied.rawValue {
+                    self?.declinedReapplySSIDs.insert(ssid)
+                    Self.hotspotLogger.info(
+                        "reapply declined by operator ssid=\(ssid, privacy: .private(mask: .hash)) — chase disarmed"
+                    )
+                    return
+                }
+                // A best-effort reapply races the camera's pairing-triggered AP restart. iOS answers
+                // `.alreadyAssociated` when the phone is already back on the network and `.internal`
+                // (code 8) when the config can't be applied right now — also on the simulator, which
+                // has no Wi‑Fi radio. Neither is actionable, so keep them out of the error stream.
+                if Self.isBenignReapplyError(error) {
+                    Self.hotspotLogger.info(
+                        "NEHotspotConfiguration reapply ssid=\(ssid, privacy: .private(mask: .hash)) deferred to discovery (\(error.localizedDescription, privacy: .private(mask: .hash)))"
+                    )
+                } else {
+                    Self.logHotspotError(error, context: "reapply ssid=\(ssid)")
+                }
             }
         }
     }

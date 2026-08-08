@@ -14,6 +14,11 @@ private let transportLogger = Logger(
 // serialized by `transactionGate` (`AsyncSerialGate`); socket I/O is serialized on each
 // `PTPIPSocket`'s own dispatch queue.
 final class PTPIPTransport: CameraTransport, @unchecked Sendable {
+    /// How many times the idle limit a single transaction may run before it is killed regardless
+    /// of still-arriving bytes. Generous on purpose: the ceiling is a backstop against a body that
+    /// trickles forever, not a second opinion on whether a slow link is worth waiting for.
+    static let idleDeadlineCeilingMultiple: Double = 4
+
     private init(
         host: String,
         command: PTPIPSocket,
@@ -108,6 +113,69 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
     /// Minimal Init handshake on the command channel only, used by subnet discovery to identify a
     /// PTP-IP responder without opening a session. Returns the camera name, a placeholder for a
     /// responder that refused the handshake, or nil when nothing answered.
+    /// Whether anything is listening on this host's PTP-IP port — connect, observe, close.
+    ///
+    /// The cheap half of discovery, and the reason a search can now be wide. `probeCameraName`
+    /// below sends a real `InitCommandRequest`, which is a PTP conversation the body must answer;
+    /// running that against a whole subnet is what kept the sweep pinned to a single /24, because
+    /// an Init aimed at a camera sitting in pairing mode knocks it out of it. This sends NO PTP
+    /// bytes at all. It cannot tell a camera from anything else on 15740 — that is what the Init
+    /// pass is for, against the handful of hosts that answer here.
+    ///
+    /// [verify-on-HW: that a bare connect-and-close leaves a ZR in pairing mode undisturbed. It is
+    /// strictly less than the Init this code already aims at 254 hosts every sweep, but the
+    /// pairing-mode sensitivity is real and was found the hard way.]
+    static func probePortOpen(
+        host rawHost: String,
+        timeoutMilliseconds: UInt64 = 250
+    ) async -> Bool {
+        await probePort(host: rawHost, timeoutMilliseconds: timeoutMilliseconds).isOpen
+    }
+
+    /// The same probe, keeping WHY it failed.
+    ///
+    /// A sweep that opens nothing looks identical whether every host refused (nothing listening,
+    /// network right), had no route (wrong network), or timed out (unreachable, or the wait was
+    /// simply shorter than the network took to answer). The counts separate those, and a sweep is
+    /// only worth trusting once they do.
+    ///
+    /// The verdict is read off the SOCKET, not off the thrown error: every failure here arrives
+    /// wrapped in `NativeCameraSessionError`, whose NSError domain is this module's and never
+    /// `NSPOSIXErrorDomain` — classifying the wrapper sorted all 254 hosts of a subnet into
+    /// "other" and made the whole tally a tautology (field logs, 2026-08-08).
+    static func probePort(
+        host rawHost: String,
+        timeoutMilliseconds: UInt64 = 250
+    ) async -> (isOpen: Bool, verdict: String) {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return (false, "empty") }
+        let socket = PTPIPSocket(
+            host: host,
+            port: UInt16(ptpIPPort),
+            label: "reachability",
+            timeoutMilliseconds: timeoutMilliseconds
+        )
+        do {
+            try await socket.start()
+            socket.close()
+            return (true, "open")
+        } catch {
+            let code = socket.lastErrno
+            socket.close()
+            if case NativeCameraSessionError.timeout = error { return (false, "timeout") }
+            switch code {
+            case 0: return (false, "other")
+            case ECONNREFUSED: return (false, "refused")
+            case EHOSTUNREACH: return (false, "no-route")
+            case ENETUNREACH: return (false, "no-network")
+            case ETIMEDOUT, ETIME: return (false, "timeout")
+            case EMFILE, ENFILE: return (false, "no-fds")
+            case EACCES, EPERM: return (false, "denied")
+            default: return (false, "errno-\(code)")
+            }
+        }
+    }
+
     static func probeCameraName(
         host rawHost: String,
         guid: Data,
@@ -170,10 +238,34 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
         // reconnects. Live-view fetches pass a finite deadline too: the LiveViewWatchdog only
         // evaluates BETWEEN completed frames, so an unbounded fetch that never returns would hold
         // the gate forever and deaden every other command.
+        //
+        // The bound is IDLE time, not elapsed time. On a narrow or congested link — 2.4 GHz with a
+        // neighbour's network on the same channel is the everyday case — one 100 KB frame can
+        // legitimately take several seconds while bytes arrive the whole way. An elapsed-time
+        // bound reads that as death and closes a perfectly live session, which is how ordinary
+        // interference became a dropped connection. A transfer still being DELIVERED is not
+        // stalled, however slow; one that has gone silent for the limit is.
+        //
+        // The absolute ceiling exists because "still trickling" is not the same as "will finish":
+        // a body dribbling a byte a second would otherwise hold the gate forever.
+        command.markReceiveActivity()
         let deadlineTask: Task<Void, Never>? = deadline.map { limit in
             Task { [command] in
-                try? await Task.sleep(for: limit)
-                if !Task.isCancelled { command.close() }
+                let startedAt = CFAbsoluteTimeGetCurrent()
+                let limitSeconds =
+                    Double(limit.components.seconds)
+                    + Double(limit.components.attoseconds) / 1e18
+                let ceilingSeconds = limitSeconds * Self.idleDeadlineCeilingMultiple
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if Task.isCancelled { return }
+                    let idle = command.secondsSinceLastReceive ?? 0
+                    let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
+                    if idle >= limitSeconds || elapsed >= ceilingSeconds {
+                        command.close()
+                        return
+                    }
+                }
             }
         }
         defer { deadlineTask?.cancel() }
@@ -239,6 +331,15 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
         // the benign idle `.timeout`) propagate to the caller's drain loop.
         while true {
             let packet = try await event.readPacket()
+            if packet.type == .probeRequest {
+                // Liveness ping (CIPA DC-005): the body treats a missing ProbeResponse as a
+                // dead initiator and closes the whole session — operator-visible as an
+                // "event channel ended" drop. This packet was silently swallowed until now.
+                // [verify-on-HW: the ZR probing cadence and whether answering ends the drops]
+                try await event.send(PTPIPPacket(type: .probeResponse, payload: packet.payload))
+                logConnection("event-channel liveness probe answered")
+                continue
+            }
             if let parsed = try? PTPEvent(from: packet) {
                 return parsed
             }
@@ -340,7 +441,44 @@ final class PTPIPSocket: @unchecked Sendable {
     private let queue = DispatchQueue(label: "camera.ptpip.socket")
     private let descriptorLock = NSLock()
     private var descriptor: Int32 = -1
+    /// Latched by `interrupt()` so a descriptor created AFTER the interrupt (cancellation racing
+    /// `connectOnQueue`'s socket() call) is shut down the moment it is stored — the abandoned
+    /// attempt can never proceed to a live init on a channel nobody owns.
+    private var interruptRequested = false
     private var readBuffer = PTPIPReadBuffer()
+    /// When this socket last took delivery of any bytes, in `CFAbsoluteTimeGetCurrent` terms.
+    ///
+    /// The transaction deadline reads it to tell a SLOW transfer from a STOPPED one. Its own lock,
+    /// not `descriptorLock`: it is written on the socket queue for every recv and read from the
+    /// deadline task, and it must never contend with descriptor teardown.
+    private let receiveClockLock = NSLock()
+    private var lastReceiveAt: TimeInterval = 0
+
+    /// Seconds since this socket last received anything, or `nil` if it never has.
+    var secondsSinceLastReceive: TimeInterval? {
+        receiveClockLock.lock()
+        defer { receiveClockLock.unlock() }
+        guard lastReceiveAt > 0 else { return nil }
+        return CFAbsoluteTimeGetCurrent() - lastReceiveAt
+    }
+
+    /// Starts the idle clock without a delivery, so a transfer that has not yet produced its first
+    /// byte is measured from when it was ASKED for rather than from an unrelated earlier read.
+    func markReceiveActivity() {
+        receiveClockLock.lock()
+        lastReceiveAt = CFAbsoluteTimeGetCurrent()
+        receiveClockLock.unlock()
+    }
+
+    /// Reused `recv` scratch (serial-queue-owned) — see `receiveOnQueue` for why.
+    private var receiveScratch: [UInt8] = []
+
+    /// The errno behind the last `socketError` this socket raised, or 0 if it never raised one.
+    ///
+    /// `NativeCameraSessionError` carries a sentence, not a code, and a sentence cannot be
+    /// counted. The reachability probe reads this to say WHY a host did not answer; nothing else
+    /// should — the wrapped message is what a person reads.
+    fileprivate private(set) var lastErrno: Int32 = 0
 
     func start() async throws {
         try await performOnQueue { try self.connectOnQueue() }
@@ -348,6 +486,23 @@ final class PTPIPSocket: @unchecked Sendable {
 
     func close() {
         closeDescriptor()
+    }
+
+    /// Unblocks any in-flight poll/recv/connect NOW, without freeing the descriptor: shutdown
+    /// makes the fd poll readable-at-EOF, so the serial-queue call returns and throws through
+    /// its own error path, which closes. Closing here instead would race descriptor reuse with
+    /// the blocked call (audit M1); shutdown cannot. This is what makes an ABANDONED
+    /// establishment attempt tear down immediately instead of holding a half-open init channel
+    /// at a one-initiator body while the next attempt opens a second one (audit H4 — the
+    /// two-command-channels wedge behind the two-device handoff brick).
+    func interrupt() {
+        descriptorLock.lock()
+        interruptRequested = true
+        let live = descriptor
+        descriptorLock.unlock()
+        if live >= 0 {
+            Darwin.shutdown(live, SHUT_RDWR)
+        }
     }
 
     func send(_ packet: PTPIPPacket) async throws {
@@ -371,7 +526,13 @@ final class PTPIPSocket: @unchecked Sendable {
         }
         let payloadLength = Int(length) - 8
         let payload = payloadLength > 0 ? try await readExact(byteCount: payloadLength) : Data()
-        return try PTPIPPacket(serializedBytes: headerBytes + Array(payload))
+        // Build the packet directly from the parsed header + payload Data. The old
+        // serialize-then-reparse roundtrip (`headerBytes + Array(payload)` →
+        // `init(serializedBytes:)` → `Data(bytes[8..<length])`) copied the whole JPEG-sized
+        // payload three extra times per frame (audit finding: the copy chain).
+        let type =
+            PTPIPPacketType(rawValue: ByteCoding.readUInt32LE(headerBytes, at: 4)) ?? .unknown
+        return PTPIPPacket(type: type, payload: payload)
     }
 
     private func send(_ data: Data) async throws {
@@ -394,14 +555,23 @@ final class PTPIPSocket: @unchecked Sendable {
     }
 
     private func performOnQueue<T>(_ work: @Sendable @escaping () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                do {
-                    continuation.resume(returning: try work())
-                } catch {
-                    continuation.resume(throwing: error)
+        // Task cancellation interrupts the blocked syscall instead of letting it run out its
+        // own deadline — see `interrupt()`. Without this, cancellation was invisible here and
+        // an abandoned attempt kept its socket (and its half-open init at the body) alive for
+        // the full poll timeout.
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    do {
+                        continuation.resume(returning: try work())
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
+        } onCancel: {
+            interrupt()
         }
     }
 
@@ -460,6 +630,22 @@ final class PTPIPSocket: @unchecked Sendable {
         var keepProbeCount: Int32 = 4
         setsockopt(
             newDescriptor, IPPROTO_TCP, TCP_KEEPCNT, &keepProbeCount,
+            socklen_t(MemoryLayout<Int32>.size))
+
+        // A peer-closed socket must surface as a send error, never SIGPIPE (the Android facade
+        // already sets this; iOS had silently diverged).
+        var noSigPipe: Int32 = 1
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
+            socklen_t(MemoryLayout<Int32>.size))
+
+        // Live-view frames arrive as ~100 KB bursts every frame period; the default receive
+        // window under-buffers that on a lossy AP and turns transient congestion into stalled
+        // reads. Half a megabyte absorbs several frames of burst without meaningfully delaying
+        // loss feedback.
+        var receiveBufferBytes: Int32 = 512 * 1024
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_RCVBUF, &receiveBufferBytes,
             socklen_t(MemoryLayout<Int32>.size))
 
         let flags = fcntl(newDescriptor, F_GETFL, 0)
@@ -533,6 +719,13 @@ final class PTPIPSocket: @unchecked Sendable {
 
     private func receiveOnQueue(maximumLength: Int) throws -> Data {
         let descriptor = try currentDescriptor()
+        // One scratch buffer per transport, grown to the largest read ever asked for: the old
+        // per-recv `[UInt8](repeating: 0, …)` zero-filled up to 256 KiB per call — at ~100 KB
+        // × 30 fps that was tens of MB/s of pure allocator+memset churn on the socket queue.
+        // Safe without locking: this only runs on the transport's serial queue.
+        if receiveScratch.count < maximumLength {
+            receiveScratch = [UInt8](repeating: 0, count: maximumLength)
+        }
         // Loop rather than recurse: a flaky link can deliver a stream of spurious poll wakeups
         // followed by EAGAIN/EINTR, and recursing per retry once grew the stack until it crashed
         // the socket queue. The loop re-polls (bounded by the descriptor timeout) in constant
@@ -540,12 +733,16 @@ final class PTPIPSocket: @unchecked Sendable {
         while true {
             try waitForDescriptor(descriptor, events: Int16(POLLIN), label: "\(label) receive")
 
-            var bytes = [UInt8](repeating: 0, count: maximumLength)
-            let received = bytes.withUnsafeMutableBytes { rawBuffer in
+            let received = receiveScratch.withUnsafeMutableBytes { rawBuffer in
                 Darwin.recv(descriptor, rawBuffer.baseAddress, maximumLength, 0)
             }
             if received > 0 {
-                return Data(bytes.prefix(received))
+                // Every delivery restarts the idle clock: this is what lets the transaction
+                // deadline distinguish a link that is slow from one that has stopped.
+                markReceiveActivity()
+                return receiveScratch.withUnsafeBytes { rawBuffer in
+                    Data(bytes: rawBuffer.baseAddress!, count: received)
+                }
             }
             if received == 0 {
                 throw NativeCameraSessionError.connectionClosed
@@ -560,16 +757,37 @@ final class PTPIPSocket: @unchecked Sendable {
 
     private func waitForDescriptor(_ descriptor: Int32, events: Int16, label: String) throws {
         // Loop rather than recurse on EINTR (and on a wakeup that isn't yet readable): under a
-        // signal storm the old recursion grew the stack without bound. Each iteration re-polls
-        // with the same timeout, so a genuine stall still surfaces as `.timeout`.
+        // signal storm the old recursion grew the stack without bound. The bound is CUMULATIVE
+        // across retries — each re-poll used to get the full timeout again, so a stream of
+        // spurious wakeups could stretch one "10 s" wait indefinitely (audit finding #13).
+        let deadline = DispatchTime.now().advanced(
+            by: .milliseconds(Int(min(timeoutMilliseconds, 30_000))))
         while true {
+            let remainingMilliseconds =
+                (deadline.uptimeNanoseconds &- DispatchTime.now().uptimeNanoseconds) / 1_000_000
+            guard DispatchTime.now() < deadline, remainingMilliseconds > 0 else {
+                throw NativeCameraSessionError.timeout(label)
+            }
             var pollDescriptor = pollfd(fd: descriptor, events: events, revents: 0)
-            let result = Darwin.poll(&pollDescriptor, 1, Int32(min(timeoutMilliseconds, 30_000)))
+            let result = Darwin.poll(&pollDescriptor, 1, Int32(remainingMilliseconds))
             if result > 0 {
                 if (pollDescriptor.revents & events) != 0 {
                     return
                 }
                 if (pollDescriptor.revents & Int16(POLLHUP | POLLERR | POLLNVAL)) != 0 {
+                    // Ask the socket WHY before calling it closed. A refused connection wakes a
+                    // non-blocking connect with POLLERR and no POLLOUT, and reporting that as
+                    // "the connection closed" both loses the errno and tells an operator the
+                    // opposite of the truth: nothing was ever there to close. SO_ERROR holds the
+                    // real reason — ECONNREFUSED, EHOSTUNREACH — so raise that instead.
+                    var pendingError: Int32 = 0
+                    var pendingErrorLength = socklen_t(MemoryLayout<Int32>.size)
+                    if getsockopt(
+                        descriptor, SOL_SOCKET, SO_ERROR, &pendingError, &pendingErrorLength) == 0,
+                        pendingError != 0
+                    {
+                        throw socketError(pendingError, context: label)
+                    }
                     throw NativeCameraSessionError.connectionClosed
                 }
                 // Woke for some other reason without data ready; poll again.
@@ -589,7 +807,14 @@ final class PTPIPSocket: @unchecked Sendable {
     private func storeDescriptor(_ descriptor: Int32) {
         descriptorLock.lock()
         self.descriptor = descriptor
+        let alreadyInterrupted = interruptRequested
         descriptorLock.unlock()
+        // Cancellation raced descriptor creation: kill the fresh socket immediately, exactly as
+        // if it had existed when `interrupt()` ran. The latch is terminal per socket — a
+        // cancelled attempt stays cancelled.
+        if alreadyInterrupted {
+            Darwin.shutdown(descriptor, SHUT_RDWR)
+        }
     }
 
     private func currentDescriptor() throws -> Int32 {
@@ -612,6 +837,7 @@ final class PTPIPSocket: @unchecked Sendable {
     }
 
     private func socketError(_ code: Int32, context: String) -> NativeCameraSessionError {
+        lastErrno = code
         if code == EACCES {
             return .connectionFailed(
                 "iOS denied \(context) to \(host):\(port). Confirm Local Network is enabled and that the phone is on the camera network."

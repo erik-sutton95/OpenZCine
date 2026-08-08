@@ -5,6 +5,7 @@ import SwiftUI
 /// camera session; this app is a WatchConnectivity remote.
 @main
 struct OpenZCineWatchApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var controller = WatchSessionController()
 
     var body: some Scene {
@@ -12,6 +13,11 @@ struct OpenZCineWatchApp: App {
             WatchMonitorView()
                 .environment(controller)
                 .onAppear { controller.activate() }
+                // A dimmed display suspends the app without re-running `onAppear`, so returning to
+                // active is the only signal that the link needs re-arming (#187).
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { controller.resume() }
+                }
         }
     }
 }

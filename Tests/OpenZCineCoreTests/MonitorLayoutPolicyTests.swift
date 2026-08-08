@@ -1117,3 +1117,43 @@ import Testing
     #expect(geometry.sweepDiameter == 184)
     #expect(geometry.sweepDiameter <= 190)
 }
+
+// Vertical camera: a rotated (9:16) feed pillarboxes centred in a landscape viewport, and in a
+// tall (portrait-zone) viewport it binds to the height instead of overflowing it.
+@Test func verticalAspectPillarboxesCenteredInLandscape() {
+    let frame = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 852, viewportHeight: 393,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 59),
+        aspect: 9.0 / 16.0, centered: true)
+    #expect(frame.height == 393)
+    #expect(abs(frame.width - 393 * 9 / 16) < 0.5)
+    #expect(abs(frame.x - (852 - 393 * 9.0 / 16) / 2) < 1)
+}
+
+// A small overflow (≤15%) fills the WIDTH and centre-crops the sliver — the field case where
+// the pillarbox left "few-pixel black bars" that read as a rendering bug. The mount clips the
+// negative-y overflow to the band.
+@Test func verticalAspectFillsWidthWhenOverflowIsSmall() {
+    let frame = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 390, viewportHeight: 629,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0),
+        aspect: 9.0 / 16.0, centered: true)
+    // 390 / (9/16) = 693.3 — a 10% overflow, filled and centred.
+    #expect(frame.width == 390)
+    #expect(frame.x == 0)
+    #expect(abs(frame.height - 390 * 16 / 9) < 0.5)
+    #expect(abs(frame.y - (629 - 390 * 16.0 / 9) / 2) < 0.5)
+}
+
+// A LARGE overflow still pillarboxes: cropping real framing is worse than bars. 9:16 in a very
+// short band (>15% overflow) binds to the height.
+@Test func verticalAspectStillPillarboxesWhenOverflowIsLarge() {
+    let frame = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 390, viewportHeight: 500,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0),
+        aspect: 9.0 / 16.0, centered: true)
+    #expect(frame.height == 500)
+    #expect(abs(frame.width - 500 * 9 / 16) < 0.5)
+    #expect(abs(frame.x - (390 - 500 * 9.0 / 16) / 2) < 0.5)
+    #expect(frame.y == 0)
+}

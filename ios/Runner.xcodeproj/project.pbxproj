@@ -23,6 +23,7 @@
 		223A328A28F6A9969245C3A0 /* FrameioClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 953D4988DD8F529689A672A9 /* FrameioClient.swift */; };
 		314BDCD7FD3C538AA88BFC57 /* FrameioOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F754633AC5090E76E19F5CD /* FrameioOAuth.swift */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
+		BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */; };
 		331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */; };
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
 		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
@@ -97,7 +98,9 @@
 		C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000051 /* ConnectionProgressSheet.swift */; };
 		C0DE00000000000000000052 /* ConnectionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000053 /* ConnectionProgress.swift */; };
 		C0DE00000000000000000054 /* CameraWiFiSSID.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000055 /* CameraWiFiSSID.swift */; };
+		C0DE000000000000000000FB /* CameraCredentialHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FC /* CameraCredentialHandoff.swift */; };
 		C0DE00000000000000000056 /* WiFiJoinCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */; };
+		C0DE000000000000000000FD /* CredentialHandoffTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FE /* CredentialHandoffTransport.swift */; };
 		C0DE00000000000000000058 /* CameraWiFiCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */; };
 		C0DE00000000000000000060 /* AccessorySetupWiFiCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */; };
 		C0DE00000000000000000066 /* CameraWiFiScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000067 /* CameraWiFiScannerView.swift */; };
@@ -143,6 +146,10 @@
 		VSRC00000000000000000002 /* VideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = VSRC00000000000000000001 /* VideoSource.swift */; };
 		LVPP00000000000000000002 /* LiveViewPollPacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVPP00000000000000000001 /* LiveViewPollPacing.swift */; };
 		RBAD00000000000000000002 /* RelayBitrateAdaptation.swift in Sources */ = {isa = PBXBuildFile; fileRef = RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */; };
+		CPAT00000000000000000002 /* CameraPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPAT00000000000000000001 /* CameraPath.swift */; };
+		SSST00000000000000000002 /* SetupStreamSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSST00000000000000000001 /* SetupStreamSettings.swift */; };
+		LTPT00000000000000000002 /* LinkThroughputSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = LTPT00000000000000000001 /* LinkThroughputSampler.swift */; };
+		SSPL00000000000000000002 /* SubnetScanPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPL00000000000000000001 /* SubnetScanPlan.swift */; };
 		SCPG00000000000000000002 /* SavedCameraPathGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCPG00000000000000000001 /* SavedCameraPathGroups.swift */; };
 		BBHP00000000000000000002 /* BodyBusyHoldPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBHP00000000000000000001 /* BodyBusyHoldPolicy.swift */; };
 		WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */; };
@@ -213,6 +220,7 @@
 		2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDelivery.swift; sourceTree = "<group>"; };
 		31188208A12A06911B1DC3AB /* FrameScopeSampler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FrameScopeSampler.swift; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
+		BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockArtifactFilterTests.swift; sourceTree = "<group>"; };
 		331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStoreTests.swift; sourceTree = "<group>"; };
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
 		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
@@ -294,7 +302,9 @@
 		C0DE00000000000000000051 /* ConnectionProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProgressSheet.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000053 /* ConnectionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConnectionProgress.swift; path = ../Sources/OpenZCineCore/ConnectionProgress.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000055 /* CameraWiFiSSID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraWiFiSSID.swift; path = ../Sources/OpenZCineCore/CameraWiFiSSID.swift; sourceTree = SOURCE_ROOT; };
+		C0DE000000000000000000FC /* CameraCredentialHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraCredentialHandoff.swift; path = ../Sources/OpenZCineCore/CameraCredentialHandoff.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiJoinCoordinator.swift; sourceTree = "<group>"; };
+		C0DE000000000000000000FE /* CredentialHandoffTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialHandoffTransport.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStore.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessorySetupWiFiCoordinator.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000067 /* CameraWiFiScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiScannerView.swift; sourceTree = "<group>"; };
@@ -342,6 +352,10 @@
 		VSRC00000000000000000001 /* VideoSource.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = VideoSource.swift; path = ../Sources/OpenZCineCore/VideoSource.swift; sourceTree = SOURCE_ROOT; };
 		LVPP00000000000000000001 /* LiveViewPollPacing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveViewPollPacing.swift; path = ../Sources/OpenZCineCore/LiveViewPollPacing.swift; sourceTree = SOURCE_ROOT; };
 		RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RelayBitrateAdaptation.swift; path = ../Sources/OpenZCineCore/RelayBitrateAdaptation.swift; sourceTree = SOURCE_ROOT; };
+		CPAT00000000000000000001 /* CameraPath.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CameraPath.swift; path = ../Sources/OpenZCineCore/CameraPath.swift; sourceTree = SOURCE_ROOT; };
+		SSST00000000000000000001 /* SetupStreamSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SetupStreamSettings.swift; path = ../Sources/OpenZCineCore/SetupStreamSettings.swift; sourceTree = SOURCE_ROOT; };
+		LTPT00000000000000000001 /* LinkThroughputSampler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LinkThroughputSampler.swift; path = ../Sources/OpenZCineCore/LinkThroughputSampler.swift; sourceTree = SOURCE_ROOT; };
+		SSPL00000000000000000001 /* SubnetScanPlan.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SubnetScanPlan.swift; path = ../Sources/OpenZCineCore/SubnetScanPlan.swift; sourceTree = SOURCE_ROOT; };
 		SCPG00000000000000000001 /* SavedCameraPathGroups.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SavedCameraPathGroups.swift; path = ../Sources/OpenZCineCore/SavedCameraPathGroups.swift; sourceTree = SOURCE_ROOT; };
 		BBHP00000000000000000001 /* BodyBusyHoldPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BodyBusyHoldPolicy.swift; path = ../Sources/OpenZCineCore/BodyBusyHoldPolicy.swift; sourceTree = SOURCE_ROOT; };
 		WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WhiteBalanceKelvinPolicy.swift; path = ../Sources/OpenZCineCore/WhiteBalanceKelvinPolicy.swift; sourceTree = SOURCE_ROOT; };
@@ -373,6 +387,7 @@
 			isa = PBXGroup;
 			children = (
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
+				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
 				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
@@ -431,6 +446,7 @@
 				C0DE00000000000000000027 /* StartupDesign.swift */,
 				C0DE00000000000000000051 /* ConnectionProgressSheet.swift */,
 				C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */,
+				C0DE000000000000000000FE /* CredentialHandoffTransport.swift */,
 				C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */,
 				C0DE00000000000000000067 /* CameraWiFiScannerView.swift */,
 				C0DE00000000000000000069 /* StartupPermissions.swift */,
@@ -493,6 +509,7 @@
 				C0DE00000000000000000053 /* ConnectionProgress.swift */,
 				C0DE000000000000000000A1 /* CameraWiFiScreenParser.swift */,
 				C0DE00000000000000000055 /* CameraWiFiSSID.swift */,
+				C0DE000000000000000000FC /* CameraCredentialHandoff.swift */,
 				C0DE0000000000000000000F /* PTPIPTransaction.swift */,
 				CTRN00000000000000000001 /* CameraTransport.swift */,
 				USBC00000000000000000001 /* PTPUSBContainer.swift */,
@@ -540,6 +557,10 @@
 				VSRC00000000000000000001 /* VideoSource.swift */,
 				LVPP00000000000000000001 /* LiveViewPollPacing.swift */,
 				RBAD00000000000000000001 /* RelayBitrateAdaptation.swift */,
+				CPAT00000000000000000001 /* CameraPath.swift */,
+				SSST00000000000000000001 /* SetupStreamSettings.swift */,
+				LTPT00000000000000000001 /* LinkThroughputSampler.swift */,
+				SSPL00000000000000000001 /* SubnetScanPlan.swift */,
 				SCPG00000000000000000001 /* SavedCameraPathGroups.swift */,
 				BBHP00000000000000000001 /* BodyBusyHoldPolicy.swift */,
 				RLYP00000000000000000001 /* MonitorRelayProtocol.swift */,
@@ -709,6 +730,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
+				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
 				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
@@ -764,7 +786,9 @@
 				C0DE00000000000000000052 /* ConnectionProgress.swift in Sources */,
 				C0DE000000000000000000A0 /* CameraWiFiScreenParser.swift in Sources */,
 				C0DE00000000000000000054 /* CameraWiFiSSID.swift in Sources */,
+				C0DE000000000000000000FB /* CameraCredentialHandoff.swift in Sources */,
 				C0DE00000000000000000056 /* WiFiJoinCoordinator.swift in Sources */,
+				C0DE000000000000000000FD /* CredentialHandoffTransport.swift in Sources */,
 				C0DE00000000000000000060 /* AccessorySetupWiFiCoordinator.swift in Sources */,
 				C0DE00000000000000000066 /* CameraWiFiScannerView.swift in Sources */,
 				C0DE00000000000000000068 /* StartupPermissions.swift in Sources */,
@@ -815,6 +839,10 @@
 				VSRC00000000000000000002 /* VideoSource.swift in Sources */,
 				LVPP00000000000000000002 /* LiveViewPollPacing.swift in Sources */,
 				RBAD00000000000000000002 /* RelayBitrateAdaptation.swift in Sources */,
+				CPAT00000000000000000002 /* CameraPath.swift in Sources */,
+				SSST00000000000000000002 /* SetupStreamSettings.swift in Sources */,
+				LTPT00000000000000000002 /* LinkThroughputSampler.swift in Sources */,
+				SSPL00000000000000000002 /* SubnetScanPlan.swift in Sources */,
 				SCPG00000000000000000002 /* SavedCameraPathGroups.swift in Sources */,
 				BBHP00000000000000000002 /* BodyBusyHoldPolicy.swift in Sources */,
 				RLYP00000000000000000002 /* MonitorRelayProtocol.swift in Sources */,

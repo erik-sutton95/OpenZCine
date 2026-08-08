@@ -92,9 +92,12 @@ internal fun compactPictureControlLabel(pictureControl: String?): String? =
  * the strip, like the movie tile).
  */
 internal fun stillWhiteBalanceValue(properties: CameraPropertySnapshot): String {
+    // The STILLS side: `WhiteBalance` (0x5005) is its own camera setting, and a movie value
+    // standing in for it is what made the readout jump when a take started.
+    val mode = properties.activeWhiteBalanceMode(photography = true)
     val kelvin = properties.whiteBalanceKelvin
-    if (properties.whiteBalanceMode == "Color temp" && kelvin != null) return "${kelvin}K"
-    return properties.whiteBalanceMode ?: "—"
+    if (mode == "Color temp" && kelvin != null) return "${kelvin}K"
+    return mode ?: "—"
 }
 
 /** Quality label compacted to strip width ("RAW+JPEG Fine★" → "R+JF★"). */
@@ -171,6 +174,10 @@ internal fun ShotsRemainingReadout(
     storage: CameraStorageStatus? = null,
     showsStorage: Boolean = false,
     onToggle: (() -> Unit)? = null,
+    /** 20sp in the landscape deck; the portrait bar runs at its own 15sp timecode size. */
+    sizeSp: Float = 20f,
+    /** The " SHOTS" / "%" suffix, sized against [sizeSp]. */
+    labelSp: Float = 12f,
 ) {
     val storageForm = showsStorage && storage != null && storage.totalCapacityBytes > 0
     Text(
@@ -182,7 +189,7 @@ internal fun ShotsRemainingReadout(
                 withStyle(
                     SpanStyle(
                         color = LiveDesign.muted,
-                        fontSize = 12.sp,
+                        fontSize = labelSp.sp,
                         fontWeight = FontWeight.SemiBold,
                     ),
                 ) {
@@ -196,13 +203,13 @@ internal fun ShotsRemainingReadout(
                 withStyle(
                     SpanStyle(
                         color = LiveDesign.muted,
-                        fontSize = 12.sp,
+                        fontSize = labelSp.sp,
                         fontWeight = FontWeight.SemiBold,
                     ),
                 ) { append(" SHOTS") }
             }
         },
-        style = chromeStyle(20f, FontWeight.Medium, mono = true),
+        style = chromeStyle(sizeSp, FontWeight.Medium, mono = true),
         maxLines = 1,
         softWrap = false,
         modifier =

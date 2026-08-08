@@ -684,7 +684,7 @@ struct CleanViewPinStrip: View {
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], spacing: 7) {
-            ForEach(MonitorAssistTool.allCases) { tool in
+            ForEach(MonitorAssistTool.activeCases) { tool in
                 DisplayToggleItem(
                     title: tool.displaySettingsTitle,
                     isOn: model.preferences.cleanViewPinnedTools.contains(tool)
@@ -892,7 +892,11 @@ struct SettingsCrushClipSegmented: View {
                         .foregroundStyle(active ? LiveDesign.text : LiveDesign.muted)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
-                        .frame(minHeight: 34)
+                        // Segment labels are single glyphs, so the row's intrinsic width collapsed
+                        // to about a finger's worth for all five stops — and the wide card form
+                        // shrink-wraps to intrinsic width. The floor is what makes each stop
+                        // tappable.
+                        .frame(minWidth: 46, minHeight: 34)
                         .background(
                             active ? LiveDesign.surface : Color.clear,
                             in: RoundedRectangle(
@@ -958,24 +962,35 @@ struct SettingsInlineRow<Trailing: View>: View {
                 Rectangle().fill(LiveDesign.hairline).frame(height: 1)
             }
             if stacked {
-                VStack(alignment: .leading, spacing: 6) {
-                    labelRow
-                    trailing
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, minHeight: 44)
+                stackedRow
             } else {
-                HStack(spacing: 8) {
-                    labelRow
-                    Spacer(minLength: 12)
-                    trailing
+                // Inline when the control fits beside the label; otherwise the row WRAPS into
+                // the stacked form instead of running off the trailing edge — narrow widths
+                // (portrait, Display Zoom, small phones) hit this on every segmented row.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        labelRow
+                        Spacer(minLength: 12)
+                        trailing
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    // Stay greedy so a divided row card fills its full grid span instead of
+                    // shrink-wrapping to the rows' intrinsic width (which would clip titles).
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    stackedRow
                 }
-                // Stay greedy so a divided row card fills its full grid span instead of shrink-wrapping
-                // to the rows' intrinsic width (which would clip titles on the left).
-                .frame(maxWidth: .infinity, minHeight: 50)
             }
         }
+    }
+
+    private var stackedRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            labelRow
+            trailing
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 44)
     }
 
     private var labelRow: some View {
@@ -1025,6 +1040,13 @@ struct SettingsPercentSlider: View {
                 step: 1
             )
             .tint(LiveDesign.accent)
+            // A Slider has no intrinsic width, and `SettingsInlineRow` measures its trailing
+            // control with `fixedSize(horizontal:)` so `ViewThatFits` can decide between the
+            // inline and stacked forms. Fixed to nothing is exactly what it collapsed to: the
+            // bare thumb, reading as a pill jammed against the percentage. An ideal width gives
+            // that measurement something to resolve to; the minimum keeps it draggable if the
+            // row ever squeezes, and the stacked form still stretches it edge to edge.
+            .frame(minWidth: 120, idealWidth: 190)
             Text("\(value)%")
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(LiveDesign.text)
@@ -1037,18 +1059,50 @@ struct SettingsPercentSlider: View {
 /// Amber action pill (`settings-action`).
 struct SettingsActionPill: View {
     let title: String
+    /// Optional leading SF Symbol (e.g. the Disconnect pill's broken-link glyph).
+    var systemImage: String? = nil
+    /// Draws the standard SF slash treatment over the symbol — for glyphs the font ships no
+    /// slashed variant of (there is no `link.slash`; a slashed `link` reads as a cut chain).
+    var slashesIcon = false
+    var tint: Color = LiveDesign.accent
+    var background: Color = LiveDesign.accentDim
+    /// Stretches the capsule to the height its row offers — used to match the link tile.
+    var fillsHeight = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                .kerning(0.6)
-                .foregroundStyle(LiveDesign.accent)
-                .lineLimit(1)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(LiveDesign.accentDim, in: Capsule())
-                .overlay(Capsule().stroke(LiveDesign.accent.opacity(0.5), lineWidth: 1))
+            HStack(spacing: 6) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                        .overlay {
+                            if slashesIcon {
+                                // SF's slash runs top-left → bottom-right; the wider casing
+                                // stroke in the pill's background color separates the slash
+                                // from the glyph, matching the system slash idiom.
+                                ZStack {
+                                    Capsule()
+                                        .fill(background)
+                                        .frame(width: 4.2, height: 19)
+                                    Capsule()
+                                        .fill(tint)
+                                        .frame(width: 1.7, height: 19)
+                                }
+                                .rotationEffect(.degrees(-45))
+                            }
+                        }
+                }
+                Text(title.uppercased())
+                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                    .kerning(0.6)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .frame(maxHeight: fillsHeight ? .infinity : nil)
+            .background(background, in: Capsule())
+            .overlay(Capsule().stroke(tint.opacity(0.5), lineWidth: 1))
         }
         .buttonStyle(.zcTapTarget)
     }

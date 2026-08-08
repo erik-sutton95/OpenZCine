@@ -258,6 +258,9 @@ public enum AndroidCameraPropertyReadbackWire {
         append("shutterAngle", value: properties.shutterAngle, to: &fields)
         append("iris", value: properties.fNumber, to: &fields)
         append("whiteBalanceMode", value: properties.wbMode, to: &fields)
+        // Both sides go over the wire because the shell, not the readback, knows which one is on
+        // screen — see `CameraPropertySnapshot.activeWhiteBalanceMode` on the Kotlin end.
+        append("stillWhiteBalanceMode", value: properties.stillWBMode, to: &fields)
         append("whiteBalanceKelvin", value: properties.wbKelvin.map { String($0) }, to: &fields)
         append("resolution", value: properties.resolution, to: &fields)
         append("frameRate", value: properties.fps.map { String($0) }, to: &fields)

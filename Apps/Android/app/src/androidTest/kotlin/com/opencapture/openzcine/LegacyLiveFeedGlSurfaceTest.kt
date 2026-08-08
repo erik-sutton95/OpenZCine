@@ -116,7 +116,7 @@ class LegacyLiveFeedGlSurfaceTest {
             // The view mounted while the host lifecycle was paused. Resuming
             // must accept the next frame without allowing background copies.
             surfaceState.resume()
-            surfaceState.update(identityLutPlan(), aspectFill = false)
+            surfaceState.update(identityLutPlan(), aspectFill = false, mirrored = false)
             surfaceState.submit(source)
         }
 

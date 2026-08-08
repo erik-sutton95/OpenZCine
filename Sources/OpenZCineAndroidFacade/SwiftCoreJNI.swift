@@ -373,7 +373,7 @@
         safeTop: jfloat, safeLeading: jfloat, safeBottom: jfloat, safeTrailing: jfloat,
         mode: jint, isPortrait: jboolean, aspectFill: jboolean,
         scopeCount: jint, mirrored: jboolean, bottomBarHeight: jfloat,
-        portraitFeedAspectRatio: jfloat
+        portraitFeedAspectRatio: jfloat, canDriveCamera: jboolean
     ) -> jfloatArray? {
         let flat = MonitorZoneMapWire.flattened(
             viewportWidth: Double(viewportWidth),
@@ -388,7 +388,8 @@
             scopeCount: Int(scopeCount),
             mirrored: mirrored != 0,
             bottomBarHeight: Double(bottomBarHeight),
-            portraitFeedAspectRatio: Double(portraitFeedAspectRatio)
+            portraitFeedAspectRatio: Double(portraitFeedAspectRatio),
+            canDriveCamera: canDriveCamera != 0
         )
         let fns = table(env)
         guard let array = fns.NewFloatArray!(env, jsize(flat.count)) else { return nil }
@@ -716,7 +717,8 @@
         hasLiveViewFPS: jboolean, targetLiveViewFPS: jdouble,
         secondsSinceLastGoodFrame: jdouble, hasLastGoodFrame: jboolean,
         consecutiveBadFrames: jint, recentCommandFailures: jint,
-        isRecoveringStream: jboolean, isUSBTransport: jboolean, resetSignalBars: jboolean
+        isRecoveringStream: jboolean, isUSBTransport: jboolean, resetSignalBars: jboolean,
+        throughputMegabitsPerSecond: jdouble, hasThroughput: jboolean
     ) -> jstring? {
         guard
             let snapshot = AndroidLinkHealthWire.snapshot(
@@ -730,7 +732,9 @@
                 recentCommandFailures: Int(recentCommandFailures),
                 isRecoveringStream: isRecoveringStream != 0,
                 isUSBTransport: isUSBTransport != 0,
-                resetSignalBars: resetSignalBars != 0),
+                resetSignalBars: resetSignalBars != 0,
+                throughputMegabitsPerSecond:
+                    hasThroughput != 0 ? Double(throughputMegabitsPerSecond) : nil),
             let encoded = AndroidLinkHealthWire.encode(snapshot)
         else { return nil }
         return javaString(env, encoded)
@@ -756,6 +760,35 @@
         env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
     ) -> jint {
         jint(AndroidSessionRecoveryWire.maximumAutomaticAttempts)
+    }
+
+    /// `SwiftCore.sessionNoteSessionDrop()` — records one session drop in the shared
+    /// drop-storm ledger; `true` means automatic recovery must pause for the operator
+    /// (reconnects that keep succeeding and dying young are churning the body's PTP
+    /// stack toward its battery-pull wedge).
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionNoteSessionDrop")
+    public func swiftCoreSessionNoteSessionDrop(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jboolean {
+        AndroidSessionRecoveryWire.noteSessionDrop() ? 1 : 0
+    }
+
+    /// `SwiftCore.sessionDropsInStormWindow()` — drops inside the storm window, for the
+    /// operator-facing count.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionDropsInStormWindow")
+    public func swiftCoreSessionDropsInStormWindow(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        jint(AndroidSessionRecoveryWire.dropsInStormWindow)
+    }
+
+    /// `SwiftCore.sessionResetDropStormGuard()` — operator action (retry, disconnect,
+    /// fresh connect) starts a fresh ledger.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResetDropStormGuard")
+    public func swiftCoreSessionResetDropStormGuard(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        AndroidSessionRecoveryWire.resetDropStormGuard()
     }
 
     // MARK: - Callback / streaming shape
@@ -1735,6 +1768,8 @@
         case legacy
         case metadata
         case fullMetadata
+        /// Full metadata plus the body-rotation byte (vertical mode).
+        case rotation
     }
 
     private struct LiveFrameListenerHandle: @unchecked Sendable {
@@ -1773,12 +1808,15 @@
         // Keep the established `onFrame([BJZDDDDZ)V` ABI alive. A newer
         // listener receives one richer callback per frame; an older one keeps
         // receiving its exact legacy payload rather than failing start-up.
+        let rotationFrame = optionalInstanceMethod(
+            env, cls, "onFrameWithRotation", "([BJZDDDDZZIIIZZI[IZDDDZIIIII)V")
         let fullMetadataFrame = optionalInstanceMethod(
             env, cls, "onFrameWithFullMetadata", "([BJZDDDDZZIIIZZI[IZDDDZIIII)V")
         let metadataFrame = optionalInstanceMethod(
             env, cls, "onFrameWithMetadata", "([BJZDDDDZZIIIZZI[IZDDD)V")
         guard
-            let onFrame = fullMetadataFrame
+            let onFrame = rotationFrame
+                ?? fullMetadataFrame
                 ?? metadataFrame
                 ?? optionalInstanceMethod(
                     env, cls, "onFrame", "([BJZDDDDZ)V")
@@ -1786,12 +1824,21 @@
             fns.DeleteGlobalRef!(env, global)
             return
         }
+        let callback: LiveFrameCallback =
+            if rotationFrame != nil {
+                .rotation
+            } else if fullMetadataFrame != nil {
+                .fullMetadata
+            } else if metadataFrame != nil {
+                .metadata
+            } else {
+                .legacy
+            }
         let handle = LiveFrameListenerHandle(
             vm: vm,
             listener: global,
             onFrame: onFrame,
-            callback: fullMetadataFrame != nil
-                ? .fullMetadata : (metadataFrame != nil ? .metadata : .legacy),
+            callback: callback,
             onEnded: onEnded)
 
         /// Terminal path on the CALLING (JVM-owned) thread: report the end and
@@ -1818,7 +1865,7 @@
                     pushLiveFrame(
                         handle, jpeg: frame.jpeg, timestampNanos: timestampNanos,
                         isRecording: frame.isRecording, audio: audio, focus: focus, level: level,
-                        timecode: frame.timecode)
+                        timecode: frame.timecode, rotation: jint(frame.rotation.rawValue))
                 },
                 onEnded: { finishLiveFrameStream(handle) })
         } catch {
@@ -1838,10 +1885,21 @@
     /// Delivers one JPEG frame to the Kotlin listener from the pump thread.
     /// Attaches the thread on every call (idempotent and cheap when already
     /// attached); the matching single detach happens in `finishLiveFrameStream`.
+    /// Clears any pending Java exception so the NEXT JNI call on this thread is legal. A failed
+    /// allocation (OOM) or a throwing Kotlin callback leaves the exception pending, and ART
+    /// aborts the whole process on the following JNI call ("JNI DETECTED ERROR IN APPLICATION")
+    /// — at 60 frames/second that turns one dropped frame into a crash.
+    private func clearPendingJavaException(_ env: UnsafeMutablePointer<JNIEnv?>) {
+        let fns = table(env)
+        if fns.ExceptionCheck!(env) != 0 {
+            fns.ExceptionClear!(env)
+        }
+    }
+
     private func pushLiveFrame(
         _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64,
         isRecording: Bool, audio: LiveAudioMeterWire, focus: LiveViewFocusWire,
-        level: LiveViewLevelWire, timecode: Timecode
+        level: LiveViewLevelWire, timecode: Timecode, rotation: jint
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -1850,7 +1908,10 @@
             let env = envOut
         else { return }
         let fns = table(env)
-        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else { return }
+        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else {
+            clearPendingJavaException(env)
+            return
+        }
         jpeg.withUnsafeBytes { rawBuffer in
             guard let base = rawBuffer.baseAddress else { return }
             fns.SetByteArrayRegion!(
@@ -1868,6 +1929,7 @@
         ]
         guard case .legacy = handle.callback else {
             guard let boxes = javaIntArray(env, focus.boxes) else {
+                clearPendingJavaException(env)
                 fns.DeleteLocalRef!(env, array)
                 return
             }
@@ -1883,6 +1945,11 @@
                     jvalue(d: level.rollDegrees), jvalue(d: level.pitchDegrees),
                     jvalue(d: level.yawDegrees),
                 ]
+            let timecodeArgs = [
+                jvalue(z: timecode.on ? 1 : 0),
+                jvalue(i: jint(timecode.hour)), jvalue(i: jint(timecode.minute)),
+                jvalue(i: jint(timecode.second)), jvalue(i: jint(timecode.frame)),
+            ]
             switch handle.callback {
             case .legacy:
                 break
@@ -1890,19 +1957,19 @@
                 var arguments = metadataArgs
                 fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
             case .fullMetadata:
-                var arguments =
-                    metadataArgs + [
-                        jvalue(z: timecode.on ? 1 : 0),
-                        jvalue(i: jint(timecode.hour)), jvalue(i: jint(timecode.minute)),
-                        jvalue(i: jint(timecode.second)), jvalue(i: jint(timecode.frame)),
-                    ]
+                var arguments = metadataArgs + timecodeArgs
+                fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
+            case .rotation:
+                var arguments = metadataArgs + timecodeArgs + [jvalue(i: rotation)]
                 fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
             }
+            clearPendingJavaException(env)
             fns.DeleteLocalRef!(env, boxes)
             fns.DeleteLocalRef!(env, array)
             return
         }
         fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &legacyArgs)
+        clearPendingJavaException(env)
         fns.DeleteLocalRef!(env, array)
     }
 

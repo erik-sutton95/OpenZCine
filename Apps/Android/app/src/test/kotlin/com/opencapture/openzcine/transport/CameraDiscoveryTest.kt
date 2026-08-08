@@ -48,9 +48,12 @@ class CameraDiscoveryTest {
 
     @Test
     fun `accepts the private IPv4 ranges supported by iOS discovery`() {
-        listOf("172.16.0.1", "172.31.255.254", "192.168.1.7").forEach { host ->
-            assertTrue(CameraDiscovery.isSupportedPtpIpDiscoveryHost(host), host)
-        }
+        // 10/8 included on purpose: set and travel routers commonly hand out 10.x, and the
+        // shared core scans it — excluding it here made such cameras Android-invisible.
+        listOf("10.0.0.7", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.1.7")
+            .forEach { host ->
+                assertTrue(CameraDiscovery.isSupportedPtpIpDiscoveryHost(host), host)
+            }
     }
 
     @Test
@@ -59,7 +62,8 @@ class CameraDiscoveryTest {
             "fe80::1",
             "2001:db8::1",
             "8.8.8.8",
-            "10.0.0.7",
+            "9.255.255.255",
+            "11.0.0.1",
             "172.15.0.7",
             "172.32.0.7",
             "169.254.1.7",

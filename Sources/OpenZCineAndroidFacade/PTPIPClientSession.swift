@@ -20,13 +20,20 @@
 import Foundation
 import OpenZCineCore
 
-/// Stable Android PTP-IP initiator identity kept separate from the iOS camera profile.
+/// PTP-IP initiator identity for Android — deliberately the *same* identity iOS presents.
+///
+/// Nikon keys a paired-computer profile to the initiator GUID, so sharing it means one
+/// camera-side profile serves every OpenZCine install on either platform: pair a body once
+/// from any device and the rest connect straight to that profile. Android used to send its
+/// own GUID, which made it a stranger to a body paired from an iPhone (`rejectedInitiator`).
 public enum AndroidPTPIPInitiator {
-    /// The 16-byte Android GUID retained across reconnects and upgrades.
-    public static let appGUID = Data("OpenZCineAndroid".utf8)
+    /// Mirrors ``PTPIPInitiator/appGUID``. The Kotlin side sends the same bytes over JNI
+    /// (`PtpIpInitiatorIdentity.guid`); this is the default for the facade's own callers.
+    public static let appGUID = PTPIPInitiator.appGUID
 
-    /// Android's paired-initiator display name.
-    public static let friendlyName = "OpenZCine Android"
+    /// Mirrors ``PTPIPInitiator/friendlyName`` so a profile looks identical whichever
+    /// platform created it.
+    public static let friendlyName = PTPIPInitiator.friendlyName
 }
 
 #if canImport(Android)
@@ -91,6 +98,9 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "\(label) timed out."
         case .unexpectedPacket(let expected, let actual):
             return "Expected \(expected), got PTP-IP packet \(actual.rawValue)."
+        case .initFailed(.busy):
+            return
+                "Another device is connected to this camera. Disconnect it there, then try again."
         case .initFailed(let reason):
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
@@ -390,10 +400,12 @@ private struct AndroidRawControlCatalog: Sendable {
                     ? WhiteBalanceKelvinPolicy.kelvinOptions : [])
                 + stillWhiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
         } else {
-            whiteBalanceValues =
-                (whiteBalanceModes.contains { $0.label == "Color temp" }
+            // Same R3D rule as the iOS drum: no automatic WB presets while recording R3D NE.
+            whiteBalanceValues = PTPCameraPropertyDecoders.whiteBalanceOptions(
+                advertised: (whiteBalanceModes.contains { $0.label == "Color temp" }
                     ? whiteBalanceKelvin.map(\.label) : [])
-                + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+                    + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label),
+                codec: properties.fileType)
         }
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: resolutionFrameRate,
@@ -516,17 +528,21 @@ private struct AndroidRawControlCatalog: Sendable {
         usesNikonZRFallbacks: Bool
     ) -> PTPCameraScreenSizeMode? {
         let currentCodec = recognizedCurrentCodec(properties.fileType)
-        let bareTarget = PTPIPClientSession.bareRecordingModeLabel(label)
-        return screenSizes.first { mode in
-            let presented = screenSizeLabel(
+        // Shared-core ordering, not a first(where:) over OR'd comparisons: the loose clause strips
+        // the `[FX]`/`[DX]` tag from both sides, so a picked `[DX]` label used to land on whichever
+        // FX mode came first. See `pickedModeIndex`.
+        let presentationLabels = screenSizes.map { mode in
+            screenSizeLabel(
                 for: mode,
                 currentCodec: currentCodec,
                 usesNikonZRFallbacks: usesNikonZRFallbacks)
-            if presented == label || mode.label == label { return true }
-            guard !bareTarget.isEmpty else { return false }
-            return PTPIPClientSession.bareRecordingModeLabel(mode.label) == bareTarget
-                || PTPIPClientSession.bareRecordingModeLabel(presented) == bareTarget
         }
+        return NikonZRRawCropPresentation.pickedModeIndex(
+            for: label,
+            presentationLabels: presentationLabels,
+            modeLabels: screenSizes.map(\.label)
+        )
+        .map { screenSizes[$0] }
     }
 
     /// Matches a packed raw to a catalog mode by exact bytes, then by decoded WxH+fps.
@@ -636,6 +652,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// measurements independently of `commandLifecycleLock`.
     private let roundTripLock = NSLock()
     private var latestRoundTripMillisecondsStorage: Double?
+    /// Bytes-per-second across frame fetches, under the same lock as the round-trip average.
+    private var throughputStorage = LinkThroughputSampler()
 
     /// Live-view pump state, guarded by `liveViewCondition` (never by
     /// `transactionLock` — the pump holds that per transaction, and stop/join
@@ -743,7 +761,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase(.handshaking, "")
         switch strategy {
         case .savedProfile:
-            return try connectSavedProfile(
+            return try connectSavedProfileSettlingHandoff(
                 host: host,
                 port: port,
                 guid: guid,
@@ -762,7 +780,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             )
         case .restoreProfileThenPairing:
             do {
-                return try connectSavedProfile(
+                return try connectSavedProfileSettlingHandoff(
                     host: host,
                     port: port,
                     guid: guid,
@@ -785,6 +803,43 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     onPhase: onPhase
                 )
             }
+        }
+    }
+
+    /// "Another initiator holds me." The one case this clears by itself is the handoff: the
+    /// other device just disconnected and the body is still tearing its session down. One retry
+    /// after a settle long enough for any teardown — never a fast hammer, which lands
+    /// mid-teardown and wedges the body's network stack (iOS twin: `establishSession`'s busy
+    /// arm). A second busy answer means the other device is genuinely still connected; its
+    /// dedicated copy surfaces. Pairing attempts never come through here — a body on its
+    /// pairing wizard must not be re-probed.
+    private static func connectSavedProfileSettlingHandoff(
+        host: String,
+        port: UInt16,
+        guid: Data,
+        friendlyName: String,
+        timeoutMilliseconds: Int32,
+        onPhase: (CameraConnectionPhase, String) -> Void
+    ) throws -> PTPIPClientSession {
+        do {
+            return try connectSavedProfile(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
+        } catch PTPIPClientSessionError.initFailed(.busy) {
+            Thread.sleep(forTimeInterval: 5)
+            return try connectSavedProfile(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
         }
     }
 
@@ -3164,14 +3219,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 Thread.sleep(forTimeInterval: 0.12)
             }
         }
-        // Photography: moving the point alone never focuses (video's
-        // continuous AF does that part) — drive AF like a half-press, with a
-        // short DeviceReady drain so the body isn't left mid-drive. Subject
-        // tracking latches through the same area change, exactly as in video.
-        // Out-of-focus or a still-busy timeout stays silent; the AF box state
-        // in the header tells the story. [verify-on-HW]
-        if StillCapturePolicy.prefersPhotographyChrome(
-            selector: androidPropertySnapshot.captureSelector)
+        // Moving the point alone never focuses — drive AF like a half-press, with
+        // a short DeviceReady drain so the body isn't left mid-drive. Subject
+        // tracking latches through the same area change. Out-of-focus or a
+        // still-busy timeout stays silent; the AF box state in the header tells
+        // the story.
+        //
+        // This used to key on photography alone, on the assumption that video
+        // always runs continuous AF. A video AF-S body has no such loop, so the
+        // tap moved the box and focused nothing — #272, where AF-F "worked" only
+        // because the camera's own loop chased the box. [verify-on-HW]
+        if StillCapturePolicy.focusPointNeedsAutofocusDrive(
+            focusMode: androidPropertySnapshot.focusMode,
+            photography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector))
         {
             _ = try? transactExpectingOK(.afDrive)
             for _ in 0..<4 {
@@ -3564,6 +3625,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 // event payloads are skipped, while valid-but-unknown event
                 // codes still surface through PTPEvent.rawEventCode.
                 let packet = try event.readPacket()
+                if packet.type == .probeRequest {
+                    // Liveness ping (CIPA DC-005): the body treats a missing ProbeResponse
+                    // as a dead initiator and closes the whole session. Answer immediately;
+                    // a failed send means the link is genuinely gone and ends the drain.
+                    try event.send(PTPIPPacket(type: .probeResponse, payload: packet.payload))
+                    continue
+                }
                 guard let parsed = try? PTPEvent(from: packet) else { continue }
                 onEvent(parsed)
             } catch let error as PTPIPClientSessionError {
@@ -3991,7 +4059,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(
             commandTransactionTimeout + 2)
         while liveViewPumpActive {
-            guard liveViewCondition.wait(until: deadline) else { return }
+            guard liveViewCondition.wait(until: deadline) else {
+                // The pump overran the bound (a trickling read can hold one transaction alive
+                // past any per-poll timeout). Un-latch the flag so the NEXT start can proceed —
+                // a permanently stuck `liveViewPumpActive` turned every later start into
+                // `liveViewAlreadyActive` and a full reconnect loop. The zombie pump still sees
+                // stopRequested and exits when its read finally returns; its transactions
+                // serialize behind the transaction lock, so the worst case is delay, not
+                // corruption.
+                liveViewPumpActive = false
+                return
+            }
         }
     }
 
@@ -4033,7 +4111,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
         var framesSinceDeviceEventPoll = 0
         while !liveViewStopIsRequested() {
             do {
+                // The frame fetch is the only transfer big enough to measure the LINK by: a
+                // keep-alive answers in milliseconds on a link too narrow to carry the operator's
+                // preset. Deliberately not an RTT sample — see `recordRoundTrip`.
+                let transferStartNanos = Self.monotonicNanoseconds()
                 let result = try transactExpectingOK(.getLiveViewImageEx, dataPhase: .dataIn)
+                recordFrameTransfer(
+                    bytes: result.data.count,
+                    seconds: Double(Self.monotonicNanoseconds() &- transferStartNanos) / 1e9)
                 let frame = try PTPLiveViewObject.frame(from: result.data)
                 focusFrameCondition.lock()
                 latestLiveViewFocus = frame.focus
@@ -4133,6 +4218,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return latestRoundTripMillisecondsStorage
     }
 
+    /// Measured link throughput, or `nil` before the first frame of this session.
+    public func latestLinkThroughputMegabitsPerSecond() -> Double? {
+        roundTripLock.lock()
+        defer { roundTripLock.unlock() }
+        return throughputStorage.megabitsPerSecond
+    }
+
+    private func recordFrameTransfer(bytes: Int, seconds: Double) {
+        roundTripLock.lock()
+        throughputStorage.record(bytes: bytes, seconds: seconds)
+        roundTripLock.unlock()
+    }
+
     private func recordRoundTrip(startNanoseconds: UInt64, endNanoseconds: UInt64) {
         guard endNanoseconds > startNanoseconds else { return }
         let milliseconds = Double(endNanoseconds - startNanoseconds) / 1_000_000
@@ -4165,6 +4263,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         // Bound every remaining join before waiting: EndLiveView, media stop,
         // and CloseSession all inherit the shortened command timeout.
         command?.timeoutMilliseconds = 2_000
+        // The event socket gets the same shortened bound: the drain can be blocked in the
+        // liveness-probe answer's send against a stalled link, and teardown holds the
+        // command-lifecycle lock while it waits for the drain to exit.
+        event?.timeoutMilliseconds = 2_000
         #if os(Android)
             // USB shares the same 2 s teardown budget as Wi‑Fi CloseSession.
             // (executeTransactionSynchronously still takes an explicit deadline.)
@@ -4367,8 +4469,36 @@ final class PosixTCPSocket: @unchecked Sendable {
                 newDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
                 socklen_t(MemoryLayout<Int32>.size))
         #endif
-        // ponytail: the iOS twin's keepalive timer tuning arrives with the
-        // Android reconnect machinery — connect/read/disconnect doesn't idle.
+        // Match the iOS twin's socket tuning: keepalive detects a half-open link (an AP that
+        // dropped the association without a FIN) within ~30 s instead of never, and the
+        // enlarged receive window absorbs the ~100 KB per-frame JPEG bursts a lossy AP delivers
+        // in clumps — the default window turns transient congestion into stalled reads.
+        var keepAlive: Int32 = 1
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_KEEPALIVE, &keepAlive,
+            socklen_t(MemoryLayout<Int32>.size))
+        var keepIdle: Int32 = 10
+        var keepInterval: Int32 = 5
+        var keepCount: Int32 = 4
+        #if canImport(Darwin)
+            setsockopt(
+                newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPALIVE, &keepIdle,
+                socklen_t(MemoryLayout<Int32>.size))
+        #else
+            setsockopt(
+                newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPIDLE, &keepIdle,
+                socklen_t(MemoryLayout<Int32>.size))
+        #endif
+        setsockopt(
+            newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPINTVL, &keepInterval,
+            socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(
+            newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPCNT, &keepCount,
+            socklen_t(MemoryLayout<Int32>.size))
+        var receiveBuffer: Int32 = 512 * 1024
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_RCVBUF, &receiveBuffer,
+            socklen_t(MemoryLayout<Int32>.size))
 
         let flags = fcntl(newDescriptor, F_GETFL, 0)
         if flags >= 0 {
@@ -4425,7 +4555,6 @@ final class PosixTCPSocket: @unchecked Sendable {
 
     func send(_ packet: PTPIPPacket) throws {
         let data = Data(packet.serializedBytes)
-        let descriptor = try currentDescriptor()
         #if canImport(Darwin)
             let sendFlags: Int32 = 0
         #else
@@ -4435,6 +4564,8 @@ final class PosixTCPSocket: @unchecked Sendable {
         try data.withUnsafeBytes { rawBuffer in
             guard let base = rawBuffer.baseAddress else { return }
             while offset < data.count {
+                // Re-read per iteration — see readExact's fd-reuse note.
+                let descriptor = try currentDescriptor()
                 try waitForDescriptor(descriptor, events: Int16(POLLOUT), label: "\(label) send")
                 let sent = platformSend(
                     descriptor, base.advanced(by: offset), data.count - offset, sendFlags)
@@ -4469,8 +4600,11 @@ final class PosixTCPSocket: @unchecked Sendable {
     }
 
     private func readExact(byteCount: Int) throws -> Data {
-        let descriptor = try currentDescriptor()
         while readBuffer.availableCount < byteCount {
+            // Re-read per iteration: a close() from teardown recycles the fd number, and a
+            // stale cached descriptor would silently recv() off whatever socket the OS handed
+            // that number to next — a cross-connection PTP stream desync.
+            let descriptor = try currentDescriptor()
             try waitForDescriptor(descriptor, events: Int16(POLLIN), label: "\(label) receive")
             let remaining = byteCount - readBuffer.availableCount
             let maximumLength = min(max(remaining, 4096), 256 * 1024)

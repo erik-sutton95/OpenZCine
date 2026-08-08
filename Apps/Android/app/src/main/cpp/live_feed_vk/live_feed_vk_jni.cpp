@@ -132,6 +132,7 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_setPlan(
     jfloat zebraMidtone,
     jfloatArray zebraMidtoneColor,
     jboolean aspectFill,
+    jboolean mirrored,
     jboolean splitOn,
     jboolean splitVertical) {
     std::vector<uint8_t> lut, paint, weight;
@@ -173,6 +174,7 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_setPlan(
         zebraMidtone,
         zm,
         aspectFill == JNI_TRUE,
+        mirrored == JNI_TRUE,
         splitOn == JNI_TRUE,
         splitVertical == JNI_TRUE)
         ? JNI_TRUE

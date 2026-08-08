@@ -6,6 +6,8 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.openzcine.core.MonitorDataAvailability
+import com.opencapture.openzcine.settings.ChromeSection
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -68,12 +70,19 @@ class MonitorReadoutsTest {
 
     @Test
     fun `battery labels distinguish percentage external power and unavailable`() {
-        assertEquals("0%", batteryReadoutLabel(0))
-        assertEquals("80%", batteryReadoutLabel(80, externalPower = true))
+        // #303: the camera gauge is five bars, not a percentage — BatteryLevel only ever carries
+        // 1/20/40/60/80/100, so "80%" claimed a precision the body never sent.
+        assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(0))
+        assertEquals("\u25AE\u25AE\u25AE\u25AE\u25AF", batteryReadoutLabel(80, externalPower = true))
+        assertEquals("\u25AE\u25AE\u25AE\u25AF\u25AF", batteryReadoutLabel(60))
+        assertEquals("\u25AE\u25AF\u25AF\u25AF\u25AF", batteryReadoutLabel(20))
+        // The blinking shutter-disabled step, and an off-step value rounding up to its step.
+        assertEquals("\u25AE\u25AF\u25AF\u25AF\u25AF", batteryReadoutLabel(1))
+        assertEquals("\u25AE\u25AE\u25AF\u25AF\u25AF", batteryReadoutLabel(39))
         assertEquals("EXT", batteryReadoutLabel(null, externalPower = true))
         assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(Int.MIN_VALUE))
         val poweredPercentage = monitorBatteryPresentation(80, externalPower = true)
-        assertEquals("80%", poweredPercentage.label)
+        assertEquals("\u25AE\u25AE\u25AE\u25AE\u25AF", poweredPercentage.label)
         assertEquals(80, poweredPercentage.percent)
         assertTrue(poweredPercentage.externalPower)
         val poweredOnly = monitorBatteryPresentation(null, externalPower = true)
@@ -159,6 +168,31 @@ class MonitorReadoutsTest {
         // Empty/off zero must not wipe the last good camera sample.
         retention.accept(LiveFrameTimecode(on = false, hour = 0, minute = 0, second = 0, frame = 0))
         assertEquals(midTake, retention.timecodeFor(connected))
+    }
+
+    @Test
+    fun `timecode readout hides on a body that strikes no timecode`() {
+        val owning = MonitorDataAvailability.OWNING
+
+        // The live-view header's own status bit gates the slot: bodies with no timecode hardware
+        // pin it to zero forever, and a frozen 00:00:00:00 on set is worse than no readout.
+        assertTrue(owning.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = true))
+        assertFalse(owning.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = false))
+
+        // Photography rents the same slot for the SHOTS counter, which has nothing to do with
+        // timecode — it follows the camera link instead.
+        assertTrue(
+            owning.hasSource(
+                ChromeSection.TIMECODE_READOUT,
+                cameraReportsTimecode = false,
+                isPhotographyMode = true,
+            ),
+        )
+
+        // A device receiving nothing has no timecode source however the body is set.
+        val unlinked =
+            MonitorDataAvailability(ownsCameraSession = false, receivesCameraMetadata = false)
+        assertFalse(unlinked.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = true))
     }
 
     @Test

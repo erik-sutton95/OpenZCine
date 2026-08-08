@@ -487,7 +487,11 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
         }
         if control == .iso {
             var writes: [PTPCameraPropertyWrite] = []
-            if snapshot.isoAuto == true {
+            // Same codec gate as the readout: under R3D NE the stale flag would otherwise
+            // prepend a pointless (and refusable) auto-off write to every ISO change.
+            if ISOPickerPolicy.isAutoISOActive(
+                isoAuto: snapshot.isoAuto, codec: snapshot.fileType ?? "")
+            {
                 writes.append(movieISOAuto(enabled: false))
             }
             if let iso = isoWrite(
@@ -1063,6 +1067,17 @@ public enum PTPCameraPropertyDecoders {
 
     /// Merges the camera's advertised focus-mode enum with the full picker list so AF modes stay
     /// selectable after a lens focus-ring override narrows the descriptor to MF-only.
+    /// Drops the automatic WB presets when the active codec is R3D: the ZR offers no
+    /// automatic white balance while recording R3D NE — its own WB menu hides Auto and
+    /// Natural auto there — so the picker must not offer a mode the body will refuse.
+    /// Every other codec passes the advertised list through untouched, and non-preset
+    /// entries (Kelvin readouts) are never filtered. Works on raw and shortened codec
+    /// labels alike. [verify-on-HW: whether N-RAW / ProRes RAW share this restriction]
+    public static func whiteBalanceOptions(advertised: [String], codec: String?) -> [String] {
+        guard let codec, codec.uppercased().contains("R3D") else { return advertised }
+        return advertised.filter { $0 != "Auto" && $0 != "Natural auto" }
+    }
+
     public static func mergedMovieFocusModeOptions(advertised: [String]) -> [String] {
         var seen = Set<String>()
         return (movieFocusModePickerOptions + advertised).filter { seen.insert($0).inserted }
@@ -1759,6 +1774,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         shutterAngle: String? = nil,
         fNumber: String? = nil,
         wbMode: String? = nil,
+        stillWBMode: String? = nil,
         wbKelvin: UInt16? = nil,
         resolution: String? = nil,
         fps: Int? = nil,
@@ -1810,6 +1826,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.shutterAngle = shutterAngle
         self.fNumber = fNumber
         self.wbMode = wbMode
+        self.stillWBMode = stillWBMode
         self.wbKelvin = wbKelvin
         self.resolution = resolution
         self.fps = fps
@@ -1865,7 +1882,20 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public let fNumber: String?
 
     // White balance + recording format.
+    /// The MOVIE white-balance mode (`MovWhiteBalance`).
     public let wbMode: String?
+    /// The STILLS white-balance mode (`WhiteBalance`, 0x5005) — a different camera setting that
+    /// happens to decode through the same table. See ``activeWBMode(photography:)``.
+    public let stillWBMode: String?
+
+    /// The white-balance mode that belongs to the side of the camera currently on screen.
+    ///
+    /// Falls back to the other one only when its own has never been reported, so a body that has
+    /// only ever pushed one of the two still reads out — but a value from the wrong side never
+    /// overwrites a value from the right one.
+    public func activeWBMode(photography: Bool) -> String? {
+        photography ? (stillWBMode ?? wbMode) : (wbMode ?? stillWBMode)
+    }
     public let wbKelvin: UInt16?
     public let resolution: String?
     public let fps: Int?
@@ -2145,8 +2175,12 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                 focusArea: PTPCameraPropertyDecoders.stillFocusArea(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         case .whiteBalance where bytes.count >= 2:
+            // The STILLS white balance (0x5005), kept apart from the movie one. Both used to land
+            // in `wbMode`, last writer winning — so a stills-WB event during the record burst
+            // repainted the movie readout as Auto while the camera's movie WB never moved
+            // (field-reported: the WB tile flips to the Auto glyph on record).
             return replacing(
-                wbMode: PTPCameraPropertyDecoders.whiteBalanceMode(
+                stillWBMode: PTPCameraPropertyDecoders.whiteBalanceMode(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         case .focusMode where bytes.count >= 2:
             return replacing(
@@ -2168,6 +2202,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         shutterAngle: String? = nil,
         fNumber: String? = nil,
         wbMode: String? = nil,
+        stillWBMode: String? = nil,
         wbKelvin: UInt16? = nil,
         resolution: String? = nil,
         fps: Int? = nil,
@@ -2220,6 +2255,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             shutterAngle: shutterAngle ?? self.shutterAngle,
             fNumber: fNumber ?? self.fNumber,
             wbMode: wbMode ?? self.wbMode,
+            stillWBMode: stillWBMode ?? self.stillWBMode,
             wbKelvin: wbKelvin ?? self.wbKelvin,
             resolution: resolution ?? self.resolution,
             fps: fps ?? self.fps,
@@ -2268,7 +2304,8 @@ extension CameraDisplayState {
     /// Returns a monitor-display snapshot updated with the decoded camera properties available so far.
     public func applyingCameraProperties(
         _ properties: PTPCameraPropertySnapshot,
-        mediaStatus: MediaStatus? = nil
+        mediaStatus: MediaStatus? = nil,
+        photography: Bool = false
     )
         -> CameraDisplayState
     {
@@ -2276,7 +2313,8 @@ extension CameraDisplayState {
             CameraValue(
                 label: value.label,
                 value: cameraValue(
-                    label: value.label, existing: value.value, properties: properties),
+                    label: value.label, existing: value.value, properties: properties,
+                    photography: photography),
                 isSettable: value.isSettable
             )
         }
@@ -2308,14 +2346,18 @@ extension CameraDisplayState {
     private func cameraValue(
         label: String,
         existing: String,
-        properties: PTPCameraPropertySnapshot
+        properties: PTPCameraPropertySnapshot,
+        photography: Bool
     ) -> String {
         switch label {
         case "ISO":
             // Movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto.
             // When auto is on, surface the body's effective ISO (ISOControlSensitivity)
             // so the drum/tile tracks Auto changes (e.g. A51200, not a stale dual-base base).
-            if properties.isoAuto == true {
+            // Codec-gated: under R3D NE the flag is inert leftover state, never Auto.
+            if ISOPickerPolicy.isAutoISOActive(
+                isoAuto: properties.isoAuto, codec: properties.fileType ?? "")
+            {
                 properties.iso.map { "A\($0)" } ?? "Auto"
             } else {
                 properties.iso.map(String.init) ?? existing
@@ -2330,10 +2372,12 @@ extension CameraDisplayState {
         case "WB":
             // Kelvin only in colour-temperature WB mode. Named presets (Sunny, Cloudy, …) show
             // their name — a stale Kelvin reading must never win over a preset selection.
-            if properties.wbMode == "Color temp", let kelvin = properties.wbKelvin {
-                "\(kelvin)K"
+            if let mode = properties.activeWBMode(photography: photography) {
+                mode == "Color temp"
+                    ? (properties.wbKelvin.map { "\($0)K" } ?? mode)
+                    : mode
             } else {
-                properties.wbMode ?? properties.wbKelvin.map { "\($0)K" } ?? existing
+                properties.wbKelvin.map { "\($0)K" } ?? existing
             }
         case "FOCUS":
             properties.focusMode ?? existing

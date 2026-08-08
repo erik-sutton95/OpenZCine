@@ -965,8 +965,12 @@ private func splitEraConfiguration(
 
 // MARK: - Clean view (#256)
 
-@Test func cleanViewPinsDefaultOffAndToleratePayloadsPredatingThem() throws {
-    #expect(OperatorPreferences.defaults.cleanViewPinnedTools.isEmpty)
+@Test func cleanViewPinsDefaultToTheStockSetAndToleratePayloadsPredatingThem() throws {
+    // Clean strips chrome, not tools: the grade, the focus aid and the two geometry corrections
+    // are what make DISP 2 the right picture rather than a raw one.
+    #expect(
+        OperatorPreferences.defaults.cleanViewPinnedTools
+            == OperatorPreferences.cleanViewDefaultPinnedTools)
 
     var dict = try #require(
         try JSONSerialization.jsonObject(
@@ -975,7 +979,9 @@ private func splitEraConfiguration(
     let decoded = try JSONDecoder().decode(
         OperatorPreferences.self,
         from: try JSONSerialization.data(withJSONObject: dict))
-    #expect(decoded.cleanViewPinnedTools.isEmpty)
+    // The key is absent only in a payload written before it existed, i.e. by an operator who
+    // never pinned anything — so it lands on the stock set, not on empty.
+    #expect(decoded.cleanViewPinnedTools == OperatorPreferences.cleanViewDefaultPinnedTools)
     // The rest of the blob must survive — a missing new key never resets the preferences.
     #expect(decoded.dispOrder == OperatorPreferences.defaults.dispOrder)
     #expect(decoded.streamPreset == OperatorPreferences.defaults.streamPreset)
@@ -983,6 +989,7 @@ private func splitEraConfiguration(
 
 @Test func cleanViewPinsRoundTrip() throws {
     var prefs = OperatorPreferences.defaults
+    prefs.cleanViewPinnedTools = []
     prefs.toggleCleanViewPin(.guides)
     prefs.toggleCleanViewPin(.histogram)
     prefs.toggleCleanViewPin(.histogram)  // second toggle un-pins
@@ -991,28 +998,34 @@ private func splitEraConfiguration(
     #expect(decoded.cleanViewPinnedTools == [.guides])
 }
 
-@Test func cleanViewHidesEveryUnpinnedToolByDefault() {
+@Test func cleanViewShowsTheStockPinsAndHidesEveryOtherToolByDefault() {
     var prefs = OperatorPreferences.defaults
     prefs.liveViewVisibleAssistTools = Set(MonitorAssistTool.allCases)
+    let stock = OperatorPreferences.cleanViewDefaultPinnedTools
 
     for tool in MonitorAssistTool.allCases {
         #expect(
             MonitorChromePolicy.isToolVisible(tool, mode: .live, preferences: prefs),
             "\(tool) must show in live")
         #expect(
-            !MonitorChromePolicy.isToolVisible(tool, mode: .clean, preferences: prefs),
-            "\(tool) must be hidden in clean by default")
+            MonitorChromePolicy.isToolVisible(tool, mode: .clean, preferences: prefs)
+                == stock.contains(tool),
+            "\(tool) in clean must follow the stock pin set")
+        // Command replaces the feed with the dashboard, so it shows no feed tool at all —
+        // pinned or not.
         #expect(
             !MonitorChromePolicy.isToolVisible(tool, mode: .command, preferences: prefs),
             "\(tool) must be hidden in command")
     }
-    #expect(MonitorChromePolicy.visibleTools(mode: .clean, preferences: prefs).isEmpty)
+    #expect(MonitorChromePolicy.visibleTools(mode: .clean, preferences: prefs) == stock)
     #expect(MonitorChromePolicy.visibleTools(mode: .command, preferences: prefs).isEmpty)
 }
 
 @Test func cleanViewShowsExactlyThePinnedToolsAndRestoresOnLeaving() {
     var prefs = OperatorPreferences.defaults
     prefs.liveViewVisibleAssistTools = [.histogram, .peaking, .guides]
+    // This is about the pin mechanism, not about what DISP 2 ships with.
+    prefs.cleanViewPinnedTools = []
     prefs.toggleCleanViewPin(.peaking)
 
     #expect(MonitorChromePolicy.visibleTools(mode: .clean, preferences: prefs) == [.peaking])
@@ -1038,11 +1051,12 @@ private func splitEraConfiguration(
             .histogram, mode: .live, context: .playback, preferences: prefs))
 }
 
-@Test func cleanViewDefersPopups() {
-    #expect(MonitorChromePolicy.allowsPopups(in: .live))
-    #expect(!MonitorChromePolicy.allowsPopups(in: .clean))
-    // Command's dashboard tiles open the value pickers, so pop-ups stay allowed there.
-    #expect(MonitorChromePolicy.allowsPopups(in: .command))
+@Test func enteringCleanSweepsInFlightPopups() {
+    #expect(!MonitorChromePolicy.dismissesPopupsOnEntry(to: .live))
+    // The sweep is entry-only: controls clean itself mounts still present their pop-ups.
+    #expect(MonitorChromePolicy.dismissesPopupsOnEntry(to: .clean))
+    // Command's dashboard tiles keep their value pickers; nothing is swept entering it.
+    #expect(!MonitorChromePolicy.dismissesPopupsOnEntry(to: .command))
 }
 
 @Test func commandKeepsTheHeaderStreamUpForLiveTimecode() {

@@ -22,7 +22,9 @@ layout(set = 0, binding = 2) uniform Params {
     // against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
     float splitOn;
     float splitVertical;
-    float splitPad;
+    // Horizontal flip for a camera pointed back at the operator: 1 mirrors, 0 does not. Takes the
+    // slot that was `splitPad`, so no offset in this block moves.
+    float mirror;
     vec4 deLogCurve0to3;
     float deLogCurve4;
     float deLogPad;
@@ -120,7 +122,11 @@ float peakingRoberts(float a, float b, float c, float d) {
 }
 
 void main() {
-    vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+    // The mirror folds the SAMPLING coordinate, so everything read through `uv` — the picture and
+    // peaking's neighbourhood alike — flips together and the overlay stays on its edge. The split
+    // boundary deliberately does not: it reads raw `vUv` because it is a question about where the
+    // pixel lands for the operator, not about the picture.
+    vec2 uv = vec2(mix(vUv.x, 1.0 - vUv.x, u.mirror), 1.0 - vUv.y);
     vec3 source = texture(uFeed, uv).rgb;
     vec3 color = splitIsGradedSide(vUv) ? grade(source) : source;
 

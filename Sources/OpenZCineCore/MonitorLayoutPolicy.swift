@@ -233,6 +233,24 @@ public enum MonitorFeedLayout {
         if viewportHeight > viewportWidth {
             let width = viewportWidth
             let height = width / aspectRatio
+            // Vertical (rotated) feeds are taller than the tall viewport itself. Gated to
+            // aspect < 1 so every landscape-or-wider aspect keeps its historical full-width
+            // portrait frame untouched.
+            if aspectRatio < 1, height > viewportHeight + 0.5 {
+                // A SMALL overflow (≤15%) binds to the WIDTH and centre-crops the sliver: a
+                // vertical phone filming vertical wants edge-to-edge, and the ~13 pt
+                // pillarbox this produced read as a rendering bug in the field. The mount
+                // clips the overflow. A LARGE overflow still pillarboxes — cropping real
+                // framing is worse than bars.
+                if height <= viewportHeight * 1.15 {
+                    return MonitorFeedFrame(
+                        x: 0, y: (viewportHeight - height) / 2, width: width, height: height)
+                }
+                let boundWidth = viewportHeight * aspectRatio
+                return MonitorFeedFrame(
+                    x: (viewportWidth - boundWidth) / 2, y: 0,
+                    width: boundWidth, height: viewportHeight)
+            }
             return MonitorFeedFrame(x: 0, y: 0, width: width, height: height)
         }
 
@@ -874,9 +892,13 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// (4:3-ish iPad) landscape layouts.
     public static let inlineLeadingGap = 12.0
 
-    /// Nominal frame width for the inline battery cluster (two single-row indicators). The shell's
+    /// Nominal frame width for the inline battery cluster (the two stacked gauge rows). The shell's
     /// content hugs the frame's leading edge, so slack here never shifts the indicators.
-    public static let inlineClusterWidth = 190.0
+    ///
+    /// The stacked gauges are a third the width of the side-by-side row they replaced, and every
+    /// point saved here is a point the top info bar gets back: this cluster is what the deck insets
+    /// past, and the deck is where the timecode lives.
+    public static let inlineClusterWidth = 52.0
 
     // Indicator centers.
     public let phoneCenterX: Double

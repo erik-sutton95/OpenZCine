@@ -882,6 +882,50 @@ final class RunnerTests: XCTestCase {
 }
 
 extension RunnerTests {
+    /// The anchor is the operator's own level, not mid-scale. Arming the shutter used to set every
+    /// phone to half volume — remote or not — and drag whatever they were listening to with it.
+    /// All the mechanism needs is a step of room each way, which nearly every real setting has.
+    func testTheVolumeAnchorLeavesAnOrdinaryLevelExactlyWhereItIs() {
+        // Anything with a step of headroom either side is its own anchor: nothing to hear.
+        for volume in stride(from: Float(0.0625), through: Float(0.9375), by: 0.0625) {
+            XCTAssertEqual(
+                BluetoothShutterMonitor.anchor(forCurrentVolume: volume), volume, accuracy: 0.0001,
+                "volume \(volume) should not be moved")
+        }
+        // Only the rails move, and only by the one step a press needs to be visible.
+        XCTAssertEqual(
+            BluetoothShutterMonitor.anchor(forCurrentVolume: 0), 0.0625, accuracy: 0.0001)
+        XCTAssertEqual(
+            BluetoothShutterMonitor.anchor(forCurrentVolume: 1), 0.9375, accuracy: 0.0001)
+        // Both rails keep room to MOVE, which is the whole reason the anchor exists: a press
+        // either way from the anchored value lands somewhere detectably different.
+        for rail in [Float(0), Float(1)] {
+            let anchored = BluetoothShutterMonitor.anchor(forCurrentVolume: rail)
+            XCTAssertGreaterThan(anchored, 0)
+            XCTAssertLessThan(anchored, 1)
+        }
+    }
+
+    /// The decision travels with whatever anchor the session took, not a hardcoded half.
+    func testTheTriggerDecisionFollowsTheOperatorsOwnAnchor() {
+        let t0: TimeInterval = 100
+        let anchor: Float = 0.25
+        XCTAssertFalse(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.25, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor),
+            "the anchor's own echo is never a press")
+        XCTAssertTrue(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.3125, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
+        XCTAssertTrue(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.1875, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
+        // 0.5 is just a volume now — at this anchor it is a press, not a resting place.
+        XCTAssertTrue(
+            BluetoothShutterMonitor.isTrigger(
+                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
+    }
+
     /// The Bluetooth-shutter volume decision: any move off the mid-scale anchor triggers (shutter
     /// remotes send volume-up or volume-down depending on model), but not within the debounce
     /// window after a trigger nor within the echo window after a programmatic re-anchor; the
@@ -891,27 +935,27 @@ extension RunnerTests {
         // Presses in BOTH directions, well clear of both windows → trigger.
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.5625, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.4375, now: t0, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.4375, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
         // The anchor echo (same value) never triggers.
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
         // Inside the debounce window after a trigger → suppressed; after it → fires again.
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.3, lastTriggerAt: t0, lastAnchorAt: t0))
+                newVolume: 0.5625, now: t0 + 0.3, lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
                 newVolume: 0.5625,
                 now: t0 + BluetoothShutterMonitor.debounceInterval + 0.01,
-                lastTriggerAt: t0, lastAnchorAt: t0))
+                lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
         // Right after a programmatic re-anchor, a rise is its echo → suppressed.
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0))
+                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5))
     }
 
     /// KVO is the primary detector and the private notification is a rail fallback. On releases
@@ -920,28 +964,29 @@ extension RunnerTests {
         let firstEventAt: TimeInterval = 200
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: firstEventAt, lastTriggerAt: 0, lastAnchorAt: 0))
+                newVolume: 0.5625, now: firstEventAt, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5
+            ))
         XCTAssertFalse(
             BluetoothShutterMonitor.isTrigger(
                 newVolume: 0.5625,
                 now: firstEventAt + 0.01,
                 lastTriggerAt: firstEventAt,
-                lastAnchorAt: firstEventAt))
+                lastAnchorAt: firstEventAt, anchor: 0.5))
     }
 
     func testBluetoothShutterReportsWhyVolumeEventsAreIgnored() {
         let t0: TimeInterval = 300
         XCTAssertEqual(
             BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0),
+                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5),
             .atAnchor)
         XCTAssertEqual(
             BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: t0, lastAnchorAt: 0),
+                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: t0, lastAnchorAt: 0, anchor: 0.5),
             .debounced)
         XCTAssertEqual(
             BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0),
+                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5),
             .selfInflicted)
     }
 
@@ -1314,29 +1359,25 @@ extension RunnerTests {
 
     // MARK: - Live-feed bake resolution
 
-    /// A 16:9 feed on a 2.17:1 panel keeps every source column and crops rows — at SOURCE
-    /// resolution, which is the whole point: the drawable-sized bake it replaced evaluated the
-    /// Core Image graph over 6× as many pixels.
-    func testFeedBakeKeepsSourceResolutionAndCropsToDrawableAspect() {
+    /// A 16:9 feed on a 2.17:1 panel bakes the WHOLE source at source resolution: fit, never
+    /// crop (#115) — the present letterboxes, so no source pixel is ever discarded here.
+    func testFeedBakeKeepsSourceResolutionAndItsOwnAspect() {
         let size = MetalFeedFrameBaker.bakeSize(
             source: CGSize(width: 1_024, height: 576),
             drawable: CGSize(width: 2_868, height: 1_320))
 
-        XCTAssertEqual(size.width, 1_024, accuracy: 0.5)
-        XCTAssertEqual(size.height, 1_024 / (2_868.0 / 1_320.0), accuracy: 0.5)
-        // Aspect must match the drawable exactly, or the uniform scale on present stretches.
-        XCTAssertEqual(size.width / size.height, 2_868.0 / 1_320.0, accuracy: 0.001)
+        XCTAssertEqual(size, CGSize(width: 1_024, height: 576))
     }
 
-    /// A taller-than-panel source crops columns instead, and still matches the drawable's aspect.
-    func testFeedBakeCropsColumnsWhenSourceIsWiderThanTheDrawable() {
+    /// A source wider than the drawable downscales uniformly — the SOURCE's aspect survives,
+    /// because the present letterboxes rather than the bake cropping (#115).
+    func testFeedBakeDownscalesPreservingTheSourceAspect() {
         let size = MetalFeedFrameBaker.bakeSize(
             source: CGSize(width: 1_024, height: 256),
             drawable: CGSize(width: 800, height: 600))
 
-        XCTAssertEqual(size.height, 256, accuracy: 0.5)
-        XCTAssertEqual(size.width / size.height, 800.0 / 600.0, accuracy: 0.001)
-        XCTAssertLessThan(size.width, 1_024)
+        XCTAssertEqual(size.width, 800, accuracy: 0.5)
+        XCTAssertEqual(size.width / size.height, 1_024.0 / 256.0, accuracy: 0.001)
     }
 
     /// Demo stills out-resolve the panel. Baking at their size would render pixels that can never
@@ -1359,6 +1400,228 @@ extension RunnerTests {
         XCTAssertEqual(
             MetalFeedFrameBaker.bakeSize(source: CGRect.infinite.size, drawable: drawable), drawable
         )
+    }
+
+    // MARK: - Hardware JPEG decode
+
+    /// The decoder against a REAL ZR live-view frame, not a synthetic baseline JPEG.
+    ///
+    /// The MockFeed test below passed while the camera's own frames silently fell back to ImageIO
+    /// on device — camera motion-JPEG differs from `UIImage.jpegData` output (subsampling,
+    /// restart markers), and a fallback nobody sees means every feature living on the hardware
+    /// path (the noise filter) quietly never runs. The peaking corpus carries genuine
+    /// LiveViewObjects, so this is the frame class the device actually decodes.
+    func testHardwareJPEGDecodeTakesARealZRLiveViewFrame() throws {
+        #if targetEnvironment(simulator)
+            // The simulator's software VideoToolbox stack is not the device's: it refuses this
+            // frame class while macOS accepts the identical bytes (probed step-by-step, forced
+            // 420v AND native). Device truth comes from the on-feed debug key, which reports the
+            // decode path and the filter's verdict live (`LiveDenoiseSwitch.pipelineReport`).
+            throw XCTSkip("simulator VideoToolbox refuses the ZR frame class")
+        #else
+            let url = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()  // RunnerTests
+                .deletingLastPathComponent()  // ios
+                .appendingPathComponent("Tests/OpenZCineCoreTests/Fixtures/peaking/zr-sweep-12.bin")
+            let object = try Data(contentsOf: url)
+            let soi = try XCTUnwrap(
+                object.firstRange(of: Data([0xFF, 0xD8, 0xFF])), "no JPEG in the fixture")
+            let jpeg = object[soi.lowerBound...]
+            let header = try XCTUnwrap(JPEGPixelBufferDecoder.dimensions(of: jpeg))
+            let decoder = JPEGPixelBufferDecoder()
+            let buffer = try XCTUnwrap(
+                decoder.decode(jpeg),
+                "the hardware decoder refuses a real ZR live-view frame (\(decoder.report))")
+            XCTAssertGreaterThanOrEqual(CVPixelBufferGetWidth(buffer), header.width)
+            XCTAssertGreaterThanOrEqual(CVPixelBufferGetHeight(buffer), header.height)
+        #endif
+    }
+    // MARK: - Hardware JPEG decode
+
+    /// The camera's live view is motion JPEG, and `420v` is what a JPEG already is inside. This
+    /// decoder is the whole reason the super-resolution input needs no colour conversion — so it
+    /// has to actually produce that format, at the right size, with real content in it.
+    func testHardwareJPEGDecodeProducesA420vBufferWithRealPixels() throws {
+        let image = try XCTUnwrap(UIImage(named: "MockFeed"), "MockFeed asset missing")
+        let jpeg = try XCTUnwrap(image.jpegData(compressionQuality: 0.9))
+        let header = try XCTUnwrap(
+            JPEGPixelBufferDecoder.dimensions(of: jpeg), "dimensions must come off the header")
+
+        let buffer = try XCTUnwrap(
+            JPEGPixelBufferDecoder().decode(jpeg), "hardware JPEG decode returned nothing")
+
+        XCTAssertEqual(
+            CVPixelBufferGetPixelFormatType(buffer),
+            JPEGPixelBufferDecoder.pixelFormat,
+            "the decoder must land in the model's own format, not RGB")
+        XCTAssertEqual(CVPixelBufferGetWidth(buffer), header.width)
+        XCTAssertEqual(CVPixelBufferGetHeight(buffer), header.height)
+
+        // A buffer of one constant value is what every failure so far looked like — flat green —
+        // so "it decoded" is not the claim; "it decoded a picture" is.
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let luma = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(buffer, 0))
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        let rows = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let bytes = luma.assumingMemoryBound(to: UInt8.self)
+        var lowest = UInt8.max
+        var highest = UInt8.min
+        for row in stride(from: 0, to: rows, by: 8) {
+            for column in stride(from: 0, to: CVPixelBufferGetWidthOfPlane(buffer, 0), by: 8) {
+                let value = bytes[row * rowBytes + column]
+                lowest = min(lowest, value)
+                highest = max(highest, value)
+            }
+        }
+        XCTAssertGreaterThan(
+            Int(highest) - Int(lowest), 16,
+            "the luma plane is nearly uniform — this decoded to a flat field, not a frame")
+    }
+
+    // MARK: - Feed upscaler availability
+
+    /// The picker lists only what this device can run, and the Lanczos floor is the one thing every
+    /// device can — the simulator, which has neither MetalFX nor VideoToolbox super resolution,
+    /// lists that alone.
+    func testOfferedUpscalersAreAllRunnableAndAlwaysIncludeTheFloor() {
+        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.off))
+        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.lanczos))
+        for upscaler in FeedUpscaler.supportedOnThisDevice {
+            XCTAssertTrue(
+                upscaler.isSupportedOnThisDevice, "\(upscaler) is offered but not runnable")
+        }
+        #if targetEnvironment(simulator)
+            XCTAssertEqual(FeedUpscaler.supportedOnThisDevice, [.off, .lanczos])
+        #endif
+    }
+
+    /// A stored choice outlives the device it was made on. Whatever it names, what comes back is
+    /// something this device actually runs — never a setting that reads as active while the
+    /// renderer quietly does something else.
+    func testAStoredChoiceThisDeviceCannotRunResolvesToOneItCan() {
+        XCTAssertTrue(FeedUpscaler.supported(or: nil).isSupportedOnThisDevice)
+        for upscaler in FeedUpscaler.allCases {
+            XCTAssertTrue(FeedUpscaler.supported(or: upscaler).isSupportedOnThisDevice)
+        }
+        XCTAssertEqual(FeedUpscaler.supported(or: .lanczos), .lanczos)
+    }
+
+    /// An untouched install starts at the floor, on every device — the picker is how an operator
+    /// spends GPU on the feed, not something they have to find to stop spending it.
+    func testTheDefaultUpscalerIsTheFastFloorEvenWhereBetterOnesExist() {
+        XCTAssertEqual(FeedUpscaler.supported(or: nil), .lanczos)
+        XCTAssertEqual(FeedUpscaler.lanczos.rawValue, "Fast")
+        // A stored choice still wins wherever the device can run it — the default is a starting
+        // point, not a cap.
+        for upscaler in FeedUpscaler.supportedOnThisDevice {
+            XCTAssertEqual(FeedUpscaler.supported(or: upscaler), upscaler)
+        }
+    }
+
+    // MARK: - Super-resolution input size
+
+    /// The low-latency processor tops out at 960×960, and a Quality-preset ZR feed is 1024×576 —
+    /// over the ceiling, which is why it offered no scale factor and the option did nothing. A 6%
+    /// shrink clears it and buys a ×2 ML upscale of the result.
+    func testSuperResolutionShrinksABakeThatOutsizesTheProcessor() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (1_024, 576), target: (2_347, 1_320), scale: 0, maximum: (960, 960))
+
+        XCTAssertEqual(input.width, 960)
+        XCTAssertEqual(input.height, 540)
+        // Uniform: the present letterboxes against this aspect, so it must not change.
+        XCTAssertEqual(
+            Double(input.width) / Double(input.height), 1_024.0 / 576.0, accuracy: 0.01)
+    }
+
+    /// Never an upscale — a source already inside the limit is handed over untouched, and
+    /// enlarging before the model would only give it invented detail to sharpen.
+    func testSuperResolutionLeavesASourceInsideTheLimitAlone() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (640, 480), target: (1_280, 960), scale: 2, maximum: (960, 960))
+
+        XCTAssertEqual(input.width, 640)
+        XCTAssertEqual(input.height, 480)
+    }
+
+    /// Height can be the binding limit as easily as width.
+    func testSuperResolutionShrinksToWhicheverDimensionBindsFirst() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (1_000, 2_000), target: (4_000, 8_000), scale: 0, maximum: (1_440, 1_080))
+
+        XCTAssertEqual(input.height, 1_080)
+        XCTAssertEqual(input.width, 540)
+    }
+
+    /// A fixed ×4 against a 2347×1320 panel produced 4096×2304 — 75 MB a surface, three deep,
+    /// and the drawable queue starved until `nextDrawable` timed out on every frame. The input
+    /// has to be sized so the model's OUTPUT lands on the panel, not far past it.
+    func testSuperResolutionShrinksTheInputSoAFixedFactorLandsOnThePanel() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (1_024, 576), target: (2_347, 1_320), scale: 4, maximum: (1_440, 1_080))
+
+        // ×4 of this clears the panel with nothing meaningful left over.
+        XCTAssertEqual(Double(input.width) * 4, 2_347, accuracy: 8)
+        XCTAssertEqual(Double(input.height) * 4, 1_320, accuracy: 8)
+        XCTAssertLessThan(input.width, 1_024)
+    }
+
+    /// When the factor cannot reach the panel even from the whole source, there is nothing to
+    /// give back — the fit enlarges the remainder and the model gets every pixel available.
+    func testSuperResolutionKeepsTheWholeSourceWhenTheFactorCannotReachThePanel() {
+        let input = FeedUpscaler.superResolutionInputSize(
+            source: (960, 540), target: (2_347, 1_320), scale: 2, maximum: (1_440, 1_080))
+
+        XCTAssertEqual(input.width, 960)
+        XCTAssertEqual(input.height, 540)
+    }
+
+    // MARK: - Super-resolution scale selection
+
+    /// The model only offers discrete factors, so the one it runs at has to CLEAR the blow-up the
+    /// present needs — 1024×576 into a 2868×1320 panel is 2.8×, and 2× would leave Lanczos to
+    /// enlarge the model's own output by the rest, which is the whole thing being paid for.
+    func testSuperResolutionScaleClearsTheRatioSoTheFitOnlyShrinks() {
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8), 3)
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2), 2)
+    }
+
+    /// When nothing on offer clears the ratio the largest gets as close as the processor allows —
+    /// a softer last leg beats refusing the model outright.
+    func testSuperResolutionScaleFallsToTheLargestOfferedWhenNoneClearsTheRatio() {
+        XCTAssertEqual(FeedUpscaler.superResolutionScale(offered: [1.5, 2], ratio: 2.8), 2)
+    }
+
+    /// An empty list is the processor saying it does not serve this source size at all.
+    func testSuperResolutionScaleIsNilWhenNoFactorsAreOffered() {
+        XCTAssertNil(FeedUpscaler.superResolutionScale(offered: [], ratio: 2.8))
+    }
+
+    /// Order comes from the processor, not from us — an unsorted list must not pick a factor that
+    /// happens to be first.
+    func testSuperResolutionScaleDoesNotTrustTheOfferedOrder() {
+        XCTAssertEqual(FeedUpscaler.superResolutionScale(offered: [3, 1.5, 2], ratio: 1.6), 2)
+    }
+
+    /// A layout animation walks the drawable through a dozen sizes — a device log caught the
+    /// MetalFX scaler rebuilt five times across one. Changing factor restarts the processor and
+    /// loads an ML model on the draw thread, so a running factor that still clears the ratio is
+    /// kept rather than traded down.
+    func testSuperResolutionScaleKeepsARunningFactorThatStillClearsTheRatio() {
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 1.3, held: 3), 3)
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2, held: 2), 2)
+    }
+
+    /// It is kept, not pinned: once the panel outgrows what the running factor covers, the model
+    /// has to be restarted at one that clears it or the fit goes back to enlarging its output.
+    func testSuperResolutionScaleReplacesARunningFactorThatNoLongerClearsTheRatio() {
+        XCTAssertEqual(
+            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8, held: 2), 3)
     }
 
     /// The Focus dial is opt-in, and switching the default off must not overrule an operator who
@@ -1580,5 +1843,111 @@ extension RunnerTests {
         // Each chrome's own tracking position, spelled the way the body spells it.
         XCTAssertTrue(CameraPicker.focus.modes[1].options.contains("Subject tracking"))
         XCTAssertTrue(CameraPicker.stillFocus.modes[1].options.contains("3D tracking"))
+    }
+}
+
+/// The watch feed's encoder. HEIC carries roughly JPEG's perceived quality in half the bytes,
+/// which is what buys back the cost of the larger frames.
+@MainActor
+final class WatchFrameEncodingTests: XCTestCase {
+    private func solidImage(width: Int = 64, height: Int = 36) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+    }
+
+    /// HEIC, not JPEG. An ISOBMFF file names its box type at bytes 4..8 ("ftyp"), where a JPEG
+    /// opens 0xFFD8. Checking the container rather than "some bytes came back" is the point: the
+    /// JPEG fallback is silent by design, so it would look identical to success at the call site,
+    /// and shipping the fallback everywhere would quietly undo the whole change.
+    func testFramesEncodeAsHeic() throws {
+        let data = try XCTUnwrap(WatchRelay.encodedFrameData(solidImage(), quality: 0.5))
+        XCTAssertGreaterThan(data.count, 0)
+        let isJPEG =
+            data.count >= 2 && data[data.startIndex] == 0xFF
+            && data[data.startIndex + 1] == 0xD8
+        XCTAssertFalse(isJPEG, "still JPEG — the HEIC destination silently fell back")
+        let ftyp = data.count >= 8 ? Array(data[(data.startIndex + 4)..<(data.startIndex + 8)]) : []
+        XCTAssertEqual(ftyp, Array("ftyp".utf8), "not an ISOBMFF container")
+    }
+
+    /// Quality has to actually reach the encoder. A parameter accepted and ignored would leave the
+    /// feed exactly as compressed as before while the ladder claims otherwise.
+    func testQualityReachesTheEncoder() throws {
+        // A gradient, not a flat fill: a solid colour compresses to nearly the same size at any
+        // quality, so it would pass this test without the parameter doing anything.
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 128, height: 72)).image { ctx in
+            let colors = [UIColor.black.cgColor, UIColor.white.cgColor] as CFArray
+            if let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])
+            {
+                ctx.cgContext.drawLinearGradient(
+                    gradient, start: .zero, end: CGPoint(x: 128, y: 72), options: [])
+            }
+        }
+        let low = try XCTUnwrap(WatchRelay.encodedFrameData(image, quality: 0.1))
+        let high = try XCTUnwrap(WatchRelay.encodedFrameData(image, quality: 0.9))
+        XCTAssertGreaterThan(high.count, low.count, "quality is not reaching the encoder")
+    }
+}
+
+extension RunnerTests {
+    /// The app target compiles the shared core from its OWN file references, so a rule the SPM
+    /// suite proves is not thereby proven here — and the store the app writes through is this
+    /// target's. Two routers on different subnets are two setups.
+    func testTwoRoutersOnDifferentSubnetsStaySeparateInTheAppTarget() {
+        let records = PTPIPSavedCameraRecords.canonicalized([
+            PTPIPSavedCameraRecord(
+                host: "10.99.0.20", displayName: "ZR_6002199", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 1), serialNumber: "6002199",
+                path: .infrastructure(networkName: nil)),
+            PTPIPSavedCameraRecord(
+                host: "192.168.129.66", displayName: "ZR_6002199", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 2), serialNumber: "6002199",
+                path: .infrastructure(networkName: nil)),
+        ])
+        XCTAssertEqual(records.count, 2, "hosts: \(records.map(\.host))")
+    }
+}
+
+extension RunnerTests {
+    /// Failure copy is matched on the TEXT of a status, which carries no idea which path produced
+    /// it — so a cable failure used to be answered with "check Wi-Fi", sending the operator to
+    /// inspect a radio the attempt never used.
+    func testCableFailuresAreNotToldToCheckWiFi() {
+        let timedOut = "PTP-IP connect timed out"
+        XCTAssertTrue(
+            StartupConnectionCopy.friendly(timedOut, path: .usbC).contains("Check the cable"))
+        XCTAssertTrue(
+            StartupConnectionCopy.friendly(timedOut, path: .hdmiCapture).contains("Check the cable")
+        )
+
+        // Every path with a network keeps the Wi-Fi wording, including an unknown one.
+        for network in [CameraPath.Kind.cameraAccessPoint, .infrastructure, .phoneHotspot] {
+            XCTAssertTrue(
+                StartupConnectionCopy.friendly(timedOut, path: network).contains("Check Wi"),
+                "\(network) should still be told to check Wi-Fi")
+        }
+        XCTAssertTrue(StartupConnectionCopy.friendly(timedOut).contains("Check Wi"))
+    }
+
+    /// The wizard's step headings describe the SHAPE of the wizard, not what any one path does in
+    /// it — "Set up the network" over a cable is a different instruction from the one on screen.
+    func testEveryPathsNetworkStepIsTitledForWhatItActuallyDoes() {
+        // The generic title survives only where it is still true.
+        XCTAssertEqual(
+            NativeAppModel.FirstPairWizardStep.connectNetwork.title, "Set up the network")
+        XCTAssertEqual(NativeAppModel.FirstPairWizardStep.discoverAndPair.title, "Find and pair")
+        // HDMI never visits the network step; every other path does, and each needs its own words.
+        XCTAssertFalse(
+            NativeAppModel.FirstPairWizardStep.sequence(
+                transport: .hdmiCapture, skipsPermissions: false
+            ).contains(.connectNetwork))
+        // Camera-AP pairing ends at the network step — nothing to find afterwards.
+        XCTAssertFalse(
+            NativeAppModel.FirstPairWizardStep.sequence(
+                transport: .cameraAccessPoint, skipsPermissions: false
+            ).contains(.discoverAndPair))
     }
 }

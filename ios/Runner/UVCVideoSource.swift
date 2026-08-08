@@ -1,6 +1,9 @@
 import AVFoundation
 import CoreImage
 import UIKit
+import os
+
+private let uvcLogger = Logger(subsystem: "com.opencapture.openzcine", category: "uvc-capture")
 
 /// A frame handed from the capture queue to the main actor.
 ///
@@ -95,19 +98,14 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// connect wizard can explain the limitation on an iPhone instead of showing a path that will
     /// never find anything. The Simulator reports `.pad` on an iPad simulator but never enumerates
     /// a device, which lands on `waitingForDevice`.
-    static var isSupportedHardware: Bool {
-        #if DEBUG
-            // Debug-only experiment: `AVCaptureDeviceTypeExternal` is documented as iPad-only, but
-            // a discovery session costs nothing to run and the only way to learn whether some
-            // phone + dongle pair ever enumerates is to let it try. It finds nothing on a phone
-            // today, in which case the capture step simply sits on "waiting for the device" —
-            // there is no session to start and so no camera indicator or thermal load either.
-            // Release keeps the honest gate, so nothing ships an option that cannot work.
-            return true
-        #else
-            return isDocumentedHardware
-        #endif
-    }
+    /// iPad only, in every configuration.
+    ///
+    /// This used to return true on any device in Debug — an experiment to learn whether some
+    /// phone + dongle pair ever enumerates. It never did, and the cost was an HDMI option
+    /// appearing throughout the iPhone UI of every development build, which is not a thing to
+    /// leave lying around on the device the app is actually tested on. The capability is
+    /// documented iPad-only; the app now says so with one answer rather than two.
+    static var isSupportedHardware: Bool { isDocumentedHardware }
 
     /// Whether Apple documents UVC support on this hardware. Kept separate from
     /// `isSupportedHardware` so a Debug build that lets a phone try can still explain why it
@@ -333,6 +331,14 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// own signal chain is to pick the format explicitly. [verify-on-HW]
     private static let preferredCaptureHeights = [2160, 1080, 720]
 
+    /// True for a 16:9 mode — the shape a camera's HDMI output actually is, as opposed to the
+    /// DCI (256:135) modes a 4K-capable link also advertises.
+    static func isBroadcastShaped(_ dimensions: CMVideoDimensions) -> Bool {
+        guard dimensions.width > 0, dimensions.height > 0 else { return false }
+        let aspect = Double(dimensions.width) / Double(dimensions.height)
+        return abs(aspect / (16.0 / 9.0) - 1) <= 0.02
+    }
+
     /// Picks the best format the device can actually feed, and returns a description of it.
     ///
     /// Three filters in order, because each one alone picks wrongly on real hardware:
@@ -375,8 +381,16 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             Self.preferredCaptureHeights.contains(Int($0.dimensions.height))
         }
         let pool = preferred.isEmpty ? candidates : preferred
+        // Then prefer a mode shaped like the signal. A camera's HDMI output is 16:9, while a DCI
+        // 4096×2160 mode is 256:135 — asking a link for that mode makes it fit a 16:9 signal into
+        // a shape the signal never had, and the cheap ones resolve that by cropping rather than
+        // padding. Ranking on pixels alone picks DCI over UHD (8.8M beats 8.3M), which is how a
+        // 4K60-capable link started cropping a feed the previous one showed whole (#115). DCI
+        // stays in the pool for a signal that really is 4096 wide.
+        let signalShaped = pool.filter { Self.isBroadcastShaped($0.dimensions) }
+        let shaped = signalShaped.isEmpty ? pool : signalShaped
         guard
-            let best = pool.max(by: { lhs, rhs in
+            let best = shaped.max(by: { lhs, rhs in
                 lhs.pixels == rhs.pixels ? lhs.fps < rhs.fps : lhs.pixels < rhs.pixels
             })
         else { return nil }
@@ -423,6 +437,48 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
     }
 
+    // MARK: - Signal colorimetry
+
+    /// What the capture chain CLAIMS the signal is, read from the first frame's attachments and
+    /// surfaced beside the format in settings. Two distinct field reports hide in one "the HDMI
+    /// picture looks wrong": a camera sending its recording gamma over HDMI (N-Log/HLG — flat or
+    /// green-tinted until the monitoring LUT is applied; fixed on the CAMERA's HDMI output
+    /// setting), and a dongle mis-tagging matrix or range (our side; would need an override this
+    /// readout is the evidence for). Without the readout, both look like "the app shifted my
+    /// colors".
+    var onSignalColorimetry: (@MainActor (String) -> Void)?
+    private var reportedColorimetry = false
+
+    private func reportSignalColorimetryOnce(of pixelBuffer: CVPixelBuffer) {
+        guard !reportedColorimetry else { return }
+        reportedColorimetry = true
+        func tag(_ key: CFString) -> String {
+            guard let value = CVBufferCopyAttachment(pixelBuffer, key, nil) as? String else {
+                return "untagged"
+            }
+            return Self.shortColorimetryName(value)
+        }
+        let summary =
+            "\(tag(kCVImageBufferColorPrimariesKey))/\(tag(kCVImageBufferTransferFunctionKey))"
+            + "/\(tag(kCVImageBufferYCbCrMatrixKey))"
+        uvcLogger.info("UVC signal colorimetry: \(summary, privacy: .public)")
+        Task { @MainActor [onSignalColorimetry] in onSignalColorimetry?(summary) }
+    }
+
+    /// The CoreVideo constants' raw values, shortened to what an operator can read; anything
+    /// unrecognised passes through raw — still evidence.
+    private static func shortColorimetryName(_ raw: String) -> String {
+        switch raw {
+        case "ITU_R_709_2": "709"
+        case "ITU_R_601_4": "601"
+        case "ITU_R_2020": "2020"
+        case "ITU_R_2100_HLG": "HLG"
+        case "SMPTE_ST_2084_PQ", "SMPTE_ST_2084": "PQ"
+        case "sRGB", "IEC_sRGB": "sRGB"
+        default: raw
+        }
+    }
+
     // MARK: - Frame delivery
 
     func captureOutput(
@@ -431,6 +487,7 @@ final class UVCVideoSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         from connection: AVCaptureConnection
     ) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        reportSignalColorimetryOnce(of: pixelBuffer)
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         guard
             let rendered = autoreleasepool(invoking: {

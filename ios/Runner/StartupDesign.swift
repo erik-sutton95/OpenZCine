@@ -3,9 +3,16 @@ import SwiftUI
 
 /// Maps technical connection/discovery status strings to operator-friendly copy for startup screens.
 enum StartupConnectionCopy {
-    static func friendly(_ raw: String) -> String {
+    /// - Parameter path: how the attempt reaches the camera, where it is known. These lines are
+    ///   matched on the TEXT of a status, which carries no idea of which path produced it — so a
+    ///   cable failure was being answered with "check Wi‑Fi", sending the operator to inspect a
+    ///   radio this attempt never used. `nil` keeps the Wi‑Fi wording, right for every path with a
+    ///   network.
+    static func friendly(_ raw: String, path: CameraPath.Kind? = nil) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
+        let checkTheLink =
+            path == .usbC || path == .hdmiCapture ? "Check the cable" : "Check Wi‑Fi"
 
         let lower = trimmed.lowercased()
         if lower.contains("imagecapturecore") {
@@ -15,7 +22,7 @@ enum StartupConnectionCopy {
         }
         if lower.contains("ptp-ip") || lower.contains("ptp ip") {
             if lower.contains("no") && (lower.contains("service") || lower.contains("answered")) {
-                return "Couldn't reach the camera. Check Wi‑Fi and try again."
+                return "Couldn't reach the camera. \(checkTheLink) and try again."
             }
             if lower.contains("handshake") || lower.contains("rejected") {
                 return "The camera didn't accept the connection. Check Connect to PC and try again."
@@ -48,7 +55,7 @@ enum StartupConnectionCopy {
                 "OpenZCine needs local network access. Allow it in Settings → OpenZCine → Local Network."
         }
         if lower.contains("timed out") {
-            return "The camera didn't respond in time. Check Wi‑Fi and try again."
+            return "The camera didn't respond in time. \(checkTheLink) and try again."
         }
         if lower.contains("closed the connection") {
             return "The camera ended the connection. Try again."
@@ -328,12 +335,6 @@ struct StartupSavedCamerasView: View {
             // on fadeOverflowBottom to signal overflow.
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
-                    if let hotspotPrompt {
-                        StartupHotspotRecoveryCard(
-                            camera: hotspotPrompt.camera,
-                            bridgeIsActive: hotspotPrompt.bridgeIsActive
-                        )
-                    }
                     // One ROW per body: records stay one-per-path on disk, and the serial
                     // stamped at connect groups them here (see SavedCameraPathGroups).
                     let pathGroups = SavedCameraPathGroups.group(model.savedCameras)
@@ -343,7 +344,8 @@ struct StartupSavedCamerasView: View {
                             SavedCameraAvailabilityPolicy.resolve(
                                 camera: record,
                                 discoveredCameras: model.discoveredCameras,
-                                connectedHost: model.connectedIdentity?.host
+                                connectedHost: model.connectedIdentity?.host,
+                                onCameraAccessPoint: model.isOnCameraAccessPointNetwork
                             )
                         }
                         if let active = SavedCameraPathGroups.activePath(
@@ -395,14 +397,37 @@ struct StartupSavedCamerasView: View {
         // A device with saved cameras only sees this section once a broadcast exists; a device
         // with none is here BECAUSE of broadcasts, so the section stays mounted with an honest
         // placeholder — browsing runs the whole time this screen is up.
-        if !model.discoveredRelayHosts.isEmpty || model.savedCameras.isEmpty {
+        if !model.visibleRelayBroadcasts.isEmpty || model.savedCameras.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("NEARBY BROADCASTS")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .tracking(1.4)
                     .foregroundStyle(StartupColors.muted)
                     .padding(.top, 6)
-                if model.discoveredRelayHosts.isEmpty {
+                if model.networkFiltersDiscovery {
+                    // Proven, not guessed: a device answered the app's direct check while the
+                    // network's own discovery never delivered it (multicast/mDNS filtered —
+                    // UniFi "Multicast Filtering" and multicast minimum-rate settings are the
+                    // field examples). Devices below were found directly and stay joinable.
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(StartupColors.accent)
+                        Text(
+                            "This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router."
+                        )
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(StartupColors.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        StartupColors.accent.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+                }
+                if model.visibleRelayBroadcasts.isEmpty {
                     HStack(spacing: 8) {
                         Image(systemName: "dot.radiowaves.left.and.right")
                             .font(.system(size: 13, weight: .semibold))
@@ -421,7 +446,7 @@ struct StartupSavedCamerasView: View {
                         in: RoundedRectangle(cornerRadius: 14)
                     )
                 }
-                ForEach(model.discoveredRelayHosts) { host in
+                ForEach(model.visibleRelayBroadcasts) { host in
                     Button {
                         model.joinRelay(host)
                     } label: {
@@ -482,60 +507,6 @@ struct StartupSavedCamerasView: View {
         case .waitForIPhoneHotspotCamera(let camera):
             return (camera, true)
         }
-    }
-}
-
-struct StartupHotspotRecoveryCard: View {
-    let camera: PTPIPSavedCameraRecord
-    let bridgeIsActive: Bool
-
-    // Row-scale on purpose: the camera's own row directly below already carries the
-    // "Waiting for hotspot" state, so this strip only says what that row cannot — the one
-    // thing to keep enabled (active) or the path to enable it (needed). The old three-pill
-    // status band restated both and tripled the height.
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "personalhotspot")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
-                Text(title)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            Text(detail)
-                .font(.system(size: 11.5, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            StartupColors.surface.opacity(0.74),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                .stroke(StartupColors.accent.opacity(0.35), lineWidth: 1)
-        )
-    }
-
-    private var title: String {
-        bridgeIsActive ? "iPhone Hotspot active" : "iPhone Hotspot needed"
-    }
-
-    private var detail: String {
-        if bridgeIsActive {
-            return
-                "Keep Connect to PC on — \(camera.displayTitle) connects the moment it joins."
-        }
-        return
-            "Settings → Personal Hotspot → Allow Others to Join, then return here — "
-            + "\(camera.displayTitle) is waiting."
     }
 }
 
@@ -655,6 +626,7 @@ struct StartupCameraListRow: View {
     @Environment(NativeAppModel.self) private var model
     @State private var isDeleteConfirmationPresented = false
     @State private var isRenamePresented = false
+    @State private var isAddSetupPresented = false
     @State private var renameText = ""
     let camera: PTPIPSavedCameraRecord
     let availability: SavedCameraAvailability
@@ -663,10 +635,18 @@ struct StartupCameraListRow: View {
     /// Every saved path of this body (the active one included), most recently seen first.
     /// One record = one path; with a single path the row reads exactly as it always has.
     var paths: [PTPIPSavedCameraRecord] = []
+    /// The setup whose name is being edited, and the text field's contents. Separate from the
+    /// camera rename above: that one names the BODY and lands on every path.
+    @State private var renamingSetup: PTPIPSavedCameraRecord?
+    @State private var setupNameText = ""
     /// Availability resolver for sibling paths — the list owns discovery state.
     var availabilityFor: ((PTPIPSavedCameraRecord) -> SavedCameraAvailability)? = nil
 
     private var allPaths: [PTPIPSavedCameraRecord] { paths.isEmpty ? [camera] : paths }
+
+    /// Squarer than the pills elsewhere in this list, on purpose: these read as segmented TABS
+    /// the operator picks between, not as status chips that merely report something.
+    private static let setupTabCornerRadius: CGFloat = 10
 
     var body: some View {
         // Ticks once a second so the card-scan state (pill %, dimmed Preparing… button, subtitle)
@@ -689,22 +669,27 @@ struct StartupCameraListRow: View {
                     .foregroundStyle(StartupColors.muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                if allPaths.count > 1 {
-                    // One body, several ways in: a chip per saved path, availability dot on
-                    // each. The row's title, pill and Connect follow the ACTIVE path; a chip
-                    // tap connects over that specific path instead.
-                    HStack(spacing: 6) {
+                // One body, several ways in: a chip per saved setup, availability dot on each.
+                // The row's title, pill and Connect follow the ACTIVE setup; a chip tap
+                // connects over that specific one, and "+" adds a setup this camera doesn't
+                // have yet. Always visible — a single chip names the one saved path at a
+                // glance, and the add chip is how the second one gets made. Scrolls sideways
+                // rather than truncating: four chips don't fit a portrait phone row.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
                         ForEach(allPaths) { path in
                             pathChip(path)
                         }
-                        Spacer(minLength: 0)
+                        addSetupChip
                     }
-                    .padding(.top, 2)
                 }
+                .padding(.top, 4)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        // The setup tabs are the row's primary control now, so the card breathes a little more
+        // around them — the extra height is the tabs' own, not padding for its own sake.
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(StartupColors.tile.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
         .overlay(
@@ -730,6 +715,34 @@ struct StartupCameraListRow: View {
         } message: {
             Text("Give this camera a name you'll recognize.")
         }
+        .alert(
+            "Rename setup",
+            isPresented: Binding(
+                get: { renamingSetup != nil },
+                set: { if !$0 { renamingSetup = nil } })
+        ) {
+            TextField("Name", text: $setupNameText)
+            Button("Cancel", role: .cancel) { renamingSetup = nil }
+            Button("Save") { commitSetupRename() }
+        } message: {
+            // The network, not the number: "which one is this" is the question a person renaming
+            // a setup is actually holding, and the chip deliberately does not answer it.
+            Text(setupRenameMessage)
+        }
+    }
+
+    private var setupRenameMessage: String {
+        guard let renamingSetup else { return "" }
+        guard let network = SavedCameraPathGroups.networkQualifier(for: renamingSetup) else {
+            return "Name this setup so you can tell it apart at a glance."
+        }
+        return "This one is on \(network). Name it so you can tell it apart at a glance."
+    }
+
+    private func commitSetupRename() {
+        guard let renamingSetup else { return }
+        model.updateSavedCameraSetupName(setup: renamingSetup, name: setupNameText)
+        self.renamingSetup = nil
     }
 
     @ViewBuilder private var menuActions: some View {
@@ -740,13 +753,30 @@ struct StartupCameraListRow: View {
             Label("Rename", systemImage: "pencil")
         }
         if allPaths.count > 1 {
+            // A camera can hold several Wi-Fi setups now, and "Wi-Fi (2)" is a placeholder, not a
+            // name. The operator knows which is the studio and which is the van; this is where
+            // they say so, and the chip wears it from then on.
+            Menu {
+                ForEach(allPaths) { path in
+                    Button {
+                        renamingSetup = path
+                        setupNameText = path.setupName ?? ""
+                    } label: {
+                        Label(
+                            SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths),
+                            systemImage: "pencil")
+                    }
+                }
+            } label: {
+                Label("Rename a Setup", systemImage: "tag")
+            }
             Menu {
                 ForEach(allPaths) { path in
                     Button(role: .destructive) {
                         model.forgetPairing(host: path.host)
                     } label: {
                         Label(
-                            "Forget \(SavedCameraPathGroups.pathLabel(for: path)) path",
+                            "Forget \(SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths))",
                             systemImage: "minus.circle")
                     }
                 }
@@ -782,9 +812,12 @@ struct StartupCameraListRow: View {
     private func connect(
         _ record: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
     ) {
+        // Both branches carry the tapped record: a path chip is a statement about WHICH setup to
+        // use, and dialling a discovered address without it left the connect to re-derive the
+        // setup from the host — which cannot tell one body's setups apart when they share one.
         switch availability {
         case .available(let discoveredCamera):
-            model.connectToCamera(discoveredCamera)
+            model.connectToCamera(discoveredCamera, setup: record)
         case .connected, .offline:
             model.connectSavedCamera(record)
         }
@@ -796,20 +829,21 @@ struct StartupCameraListRow: View {
         return Button {
             connect(path, availability: pathAvailability)
         } label: {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(chipDotColor(for: pathAvailability))
-                    .frame(width: 6, height: 6)
-                Text(SavedCameraPathGroups.pathLabel(for: path))
-                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+            HStack(spacing: 6) {
+                setupTabDot(for: path, availability: pathAvailability)
+                Text(SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths))
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(isActive ? StartupColors.ink : StartupColors.muted)
                     .lineLimit(1)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(StartupColors.control.opacity(isActive ? 0.8 : 0.45), in: Capsule())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                StartupColors.control.opacity(isActive ? 0.8 : 0.45),
+                in: RoundedRectangle(cornerRadius: Self.setupTabCornerRadius)
+            )
             .overlay(
-                Capsule().stroke(
+                RoundedRectangle(cornerRadius: Self.setupTabCornerRadius).stroke(
                     isActive
                         ? StartupColors.accent.opacity(0.45)
                         : StartupColors.border.opacity(0.12),
@@ -818,6 +852,106 @@ struct StartupCameraListRow: View {
         }
         .buttonStyle(.plain)
         .disabled(isBusy)
+        // ponytail: no manual "default setup" star — the row's Connect already prefers
+        // connected > discovered > most recent, which picks the reachable setup better than a
+        // static flag would. Add the flag only if operators ask for a pinned choice.
+        .contextMenu {
+            if allPaths.count > 1 {
+                Button(role: .destructive) {
+                    model.forgetPairing(host: path.host)
+                } label: {
+                    Label(
+                        "Forget \(SavedCameraPathGroups.pathLabel(for: path)) Setup",
+                        systemImage: "minus.circle")
+                }
+            }
+        }
+    }
+
+    /// The kinds this camera could still be set up for. HDMI capture is a video source, not a
+    /// saved camera setup, so it is not offered here.
+    private var missingSetupKinds: [CameraPath.Kind] {
+        let saved = Set(allPaths.compactMap(\.pathKind))
+        // HDMI capture is iPad-only — `AVCaptureDeviceTypeExternal` is UVC-on-iPad, so offering
+        // it on a phone would be offering something the hardware cannot do.
+        var kinds: [CameraPath.Kind] = [.usbC, .cameraAccessPoint, .infrastructure, .phoneHotspot]
+        if UVCVideoSource.isSupportedHardware { kinds.append(.hdmiCapture) }
+        return kinds.filter { kind in
+            // Router stays on offer however many are saved: a camera can live on a studio
+            // network, a home one and a location's, and each is its own setup keyed by the
+            // network's name. Every other kind is singular by definition — the access point is
+            // the camera's own network, the hotspot is this phone, the cable is the cable — so
+            // offering a second one would be offering the row that already exists.
+            kind == .infrastructure || !saved.contains(kind)
+        }
+    }
+
+    @ViewBuilder private var addSetupChip: some View {
+        if !missingSetupKinds.isEmpty {
+            Button {
+                isAddSetupPresented = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10.5, weight: .bold))
+                    Text("Add setup")
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(StartupColors.muted)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(
+                    StartupColors.control.opacity(0.25),
+                    in: RoundedRectangle(cornerRadius: Self.setupTabCornerRadius)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Self.setupTabCornerRadius).stroke(
+                        StartupColors.border.opacity(0.2),
+                        style: StrokeStyle(lineWidth: 1, dash: [3, 2.5]))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+            .sheet(
+                isPresented: $isAddSetupPresented,
+                onDismiss: { model.runPendingAddSetupAction() },
+                content: {
+                    StartupAddSetupSheet(camera: camera, missingKinds: missingSetupKinds)
+                        .environment(model)
+                })
+        }
+    }
+
+    /// A camera-AP setup we hold credentials for, while this device is not on that network.
+    ///
+    /// It is neither reachable nor dead, and iOS cannot tell us which: there is no API to scan for
+    /// a network by name (`NEHotspotNetwork` reports only the network already joined), so "is the
+    /// camera powered on" is unanswerable from here. What IS certain is that tapping it offers the
+    /// join, because the SSID resolves and the key is saved. A plain dark dot claimed the opposite
+    /// and read as a broken tab — the more so now that an AP setup only lights on its own fixed
+    /// address, which makes dark its normal resting state.
+    private func isReadyToJoin(
+        _ path: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
+    ) -> Bool {
+        guard path.path?.kind == .cameraAccessPoint, case .offline = availability else {
+            return false
+        }
+        return CameraWiFiJoinPolicy.resolvedSSID(savedCamera: path, discoveredCamera: nil) != nil
+    }
+
+    /// Hollow, not filled: a ring says "this can be done" where a filled dot says "this is so".
+    @ViewBuilder private func setupTabDot(
+        for path: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
+    ) -> some View {
+        if isReadyToJoin(path, availability: availability) {
+            Circle()
+                .strokeBorder(StartupColors.accent.opacity(0.9), lineWidth: 1.6)
+                .frame(width: 7, height: 7)
+        } else {
+            Circle()
+                .fill(chipDotColor(for: availability))
+                .frame(width: 7, height: 7)
+        }
     }
 
     private func chipDotColor(for availability: SavedCameraAvailability) -> Color {
@@ -906,8 +1040,23 @@ struct StartupCameraListRow: View {
             : "Remove \(camera.displayTitle) from saved cameras on this iPhone."
     }
 
+    /// The armed add-setup watch, when it targets this body.
+    private var armedSetupKind: CameraPath.Kind? {
+        guard let intent = model.pendingSetupIntent,
+            intent.anchor.displayTitle.localizedCaseInsensitiveCompare(camera.displayTitle)
+                == .orderedSame
+        else { return nil }
+        return intent.kind
+    }
+
     private var statusText: String {
         if isRecoveryTarget { return "Waiting for hotspot" }
+        switch armedSetupKind {
+        case .usbC: return "Waiting for cable"
+        case .infrastructure: return "Watching this network"
+        case .phoneHotspot: return "Waiting for hotspot"
+        default: break
+        }
         switch availability {
         case .connected: return "Connected"
         case .available:
@@ -921,6 +1070,7 @@ struct StartupCameraListRow: View {
 
     private var statusColor: Color {
         if isRecoveryTarget { return StartupColors.accent }
+        if armedSetupKind != nil { return StartupColors.accent }
         switch availability {
         case .connected, .available:
             if let usbScan, !usbScan.ready { return StartupColors.accent }
@@ -960,8 +1110,14 @@ struct StartupCameraListRow: View {
             parts.append("USB-C")
             parts.append("connect cable to wake the session")
         } else {
-            parts.append("Wi‑Fi")
-            if let ssid = CameraWiFiSSID.resolve(for: camera) { parts.append(ssid) }
+            parts.append(SavedCameraPathGroups.pathLabel(for: camera))
+            // The SSID belongs on the AP setup only — a router row wearing a derived NIKON_…
+            // name is the display face of the old cross-path confusion.
+            if camera.path?.kind == .cameraAccessPoint,
+                let ssid = CameraWiFiSSID.resolve(for: camera)
+            {
+                parts.append(ssid)
+            }
             parts.append(lastConnectedText)
         }
         return parts.joined(separator: " · ")
@@ -973,6 +1129,212 @@ struct StartupCameraListRow: View {
         if seconds < 86_400 { return "last connected today" }
         if seconds < 172_800 { return "last connected yesterday" }
         return "last connected \(Int(seconds / 86_400))d ago"
+    }
+}
+
+/// "+ Add setup" on a saved camera: a mini-wizard scoped to THIS camera, offering only the
+/// path kinds it doesn't have yet. Nothing here re-runs first pair — records write themselves
+/// at the next connect, stamped with the declared path; this sheet only prepares the way
+/// (joins the camera's Wi-Fi for AP, instructs for the rest).
+struct StartupAddSetupSheet: View {
+    @Environment(NativeAppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let camera: PTPIPSavedCameraRecord
+    let missingKinds: [CameraPath.Kind]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add a setup · \(camera.displayTitle)")
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(StartupColors.ink)
+            Text(
+                "One camera, several ways to reach it. Pick how this rig runs; the setup "
+                    + "saves itself the first time you connect that way."
+            )
+            .font(.system(size: 13, weight: .regular, design: .rounded))
+            .foregroundStyle(StartupColors.muted)
+            ScrollView {
+                VStack(spacing: 10) {
+                    ForEach(missingKinds, id: \.self) { kind in
+                        setupRow(kind)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(StartupColors.background)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder private func setupRow(_ kind: CameraPath.Kind) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon(for: kind))
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(StartupColors.accent)
+                .frame(width: 30, height: 30)
+                .background(StartupColors.control.opacity(0.5), in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title(for: kind))
+                    .font(.system(size: 14.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(StartupColors.ink)
+                Text(guidance(for: kind))
+                    .font(.system(size: 12.5, weight: .regular, design: .rounded))
+                    .foregroundStyle(StartupColors.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Every row DOES something — a "+ Add setup" that only explains is a dead
+                // end. Try-now-else-watch: connect immediately when the path is already
+                // reachable, otherwise dismiss into the list, which is watching for it.
+                setupActionButton(kind)
+                    .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(StartupColors.tile.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// The discovered camera that would satisfy this kind RIGHT NOW, if any.
+    private func discoveredMatch(for kind: CameraPath.Kind) -> DiscoveredCamera? {
+        switch kind {
+        case .usbC:
+            return model.discoveredCameras.first { $0.source == .usb }
+        case .infrastructure:
+            // On the camera's own AP this body is discovered — over a network the router
+            // setup can't use. Same rule as the availability chips: no route, no match.
+            guard !model.isOnCameraAccessPointNetwork else { return nil }
+            return model.discoveredCameras.first { discovered in
+                discovered.source != .usb
+                    && CameraStartupPolicy.savedCamera(
+                        forDiscovered: discovered, in: [camera]) != nil
+            }
+        case .cameraAccessPoint, .phoneHotspot, .hdmiCapture:
+            return nil
+        }
+    }
+
+    @ViewBuilder private func setupActionButton(_ kind: CameraPath.Kind) -> some View {
+        let match = discoveredMatch(for: kind)
+        let title: String? = {
+            switch kind {
+            case .cameraAccessPoint: return "Join Camera Wi-Fi"
+            case .usbC: return match != nil ? "Connect Now" : "Connect When Plugged In"
+            case .infrastructure:
+                return match != nil ? "Connect Now" : "Find On This Network"
+            case .phoneHotspot: return "Wait For Camera"
+            case .hdmiCapture: return "Use HDMI Capture"
+            }
+        }()
+        if let title {
+            Button {
+                // Anything that PRESENTS (the join cover, the connect popup) runs from the
+                // sheet's onDismiss — fired mid-dismissal it is silently dropped, which is
+                // exactly how "Join Camera Wi-Fi" did nothing. Pure state writes run now.
+                switch kind {
+                case .cameraAccessPoint:
+                    model.pendingAddSetupAction = { [weak model] in
+                        model?.beginAddCameraAPSetup(for: camera)
+                    }
+                case .usbC, .infrastructure:
+                    if let match {
+                        // Connecting over this path IS adding the setup — the record saves
+                        // itself with the declared path at establishment.
+                        model.pendingAddSetupAction = { [weak model] in
+                            model?.connectToCamera(match)
+                        }
+                    } else {
+                        // No match yet: ARM the watch — the first discovery on this path
+                        // auto-connects (the row shows it waiting). A button that only
+                        // dismissed here is what made add-setup feel dead.
+                        // The watch gets a VISIBLE card from the tap (Cancel disarms). Without
+                        // one, the later auto-fulfillment read as the whole flow "doing stuff in
+                        // the background" — and any card presented at fulfillment could land
+                        // mid-sheet-dismissal and be dropped. USB-C was the last kind still
+                        // arming silently, which is why "Connect When Plugged In" did nothing
+                        // visible: the watch WAS armed, it just never said so.
+                        model.pendingSetupIntent = .init(anchor: camera, kind: kind)
+                        model.pendingAddSetupAction = { [weak model] in
+                            model?.presentSetupWatchProgress(for: camera, kind: kind)
+                        }
+                        Task { await model.refreshCameraDiscovery() }
+                    }
+                case .phoneHotspot:
+                    // Same shape as the Router watch, and for the same reason: arming alone
+                    // dismissed the sheet onto an unchanged camera list, so the button read as
+                    // dead. The camera can only join a hotspot the operator turns on, so the
+                    // card is also the only place that instruction gets said.
+                    model.pendingSetupIntent = .init(anchor: camera, kind: kind)
+                    model.pendingAddSetupAction = { [weak model] in
+                        model?.presentSetupWatchProgress(for: camera, kind: .phoneHotspot)
+                    }
+                    Task { await model.refreshCameraDiscovery() }
+                case .hdmiCapture:
+                    // Picture-only and no PTP control, so there is nothing to watch FOR — the
+                    // dongle either has a signal or it doesn't. Start the capture session
+                    // straight away; it adopts a live camera link as a source change rather
+                    // than tearing it down (`startHDMIMonitorSession`).
+                    model.pendingAddSetupAction = { [weak model] in
+                        model?.startHDMIMonitorSession()
+                    }
+                }
+                dismiss()
+            } label: {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(StartupColors.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(StartupColors.accent.opacity(0.35), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func icon(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint: return "personalhotspot"
+        case .infrastructure: return "wifi.router"
+        case .phoneHotspot: return "iphone.radiowaves.left.and.right"
+        case .usbC: return "cable.connector"
+        case .hdmiCapture: return "tv"
+        }
+    }
+
+    private func title(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint: return "Camera access point"
+        case .infrastructure: return "Wi-Fi network"
+        case .phoneHotspot: return "This device's hotspot"
+        case .usbC: return "USB-C cable"
+        case .hdmiCapture: return "HDMI capture"
+        }
+    }
+
+    private func guidance(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint:
+            return
+                "This device joins the camera's own Wi-Fi — best in the field with no other "
+                + "gear. You'll be asked for the camera's network key the first time only."
+        case .infrastructure:
+            return
+                "Put the camera and this device on the same network (a set router, house "
+                + "Wi-Fi). Turn on Connect to PC on the camera with a profile for that "
+                + "network; it appears in the camera list and saves on connect. Each network "
+                + "you use keeps its own setup, so a studio and a home router are two."
+        case .phoneHotspot:
+            return
+                "Turn on this device's Personal Hotspot and point a camera network profile "
+                + "at it. The camera joins YOU — once it does, it appears in the list."
+        case .usbC:
+            return
+                "Plug the camera straight into this device. It connects and saves itself — "
+                + "nothing to configure."
+        case .hdmiCapture:
+            return "Use the connect screen's Cable Link → HDMI capture for a picture-only feed."
+        }
     }
 }
 
@@ -1847,13 +2209,36 @@ struct StartupFirstPairWizardView: View {
         }
     }
 
-    /// The step heading, overridden where a path makes the generic wording wrong: HDMI capture
-    /// finds nothing and pairs with nothing, so "Find and pair" would misdescribe the whole step.
+    /// The step heading, in the terms of the path the operator actually chose.
+    ///
+    /// The generic titles describe the SHAPE of the wizard, not what any one path does in it, and
+    /// on three of the five that reads as a different instruction from the one on screen: "Set up
+    /// the network" over a cable, over a step whose whole content is "check you are both already
+    /// on the same network", or over "turn on your hotspot". HDMI already had an override here
+    /// because "Find and pair" misdescribed a step that finds nothing and pairs with nothing; the
+    /// same was true elsewhere and only that one case had been noticed.
     private var stepTitle: String {
-        if step == .discoverAndPair, model.firstPairTransportMethod == .hdmiCapture {
+        switch (step, model.firstPairTransportMethod) {
+        case (.prepareCamera, .hdmiCapture):
+            // The camera is half of it; the capture device is the half that has to be right.
+            return "Prepare the camera and capture device"
+        case (.connectNetwork, .usbC):
+            return "Connect the cable"
+        case (.connectNetwork, .cameraAccessPoint):
+            return "Join the camera's Wi-Fi"
+        case (.connectNetwork, .phoneHotspot):
+            return "Turn on your hotspot"
+        case (.connectNetwork, .wiFiNetwork):
+            // A CHECK, not a setup: the app joins nothing here and neither does the operator.
+            return "Get both on one network"
+        case (.discoverAndPair, .hdmiCapture):
             return "Connect the capture device"
+        case (.discoverAndPair, .phoneHotspot):
+            // The direction is the whole point of this path: the camera joins the phone.
+            return "Wait for the camera"
+        default:
+            return step.title
         }
-        return step.title
     }
 
     // MARK: - Right column: current step
@@ -2106,13 +2491,7 @@ struct StartupWizardTransportCard: View {
     /// Whether the nested choice is open. Cards without nested options never set it.
     /// The debug seed exists because expansion is a tap — unreachable headless — and the
     /// expanded step's overflow behavior is exactly what screenshots must check.
-    @State private var showsOptions: Bool = {
-        #if DEBUG
-            return ProcessInfo.processInfo.environment["ZC_DEMO_WIZARD_EXPANDED"] == "1"
-        #else
-            return false
-        #endif
-    }()
+    @State private var showsOptions: Bool = DemoHarness.wizardExpanded
 
     private var options: [NativeAppModel.FirstPairTransportMethod] { card.options }
 
@@ -2520,6 +2899,7 @@ struct StartupDiscoveryView: View {
                 StartupEmptyDiscoveryCard(
                     compact: true,
                     transport: model.discoveryTransportFilter,
+                    pairingMethod: model.firstPairTransportMethod,
                     usbAuthorizationDenied: model.isUSBControlAuthorizationDenied
                 )
                 // Indeterminate "something's happening" line in place of the status text.
@@ -2605,7 +2985,9 @@ struct StartupDiscoveredCameraCard: View {
                         )
                         .foregroundStyle(StartupColors.ink)
                         .lineLimit(1)
-                    Text("\(sourceLabel(camera.source)) · nearby")
+                    // The holder replaces "nearby" rather than joining it: on this row the
+                    // question is not where the camera is, it is who has it.
+                    Text(camera.heldByLabel ?? "\(sourceLabel(camera.source)) · nearby")
                         .font(
                             .system(
                                 size: compact ? 10 : 12, weight: .regular, design: .rounded)
@@ -2616,9 +2998,13 @@ struct StartupDiscoveredCameraCard: View {
 
                 Spacer()
 
-                Image(systemName: "cellularbars")
+                // A held camera is reachable but not free — the antenna reads as "connect
+                // now", which is the one thing this row cannot promise.
+                Image(systemName: camera.isHeldByAnotherDevice ? "person.fill" : "cellularbars")
                     .font(.system(size: compact ? 16 : 20, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
+                    .foregroundStyle(
+                        camera.isHeldByAnotherDevice
+                            ? StartupColors.muted : StartupColors.accent)
             }
             .padding(.horizontal, compact ? 12 : 16)
             .frame(height: compact ? 64 : 84)
@@ -2639,9 +3025,13 @@ struct StartupDiscoveredCameraCard: View {
 
     private func sourceLabel(_ source: DiscoverySource) -> String {
         switch source {
-        case .bonjour, .subnetProbe: "Wi-Fi"
+        case .bonjour, .subnetProbe, .liveness: "Wi-Fi"
         case .manual: "Manual"
         case .usb: "USB-C"
+        // The holder's name is what this row is for, and it replaces the transport label — the
+        // camera is on Wi-Fi either way, and that is not the fact standing between the operator
+        // and a picture.
+        case .heldByAnotherDevice: "In use"
         }
     }
 }
@@ -2649,6 +3039,10 @@ struct StartupDiscoveredCameraCard: View {
 struct StartupEmptyDiscoveryCard: View {
     var compact = false
     var transport: NativeAppModel.DiscoveryTransportFilter = .wiFi
+    /// The path the operator actually chose, which `transport` cannot answer: its whole vocabulary
+    /// is Wi-Fi versus USB, and three different Wi-Fi paths reach this card expecting three
+    /// different things to happen next.
+    var pairingMethod: NativeAppModel.FirstPairTransportMethod = .phoneHotspot
     /// iOS denied USB camera control — the card leads with the Settings recovery instead of
     /// cable guidance (nothing can ever appear until it's re-allowed).
     var usbAuthorizationDenied = false
@@ -2677,29 +3071,69 @@ struct StartupEmptyDiscoveryCard: View {
             : "Plug the camera into this device with a USB-C cable — it appears here the moment it's detected."
     }
 
+    /// What the operator is waiting for, in the terms of the path they picked.
+    ///
+    /// This used to be one sentence about the phone's hotspot, on the reasoning that the Wi-Fi arm
+    /// could only be the hotspot step — camera-AP pairing ends at the network step, and there was
+    /// no third Wi-Fi path. Router made that false, and the operator who had just been told to put
+    /// both devices on the set's network was then told to wait for the camera to join their phone.
+    private var wiFiTitle: String {
+        switch pairingMethod {
+        case .wiFiNetwork: return "Looking on your network"
+        case .phoneHotspot: return "Waiting for the camera"
+        default: return "Looking for cameras"
+        }
+    }
+
+    private var wiFiHint: String {
+        switch pairingMethod {
+        case .wiFiNetwork:
+            // Nothing to join from here: both ends are already somebody else's guests, so the one
+            // thing worth showing is WHICH network this device is searching. A search that finds
+            // nothing looks the same whether the camera is off, not paired, or simply on another
+            // network — and the operator can only check the last one if the app says which it is
+            // on. The SSID would read better; iOS refuses it often enough that the subnet, which
+            // always answers, is the honest choice.
+            let network = NativeNetworkInterfaceSnapshot.currentScanSubnetLabel()
+            guard let network else {
+                return compact
+                    ? "The camera appears once it's on this same network."
+                    : "Both devices need to be on the same network. The camera appears here a few seconds after it joins."
+            }
+            return compact
+                ? "Searching \(network) — the camera has to be on it too."
+                : "Searching \(network), the network this device is on. The camera appears here a few seconds after it joins that same network."
+        case .phoneHotspot:
+            // The direction matters: the CAMERA joins this phone, the phone joins nothing.
+            return compact
+                ? "Waiting for the camera to join this phone's hotspot."
+                : "The camera appears here a few seconds after it joins this phone's hotspot."
+        case .cameraAccessPoint:
+            // Reachable when a saved AP setup sends the operator back through discovery.
+            return compact
+                ? "Waiting for the camera's own network."
+                : "This device joins the camera's own Wi-Fi — the camera appears once that network is up."
+        default:
+            return compact
+                ? "Waiting for the camera to appear."
+                : "The camera appears here a few seconds after it reaches this device."
+        }
+    }
+
     var body: some View {
         VStack(spacing: compact ? 6 : 10) {
             Image(systemName: isUSB ? "cable.connector" : "dot.radiowaves.left.and.right")
                 .font(.system(size: compact ? 18 : 24, weight: .semibold))
                 .foregroundStyle(StartupColors.accent)
-            Text(isUSB ? usbTitle : "Looking for cameras")
+            Text(isUSB ? usbTitle : wiFiTitle)
                 .font(.system(size: compact ? 13 : 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(StartupColors.ink)
-            Text(
-                isUSB
-                    ? usbHint
-                    // The Wi‑Fi arm renders only on the wizard's Phone Hotspot discovery step
-                    // (camera-AP pairing ends at connectNetwork) — so the hint must describe the
-                    // hotspot direction: the CAMERA joins this phone, the phone joins nothing.
-                    : (compact
-                        ? "Waiting for the camera to join this phone's hotspot."
-                        : "The camera appears here a few seconds after it joins this phone's hotspot.")
-            )
-            .font(.system(size: compact ? 10 : 12, weight: .regular, design: .rounded))
-            .foregroundStyle(StartupColors.muted)
-            .multilineTextAlignment(.center)
-            .lineLimit(compact ? 2 : nil)
-            .minimumScaleFactor(compact ? 0.85 : 1)
+            Text(isUSB ? usbHint : wiFiHint)
+                .font(.system(size: compact ? 10 : 12, weight: .regular, design: .rounded))
+                .foregroundStyle(StartupColors.muted)
+                .multilineTextAlignment(.center)
+                .lineLimit(compact ? 2 : nil)
+                .minimumScaleFactor(compact ? 0.85 : 1)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, compact ? 12 : 18)
@@ -2872,5 +3306,46 @@ struct StartupQuietButtonStyle: ButtonStyle {
             .overlay(
                 RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
                     StartupColors.border.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// Asks before connecting to a camera another device is holding.
+///
+/// A modifier rather than an alert written into one screen: the pairing wizard and the saved-camera
+/// list both reach the same connect, so the confirmation has to be wherever the operator is when
+/// the model raises it. The alert names the device that loses its session, because "are you sure"
+/// without that is not a decision anyone can make.
+struct TakeOverConfirmation: ViewModifier {
+    /// Passed in rather than read from the environment: this is mounted at the app root, above
+    /// the point where the model is installed, and an `@Environment` lookup there traps at launch.
+    let model: NativeAppModel
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Take over this camera?",
+            isPresented: Binding(
+                get: { model.pendingTakeOverCamera != nil },
+                set: { if !$0 { model.cancelTakeOver() } }
+            )
+        ) {
+            Button("Take Over", role: .destructive) { model.confirmTakeOver() }
+            Button("Cancel", role: .cancel) { model.cancelTakeOver() }
+        } message: {
+            Text(takeOverMessage)
+        }
+    }
+
+    private var takeOverMessage: String {
+        let holder = model.pendingTakeOverCamera?.heldByDeviceName
+        guard let holder, !holder.isEmpty else {
+            return "Another device is using this camera. Connecting will disconnect it."
+        }
+        return "\(holder) is using this camera. Connecting will disconnect it."
+    }
+}
+
+extension View {
+    func takeOverConfirmation(model: NativeAppModel) -> some View {
+        modifier(TakeOverConfirmation(model: model))
     }
 }

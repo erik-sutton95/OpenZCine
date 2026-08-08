@@ -21,6 +21,8 @@ ZR = "ZR"
 MTP = "MTP"
 PTP = "PTP"
 UVC = "UVC"
+# Retransmission timeout — a TCP term, quoted as "RTO-class stalls" in the transport docs.
+RTO = "RTO"
 # Simulator device identifier (not a UUID misspelling) — appears in verification recipes.
 UDID = "UDID"
 # Upstream libgphoto2 symbol name (ptp.h) reproduced verbatim for interop provenance —
@@ -33,4 +35,9 @@ extend-ignore-re = [
     "R3DNE",
     "ND'd",
     "PNGs?",
+    # "mis-" is an English prefix, not a truncated "miss"/"mist" — mis-tags, mis-assign,
+    # mis-weights. Hyphen-bounded so a bare "mis" is still caught.
+    "mis-[a-z]+",
+    # A comment quoting how a label letter-wrapped when squeezed. The broken word is the point.
+    "Activ / e",
 ]

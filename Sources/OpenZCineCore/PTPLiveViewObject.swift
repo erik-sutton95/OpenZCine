@@ -5,7 +5,8 @@ public struct PTPLiveViewFrame: Equatable, Sendable {
     public init(
         jpeg: Data, timecode: Timecode, focus: PTPLiveViewFocusInfo? = nil,
         isRecording: Bool = false, level: PTPLevelAngles? = nil,
-        sound: PTPLiveViewSoundIndicator? = nil
+        sound: PTPLiveViewSoundIndicator? = nil,
+        rotation: PTPLiveViewRotation = .landscape
     ) {
         self.jpeg = jpeg
         self.timecode = timecode
@@ -13,6 +14,7 @@ public struct PTPLiveViewFrame: Equatable, Sendable {
         self.isRecording = isRecording
         self.level = level
         self.sound = sound
+        self.rotation = rotation
     }
 
     public let jpeg: Data
@@ -27,6 +29,41 @@ public struct PTPLiveViewFrame: Equatable, Sendable {
     public let level: PTPLevelAngles?
     /// The camera's stereo sound-level indicator, or nil when the header is too short to carry it.
     public let sound: PTPLiveViewSoundIndicator?
+    /// How the body is held (header byte 839) — drives vertical-mode feed rotation.
+    public let rotation: PTPLiveViewRotation
+}
+
+/// The camera-body rotation from the LiveViewObject header (byte 839: 0 Off, 1 rotate
+/// counter-clockwise, 2 rotate clockwise, 3 upside down — the same enumeration as the Get-only
+/// `Orientation` property 0xD10E: landscape, portrait grip up, portrait grip down, upside down).
+///
+/// A body rotated 90° CCW (grip up) stores the scene with its visual top at the image's right
+/// edge, so the displayed feed rotates the same way the body did to read upright — Nikon's value
+/// doubles as the display instruction. `[verify-on-HW]` — polarity confirmed on paper (axis map +
+/// EXIF cross-check), not yet against a physically rotated body.
+public enum PTPLiveViewRotation: UInt8, Equatable, Sendable, CaseIterable {
+    /// Landscape, or the body reports no rotation (auto-rotate off).
+    case landscape = 0
+    /// Portrait, grip side up — body rotated 90° counter-clockwise.
+    case portraitGripUp = 1
+    /// Portrait, grip side down — body rotated 90° clockwise.
+    case portraitGripDown = 2
+    /// Landscape upside down.
+    case upsideDown = 3
+
+    /// Degrees to rotate the displayed feed, positive clockwise (SwiftUI `rotationEffect` /
+    /// Compose `rotationZ` convention), so the scene reads upright.
+    public var displayDegreesClockwise: Double {
+        switch self {
+        case .landscape: 0
+        case .portraitGripUp: -90
+        case .portraitGripDown: 90
+        case .upsideDown: 180
+        }
+    }
+
+    /// True when the frame presents tall — layout swaps the feed's width and height.
+    public var isVertical: Bool { self == .portraitGripUp || self == .portraitGripDown }
 }
 
 /// The camera's audio-level readout from the LiveViewObject header — the same segmented meter the
@@ -340,6 +377,7 @@ public enum PTPLiveViewObject {
         static let soundCurrentLeft = 826  // uint8 0–14 — sound indicator current value, L
         static let soundCurrentRight = 827  // uint8 0–14 — sound indicator current value, R
         static let recordState = 828  // uint8 — 0 = live view, 1 = recording
+        static let rotation = 839  // uint8 — 0 off, 1 rotate CCW, 2 rotate CW, 3 upside down
         static let angleRolling = 840  // BE 16.16 fixed-point INT32 — roll (degrees = value/65536)
         static let anglePitching = 844  // BE 16.16 — pitch
         static let angleYawing = 848  // BE 16.16 — yaw
@@ -356,6 +394,17 @@ public enum PTPLiveViewObject {
     private static func recordingState(fromHeader bytes: [UInt8]) -> Bool {
         guard bytes.count > HeaderOffset.recordState else { return false }
         return bytes[HeaderOffset.recordState] == 1
+    }
+
+    /// The body rotation from the header (byte 839). Short headers and undocumented values decode
+    /// as `.landscape` so a misreported byte can never turn the feed sideways.
+    public static func rotation(from liveViewObject: Data) -> PTPLiveViewRotation {
+        rotation(fromHeader: headerBytes(from: liveViewObject))
+    }
+
+    private static func rotation(fromHeader bytes: [UInt8]) -> PTPLiveViewRotation {
+        guard bytes.count > HeaderOffset.rotation else { return .landscape }
+        return PTPLiveViewRotation(rawValue: bytes[HeaderOffset.rotation]) ?? .landscape
     }
 
     /// The camera's stereo sound indicator from the header (offsets 824–827, one byte each, `0…14`
@@ -471,7 +520,8 @@ public enum PTPLiveViewObject {
             focus: focusInfo(fromHeader: header),
             isRecording: recordingState(fromHeader: header),
             level: levelAngles(fromHeader: header),
-            sound: soundIndicator(fromHeader: header)
+            sound: soundIndicator(fromHeader: header),
+            rotation: rotation(fromHeader: header)
         )
     }
 }

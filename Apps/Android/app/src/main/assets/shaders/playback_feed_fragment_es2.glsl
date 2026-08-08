@@ -7,6 +7,9 @@ uniform sampler2D uLut;
 uniform sampler2D uLimitsPaintCube;
 uniform sampler2D uLimitsWeightCube;
 uniform float uFlipInputY;
+// Horizontal flip for a camera pointed back at the operator: 1 mirrors, 0 does not. Folds the
+// SAMPLING coordinate, so the picture and every effect read through it flip together.
+uniform float uMirror;
 uniform float uLutSize;
 // 50/50 Log-vs-LUT comparison: 1 = on, and 1 = a vertical boundary (Log left, LUT right)
 // against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
@@ -81,6 +84,70 @@ vec3 grade(vec3 color) {
 vec3 sampleSource(vec2 coordinate) {
     float y = mix(coordinate.y, 1.0 - coordinate.y, uFlipInputY);
     return texture2D(uTexSampler, vec2(coordinate.x, y)).rgb;
+}
+
+// One bilinear fetch in source-pixel space, for the reconstruction below.
+vec3 sampleSourceAt(vec2 pixel, vec2 sourceSize) {
+    return sampleSource(pixel / sourceSize);
+}
+
+// Catmull-Rom reconstruction of the live-view frame, used only where the feed is MAGNIFIED.
+//
+// The camera bounds the frame at XGA, so on a panel taller than the frame every displayed pixel
+// is an interpolation. GL_LINEAR reconstructs that with a 2x2 tent, which is what makes an
+// upscaled feed look soft. Catmull-Rom is an interpolating cubic — it passes exactly through the
+// source samples and carries a mild sharpening lobe — so edges resolve instead of ramping.
+//
+// This is the Android tier of the iOS present-time upscale, which runs MetalFX Spatial over an
+// MPS Lanczos fallback. MetalFX has no Android equivalent; Catmull-Rom is the portable
+// Lanczos-class filter, and unlike Lanczos-3 it fits the GLES2 floor device.
+//
+// Nine taps, not sixteen: each axis' inner pair is fetched as one bilinear sample placed at the
+// pair's weighted centroid, which is exact for a separable filter and cuts the fetch count.
+vec3 sampleSourceReconstructed(vec2 coordinate, vec2 sourceSize) {
+    vec2 samplePosition = coordinate * sourceSize;
+    vec2 centre = floor(samplePosition - 0.5) + 0.5;
+    vec2 f = samplePosition - centre;
+
+    // Catmull-Rom basis. These sum to exactly 1 for every f, so flat areas cannot shift level.
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+
+    // The inner pair, collapsed to one bilinear fetch at its centroid. w1 + w2 is bounded away
+    // from zero across the whole cell, so this division is safe.
+    vec2 w12 = w1 + w2;
+    vec2 centre12 = centre + w2 / w12;
+    vec2 centre0 = centre - 1.0;
+    vec2 centre3 = centre + 2.0;
+
+    vec3 row0 = sampleSourceAt(vec2(centre0.x, centre0.y), sourceSize) * w0.x
+        + sampleSourceAt(vec2(centre12.x, centre0.y), sourceSize) * w12.x
+        + sampleSourceAt(vec2(centre3.x, centre0.y), sourceSize) * w3.x;
+    vec3 row12 = sampleSourceAt(vec2(centre0.x, centre12.y), sourceSize) * w0.x
+        + sampleSourceAt(vec2(centre12.x, centre12.y), sourceSize) * w12.x
+        + sampleSourceAt(vec2(centre3.x, centre12.y), sourceSize) * w3.x;
+    vec3 row3 = sampleSourceAt(vec2(centre0.x, centre3.y), sourceSize) * w0.x
+        + sampleSourceAt(vec2(centre12.x, centre3.y), sourceSize) * w12.x
+        + sampleSourceAt(vec2(centre3.x, centre3.y), sourceSize) * w3.x;
+
+    vec3 reconstructed = row0 * w0.y + row12 * w12.y + row3 * w3.y;
+    // The cubic overshoots at hard edges. Clamping the undershoot keeps a dark ring from going
+    // negative and poisoning the luma the grade and scopes read downstream.
+    return max(reconstructed, vec3(0.0));
+}
+
+// The displayed sample. Reconstruction is for magnification only: below 1:1 the feed is being
+// minified, where an interpolating cubic is the wrong tool (it aliases without a prefilter) and
+// GL_LINEAR is already correct. The A12-class 720p panel sits on this side of the gate, so the
+// floor device pays nothing for this.
+vec3 sampleSourceForDisplay(vec2 coordinate) {
+    vec2 sourceSize = max(uSourceSize, vec2(1.0));
+    if (uDisplaySize.x <= sourceSize.x && uDisplaySize.y <= sourceSize.y) {
+        return sampleSource(coordinate);
+    }
+    return sampleSourceReconstructed(coordinate, sourceSize);
 }
 
 // Whether this fragment belongs to the graded half of a 50/50 comparison — always true when the
@@ -173,8 +240,23 @@ float peakingClosedStroke(vec2 centre, vec2 texel) {
 }
 
 void main() {
-    vec3 source = sampleSource(vTexSamplingCoord);
-    vec3 color = splitIsGradedSide(vTexSamplingCoord) ? grade(source) : source;
+    // `source` stays the raw fetch: zebra, false colour and the limits paint MEASURE it, and a
+    // measurement must describe the frame the camera sent, not a reconstruction of it. iOS keeps
+    // the same separation by upscaling at present time, after the bake the scopes read.
+    // Folded ONCE, here, and used for every read in SOURCE space — the picture and the peaking
+    // mask alike. Folding inside `sampleSource` instead would flip the picture while the mask
+    // stayed put, and the strokes would land on the wrong side of the frame.
+    //
+    // Display-space questions keep the raw coordinate: the split boundary is about where a pixel
+    // lands for the operator, and the zebra stripe is screen geometry.
+    vec2 sourceCoordinate = vec2(
+        mix(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.x, uMirror),
+        vTexSamplingCoord.y
+    );
+    vec3 source = sampleSource(sourceCoordinate);
+    vec3 displaySource = sampleSourceForDisplay(sourceCoordinate);
+    vec3 color =
+        splitIsGradedSide(vTexSamplingCoord) ? grade(displaySource) : displaySource;
 
     if (uLimitsOn > 0.5) {
         color = mix(color, limitsPaint(source), limitsWeight(source));
@@ -187,7 +269,7 @@ void main() {
         // soften the very thing the closing exists to keep continuous.
         vec2 sourceSize = max(uSourceSize, vec2(1.0));
         vec2 texel = 1.0 / sourceSize;
-        vec2 centre = (floor(vTexSamplingCoord * sourceSize) + 0.5) * texel;
+        vec2 centre = (floor(sourceCoordinate * sourceSize) + 0.5) * texel;
         float stroke = peakingClosedStroke(centre, texel);
         // The hairline is NOT closed, matching iOS: morphology is two more passes, and a
         // hairline drawn under the stroke gains almost nothing from being continuous.

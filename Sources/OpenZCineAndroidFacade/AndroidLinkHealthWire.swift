@@ -67,7 +67,12 @@ public enum AndroidLinkHealthWire {
         recentCommandFailures: Int,
         isRecoveringStream: Bool,
         isUSBTransport: Bool,
-        resetSignalBars: Bool
+        resetSignalBars: Bool,
+        /// Measured link throughput, appended to the caption for the same reason iOS appends it:
+        /// the score cannot say whether a healthy-latency link is simply too narrow to carry the
+        /// operator's preset. `nil` before the first frame, and never shown for USB — a cable has
+        /// no radio to be narrow.
+        throughputMegabitsPerSecond: Double? = nil
     ) -> AndroidLinkHealthSnapshot? {
         guard let phase = AndroidCameraLinkPhaseWire(rawValue: phaseRaw) else { return nil }
         let health = CameraLinkHealthScorer.score(
@@ -88,10 +93,19 @@ public enum AndroidLinkHealthWire {
         // is not radio strength. Mirror iOS's full-bar presentation for an
         // alive physical cable without pretending Wi-Fi signal measurement.
         let displayedBars = isUSBTransport && health.linkHealthScore > 0 ? 4 : filteredBars
+        var caption = health.detailCaption
+        if !isUSBTransport, let throughputMegabitsPerSecond {
+            var sampler = LinkThroughputSampler()
+            // One second of the measured rate reconstructs it exactly through the shared
+            // formatter, so both shells round and label the number identically.
+            sampler.record(
+                bytes: Int((throughputMegabitsPerSecond * 1_000_000 / 8).rounded()), seconds: 1)
+            if let rate = sampler.formatted { caption += " · \(rate)" }
+        }
         return AndroidLinkHealthSnapshot(
             score: health.linkHealthScore,
             signalBars: displayedBars,
-            detailCaption: health.detailCaption)
+            detailCaption: caption)
     }
 
     /// Encodes a snapshot as `score<TAB>bars<TAB>detail` for the JNI bridge.

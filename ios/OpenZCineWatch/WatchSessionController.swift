@@ -36,6 +36,48 @@ final class WatchSessionController: NSObject {
         #endif
     }
 
+    /// Re-establishes the link after the app returns to the foreground (#187).
+    ///
+    /// A dimmed display suspends the watch app; `onAppear` does not run again on wake, so nothing
+    /// re-armed the session and the wrist kept showing whatever frame it had when the screen went
+    /// out. This re-asserts delegate and activation — both survive suspension, but re-asserting is
+    /// cheap and covers a session torn down under memory pressure — refreshes reachability from the
+    /// live value rather than trusting the last delegate callback (which may have fired while
+    /// suspended), and asks the phone for a fresh snapshot and a restarted pump.
+    func resume() {
+        activate()
+        guard let session, session.isReachable else { return }
+        guard
+            let data = try? WatchRelayEnvelope.encode(
+                kind: .command, payload: WatchRelayCommand.resume)
+        else { return }
+        // The reply is discarded on purpose: the phone pushes a full state snapshot as soon as the
+        // pump restarts, and that is the authority. Acting on the ack too would briefly paint the
+        // phone's pre-resume record state over it. @Sendable for the same reason as the Record
+        // reply below.
+        session.sendMessageData(
+            data, replyHandler: { @Sendable _ in }, errorHandler: { @Sendable _ in })
+    }
+
+    /// Releases the shutter on the phone's camera. Shares the Record toggle's in-flight guard so a
+    /// double tap cannot queue two releases.
+    func sendCapture() {
+        guard let session, session.isReachable, !isSendingCommand else { return }
+        guard
+            let data = try? WatchRelayEnvelope.encode(
+                kind: .command, payload: WatchRelayCommand.capture)
+        else { return }
+        isSendingCommand = true
+        session.sendMessageData(
+            data,
+            replyHandler: { @Sendable reply in
+                Task { @MainActor [weak self] in self?.handleCommandReply(reply) }
+            },
+            errorHandler: { @Sendable _ in
+                Task { @MainActor [weak self] in self?.isSendingCommand = false }
+            })
+    }
+
     /// Sends a Record toggle to the phone. No-ops when not reachable.
     func sendToggleRecord() {
         guard let session, session.isReachable, !isSendingCommand else { return }
@@ -74,7 +116,12 @@ final class WatchSessionController: NSObject {
                 isRecording: result.isRecording,
                 connection: current.connection,
                 feedLive: current.feedLive,
-                liveFPS: current.liveFPS)
+                liveFPS: current.liveFPS,
+                // Carried, not defaulted: this rebuild runs on every command ack, and dropping
+                // them would snap the wrist out of stills chrome on each shutter release.
+                isPhotography: current.isPhotography,
+                shotsRemaining: current.shotsRemaining,
+                feedAspectRatio: current.feedAspectRatio)
             state = current
         }
     }

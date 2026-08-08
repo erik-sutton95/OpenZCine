@@ -17,7 +17,8 @@ struct RedDownloadView: View {
     @State private var pageCommitted = false
     /// Bumping this recreates the web view (fresh WKWebView + reload) — used by Retry after a failure.
     @State private var reloadToken = 0
-    @State private var reachability = InternetReachability()
+    /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
+    private var reachability: InternetReachability { .shared }
     @State private var pageLoadWatchdog: Task<Void, Never>?
 
     /// Once the operator taps DOWNLOAD the flow takes over its own full-screen page, so they never

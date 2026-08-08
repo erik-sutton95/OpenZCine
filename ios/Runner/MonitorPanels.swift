@@ -32,10 +32,29 @@ struct CommandMonitor: View {
                 )
                 // Match the live-mode deck's span so the dashboard lines up with the live HUD
                 // and clears both rails the same way.
-                let leading = layout.topInfoDeck.x
-                let trailing = viewportWidth - (layout.topInfoDeck.x + layout.topInfoDeck.width)
+                // The live deck's x aligns content with the FEED — which command mode does
+                // not have. On a wide canvas (iPad) that alignment donates the whole feed
+                // offset to an empty left margin, so clamp both insets to rail clearance
+                // there; phones keep the deck-aligned insets exactly.
+                // Leading clears the lock/battery cluster; trailing must clear the WIDER
+                // system rail (media + settings buttons top-right).
+                let isWideCanvas = viewportWidth > 1000
+                let leading =
+                    isWideCanvas
+                    ? min(layout.topInfoDeck.x, max(feedSafeArea.leading, 20) + 112)
+                    : layout.topInfoDeck.x
+                let trailingRaw =
+                    viewportWidth - (layout.topInfoDeck.x + layout.topInfoDeck.width)
+                let trailing =
+                    isWideCanvas
+                    ? min(trailingRaw, max(feedSafeArea.trailing, 20) + 176)
+                    : trailingRaw
 
                 content
+                    // Same stand-down as the capture strip: a watcher holds control, the
+                    // dashboard's writes wait until it's revoked or returned.
+                    .opacity(model.relayControlSurrendered ? 0.4 : 1)
+                    .allowsHitTesting(!model.relayControlSurrendered)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(
                         EdgeInsets(
@@ -64,7 +83,9 @@ struct CommandMonitor: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 11) {
                         RecordChip(state: model.cameraState.recordState)
-                        CommandTimecodeReadout()
+                        // Bodies that run no timecode head the dashboard with the record chip
+                        // alone — a frozen 00:00:00:00 hero is worse than none.
+                        if model.cameraReportsTimecode { CommandTimecodeReadout() }
                         Spacer(minLength: 0)
                     }
 
@@ -161,8 +182,12 @@ struct CommandPrimaryGrid: View {
         GeometryReader { proxy in
             let tiles = self.tiles
             let rows = max(1, Int((Double(tiles.count) / Double(columns)).rounded(.up)))
-            let rowHeight = max(
-                44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows))
+            // Fill the height on phones, but never stretch a tile past a readable card —
+            // the leftover breathing room reads better than title-and-value islands adrift
+            // in an empty slab (the iPad complaint).
+            let rowHeight = min(
+                150,
+                max(44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows)))
             let tileWidth = (proxy.size.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
             ZStack(alignment: .topLeading) {
                 ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
@@ -532,7 +557,11 @@ struct CommandTile: View {
                 .minimumScaleFactor(0.64)
             Spacer(minLength: 0)
             Text(value)
-                .font(.system(size: 24, weight: .medium, design: .monospaced))
+                // Tall (tablet) tiles carry the value at dashboard scale; phone tiles keep
+                // today's 24pt exactly.
+                .font(
+                    .system(size: height > 120 ? 34 : 24, weight: .medium, design: .monospaced)
+                )
                 .foregroundStyle(LiveDesign.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.46)
@@ -1494,12 +1523,26 @@ struct PickerPanel: View {
             // that, not the app's union. (The shutter circuits' single-value PLACEHOLDER enum is
             // filtered upstream in `refreshControlOption`, so it never reaches this cache.)
             if let cameraMode = model.cameraControlOptions[property], !cameraMode.isEmpty {
+                // R3D NE forbids automatic WB, and the codec can change after the enum was
+                // cached — filter at read time, not cache time. Movie chrome only: stills WB
+                // keeps its autos regardless of the movie codec left behind.
+                if property == .movieWhiteBalance {
+                    return PTPCameraPropertyDecoders.whiteBalanceOptions(
+                        advertised: cameraMode, codec: model.cameraState.codec)
+                }
                 return cameraMode
             }
         }
         guard !activePickerModes.isEmpty else { return picker.options }
         let hardcoded = activePickerModes[selectedMode].options
-        return hardcoded.isEmpty ? picker.options : hardcoded
+        let resolved = hardcoded.isEmpty ? picker.options : hardcoded
+        if picker == .whiteBalance, !model.isPhotographyMode,
+            activePickerModes[selectedMode].title == "Preset"
+        {
+            return PTPCameraPropertyDecoders.whiteBalanceOptions(
+                advertised: resolved, codec: model.cameraState.codec)
+        }
+        return resolved
     }
 }
 
@@ -2412,17 +2455,9 @@ struct AssistPanel: View {
 
                 switch tool {
                 case .magnification:
-                    // Punch-in factor only. The punched-in state itself is driven by the button on
-                    // the feed, not from here — a popup you must reopen to leave a magnified view
-                    // would be worse than no shortcut at all.
-                    SegmentedButtons(
-                        items: AssistConfiguration.Magnification.Factor.allCases.map(\.rawValue),
-                        selected: model.assistConfiguration.magnification.factor.rawValue
-                    ) { value in
-                        if let factor = AssistConfiguration.Magnification.Factor(rawValue: value) {
-                            model.assistConfiguration.magnification.factor = factor
-                        }
-                    }
+                    // Retired: zoom is direct manipulation now (pinch the feed). The case stays
+                    // only because the enum case does — stored payloads still decode it.
+                    EmptyView()
                 case .guides:
                     SegmentedButtons(
                         items: AssistConfiguration.Guides.Family.allCases.map(\.rawValue),
@@ -2572,6 +2607,15 @@ struct AssistPanel: View {
                     Text("The camera's own exposure indicator, read live from the body.")
                         .font(.system(size: 13))
                         .foregroundStyle(LiveDesign.muted)
+                case .mirror:
+                    // Unreachable via long-press (`hasConfiguration == false`); kept for
+                    // exhaustiveness and the Display settings strips.
+                    Text(
+                        "Flips the monitor left-to-right, for a camera pointed back at you. "
+                            + "The recording and the scopes are never mirrored."
+                    )
+                    .font(.system(size: 13))
+                    .foregroundStyle(LiveDesign.muted)
                 }
             }
         }
@@ -2753,7 +2797,8 @@ struct LUTPickerContent: View {
     @State private var deletionErrorMessage: String?
     /// Tracks whether a usable internet path exists, so the RED download (which needs the public
     /// internet) is blocked while the phone is on the camera's local-only Wi‑Fi AP.
-    @State private var reachability = InternetReachability()
+    /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
+    private var reachability: InternetReachability { .shared }
 
     /// Narrows the RED drum to one output color space (it ships ~16 looks per space).
     enum RedOutputFilter: String, CaseIterable {
@@ -3623,6 +3668,7 @@ struct ScrollMoreCue: View {
 /// they survive dismissing the panel back to live view.
 enum OperatorSettingsTab: String, CaseIterable, Identifiable {
     case link = "Link"
+    case sharing = "Sharing"
     case assist = "View Assist"
     case controls = "Controls"
     case display = "Display"
@@ -3638,6 +3684,7 @@ enum OperatorSettingsTab: String, CaseIterable, Identifiable {
 
     static func demoLaunchTab(_ rawValue: String?) -> OperatorSettingsTab {
         switch rawValue {
+        case "sharing": .sharing
         case "assist": .assist
         case "controls": .controls
         case "display": .display
@@ -3700,6 +3747,28 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
     }
 }
 
+/// Four digits, committed as they complete; clearing commits an open broadcast. Local draft so
+/// half-typed codes never hit the wire.
+private struct RelayPasscodeField: View {
+    let code: String
+    let onCommit: (String) -> Void
+    @State private var draft = ""
+
+    var body: some View {
+        TextField("None", text: $draft)
+            .keyboardType(.numberPad)
+            .multilineTextAlignment(.trailing)
+            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+            .frame(width: 96)
+            .onAppear { draft = code }
+            .onChange(of: draft) { _, next in
+                let digits = String(next.filter(\.isNumber).prefix(4))
+                if digits != next { draft = digits }
+                if digits.count == 4 || digits.isEmpty { onCommit(digits) }
+            }
+    }
+}
+
 struct OperatorSettingsPanel: View {
     /// Real device safe-area insets (carries the landscape Dynamic Island lane) so the full-screen
     /// surface can fill the physical screen yet keep its content clear of the cutout.
@@ -3708,6 +3777,9 @@ struct OperatorSettingsPanel: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var settingsReorderActive = false
+    /// Keyboard overlap in points; insets the settings rows so a focused field can scroll
+    /// clear of the number pad (the full-bleed layout opts out of the keyboard safe area).
+    @State private var keyboardInset: CGFloat = 0
     /// Bumped on Frame.io sign-in/out so the Storage card re-reads the (non-observable)
     /// keychain state.
     @State private var frameioAccountStamp = 0
@@ -3755,12 +3827,12 @@ struct OperatorSettingsPanel: View {
                         // the row below, entirely clear of the button's corner.
                         VStack(alignment: .leading, spacing: 8) {
                             settingsTabStrip
-                            settingsTop
+                            settingsTop(width: proxy.size.width)
                             settingsContent(portrait: portrait)
                         }
                     } else {
                         VStack(spacing: 8) {
-                            settingsTop
+                            settingsTop(width: proxy.size.width)
                                 // The floating CloseButton overlays this row's leading corner
                                 // whenever no Dynamic Island lane pushes the content past it
                                 // (iPad, non-notched devices); inset the title to clear it. On
@@ -3871,21 +3943,58 @@ struct OperatorSettingsPanel: View {
         max(0, (16 + 37 + 8) - max(CGFloat(safeArea.leading) + 6, 16))
     }
 
-    private var settingsTop: some View {
-        // Close floats in the very top-left corner (see `body`); the title leads this row, lined up
-        // with the tab rail below, and the live tile stays pinned top-right.
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("OpenZCine")
-                    .font(.system(size: 9.5, weight: .bold, design: .default))
-                    .kerning(0.8)
-                    .foregroundStyle(LiveDesign.accent)
-                    .textCase(.uppercase)
-                Text("Operator Setup")
-                    .font(.system(size: 24, weight: .semibold, design: .default))
-                    .foregroundStyle(LiveDesign.text)
+    /// Below this width the title and the session controls stop sharing a row: squeezed into
+    /// one, the pill truncates to "DISCON…" and the tile's texts letter-wrap — unreadable is
+    /// worse than a second row. iPhone portrait sits well under this; every landscape and iPad
+    /// width sits above it.
+    private static let settingsTopStackWidth: CGFloat = 560
+
+    private func settingsTop(width: CGFloat) -> some View {
+        // Close floats in the very top-left corner (see `body`); the title leads this row, lined
+        // up with the tab rail below, and the live tile stays pinned top-right — or, when the
+        // row cannot hold both readably, on its own row beneath the title.
+        let stacked = width < Self.settingsTopStackWidth
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("OpenZCine")
+                        .font(.system(size: 9.5, weight: .bold, design: .default))
+                        .kerning(0.8)
+                        .foregroundStyle(LiveDesign.accent)
+                        .textCase(.uppercase)
+                    Text("Operator Setup")
+                        .font(.system(size: 24, weight: .semibold, design: .default))
+                        .foregroundStyle(LiveDesign.text)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                Spacer()
+                if !stacked { sessionControls }
             }
-            Spacer()
+            if stacked { sessionControls }
+        }
+    }
+
+    /// Disconnect lives beside the link-health tile: session-level actions belong with the
+    /// session's status, not inside a settings tab (and a watcher leaves the same way —
+    /// model.disconnect() routes a relay viewer through leaveRelay). Destructive red, the
+    /// app's broken-connector glyph, and sized to the tile it ends.
+    @ViewBuilder private var sessionControls: some View {
+        if isConnected {
+            HStack(spacing: 10) {
+                SettingsActionPill(
+                    title: "Disconnect",
+                    systemImage: "link",
+                    slashesIcon: true,
+                    tint: LiveDesign.rec,
+                    background: LiveDesign.rec.opacity(0.16),
+                    fillsHeight: true
+                ) { model.disconnect() }
+                SettingsLiveTile()
+                    .environment(model)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
             SettingsLiveTile()
                 .environment(model)
         }
@@ -3911,8 +4020,10 @@ struct OperatorSettingsPanel: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 5) {
                 ForEach(OperatorSettingsTab.allCases) { tab in
+                    // Intrinsic width in the strip (the landscape rail keeps its fixed 146):
+                    // fixed-width chips left portrait showing two of seven tabs, which read
+                    // as a clipped bar rather than a scrollable one.
                     settingsTabButton(tab)
-                        .frame(width: 146)
                 }
             }
             .padding(6)
@@ -3993,7 +4104,30 @@ struct OperatorSettingsPanel: View {
                 reorderActive: $settingsReorderActive
             ) {
                 settingsRows(portrait: portrait)
+                    // The monitor's full-bleed layout ignores the keyboard safe area, so the
+                    // scroll area never shrinks when the number pad rises — which buried the
+                    // Watcher Passcode field under it. Inset the CONTENT by the keyboard
+                    // height instead; the rows scroll clear of the pad.
+                    .padding(.bottom, keyboardInset)
             }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillChangeFrameNotification)
+        ) { note in
+            guard
+                let frame =
+                    note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+            else { return }
+            let screen = UIScreen.main.bounds
+            let overlap = max(0, screen.maxY - frame.minY)
+            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = overlap }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillHideNotification)
+        ) { _ in
+            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = 0 }
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -4011,6 +4145,7 @@ struct OperatorSettingsPanel: View {
     private var subtitle: String {
         switch selectedTab {
         case .link: "Connection state and link behavior."
+        case .sharing: "Broadcast this feed and manage its watchers."
         case .assist: "Behavior for live-view tools."
         case .controls: "Touch behavior and safety."
         case .display: "Live view buttons and chrome."
@@ -4022,6 +4157,7 @@ struct OperatorSettingsPanel: View {
     private var pillText: String {
         switch selectedTab {
         case .link: "Live"
+        case .sharing: "Share"
         case .assist: "Assist"
         case .controls: "Touch"
         case .display: "Visibility"
@@ -4033,11 +4169,131 @@ struct OperatorSettingsPanel: View {
     private func tabSubtitle(_ tab: OperatorSettingsTab) -> String {
         switch tab {
         case .link: "Connection"
+        case .sharing: "Broadcast & watchers"
         case .assist: "Scopes & overlays"
         case .controls: "Dials and safety"
         case .display: "Live view"
         case .storage: "Cache & accounts"
         case .system: "App behavior"
+        }
+    }
+
+    @ViewBuilder private var sharingRows: some View {
+        SettingsRowCard {
+            if model.videoSource == .relay {
+                // A watcher rebroadcasting would daisy-chain feeds — a second generation of
+                // encode, a second hop of latency, and a control-token tangle. Sharing is done
+                // from the device that holds the camera.
+                SettingsInlineRow(
+                    title: "Watching",
+                    help:
+                        "This device is watching another device's broadcast. Sharing is done from the broadcasting device — re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.",
+                    showTopDivider: false
+                ) {
+                    SettingsValueText(value: model.cameraState.cameraName)
+                }
+            } else {
+                sharingBroadcasterRows
+            }
+        }
+    }
+
+    @ViewBuilder private var sharingBroadcasterRows: some View {
+        SettingsInlineRow(
+            title: "Share This Feed",
+            help:
+                "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi — its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
+            showTopDivider: false
+        ) {
+            SettingsSegmented(
+                options: ["Off", "On"],
+                selected: model.isRelayBroadcasting ? "On" : "Off"
+            ) { value in
+                model.setRelayBroadcasting(value == "On")
+            }
+        }
+        if model.isRelayBroadcasting {
+            SettingsInlineRow(
+                title: "Watching",
+                help:
+                    "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control."
+            ) {
+                SettingsValueText(
+                    value: model.relayPeerCount == 1
+                        ? "1 device" : "\(model.relayPeerCount) devices")
+            }
+        }
+        SettingsInlineRow(
+            title: "Broadcast Priority",
+            help:
+                "Low latency is the tightest glass-to-glass path — the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
+        ) {
+            SettingsSegmented(
+                options: RelayEncoderProfile.allCases.map(\.title),
+                selected: model.preferences.relayEncoderProfile.title
+            ) { value in
+                guard
+                    let profile = RelayEncoderProfile.allCases.first(where: {
+                        $0.title == value
+                    })
+                else { return }
+                model.setRelayEncoderProfile(profile)
+            }
+        }
+        SettingsInlineRow(
+            title: "Watcher Passcode",
+            help:
+                "Watchers must enter this code once per device before they receive anything — no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave."
+        ) {
+            RelayPasscodeField(
+                code: model.preferences.relayWatcherPasscode,
+                onCommit: { model.setRelayWatcherPasscode($0) })
+        }
+        SettingsInlineRow(
+            title: "Control Requests",
+            help:
+                "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way."
+        ) {
+            SettingsSegmented(
+                options: ["Off", "On"],
+                selected: model.preferences.relayAllowsControlRequests ? "On" : "Off"
+            ) { value in
+                model.setRelayAllowsControlRequests(value == "On")
+            }
+        }
+        if let requester = model.relayPendingControlRequest {
+            SettingsInlineRow(
+                title: "Control Requested",
+                help:
+                    "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
+            ) {
+                HStack(spacing: 8) {
+                    SettingsActionPill(title: "Decline") { model.declineRelayControl() }
+                    SettingsActionPill(title: "Grant to \(requester)") {
+                        model.grantRelayControl()
+                    }
+                }
+            }
+        }
+        if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
+            SettingsInlineRow(
+                title: "Camera Control",
+                help:
+                    "Take the camera back. This device holds the link, so it never has to ask."
+            ) {
+                HStack(spacing: 8) {
+                    SettingsValueText(value: holder)
+                    SettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
+                }
+            }
+        }
+    }
+
+    /// Picture sources this device can actually offer: the operator-selectable ones, minus HDMI
+    /// where there is no UVC hardware to carry it.
+    private var selectableVideoSources: [VideoSourceKind] {
+        VideoSourceKind.operatorSelectableCases.filter {
+            $0 != .hdmiCapture || UVCVideoSource.isSupportedHardware
         }
     }
 
@@ -4047,7 +4303,7 @@ struct OperatorSettingsPanel: View {
             caption: linkHealthCaption,
             score: model.linkHealth)
 
-        SettingsRowCard {
+        SettingsRowCard(title: "Connection") {
             SettingsInlineRow(
                 title: "Current Transport",
                 help:
@@ -4056,20 +4312,22 @@ struct OperatorSettingsPanel: View {
             ) {
                 SettingsValueText(value: transportLabel)
             }
-            // HDMI capture needs an iPad — iOS doesn't expose UVC devices to apps — so the whole
-            // control stays away on iPhone rather than offering a switch that can't succeed.
-            if UVCVideoSource.isSupportedHardware, model.monitorAvailability.offersSourceSwitch {
+            // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
+            // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
+            // offering a single choice is a readout pretending to be a control. Stating the rule
+            // this way also means any future source that narrows the list hides it too.
+            if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
                 SettingsInlineRow(
                     title: "Picture Source",
                     help:
                         "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
                 ) {
                     SettingsSegmented(
-                        options: VideoSourceKind.allCases.map(\.title),
+                        options: selectableVideoSources.map(\.title),
                         selected: model.videoSource.title
                     ) { value in
                         guard
-                            let kind = VideoSourceKind.allCases.first(where: { $0.title == value })
+                            let kind = selectableVideoSources.first(where: { $0.title == value })
                         else { return }
                         model.selectVideoSource(kind)
                     }
@@ -4079,27 +4337,14 @@ struct OperatorSettingsPanel: View {
                 SettingsInlineRow(
                     title: "Capture Device",
                     help:
-                        "The attached USB capture device, and the format it is sending. If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture."
+                        "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR."
                 ) {
                     SettingsValueText(value: model.hdmiCaptureState.shortStatus)
                 }
             }
             if model.videoSource == .relay {
-                SettingsInlineRow(
-                    title: "Camera Control",
-                    help:
-                        "The camera answers one device at a time, so control is passed rather than shared. Ask for it and the broadcasting device decides; it can also take it back at any moment, because it is the one actually holding the camera link."
-                ) {
-                    SettingsActionPill(
-                        title: model.relayHoldsControl ? "Give back" : "Ask for control"
-                    ) {
-                        if model.relayHoldsControl {
-                            model.releaseRelayControl()
-                        } else {
-                            model.requestRelayControl()
-                        }
-                    }
-                }
+                // The ask/give-back moved onto the live view itself (bottom centre) — control
+                // is exercised while watching, not inside a settings sheet. The readout stays.
                 SettingsInlineRow(
                     title: "Held By",
                     help: "Which device the camera is currently taking commands from."
@@ -4109,59 +4354,17 @@ struct OperatorSettingsPanel: View {
                             ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
                 }
             }
-            if let requester = model.relayPendingControlRequest {
-                SettingsInlineRow(
-                    title: "Control Requested",
-                    help:
-                        "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
-                ) {
-                    HStack(spacing: 8) {
-                        SettingsActionPill(title: "Decline") { model.declineRelayControl() }
-                        SettingsActionPill(title: "Grant to \(requester)") {
-                            model.grantRelayControl()
-                        }
-                    }
-                }
-            }
-            if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
-                SettingsInlineRow(
-                    title: "Camera Control",
-                    help:
-                        "Take the camera back. This device holds the link, so it never has to ask."
-                ) {
-                    HStack(spacing: 8) {
-                        SettingsValueText(value: holder)
-                        SettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
-                    }
-                }
-            }
-            SettingsInlineRow(
-                title: "Share This Feed",
-                help:
-                    "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device, so it covers a set router, a phone hotspot, the camera's own access point and a cable link alike."
-            ) {
-                SettingsSegmented(
-                    options: ["Off", "On"],
-                    selected: model.isRelayBroadcasting ? "On" : "Off"
-                ) { value in
-                    model.setRelayBroadcasting(value == "On")
-                }
-            }
-            if model.isRelayBroadcasting {
-                SettingsInlineRow(
-                    title: "Watching",
-                    help:
-                        "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera."
-                ) {
-                    SettingsValueText(
-                        value: model.relayPeerCount == 1
-                            ? "1 device" : "\(model.relayPeerCount) devices")
-                }
-            }
+        }
+
+        // The tab was one undifferentiated stack of rows. Three cards instead, because they answer
+        // three different questions: what the link IS, what the camera SENDS, and what this device
+        // DOES with it on the way to the panel.
+        SettingsRowCard(title: "Picture") {
             SettingsInlineRow(
                 title: "Stream Preset",
                 help:
-                    "Combines Nikon live-view stream size and compression grade into three operator-facing choices."
+                    "Combines Nikon live-view stream size and compression grade into three operator-facing choices.",
+                showTopDivider: false
             ) {
                 SettingsSegmented(
                     options: OperatorPreferences.StreamPreset.allCases.map(\.rawValue),
@@ -4193,6 +4396,55 @@ struct OperatorSettingsPanel: View {
                     model.setQualityBias(bias)
                 }
             }
+        }
+
+        // What this device does to the picture after the camera has sent it. Separate from
+        // "Picture" above, which is what the camera is asked to send in the first place.
+        SettingsRowCard(title: "Processing") {
+            // Only what this device can actually run is listed, and the row disappears entirely
+            // when that is just the floor — an option that quietly does nothing is worse than no
+            // option at all.
+            if FeedUpscaler.supportedOnThisDevice.count > 1 {
+                SettingsInlineRow(
+                    title: "Feed Upscaler",
+                    help:
+                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
+                    showTopDivider: false
+                ) {
+                    SettingsSegmented(
+                        options: FeedUpscaler.supportedOnThisDevice.map(\.rawValue),
+                        selected: FeedUpscaleSwitch.shared.upscaler.rawValue,
+                        compact: true
+                    ) { value in
+                        guard let choice = FeedUpscaler(rawValue: value) else { return }
+                        FeedUpscaleSwitch.shared.upscaler = choice
+                    }
+                }
+            }
+            if LiveDenoiseSwitch.isSupportedOnThisDevice,
+                let reason = LiveDenoiseSwitch.decoderReportsUnavailable
+            {
+                // The filter gave up mid-session. Say so where the switch was, rather than leaving
+                // a toggle sitting armed over something that has stopped running.
+                SettingsInlineRow(
+                    title: "Feed Noise Reduction",
+                    help:
+                        "The noise filter turned itself off after the camera sent something it could not take. Reconnecting the camera gives it another go.",
+                    showTopDivider: FeedUpscaler.supportedOnThisDevice.count > 1
+                ) {
+                    SettingsValueText(value: reason)
+                }
+            } else if LiveDenoiseSwitch.isSupportedOnThisDevice {
+                SettingsSwitchInlineRow(
+                    title: "Feed Noise Reduction",
+                    help:
+                        "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames — the blocky structure of a compressed stream stays put — and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
+                    showTopDivider: FeedUpscaler.supportedOnThisDevice.count > 1,
+                    isOn: LiveDenoiseSwitch.shared.enabled
+                ) {
+                    LiveDenoiseSwitch.shared.enabled.toggle()
+                }
+            }
             #if DEBUG
                 SettingsInlineRow(
                     title: "Capture Frames",
@@ -4202,28 +4454,6 @@ struct OperatorSettingsPanel: View {
                     LiveViewCaptureControl()
                 }
             #endif
-            SettingsInlineRow(
-                title: "Connection Action",
-                help:
-                    "Move into a Wi-Fi session when cable-light operation matters, or disconnect when Wi-Fi is already active."
-            ) {
-                SettingsActionPill(title: isConnected ? "Disconnect" : "Connect over Wi-Fi") {
-                    if isConnected { model.disconnect() }
-                }
-            }
-            SettingsInlineRow(
-                title: "Health Threshold",
-                help:
-                    "Warn only when latency, heartbeat, or frame delivery stays degraded instead of reacting to a single short spike."
-            ) {
-                SettingsValueText(value: "Balanced")
-            }
-            SettingsInlineRow(
-                title: "Reconnect Window",
-                help: "How long the app waits before surfacing a lost-camera warning."
-            ) {
-                SettingsValueText(value: "4 sec")
-            }
         }
     }
 
@@ -4266,6 +4496,8 @@ struct OperatorSettingsPanel: View {
     /// control reads at a glance and leaves the three sections exactly as they were.
     @ViewBuilder private var displayRows: some View {
         SettingsRowCard {
+            // Portrait Fit/Fill lives on the feed itself now — the bottom-right corner key on the
+            // portrait monitor — not as a settings row.
             SettingsInlineRow(
                 title: "Layout For",
                 help:
@@ -4714,6 +4946,8 @@ struct OperatorSettingsPanel: View {
         switch selectedTab {
         case .link:
             linkRows
+        case .sharing:
+            sharingRows
         case .assist:
             ViewAssistSettingsRows(portrait: portrait)
                 .environment(model)
@@ -5855,6 +6089,10 @@ struct SettingsLiveTile: View {
                 Text(isLinked ? "Active Link" : "No Link")
                     .font(.system(size: 12, weight: .semibold, design: .default))
                     .foregroundStyle(LiveDesign.text)
+                    // Squeezed, this label letter-wrapped ("Activ / e / Link"); a status
+                    // readout is one line or it is noise.
+                    .lineLimit(1)
+                    .fixedSize()
                 Text(isLinked ? detail : model.linkHealthDetail)
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(LiveDesign.muted)

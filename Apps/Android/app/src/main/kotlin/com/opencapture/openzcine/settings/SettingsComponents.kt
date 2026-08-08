@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -174,20 +175,34 @@ public fun SettingsResetButton(onClick: () -> Unit) {
  * `SettingsActionPill`). Title is uppercased to match the iOS monospaced pill.
  */
 @Composable
-public fun SettingsActionPill(title: String, onClick: () -> Unit) {
-    Text(
-        title.uppercase(),
-        style = chromeStyle(10.5f, FontWeight.Bold, mono = true),
-        color = LiveDesign.accent,
-        maxLines = 1,
-        letterSpacing = 0.6.sp,
-        modifier =
-            Modifier
-                .background(LiveDesign.accentDim, CircleShape)
-                .border(1.dp, LiveDesign.accent.copy(alpha = 0.5f), CircleShape)
-                .settingsClickable(role = Role.Button, onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-    )
+public fun SettingsActionPill(
+    title: String,
+    icon: ImageVector? = null,
+    tint: Color = LiveDesign.accent,
+    background: Color = LiveDesign.accentDim,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier
+            .background(background, CircleShape)
+            .border(1.dp, tint.copy(alpha = 0.5f), CircleShape)
+            .settingsClickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon?.let {
+            Icon(it, contentDescription = null, tint = tint, modifier = Modifier.size(15.dp))
+        }
+        Text(
+            title.uppercase(),
+            style = chromeStyle(10.5f, FontWeight.Bold, mono = true),
+            color = tint,
+            maxLines = 1,
+            letterSpacing = 0.6.sp,
+        )
+    }
 }
 
 /**
@@ -708,7 +723,10 @@ public fun SettingsCrushClipSegmented(
                         selected = active,
                         role = Role.RadioButton,
                         onClick = { if (!active) onSelect(label) },
-                    ),
+                    )
+                    // The segment shows a fraction glyph; the full stop value is what a screen
+                    // reader has to say, so it announces the label rather than "¼".
+                    .semantics { contentDescription = label },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(

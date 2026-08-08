@@ -91,8 +91,11 @@ internal object IsoPickerPolicy {
     /**
      * Whether movie ISO auto is active (`MovISOAutoControl` 0xD0AD).
      * Independent of exposure-program Auto (P/A/S/M). Unpolled (`null`) → manual.
+     * CODEC-GATED (iOS core rule): auto ISO does not exist under R3D NE — the body's flag
+     * keeps its last non-R3D value while inert, so a raw `true` there is stale, never Auto.
      */
-    fun isAutoISOActive(isoAuto: Boolean?): Boolean = isoAuto == true
+    fun isAutoISOActive(isoAuto: Boolean?, codec: String): Boolean =
+        !isR3DNECodec(codec) && isoAuto == true
 
     /**
      * Whether the operator may write a manual movie ISO for this codec / mode.
@@ -115,7 +118,7 @@ internal object IsoPickerPolicy {
         if (showsDualBaseCircuits(codec)) {
             false
         } else {
-            isAutoISOActive(isoAuto) || !allowsManualISO(codec, exposureMode)
+            isAutoISOActive(isoAuto, codec) || !allowsManualISO(codec, exposureMode)
         }
 
     /** Active Auto tab: 0 = Auto On, 1 = Auto Off (when M allows manual on non-R3D). */
@@ -126,7 +129,7 @@ internal object IsoPickerPolicy {
     ): Int =
         if (!allowsManualISO(codec, exposureMode)) {
             0
-        } else if (isAutoISOActive(isoAuto)) {
+        } else if (isAutoISOActive(isoAuto, codec)) {
             0
         } else {
             1

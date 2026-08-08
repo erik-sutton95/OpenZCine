@@ -1,8 +1,13 @@
 package com.opencapture.openzcine.pairing
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -15,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,9 +28,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -47,9 +57,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.R
+import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.core.CameraConnectionPhase
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.relay.probeHostAlive
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -153,16 +165,46 @@ public fun SavedCamerasExperience(
     suppressedUsbAutoReconnectHosts: Set<String> = emptySet(),
     onUsbAutoReconnectSuppressionCleared: (String) -> Unit = {},
     onShareDiagnostics: (() -> Unit)? = null,
+    nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast> = emptyList(),
+    onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit = {},
+    networkFiltersDiscovery: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val work = remember { mutableStateOf<Job?>(null) }
     val handedOff = remember { mutableStateOf(false) }
     var phase by remember { mutableStateOf<SavedCameraPhase>(SavedCameraPhase.Idle) }
+    var wifiOffPromptVisible by remember { mutableStateOf(false) }
+    var watchOnCameraApNoticeVisible by remember { mutableStateOf(false) }
+    // A watcher ON the camera's own AP can SEE broadcasts (multicast discovery gets through)
+    // but its join cannot — camera APs isolate their clients. Block the doomed join with the
+    // remedy instead of failing after the connect wait.
+    val gatedWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit =
+        { broadcast ->
+            if (isOnCameraAccessPointNetwork(context)) {
+                watchOnCameraApNoticeVisible = true
+            } else {
+                onWatchBroadcast(broadcast)
+            }
+        }
     var discoveredCameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     var attemptedUsbReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
-    var removalTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
-    var renameTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
+    var removalTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
+    var renameTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
+    var addSetupTarget by remember { mutableStateOf<List<SavedCameraRecord>?>(null) }
+    // Naming ONE setup, distinct from `renameTarget` above, which names the camera and titles its
+    // whole row.
+    /** A scanned key the operator corrected; null while the scan's own value still stands. */
+    var correctedScanKey by remember { mutableStateOf<String?>(null) }
+    /** A scanned network name the operator corrected; null while the scan's own value stands. */
+    var correctedScanSsid by remember { mutableStateOf<String?>(null) }
+    var renameSetupTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
+    var renameSetupDraft by remember { mutableStateOf("") }
+    // An armed add-setup watch (iOS pendingSetupIntent): the sheet's no-match buttons arm it,
+    // and the first discovery on that path connects — the tap was consent given in advance.
+    var armedSetupWatch by
+        remember { mutableStateOf<Pair<SavedCameraRecord, SavedCameraTransport>?>(null) }
     var renameDraft by remember { mutableStateOf("") }
 
     LaunchedEffect(environment) {
@@ -206,6 +248,7 @@ public fun SavedCamerasExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
             -> environment.createSavedProfileSession(resolvedHost(record))
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
@@ -225,6 +268,7 @@ public fun SavedCamerasExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
             -> environment.createSession(resolvedHost(record))
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
@@ -429,6 +473,13 @@ public fun SavedCamerasExperience(
                         // Pre-scan + fail-fast retries live inside joinWithFallback.
                         val joined = environment.joinCameraAp(ssid, key)
                         if (!joined) {
+                            // Wi-Fi toggled off after the join was staged: the joiner bails
+                            // in milliseconds, and the generic copy would be misleading.
+                            if (!isWifiRadioEnabled(context)) {
+                                wifiOffPromptVisible = true
+                                phase = SavedCameraPhase.Idle
+                                return@launch
+                            }
                             phase =
                                 SavedCameraPhase.Error(
                                     "Couldn't join $ssid. Keep the camera's network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-pair with a fresh SSID/key scan.",
@@ -459,11 +510,7 @@ public fun SavedCamerasExperience(
                         val useFirstTimePairing =
                             isCameraAp &&
                                 attempt == maxAttempts &&
-                                lastFailureDetail?.let { detail ->
-                                    val lower = detail.lowercase()
-                                    lower.contains("rejectedinitiator") ||
-                                        (lower.contains("rejected") && lower.contains("handshake"))
-                                } == true
+                                indicatesSavedProfileUnavailable(lastFailureDetail)
                         val attemptSession =
                             session
                                 ?: if (useFirstTimePairing) {
@@ -554,7 +601,7 @@ public fun SavedCamerasExperience(
                                 friendlyCameraConnectionFailure(
                                     lastFailureDetail
                                         ?: "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
-                                ),
+                                ) + wrongNetworkHint(record),
                             )
                         return@launch
                     }
@@ -572,7 +619,7 @@ public fun SavedCamerasExperience(
                         SavedCameraPhase.Error(
                             friendlyCameraConnectionFailure(
                                 "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
-                            ),
+                            ) + wrongNetworkHint(record),
                         )
                 } finally {
                     if (!handoffSucceeded) {
@@ -602,6 +649,10 @@ public fun SavedCamerasExperience(
         }
         handedOff.value = false
         if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+            if (!isWifiRadioEnabled(context)) {
+                wifiOffPromptVisible = true
+                return
+            }
             val ssid = record.wifiSsid
             if (ssid.isNullOrBlank()) {
                 phase =
@@ -625,13 +676,97 @@ public fun SavedCamerasExperience(
         beginReconnectWork(record, cameraApSsid = null, cameraApKey = null)
     }
 
+    // Fulfill an armed add-setup watch: the first discovery on the asked-for path connects,
+    // through the same synthesized-record reconnect the sheet's Connect Now uses. Strict
+    // name matching — a mismatch just leaves the row waiting, never connects a wrong body.
+    LaunchedEffect(armedSetupWatch, discoveredCameras, usbCameras) {
+        val (anchor, transport) = armedSetupWatch ?: return@LaunchedEffect
+        if (phase.isBusy()) return@LaunchedEffect
+        val host =
+            when (transport) {
+                SavedCameraTransport.USB_C -> {
+                    val ready = usbCameras.filter { it.access == UsbPtpCameraAccess.READY }
+                    (ready.firstOrNull {
+                        SavedCameraRecords.cameraNamesMatch(it.displayName, anchor.cameraName)
+                    } ?: ready.singleOrNull())
+                        ?.hostKey
+                }
+                SavedCameraTransport.INFRASTRUCTURE,
+                SavedCameraTransport.PHONE_HOTSPOT,
+                -> {
+                    // Same per-kind network-shape rule as the availability chips: an armed
+                    // Router watch must not be fulfilled by the body still on this phone's
+                    // hotspot (wrong path, wrong record), and vice versa.
+                    val fitting =
+                        discoveredCameras.filter {
+                            SavedCameraRecords.isPhoneHotspotHost(it.host) ==
+                                (transport == SavedCameraTransport.PHONE_HOTSPOT)
+                        }
+                    // Generic record names (a bare "Nikon ZR") are blocklisted from name
+                    // matching, so a watch anchored to one never fulfills strictly (stuck
+                    // "Searching…" with the camera in plain sight). A single shape-fitting
+                    // candidate is the camera the tap consented to; two or more stays strict.
+                    (fitting.firstOrNull {
+                        SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName)
+                    } ?: fitting.singleOrNull())
+                        ?.host
+                }
+                else -> null
+            }
+        if (host != null) {
+            armedSetupWatch = null
+            reconnect(
+                anchor.copy(
+                    transport = transport,
+                    host = host,
+                    profileID = host,
+                    wifiSsid = null,
+                    lastSeenAtEpochMillis = null,
+                )
+            )
+        }
+    }
+
+    /**
+     * "+ Add setup -> Camera access point" on a camera saved another way. With a derivable SSID
+     * and a stored key this stages the normal Ready-to-join confirm on a synthetic AP record --
+     * the setup persists itself when that connect succeeds, exactly like iOS. Without a stored
+     * key the pairing wizard owns first-time credentials (its scan flow), so route there.
+     */
+    fun addCameraApSetup(record: SavedCameraRecord) {
+        if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
+        if (!isWifiRadioEnabled(context)) {
+            wifiOffPromptVisible = true
+            return
+        }
+        val ssid =
+            record.wifiSsid?.takeIf(::looksLikeNikonAccessPointSsid)
+                ?: runCatching { SwiftCore.deriveAccessPointSSID(record.cameraName) }.getOrNull()
+        val key = ssid?.let(environment.credentials::passphrase)
+        if (ssid == null || key == null) {
+            onPairNewCamera()
+            return
+        }
+        handedOff.value = false
+        // Pinned to the AP's own address: the row this was invoked from is a router or hotspot
+        // setup, and carrying its host into the copy would create an AP setup that dials an
+        // address the camera never answers on.
+        val apRecord =
+            SavedCameraRecords.pinnedToAccessPoint(
+                record.copy(transport = SavedCameraTransport.CAMERA_ACCESS_POINT, wifiSsid = ssid),
+            )
+        phase = SavedCameraPhase.ReadyToJoin(record = apRecord, ssid = ssid, key = key)
+        environment.primeCameraApScan(ssid)
+    }
+
     /** Confirm Ready-to-join and issue the camera-AP join + session connect. */
     fun confirmCameraApJoin() {
         val staged = phase as? SavedCameraPhase.ReadyToJoin ?: return
         beginReconnectWork(
             record = staged.record,
-            cameraApSsid = staged.ssid,
-            cameraApKey = staged.key,
+            cameraApSsid = correctedScanSsid?.takeIf(String::isNotBlank) ?: staged.ssid,
+            // The CORRECTED key when the operator fixed a misread character, otherwise the scan's.
+            cameraApKey = correctedScanKey ?: staged.key,
         )
     }
 
@@ -733,11 +868,26 @@ public fun SavedCamerasExperience(
                             usbCameras = usbCameras,
                             phase = phase,
                             onConnect = ::reconnect,
-                            onRename = { record ->
-                                renameTarget = record
-                                renameDraft = record.customName.orEmpty()
+                            onRename = { group ->
+                                renameTarget = group
+                                renameDraft = group.first().customName.orEmpty()
                             },
                             onRemove = { removalTarget = it },
+                            onAddSetup = { addSetupTarget = it },
+                            onForgetSetup = { record ->
+                                onRecordsChanged(
+                                    SavedCameraRecords.removing(
+                                        record.host, record.cameraName, cameras
+                                    )
+                                )
+                            },
+                            onRenameSetup = { record ->
+                                renameSetupTarget = record
+                                renameSetupDraft = record.setupName.orEmpty()
+                            },
+                            nearbyBroadcasts = nearbyBroadcasts,
+                            onWatchBroadcast = gatedWatchBroadcast,
+                            networkFiltersDiscovery = networkFiltersDiscovery,
                             fillAvailableHeight = true,
                             scrollRows = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -764,11 +914,26 @@ public fun SavedCamerasExperience(
                                 usbCameras = usbCameras,
                                 phase = phase,
                                 onConnect = ::reconnect,
-                                onRename = { record ->
-                                    renameTarget = record
-                                    renameDraft = record.customName.orEmpty()
+                                onRename = { group ->
+                                    renameTarget = group
+                                    renameDraft = group.first().customName.orEmpty()
                                 },
                                 onRemove = { removalTarget = it },
+                                onAddSetup = { addSetupTarget = it },
+                                onForgetSetup = { record ->
+                                    onRecordsChanged(
+                                        SavedCameraRecords.removing(
+                                            record.host, record.cameraName, cameras
+                                        )
+                                    )
+                                },
+                                onRenameSetup = { record ->
+                                    renameSetupTarget = record
+                                    renameSetupDraft = record.setupName.orEmpty()
+                                },
+                                nearbyBroadcasts = nearbyBroadcasts,
+                                onWatchBroadcast = gatedWatchBroadcast,
+                                networkFiltersDiscovery = networkFiltersDiscovery,
                                 fillAvailableHeight = false,
                                 scrollRows = false,
                                 modifier = Modifier.fillMaxWidth(),
@@ -786,7 +951,11 @@ public fun SavedCamerasExperience(
                 is SavedCameraPhase.ReadyToJoin ->
                     // Prefer the camera AP SSID in the join prompt so the
                     // operator knows which network Android will request.
-                    ConnectionPopupPhase.ReadyToJoin(key = null, keyFromScan = false)
+                    ConnectionPopupPhase.ReadyToJoin(
+                        key = null,
+                        keyFromScan = false,
+                        ssid = (phase as? SavedCameraPhase.ReadyToJoin)?.ssid,
+                    )
                 is SavedCameraPhase.Joining -> ConnectionPopupPhase.JoiningWifi
                 is SavedCameraPhase.Connecting -> ConnectionPopupPhase.Handshaking
                 is SavedCameraPhase.Pairing -> ConnectionPopupPhase.Pairing
@@ -811,6 +980,8 @@ public fun SavedCamerasExperience(
                     ),
                 phase = popup,
                 onConnect = ::confirmCameraApJoin,
+                onKeyEdited = { correctedScanKey = it },
+                onSsidEdited = { correctedScanSsid = it },
                 onDismiss = ::cancelWork,
                 onShareDiagnostics =
                     onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },
@@ -818,19 +989,26 @@ public fun SavedCamerasExperience(
         }
     }
 
-    removalTarget?.let { record ->
+    removalTarget?.let { group ->
         AlertDialog(
             onDismissRequest = { removalTarget = null },
             title = { Text(stringResource(R.string.saved_remove_title)) },
             text = {
-                Text(stringResource(R.string.saved_remove_message, record.displayTitle))
+                Text(stringResource(R.string.saved_remove_message, group.first().displayTitle))
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onRecordsChanged(
-                            SavedCameraRecords.removing(record.host, record.cameraName, cameras)
-                        )
+                        // Remove means the CAMERA -- every saved setup goes with it, matching
+                        // iOS. Per-setup removal lives on the chips (long-press).
+                        var remaining = cameras
+                        for (record in group) {
+                            remaining =
+                                SavedCameraRecords.removing(
+                                    record.host, record.cameraName, remaining
+                                )
+                        }
+                        onRecordsChanged(remaining)
                         removalTarget = null
                     },
                 ) {
@@ -844,7 +1022,7 @@ public fun SavedCamerasExperience(
             },
         )
     }
-    renameTarget?.let { record ->
+    renameTarget?.let { group ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
             title = { Text(stringResource(R.string.saved_rename_title)) },
@@ -863,13 +1041,19 @@ public fun SavedCamerasExperience(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onRecordsChanged(
-                            SavedCameraRecords.updatingCustomName(
-                                host = record.host,
-                                customName = renameDraft,
-                                records = cameras,
-                            ),
-                        )
+                        // The name belongs to the CAMERA, so it lands on every setup --
+                        // otherwise a body renamed on its hotspot setup answers to its bare
+                        // name when cabled (the iOS rule).
+                        var updated = cameras
+                        for (record in group) {
+                            updated =
+                                SavedCameraRecords.updatingCustomName(
+                                    host = record.host,
+                                    customName = renameDraft,
+                                    records = updated,
+                                )
+                        }
+                        onRecordsChanged(updated)
                         renameTarget = null
                     },
                 ) {
@@ -880,6 +1064,102 @@ public fun SavedCamerasExperience(
                 TextButton(onClick = { renameTarget = null }) {
                     Text(stringResource(R.string.action_cancel))
                 }
+            },
+        )
+    }
+    if (wifiOffPromptVisible) {
+        WifiOffPromptDialog(onDismiss = { wifiOffPromptVisible = false })
+    }
+    if (watchOnCameraApNoticeVisible) {
+        WifiOffPromptDialog(
+            onDismiss = { watchOnCameraApNoticeVisible = false },
+            title = R.string.watch_on_camera_ap_title,
+            message = R.string.watch_on_camera_ap_message,
+        )
+    }
+    renameSetupTarget?.let { record ->
+        val network = record.networkQualifier
+        AlertDialog(
+            onDismissRequest = { renameSetupTarget = null },
+            title = { Text(stringResource(R.string.saved_rename_setup_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (network != null) {
+                            // The network, not the number: "which one is this" is the question a
+                            // person renaming a setup is actually holding, and the chip
+                            // deliberately does not answer it.
+                            stringResource(R.string.saved_rename_setup_body, network)
+                        } else {
+                            stringResource(R.string.saved_rename_setup_body_plain)
+                        },
+                        color = StartupColors.muted,
+                        fontSize = 13.sp,
+                    )
+                    OutlinedTextField(
+                        value = renameSetupDraft,
+                        onValueChange = { renameSetupDraft = it },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.saved_rename_setup_hint)) },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRecordsChanged(
+                        SavedCameraRecords.updatingSetupName(
+                            host = record.host,
+                            transport = record.transport,
+                            setupName = renameSetupDraft,
+                            records = cameras,
+                        )
+                    )
+                    renameSetupTarget = null
+                }) { Text(stringResource(android.R.string.ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameSetupTarget = null }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
+
+    addSetupTarget?.let { group ->
+        val anchor = group.first()
+        SavedCameraAddSetupDialog(
+            group = group,
+            usbReadyHostKey =
+                usbCameras.firstOrNull { it.access == UsbPtpCameraAccess.READY }?.hostKey,
+            routerDiscoveredHost =
+                discoveredCameras
+                    .firstOrNull {
+                        SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName)
+                    }
+                    ?.host,
+            onDismiss = { addSetupTarget = null },
+            onJoinCameraAp = { record ->
+                addSetupTarget = null
+                addCameraApSetup(record)
+            },
+            onConnectSetup = { transport, host ->
+                addSetupTarget = null
+                // Connecting over this path IS adding the setup: the record saves itself with
+                // this transport on success. A fresh profileID keeps the new setup from
+                // merging into the sibling it was copied from.
+                reconnect(
+                    anchor.copy(
+                        transport = transport,
+                        host = host,
+                        profileID = host,
+                        wifiSsid = null,
+                        lastSeenAtEpochMillis = null,
+                    )
+                )
+            },
+            onArmSetupWatch = { transport ->
+                addSetupTarget = null
+                armedSetupWatch = anchor to transport
             },
         )
     }
@@ -940,8 +1220,14 @@ private fun SavedCameraList(
     usbCameras: List<UsbPtpCamera>,
     phase: SavedCameraPhase,
     onConnect: (SavedCameraRecord) -> Unit,
-    onRename: (SavedCameraRecord) -> Unit,
-    onRemove: (SavedCameraRecord) -> Unit,
+    onRename: (List<SavedCameraRecord>) -> Unit,
+    onRemove: (List<SavedCameraRecord>) -> Unit,
+    onAddSetup: (List<SavedCameraRecord>) -> Unit,
+    onForgetSetup: (SavedCameraRecord) -> Unit,
+    onRenameSetup: (SavedCameraRecord) -> Unit,
+    nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast>,
+    onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit,
+    networkFiltersDiscovery: Boolean,
     fillAvailableHeight: Boolean,
     scrollRows: Boolean,
     modifier: Modifier,
@@ -983,29 +1269,161 @@ private fun SavedCameraList(
                     lineHeight = 18.sp,
                 )
             } else {
-                cameras.forEach { record ->
-                    val isDiscovered =
-                        if (record.transport == SavedCameraTransport.USB_C) {
-                            usbCameras.any {
-                                it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                // One ROW per body: records stay one-per-setup on disk; the assigned name
+                // groups them here (Android's identity axis -- see SavedCameraGroups).
+                val onCameraApNetwork = isOnCameraAccessPointNetwork(LocalContext.current)
+                // The list never speaks PTP: a saved wireless host's readiness comes from the
+                // kernel-level liveness dial (refused = occupied address), the same rule as
+                // the iOS list. NSD stays the richer signal when it works; this lights rows
+                // where multicast never delivers. Scoped here so leaving the list stops it.
+                var aliveHosts by remember { mutableStateOf(emptySet<String>()) }
+                val wirelessSavedHosts =
+                    cameras
+                        .filter {
+                            it.transport == SavedCameraTransport.INFRASTRUCTURE ||
+                                it.transport == SavedCameraTransport.PHONE_HOTSPOT
+                        }
+                        .map(SavedCameraRecord::host)
+                        .filter(String::isNotBlank)
+                        .toSet()
+                LaunchedEffect(wirelessSavedHosts) {
+                    if (wirelessSavedHosts.isEmpty()) {
+                        aliveHosts = emptySet()
+                        return@LaunchedEffect
+                    }
+                    while (true) {
+                        aliveHosts = wirelessSavedHosts.filter { probeHostAlive(it) }.toSet()
+                        delay(10_000)
+                    }
+                }
+                val isDiscovered = { record: SavedCameraRecord ->
+                    if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT &&
+                        !onCameraApNetwork
+                    ) {
+                        // The AP host is the fixed convention address any home network can
+                        // also occupy (the router itself, or a DHCP lease) — something
+                        // answering there off the camera's own network is not the camera's
+                        // AP, so the chip must not light (iOS core rule).
+                        false
+                    } else if (record.transport == SavedCameraTransport.USB_C) {
+                        usbCameras.any {
+                            it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                        }
+                    } else if (record.host in aliveHosts) {
+                        // Liveness lit it: the saved address is provably occupied, and the
+                        // dial only ever covered this record's own wireless kind.
+                        true
+                    } else {
+                        discoveredCameras.any { camera ->
+                            if (camera.host == record.host) return@any true
+                            if (!SavedCameraRecords.cameraNamesMatch(
+                                    camera.name,
+                                    record.cameraName,
+                                )
+                            ) {
+                                return@any false
                             }
-                        } else {
-                            discoveredCameras.any { camera ->
-                                camera.host == record.host ||
-                                    SavedCameraRecords.cameraNamesMatch(
-                                        camera.name,
-                                        record.cameraName,
-                                    )
+                            // A name match only lights a setup whose kind agrees with the
+                            // network the discovery came from (iOS rule): a body found over
+                            // the phone's hotspot is not evidence for the Router setup, and
+                            // an AP setup lights on its own fixed host only.
+                            val viaHotspot =
+                                SavedCameraRecords.isPhoneHotspotHost(camera.host)
+                            when (record.transport) {
+                                SavedCameraTransport.PHONE_HOTSPOT -> viaHotspot
+                                SavedCameraTransport.INFRASTRUCTURE -> !viaHotspot
+                                SavedCameraTransport.CAMERA_ACCESS_POINT -> false
+                                SavedCameraTransport.USB_C -> true
                             }
                         }
+                    }
+                }
+                SavedCameraGroups.group(cameras).forEach { group ->
+                    val active = SavedCameraGroups.activeRecord(group, isDiscovered)
                     SavedCameraRow(
-                        record = record,
+                        group = group,
+                        active = active,
                         isDiscovered = isDiscovered,
                         enabled = !busy,
-                        onConnect = { onConnect(record) },
-                        onRename = { onRename(record) },
-                        onRemove = { onRemove(record) },
+                        onConnect = onConnect,
+                        onRename = { onRename(group) },
+                        onRemove = { onRemove(group) },
+                        onAddSetup = { onAddSetup(group) },
+                        onForgetSetup = onForgetSetup,
+                        onRenameSetup = onRenameSetup,
                     )
+                }
+            }
+            // Broadcasts are listed beside cameras on the same screen — found and forgotten
+            // on the same schedule, exactly like the iOS camera list.
+            Spacer(Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.saved_nearby_broadcasts),
+                color = StartupColors.muted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.4.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            if (networkFiltersDiscovery) {
+                // Proven, not guessed (iOS parity): a device answered the app's direct
+                // presence check while the network's own discovery never delivered it
+                // (multicast/mDNS filtered). Rows below were found directly, stay joinable.
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(StartupColors.accent.copy(alpha = 0.12f))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Warning,
+                        contentDescription = null,
+                        tint = StartupColors.accent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        stringResource(R.string.saved_network_filters_discovery),
+                        color = StartupColors.ink,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            if (nearbyBroadcasts.isEmpty()) {
+                Text(
+                    stringResource(R.string.saved_nearby_broadcasts_empty),
+                    color = StartupColors.dim,
+                    fontSize = 12.sp,
+                )
+            } else {
+                nearbyBroadcasts.forEach { broadcast ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
+                            .clickable(enabled = !busy) { onWatchBroadcast(broadcast) }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            broadcast.name,
+                            color = StartupColors.ink,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        StartupFilledButton(
+                            text = stringResource(R.string.relay_watch),
+                            enabled = !busy,
+                            onClick = { onWatchBroadcast(broadcast) },
+                            modifier = Modifier.width(96.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
@@ -1014,20 +1432,25 @@ private fun SavedCameraList(
 
 @Composable
 internal fun SavedCameraRow(
-    record: SavedCameraRecord,
-    isDiscovered: Boolean,
+    group: List<SavedCameraRecord>,
+    active: SavedCameraRecord,
+    isDiscovered: (SavedCameraRecord) -> Boolean,
     enabled: Boolean,
-    onConnect: () -> Unit,
+    onConnect: (SavedCameraRecord) -> Unit,
     onRename: () -> Unit,
     onRemove: () -> Unit,
+    onAddSetup: () -> Unit,
+    onForgetSetup: (SavedCameraRecord) -> Unit,
+    onRenameSetup: (SavedCameraRecord) -> Unit,
 ) {
-    val availabilityColor = if (isDiscovered) StartupColors.ready else StartupColors.dim
+    val activeDiscovered = isDiscovered(active)
+    val availabilityColor = if (activeDiscovered) StartupColors.ready else StartupColors.dim
     val moreOptionsDescription = stringResource(R.string.saved_more_options)
     var optionsExpanded by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxWidth()
             .startupTile(borderColor = availabilityColor.copy(alpha = 0.28f))
-            .clickable(enabled = enabled, onClick = onConnect)
+            .clickable(enabled = enabled) { onConnect(active) }
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -1036,7 +1459,7 @@ internal fun SavedCameraRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                record.displayTitle,
+                active.displayTitle,
                 color = StartupColors.ink,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -1046,7 +1469,11 @@ internal fun SavedCameraRow(
             )
             Text(
                 stringResource(
-                    if (isDiscovered) R.string.saved_pill_online else R.string.saved_pill_offline
+                    if (activeDiscovered) {
+                        R.string.saved_pill_online
+                    } else {
+                        R.string.saved_pill_offline
+                    }
                 ),
                 color = availabilityColor,
                 fontSize = 11.sp,
@@ -1057,17 +1484,17 @@ internal fun SavedCameraRow(
             )
             // iOS fills the Connect button only when the camera is actually
             // reachable; offline rows get the quiet outline style.
-            if (isDiscovered) {
+            if (activeDiscovered) {
                 StartupFilledButton(
                     text = stringResource(R.string.action_connect),
                     enabled = enabled,
-                    onClick = onConnect,
+                    onClick = { onConnect(active) },
                     modifier = Modifier.width(96.dp),
                 )
             } else {
                 StartupOutlineButton(
                     text = stringResource(R.string.action_connect),
-                    onClick = onConnect,
+                    onClick = { onConnect(active) },
                     modifier = Modifier.width(96.dp),
                 )
             }
@@ -1107,26 +1534,342 @@ internal fun SavedCameraRow(
             }
         }
         Text(
-            savedCameraSubtitle(record),
+            savedCameraSubtitle(active),
             color = StartupColors.muted,
             fontSize = 13.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        // One body, several ways in: a chip per saved setup, availability dot on each. The
+        // row's title, pill and Connect follow the ACTIVE setup; a chip tap connects over
+        // that specific one, long-press forgets it, and "+" adds a setup this camera doesn't
+        // have yet. Scrolls sideways rather than truncating -- the iOS row's rule.
+        val chipScroll = rememberScrollState()
+        Row(
+            Modifier.horizontalScroll(chipScroll),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            group.forEach { record ->
+                SavedCameraSetupChip(
+                    record = record,
+                    group = group,
+                    isActive = record.id == active.id,
+                    isDiscovered = isDiscovered(record),
+                    enabled = enabled,
+                    canForget = group.size > 1,
+                    onConnect = { onConnect(record) },
+                    onForget = { onForgetSetup(record) },
+                    onRename = { onRenameSetup(record) },
+                )
+            }
+            if (missingSetupKinds(group).isNotEmpty()) {
+                Text(
+                    "+ " + stringResource(R.string.saved_add_setup),
+                    color = StartupColors.muted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier =
+                        Modifier.clip(CircleShape)
+                            .border(1.dp, StartupColors.muted.copy(alpha = 0.35f), CircleShape)
+                            .clickable(enabled = enabled, onClick = onAddSetup)
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+            }
+        }
+    }
+}
+
+/** The kinds this camera could still be set up for -- mirror of the iOS list. */
+internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCameraTransport> {
+    val saved = group.map(SavedCameraRecord::transport).toSet()
+    return listOf(
+            SavedCameraTransport.USB_C,
+            SavedCameraTransport.CAMERA_ACCESS_POINT,
+            SavedCameraTransport.INFRASTRUCTURE,
+            SavedCameraTransport.PHONE_HOTSPOT,
+        )
+        // Router stays on offer however many are saved: a camera can live on a studio network, a
+        // home one and a location's, and each is its own setup keyed by the network's name. Every
+        // other kind is singular by definition — the access point is the camera's own network, the
+        // hotspot is this phone, the cable is the cable (iOS `missingSetupKinds`).
+        .filterNot { it != SavedCameraTransport.INFRASTRUCTURE && saved.contains(it) }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SavedCameraSetupChip(
+    record: SavedCameraRecord,
+    /** The camera's other setups — a chip is only qualified against siblings of its own kind. */
+    group: List<SavedCameraRecord>,
+    isActive: Boolean,
+    isDiscovered: Boolean,
+    enabled: Boolean,
+    canForget: Boolean,
+    onConnect: () -> Unit,
+    onForget: () -> Unit,
+    onRename: () -> Unit,
+) {
+    var forgetExpanded by remember { mutableStateOf(false) }
+    val dotColor = if (isDiscovered) StartupColors.ready else StartupColors.dim
+    Box {
+        Row(
+            Modifier.clip(CircleShape)
+                .background(
+                    StartupColors.control.copy(alpha = if (isActive) 0.8f else 0.45f)
+                )
+                .border(
+                    1.dp,
+                    if (isActive) {
+                        StartupColors.accent.copy(alpha = 0.45f)
+                    } else {
+                        StartupColors.border.copy(alpha = 0.12f)
+                    },
+                    CircleShape,
+                )
+                .combinedClickable(
+                    enabled = enabled,
+                    onClick = onConnect,
+                    onLongClick =
+                        if (canForget) {
+                            { forgetExpanded = true }
+                        } else {
+                            null
+                        },
+                )
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(dotColor))
+            Text(
+                record.chipLabel(group),
+                color = if (isActive) StartupColors.ink else StartupColors.muted,
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        DropdownMenu(
+            expanded = forgetExpanded,
+            onDismissRequest = { forgetExpanded = false },
+        ) {
+            // "Wi-Fi (2)" is a placeholder, not a name. The operator knows which is the studio
+            // and which is the van; this is where they say so, and the chip wears it after.
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.saved_rename_setup)) },
+                onClick = {
+                    forgetExpanded = false
+                    onRename()
+                },
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        stringResource(
+                            R.string.saved_forget_setup,
+                            record.chipLabel(group),
+                        )
+                    )
+                },
+                onClick = {
+                    forgetExpanded = false
+                    onForget()
+                },
+            )
+        }
     }
 }
 
 /**
- * iOS row subtitle: `USB-C · connect cable to wake the session` or
- * `Wi‑Fi · <SSID> · <recency>`, with the recency phrased off the record's
- * last-seen timestamp.
+ * "+ Add setup" on a saved camera: a mini-wizard scoped to THIS camera, offering only the
+ * setup kinds it doesn't have yet -- the iOS sheet, as a dialog. Setups save themselves at
+ * the next connect; this only prepares the way (joins the camera's Wi-Fi for AP when the key
+ * is already stored, guides for the rest).
+ */
+@Composable
+private fun SavedCameraAddSetupDialog(
+    group: List<SavedCameraRecord>,
+    usbReadyHostKey: String?,
+    routerDiscoveredHost: String?,
+    onDismiss: () -> Unit,
+    onJoinCameraAp: (SavedCameraRecord) -> Unit,
+    onConnectSetup: (SavedCameraTransport, String) -> Unit,
+    onArmSetupWatch: (SavedCameraTransport) -> Unit,
+) {
+    val active = group.first()
+    val context = LocalContext.current
+    // Asked for HERE, and only here: naming a network is the one thing this permission buys, and
+    // a second router setup is the one place the name is needed. Launch, discovery and every
+    // other path stay untouched by it — and a refusal costs nothing but the ability to keep more
+    // than one router setup per camera, which is exactly where the operator is standing.
+    var networkNameGranted by remember {
+        mutableStateOf(ConnectedNetworkName.isPermissionGranted(context))
+    }
+    val networkNameLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            networkNameGranted = granted
+        }
+    val hasRouterSetup =
+        group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(stringResource(R.string.saved_add_setup_title, active.displayTitle))
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.saved_add_setup_body),
+                    color = StartupColors.muted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+                // Only when a second router setup is actually on the table: with none saved, the
+                // next one needs no name to be told apart from anything.
+                if (hasRouterSetup && !networkNameGranted) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            stringResource(R.string.saved_setup_router_name_permission),
+                            color = StartupColors.muted,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
+                        TextButton(
+                            onClick = {
+                                networkNameLauncher.launch(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                )
+                            },
+                        ) {
+                            Text(
+                                stringResource(R.string.saved_setup_router_name_permission_action),
+                                color = StartupColors.accent,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                }
+                missingSetupKinds(group).forEach { kind ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            stringResource(
+                                when (kind) {
+                                    SavedCameraTransport.CAMERA_ACCESS_POINT ->
+                                        R.string.saved_setup_ap_title
+                                    SavedCameraTransport.INFRASTRUCTURE ->
+                                        R.string.saved_setup_router_title
+                                    SavedCameraTransport.PHONE_HOTSPOT ->
+                                        R.string.saved_setup_hotspot_title
+                                    SavedCameraTransport.USB_C ->
+                                        R.string.saved_setup_usb_title
+                                }
+                            ),
+                            color = StartupColors.ink,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            stringResource(
+                                when (kind) {
+                                    SavedCameraTransport.CAMERA_ACCESS_POINT ->
+                                        R.string.saved_setup_ap_body
+                                    SavedCameraTransport.INFRASTRUCTURE ->
+                                        R.string.saved_setup_router_body
+                                    SavedCameraTransport.PHONE_HOTSPOT ->
+                                        R.string.saved_setup_hotspot_body
+                                    SavedCameraTransport.USB_C ->
+                                        R.string.saved_setup_usb_body
+                                }
+                            ),
+                            color = StartupColors.muted,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
+                        // Every row DOES something — connect immediately when the path is
+                        // already reachable, else dismiss into the list, which is watching.
+                        when (kind) {
+                            SavedCameraTransport.CAMERA_ACCESS_POINT ->
+                                TextButton(onClick = { onJoinCameraAp(active) }) {
+                                    Text(stringResource(R.string.saved_setup_ap_action_join))
+                                }
+                            SavedCameraTransport.USB_C ->
+                                TextButton(
+                                    onClick = {
+                                        val hostKey = usbReadyHostKey
+                                        if (hostKey != null) {
+                                            onConnectSetup(SavedCameraTransport.USB_C, hostKey)
+                                        } else {
+                                            onArmSetupWatch(SavedCameraTransport.USB_C)
+                                        }
+                                    },
+                                ) {
+                                    Text(
+                                        stringResource(
+                                            if (usbReadyHostKey != null) {
+                                                R.string.saved_setup_connect_now
+                                            } else {
+                                                R.string.saved_setup_connect_when_plugged
+                                            }
+                                        )
+                                    )
+                                }
+                            SavedCameraTransport.INFRASTRUCTURE ->
+                                TextButton(
+                                    onClick = {
+                                        val host = routerDiscoveredHost
+                                        if (host != null) {
+                                            onConnectSetup(
+                                                SavedCameraTransport.INFRASTRUCTURE, host
+                                            )
+                                        } else {
+                                            onArmSetupWatch(
+                                                SavedCameraTransport.INFRASTRUCTURE
+                                            )
+                                        }
+                                    },
+                                ) {
+                                    Text(
+                                        stringResource(
+                                            if (routerDiscoveredHost != null) {
+                                                R.string.saved_setup_connect_now
+                                            } else {
+                                                R.string.saved_setup_find_on_network
+                                            }
+                                        )
+                                    )
+                                }
+                            SavedCameraTransport.PHONE_HOTSPOT ->
+                                TextButton(
+                                    onClick = {
+                                        onArmSetupWatch(SavedCameraTransport.PHONE_HOTSPOT)
+                                    },
+                                ) {
+                                    Text(stringResource(R.string.saved_setup_wait_for_camera))
+                                }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * iOS row subtitle, path-typed: `USB-C · connect cable to wake the session`, or
+ * `<path> · <recency>` -- with the camera's own SSID shown ONLY on the AP setup. A router
+ * record wearing a derived NIKON_… name was the display face of the old cross-path confusion.
  */
 @Composable
 private fun savedCameraSubtitle(record: SavedCameraRecord): String {
     if (record.transport == SavedCameraTransport.USB_C) {
         return stringResource(R.string.saved_usb_subtitle)
     }
-    val networkName = record.wifiSsid ?: record.host
     val lastSeen = record.lastSeenAtEpochMillis
     val recency =
         if (lastSeen == null) {
@@ -1138,5 +1881,33 @@ private fun savedCameraSubtitle(record: SavedCameraRecord): String {
                 else -> stringResource(R.string.saved_last_days, days)
             }
         }
-    return stringResource(R.string.saved_wifi_subtitle, networkName, recency)
+    val ssid =
+        record.wifiSsid.takeIf {
+            record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT && !it.isNullOrBlank()
+        }
+    return if (ssid != null) {
+        stringResource(
+            R.string.saved_path_subtitle_ssid, record.transport.displayName, ssid, recency
+        )
+    } else {
+        stringResource(R.string.saved_path_subtitle, record.transport.displayName, recency)
+    }
 }
+
+/**
+ * The forgot-to-switch-networks case, word for word from iOS: a router/hotspot camera that
+ * cannot be found is overwhelmingly a phone on the WRONG network, and a spinner that never
+ * says so leaves the operator waiting on a connect that cannot succeed. AP setups are
+ * excluded -- their remedy is the join flow, which reconnect already runs.
+ */
+private fun wrongNetworkHint(record: SavedCameraRecord): String =
+    when (record.transport) {
+        SavedCameraTransport.INFRASTRUCTURE,
+        SavedCameraTransport.PHONE_HOTSPOT,
+        ->
+            " If the camera is on a router or hotspot, make sure this device is on the same " +
+                "network — that is where it was reached last time."
+        SavedCameraTransport.CAMERA_ACCESS_POINT,
+        SavedCameraTransport.USB_C,
+        -> ""
+    }

@@ -368,7 +368,10 @@ internal fun commandDashboardPresentation(
                 snapshot.shutterAngle.monitorValueOrNull()
                     ?: snapshot.shutterSpeed.monitorValueOrNull()
         }
-    val whiteBalanceMode = snapshot.whiteBalanceMode.monitorValueOrNull()
+    // The cinema dashboard wants the MOVIE side; the accessor only falls back to the stills one
+    // for a body that has never pushed a movie value at all.
+    val whiteBalanceMode =
+        snapshot.activeWhiteBalanceMode(photography = false).monitorValueOrNull()
     val whiteBalanceKelvin = snapshot.whiteBalanceKelvin?.takeIf { it > 0 }
     val whiteBalance =
         if (whiteBalanceMode == COLOR_TEMPERATURE_MODE) {
@@ -584,7 +587,7 @@ internal fun commandDashboardPresentation(
                     val displayValue =
                         when {
                             // Show the body's working ISO while Auto is on (drum is locked).
-                            IsoPickerPolicy.isAutoISOActive(snapshot.isoAuto) ->
+                            IsoPickerPolicy.isAutoISOActive(snapshot.isoAuto, codec ?: "") ->
                                 isoValue?.let { "A$it" } ?: "Auto"
                             else -> isoValue
                         }
@@ -994,10 +997,10 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.IRIS -> snapshot.iris == label
         CameraControl.WHITE_BALANCE ->
             if (label.endsWith("K")) {
-                snapshot.whiteBalanceMode == COLOR_TEMPERATURE_MODE &&
+                snapshot.activeWhiteBalanceMode(photography = false) == COLOR_TEMPERATURE_MODE &&
                     snapshot.whiteBalanceKelvin?.let { "${it}K" } == label
             } else {
-                snapshot.whiteBalanceMode == label
+                snapshot.activeWhiteBalanceMode(photography = false) == label
             }
         CameraControl.FOCUS_MODE -> snapshot.focusMode == label
         CameraControl.FOCUS_AREA -> snapshot.focusArea == label
@@ -1168,6 +1171,12 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
 internal fun CommandDashboard(
     recording: Boolean,
     timecodeRetention: MonitorTimecodeRetention,
+    /**
+     * The live-view header's timecode status bit. A body that runs no timecode gets no hero
+     * readout — the record chip takes the row back rather than heading the dashboard with a
+     * frozen 00:00:00:00.
+     */
+    showsTimecode: Boolean = true,
     sessionState: CameraSessionState,
     presentation: CommandDashboardPresentation,
     controlsEnabled: Boolean,
@@ -1196,13 +1205,15 @@ internal fun CommandDashboard(
                 // chip leaves (`minimumScaleFactor(0.78)`) — the hero timecode is a hair too
                 // wide for the column on a 16:9 landscape deck, where the dashboard narrows to
                 // clear the side rail.
-                BoxWithConstraints(Modifier.weight(1f)) {
-                    FitScale(maxWidth) {
-                        RetainedCameraTimecodeReadout(
-                            retention = timecodeRetention,
-                            sessionState = sessionState,
-                            sizeSp = 60f,
-                        )
+                if (showsTimecode) {
+                    BoxWithConstraints(Modifier.weight(1f)) {
+                        FitScale(maxWidth) {
+                            RetainedCameraTimecodeReadout(
+                                retention = timecodeRetention,
+                                sessionState = sessionState,
+                                sizeSp = 60f,
+                            )
+                        }
                     }
                 }
             }
@@ -1240,6 +1251,8 @@ internal fun CommandDashboard(
 internal fun PortraitCommandDashboard(
     presentation: CommandDashboardPresentation,
     timecodeRetention: MonitorTimecodeRetention,
+    /** As [CommandDashboard]: no body timecode, no hero band — the grid takes the space back. */
+    showsTimecode: Boolean = true,
     sessionState: CameraSessionState,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
@@ -1258,16 +1271,18 @@ internal fun PortraitCommandDashboard(
                 .padding(start = 12.dp, end = 12.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            BoxWithConstraints(
-                Modifier.fillMaxWidth().height(80.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                FitScale(maxWidth) {
-                    RetainedCameraTimecodeReadout(
-                        retention = timecodeRetention,
-                        sessionState = sessionState,
-                        sizeSp = 52f,
-                    )
+            if (showsTimecode) {
+                BoxWithConstraints(
+                    Modifier.fillMaxWidth().height(80.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    FitScale(maxWidth) {
+                        RetainedCameraTimecodeReadout(
+                            retention = timecodeRetention,
+                            sessionState = sessionState,
+                            sizeSp = 52f,
+                        )
+                    }
                 }
             }
             CommandGrid(

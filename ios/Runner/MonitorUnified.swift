@@ -166,7 +166,11 @@ struct MonitorInfoBar: View {
                     + Text(frames).foregroundStyle(LiveDesign.accent))
                     .font(.system(size: 20, weight: .medium, design: .monospaced))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    // Timecode is the one readout that must survive a squeezed deck intact — on
+                    // set a truncated TC is worse than no TC. It takes its full width first and
+                    // the softer cells beside it (codec, media, resolution) give way instead.
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
             }
         }
 
@@ -262,6 +266,11 @@ struct MonitorInfoBar: View {
     private struct InfoBarContent: View {
         @Environment(NativeAppModel.self) private var model
 
+        private var isPhotography: Bool {
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: model.cameraPropertySnapshot.captureSelector)
+        }
+
         // The portrait bar honours the same per-cell switches as the landscape deck. It used to
         // honour none of them — hiding MEDIA or the timecode in Settings changed nothing here,
         // and the battery read the policy directly so the Edit view could not force-mount it.
@@ -270,7 +279,13 @@ struct MonitorInfoBar: View {
             ZStack {
                 // Storage/minutes centered on the SCREEN, not the leftover space (spec §1): a bare
                 // Text in the ZStack centers within the full bar width regardless of siblings.
-                if model.chromeSectionMounts(.mediaReadout) {
+                //
+                // Cinema only, and photography carries no MEDIA cell at all — the same call the
+                // landscape deck makes. Shots remaining is the number a stills operator is
+                // actually counting down, and it is measured from the space this would report, so
+                // the two side by side are one fact twice. Storage stays a tap away on the SHOTS
+                // readout for whoever wants the gigabytes.
+                if model.chromeSectionMounts(.mediaReadout), !isPhotography {
                     Text(model.mediaReadout)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(LiveDesign.muted)
@@ -278,13 +293,43 @@ struct MonitorInfoBar: View {
                         .chromeEditable(.mediaReadout, editing: editing)
                 }
 
-                HStack {
+                HStack(spacing: 10) {
                     // Must read `liveTimecode` (not `cameraState.timecode`) — per-frame telemetry
                     // is held separately so the HUD struct is not invalidated every tick.
                     // A nested leaf observes that property so only this text re-renders.
+                    //
+                    // Photography makes the same swap the landscape deck already makes: the shots
+                    // counter takes the timecode slot, and size and quality follow it. A stills
+                    // body runs no timecode, so the slot was reading a frozen 00:00:00:00 — and
+                    // the two readouts that do matter between frames lived only in landscape.
                     if model.chromeSectionMounts(.timecodeReadout) {
-                        PortraitInfoBarTimecode()
-                            .chromeEditable(.timecodeReadout, editing: editing)
+                        if isPhotography {
+                            PortraitInfoBarShots()
+                                .chromeEditable(.timecodeReadout, editing: editing)
+                        } else {
+                            PortraitInfoBarTimecode()
+                                .chromeEditable(.timecodeReadout, editing: editing)
+                        }
+                    }
+                    if isPhotography {
+                        // Same pickers the landscape cells open, so the drop-down anchors to
+                        // whichever cell published its frame last — one mechanism, both shells.
+                        if model.chromeSectionMounts(.resolutionReadout) {
+                            PortraitInfoBarPickerCell(
+                                picker: .stillSize,
+                                value: model.stillSizeAreaDisplay ?? "—"
+                            )
+                            .accessibilityLabel("Image area and size")
+                            .chromeEditable(.resolutionReadout, editing: editing)
+                        }
+                        if model.chromeSectionMounts(.codecReadout) {
+                            PortraitInfoBarPickerCell(
+                                picker: .stillQuality,
+                                value: model.cameraPropertySnapshot.stillQualityCompactLabel ?? "—"
+                            )
+                            .accessibilityLabel("Image quality")
+                            .chromeEditable(.codecReadout, editing: editing)
+                        }
                     }
 
                     Spacer(minLength: 8)
@@ -314,6 +359,99 @@ struct MonitorInfoBar: View {
         }
     }
 
+    /// Portrait top-bar shots counter — the photography twin of ``PortraitInfoBarTimecode``, in
+    /// the same 15pt monospaced face so the two swap without the bar's rhythm changing.
+    ///
+    /// Tap-toggles to the storage form, exactly as the landscape deck's version does, and for the
+    /// same reason: photography carries no separate MEDIA cell, so this is where the gigabytes
+    /// live. One `photoPillShowsStorage` drives both, so the choice follows a rotation.
+    private struct PortraitInfoBarShots: View {
+        @Environment(NativeAppModel.self) private var model
+
+        var body: some View {
+            Button {
+                model.photoPillShowsStorage.toggle()
+            } label: {
+                readout
+                    .font(.system(size: 15, weight: .regular, design: .monospaced))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.zcTapTarget)
+            // Pin the cell's geometry so the width change when the readout flips cannot relayout
+            // it out from under an in-flight tap (the same trap as the landscape MEDIA cell).
+            .geometryGroup()
+            .layoutPriority(1)
+        }
+
+        private var readout: Text {
+            if model.photoPillShowsStorage, let status = model.cameraState.mediaStatus {
+                return Text("\(status.gigabytesFree) GB").foregroundStyle(LiveDesign.text)
+                    + Text(" \(status.percentFree)%")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+            let remaining = model.cameraPropertySnapshot.shotsRemaining
+            return Text(remaining.map(Self.compactCount) ?? "—")
+                .foregroundStyle(LiveDesign.text)
+                + Text(" SHOTS")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(LiveDesign.muted)
+        }
+
+        /// Four digits is the most a card ever shows before this reads as a wall of numerals.
+        private static func compactCount(_ count: Int) -> String {
+            guard count > 9999 else { return String(count) }
+            return String(format: "%.1fk", Double(count) / 1000)
+        }
+    }
+
+    /// A tappable stills readout in the portrait bar: the value in the bar's own type, the label
+    /// under it, opening the same picker as its landscape twin.
+    ///
+    /// It publishes its frame to `topBarPickerFrames` for exactly the reason the landscape cell
+    /// does — `topPickerBody` anchors the drop-down beneath whichever cell is on screen, and a
+    /// portrait cell that published nothing would drop its picker into the top-left corner.
+    private struct PortraitInfoBarPickerCell: View {
+        @Environment(NativeAppModel.self) private var model
+        let picker: CameraPicker
+        let value: String
+
+        var body: some View {
+            let isActive = model.activePanel == .picker(picker)
+            Button {
+                if model.activePanel == nil {
+                    model.showPicker(picker)
+                } else if isActive {
+                    model.dismissActivePanel()
+                } else {
+                    model.switchPicker(to: picker)
+                }
+            } label: {
+                Text(value)
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.text)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.zcTapTarget)
+            .geometryGroup()
+            .background(
+                GeometryReader { proxy in
+                    let frame = proxy.frame(in: .global)
+                    Color.clear
+                        .onAppear { model.topBarPickerFrames[picker] = frame }
+                        .onChange(of: frame) { _, newFrame in
+                            model.topBarPickerFrames[picker] = newFrame
+                        }
+                        .onDisappear { model.topBarPickerFrames[picker] = nil }
+                }
+            )
+        }
+    }
+
     /// Portrait top-bar timecode leaf — same source as landscape (`liveTimecode`), isolated so
     /// the ~30 Hz tick does not invalidate the whole info bar.
     private struct PortraitInfoBarTimecode: View {
@@ -328,6 +466,8 @@ struct MonitorInfoBar: View {
                 .foregroundStyle(LiveDesign.accent))
                 .font(.system(size: 15, weight: .regular, design: .monospaced))
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
         }
     }
 }
@@ -369,13 +509,21 @@ struct MonitorCaptureStrip: View {
     /// Portrait-only: the row's natural (scale-1) width, measured off-screen so the fitted row
     /// can derive its scale on any device width.
     @State private var naturalRowWidth: CGFloat = 0
+    /// Which edges of the scrolled row still have cells beyond them.
+    @State private var scrollEdges = ScrollEdgeFades(leading: false, trailing: true)
 
     var body: some View {
-        if fitsWidth {
-            landscapeBody
-        } else {
-            portraitBody
+        Group {
+            if fitsWidth {
+                landscapeBody
+            } else {
+                portraitBody
+            }
         }
+        // A watcher holds the control token: the tiles read on, grayed, and taps stand down
+        // until control is revoked (the pill over the feed) or given back.
+        .opacity(model.relayControlSurrendered ? 0.4 : 1)
+        .allowsHitTesting(!model.relayControlSurrendered)
     }
 
     /// The stills tiles own the whole band (assist lives on the left rail), so they run
@@ -468,10 +616,17 @@ struct MonitorCaptureStrip: View {
         .onTapGesture {}
     }
 
-    /// The five settings, scaled so the row spans the bar edge-to-edge on any device width:
-    /// scale = what makes cells + minimum gaps fill the width, capped at scale 1 (the vertical
-    /// max) — past the cap the leftover width becomes spacing (Pro Max, iPad). The natural
-    /// scale-1 row is measured hidden so the math holds for any cell set or future widths.
+    /// The settings row, spread across the bar when they fit and scrolled at full size when they
+    /// do not. The natural scale-1 row is measured hidden so the maths holds for any cell set or
+    /// future widths.
+    ///
+    /// Five cinema readouts fit any phone, so they spread edge-to-edge and the leftover width
+    /// becomes spacing (Pro Max, iPad). Photography brings NINE — mode, ISO, shutter, iris, drive,
+    /// focus, white balance, meter, profile — and shrinking those to fit turned every value into
+    /// something an operator has to lean in to read. A shorter row of full-size cells that scrolls
+    /// beats a complete row nobody can read at arm's length, so past the point where they fit, the
+    /// cells stay their own size and the bar scrolls, with the same edge fades and gold chevrons
+    /// the assist toolbar uses for exactly the same "there is more this way" job.
     private var fittedRow: some View {
         GeometryReader { proxy in
             let values = stripValues
@@ -479,20 +634,59 @@ struct MonitorCaptureStrip: View {
             let gaps = n - 1
             let cellsNatural = max(1, naturalRowWidth - Self.baseSpacing * gaps)
             let fitScale = (proxy.size.width - Self.minSpacing * gaps) / cellsNatural
-            let scale = min(Self.maxScale, max(Self.minScale, fitScale))
-            let spacing =
-                gaps > 0
-                ? max(Self.minSpacing, (proxy.size.width - cellsNatural * scale) / gaps)
-                : 0
-            HStack(spacing: spacing) {
-                ForEach(values) { item in
-                    CaptureSettingButton(value: item, scale: scale)
+            Group {
+                if fitScale >= Self.maxScale {
+                    let spacing =
+                        gaps > 0
+                        ? max(Self.minSpacing, (proxy.size.width - cellsNatural) / gaps)
+                        : 0
+                    HStack(spacing: spacing) {
+                        ForEach(values) { item in
+                            CaptureSettingButton(value: item)
+                        }
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                } else {
+                    scrolledRow(values: values)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
                 }
             }
-            .frame(width: proxy.size.width, height: proxy.size.height)
             .opacity(naturalRowWidth > 0 ? 1 : 0)  // one measurement pass before first paint
         }
         .background(naturalRowMeasurer)
+    }
+
+    /// Full-size cells in a horizontal scroller, edges faded and chevroned while there is more
+    /// that way. Transcribed from `MonitorAssistStrip.horizontalBody` — same treatment, same
+    /// tolerances, because it answers the same question about the same kind of overflowing row.
+    private func scrolledRow(values: [CameraValue]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Self.baseSpacing) {
+                ForEach(values) { item in
+                    CaptureSettingButton(value: item)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxHeight: .infinity)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .mask(scrollEdges.gradient)
+        .overlay(alignment: .leading) { scrollChevron(.leading) }
+        .overlay(alignment: .trailing) { scrollChevron(.trailing) }
+        .animation(.easeInOut(duration: 0.18), value: scrollEdges)
+        .modifier(ScrollEdgeReporter(edges: $scrollEdges))
+    }
+
+    private func scrollChevron(_ edge: HorizontalEdge) -> some View {
+        Image(systemName: edge == .leading ? "chevron.left" : "chevron.right")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(LiveDesign.accent)
+            .shadow(color: .black.opacity(0.65), radius: 4)
+            // Breathing room, as on the assist strip: without it the glyph sits on top of the
+            // last visible value rather than beside it.
+            .padding(.horizontal, 5)
+            .opacity((edge == .leading ? scrollEdges.leading : scrollEdges.trailing) ? 1 : 0)
+            .allowsHitTesting(false)
     }
 
     /// Off-screen scale-1 row whose width feeds `fittedRow`'s math. Hidden and non-interactive.
@@ -744,35 +938,39 @@ struct MonitorAssistStrip: View {
     }
 
     private var expandedRail: some View {
-        ZStack(alignment: .bottom) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 4) {
-                    collapseHandle
-                    ForEach(tools) { tool in
-                        AssistToolButtonRow(tool: tool)
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 4) {
+                        ForEach(tools) { tool in
+                            AssistToolButtonRow(tool: tool)
+                        }
                     }
+                    .padding(.top, 10)
+                    // The last row must be able to scroll fully clear of the bottom fade —
+                    // without this it parks half-faded against the collapse footer.
+                    .padding(.bottom, Self.bottomFadeHeight + 10)
+                    .padding(.horizontal, 6)
                 }
-                .padding(.top, 10)
-                // The last row must be able to scroll fully clear of the bottom fade —
-                // without this it parks half-faded against the rail's rounded end.
-                .padding(.bottom, Self.bottomFadeHeight + 10)
-                .padding(.horizontal, 6)
+                // Mirrors MediaBrowser's `portraitGridControlsBand` fade shape: rows scroll UNDER
+                // a bottom gradient so the last tool never hard-clips mid-glyph — the fade itself
+                // is the scroll affordance. The gradient reaches near-opaque well before the
+                // scroller's end so a row is fully swallowed by the time it meets the footer.
+                LinearGradient(
+                    stops: [
+                        .init(color: LiveDesign.background.opacity(0), location: 0),
+                        .init(color: LiveDesign.background.opacity(0.85), location: 0.55),
+                        .init(color: LiveDesign.background.opacity(0.98), location: 1),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: Self.bottomFadeHeight)
+                .allowsHitTesting(false)
             }
-            // Mirrors MediaBrowser's `portraitGridControlsBand` fade shape: rows scroll UNDER a
-            // bottom gradient so the last tool never hard-clips mid-glyph against the rail's
-            // rounded edge — the fade itself is the scroll affordance. The gradient reaches
-            // near-opaque well before the rail's end so a row is fully swallowed by the time
-            // it meets the rounded corner.
-            LinearGradient(
-                stops: [
-                    .init(color: LiveDesign.background.opacity(0), location: 0),
-                    .init(color: LiveDesign.background.opacity(0.85), location: 0.55),
-                    .init(color: LiveDesign.background.opacity(0.98), location: 1),
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: Self.bottomFadeHeight)
-            .allowsHitTesting(false)
+            // The collapse chevron is a fixed footer below the scroller: always visible at the
+            // rail's bottom end, never scrolled away with the tools.
+            collapseHandle
+                .padding(.bottom, 6)
         }
         .frame(width: Self.expandedWidth, height: feedHeight)
         // Rows must never draw outside the rail's rounded silhouette — the scroll view clips
@@ -977,38 +1175,54 @@ struct MonitorSystemCluster: View {
     // MARK: - .axisHorizontal (former `PortraitSystemBar`)
 
     private var portraitBody: some View {
-        // Equal GAPS via equal spacers, not equal columns: the wide record button in an equal
-        // column left DISP nearly touching record while far from lock.
+        // Record anchors DEAD-CENTRE as an overlay; the side clusters spread through their own
+        // equal-flex halves with the same 14pt-breathing spacers. The old single equal-gap flow
+        // re-centred the whole row whenever a neighbour unmounted — clean view drops the lock,
+        // and record walked visibly off-centre (field report: "record should always be in the
+        // center"). With no record mounted (a watcher), the halves join into one flow again.
         let editing = model.chromeEditorMode
-        return HStack(spacing: 0) {
-            Spacer(minLength: 14)
-            if mounts(.lockButton) {
-                lockButton
-                    .chromeEditable(.lockButton, editing: editing)
-                Spacer(minLength: 14)
-            }
-            if mounts(.railDisp) {
-                PortraitDisplayButton()
-                    .accessibilityLabel("Change display mode")
-                    .accessibilityIdentifier("monitor.system.display")
-                    .liveViewGuideAnchor(.display)
-                    .chromeEditable(.railDisp, editing: editing)
-                Spacer(minLength: 14)
+        return ZStack {
+            HStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 14)
+                    if mounts(.lockButton) {
+                        lockButton
+                            .chromeEditable(.lockButton, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                    if mounts(.railDisp) {
+                        PortraitDisplayButton()
+                            .accessibilityLabel("Change display mode")
+                            .accessibilityIdentifier("monitor.system.display")
+                            .liveViewGuideAnchor(.display)
+                            .chromeEditable(.railDisp, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                if mounts(.railRecord) {
+                    // Keeps the centre lane clear under the overlaid record button.
+                    Color.clear
+                        .frame(width: CGFloat(MonitorSideRailControlLayout.recordButtonSize))
+                }
+                HStack(spacing: 0) {
+                    Spacer(minLength: 14)
+                    if mounts(.railMedia) {
+                        mediaButton
+                            .chromeEditable(.railMedia, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                    if mounts(.railSettings) {
+                        settingsButton
+                            .chromeEditable(.railSettings, editing: editing)
+                        Spacer(minLength: 14)
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
             if mounts(.railRecord) {
                 recordButton
                     .chromeEditable(.railRecord, editing: editing)
-                Spacer(minLength: 14)
-            }
-            if mounts(.railMedia) {
-                mediaButton
-                    .chromeEditable(.railMedia, editing: editing)
-                Spacer(minLength: 14)
-            }
-            if mounts(.railSettings) {
-                settingsButton
-                    .chromeEditable(.railSettings, editing: editing)
-                Spacer(minLength: 14)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1066,6 +1280,8 @@ struct MonitorSystemCluster: View {
             )
             .accessibilityIdentifier("monitor.system.shutter")
             .liveViewGuideAnchor(.record)
+            .opacity(model.relayControlSurrendered ? 0.4 : 1)
+            .allowsHitTesting(!model.relayControlSurrendered)
         } else {
             Button {
                 model.toggleRecording()
@@ -1073,6 +1289,8 @@ struct MonitorSystemCluster: View {
                 RecordButton(isRecording: model.cameraState.recordState == .recording)
             }
             .buttonStyle(.zcTapTarget)
+            .opacity(model.relayControlSurrendered ? 0.4 : 1)
+            .allowsHitTesting(!model.relayControlSurrendered)
             .accessibilityLabel(
                 model.cameraState.recordState == .recording ? "Stop recording" : "Start recording"
             )
@@ -1214,21 +1432,42 @@ struct MonitorShell: View {
     /// shells use — the banner is mounted above `allowsHitTesting(false)`, outside the branch that
     /// already holds `map`, and only ever while the editor is open.
     private var editorZoneMap: MonitorZoneMap {
-        MonitorZoneLayout.map(
-            viewportWidth: context.viewportWidth,
-            viewportHeight: context.viewportHeight,
-            safeArea: context.feedSafeArea,
-            chromeInsets: context.isPortrait ? nil : context.chromeInsets,
-            mode: model.displayMode,
-            isPortrait: context.isPortrait,
-            aspect: model.preferences.portraitFeedAspect,
-            scopeCount: scopeCount,
-            horizontalDirection: context.horizontalDirection,
-            bottomBarHeight: context.isPortrait
-                ? (model.chromeSectionMounts(.assistToolbar)
-                    ? MonitorPortraitLayout.assistToolbarHeight : 0)
-                : landscapeBottomBarHeight
-        )
+        assistStripCenteredIfWatching(
+            MonitorZoneLayout.map(
+                viewportWidth: context.viewportWidth,
+                viewportHeight: context.viewportHeight,
+                safeArea: context.feedSafeArea,
+                chromeInsets: context.isPortrait ? nil : context.chromeInsets,
+                mode: model.displayMode,
+                isPortrait: context.isPortrait,
+                aspect: model.preferences.portraitFeedAspect,
+                scopeCount: scopeCount,
+                horizontalDirection: context.horizontalDirection,
+                bottomBarHeight: context.isPortrait
+                    ? (model.chromeSectionMounts(.assistToolbar)
+                        ? MonitorPortraitLayout.assistToolbarHeight : 0)
+                    : landscapeBottomBarHeight
+            ))
+    }
+
+    /// A watcher WITHOUT control centres its assist strip: it has no capture strip, so the lane
+    /// the strip normally takes — which exists to share the band with one — would leave it
+    /// hanging off to one side of an otherwise empty band.
+    ///
+    /// Keyed on capability, so control decides it live: being granted control brings the capture
+    /// strip back and returns the strip to its lane in the same moment, and giving control back
+    /// centres it again. `canDriveCamera` is computed from the current session, so it cannot be
+    /// carried over from one that has ended.
+    ///
+    /// Centring is ALL that happens here. The earlier version of this idea also relocated DISP to
+    /// the bottom-trailing corner and raised the top chrome; that breadth is what produced the
+    /// layout reports, and only the centring was ever wanted.
+    private func assistStripCenteredIfWatching(_ map: MonitorZoneMap) -> MonitorZoneMap {
+        guard !context.isPortrait,
+            model.displayMode != .command,
+            !model.monitorAvailability.canDriveCamera
+        else { return map }
+        return MonitorZoneLayout.watcherBand(map, viewportWidth: context.viewportWidth)
     }
 
     var body: some View {
@@ -1315,20 +1554,21 @@ struct MonitorShell: View {
         // physical height — use the context's restored full height for both the map and the
         // canvas frame, otherwise lock/battery/rail frames land short.
         let fullHeight = context.viewportHeight
-        let map = MonitorZoneLayout.map(
-            viewportWidth: context.viewportWidth,
-            viewportHeight: fullHeight,
-            safeArea: context.feedSafeArea,
-            // Carries the iPadOS 26 window-control clearance the safe area lacks (see
-            // `clearingWindowControls`), so the lock button and top deck render below the pill.
-            chromeInsets: context.chromeInsets,
-            mode: model.displayMode,
-            isPortrait: false,
-            aspect: model.preferences.portraitFeedAspect,
-            scopeCount: scopeCount,
-            horizontalDirection: context.horizontalDirection,
-            bottomBarHeight: landscapeBottomBarHeight
-        )
+        let map = assistStripCenteredIfWatching(
+            MonitorZoneLayout.map(
+                viewportWidth: context.viewportWidth,
+                viewportHeight: fullHeight,
+                safeArea: context.feedSafeArea,
+                // Carries the iPadOS 26 window-control clearance the safe area lacks (see
+                // `clearingWindowControls`), so the lock button and top deck render below the pill.
+                chromeInsets: context.chromeInsets,
+                mode: model.displayMode,
+                isPortrait: false,
+                aspect: model.preferences.portraitFeedAspect,
+                scopeCount: scopeCount,
+                horizontalDirection: context.horizontalDirection,
+                bottomBarHeight: landscapeBottomBarHeight
+            ))
         let chrome = model.monitorChrome
 
         ZStack(alignment: .topLeading) {
@@ -1435,45 +1675,6 @@ struct MonitorShell: View {
             && !model.interfaceLocked && model.chromeEditorMode == nil
     }
 
-    /// Whether the punch-in quick key mounts. Deliberately independent of the recenter/50-50
-    /// lane: the punch-in has to be reachable even when neither of those keys is up. The two
-    /// trailing clauses are the ones every on-feed key carries.
-    private var magnificationKeyMounts: Bool {
-        Magnification.showsButton(
-            toolEnabled: model.renderedLiveAssistTools.contains(.magnification))
-            && !model.interfaceLocked && model.chromeEditorMode == nil
-    }
-
-    /// The punch-in quick key itself, shared by both orientations so only the seat differs.
-    ///
-    /// One tap in, one tap out — reopening a popup to leave a magnified view would defeat the
-    /// point of a focus check. The icon's active state reads off the same flag that drives the
-    /// transform, so the two cannot disagree.
-    @ViewBuilder private func magnificationKey(size: CGFloat) -> some View {
-        Button {
-            model.magnificationActive.toggle()
-        } label: {
-            Image(
-                systemName: model.magnificationActive
-                    ? "minus.magnifyingglass" : "plus.magnifyingglass"
-            )
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(model.magnificationActive ? LiveDesign.accent : LiveDesign.text)
-            .frame(width: size, height: size)
-            .background(.black.opacity(0.55), in: Circle())
-            .overlay(
-                Circle().strokeBorder(
-                    model.magnificationActive ? LiveDesign.accent : LiveDesign.hairline,
-                    lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-        .transition(.scale(scale: 0.6).combined(with: .opacity))
-        .accessibilityLabel(
-            Magnification.buttonLabel(
-                factor: model.assistConfiguration.magnification.factor,
-                isActive: model.magnificationActive))
-    }
-
     /// The live/clean chrome: full-width info deck and the bottom assist/capture strips. Every
     /// region is per-DISP-mode configuration now — no mode branches here.
     @ViewBuilder private func landscapeChrome(
@@ -1512,9 +1713,17 @@ struct MonitorShell: View {
             if let assist = map.assistStrip, let capture = map.captureStrip,
                 assistVisible || captureVisible
             {
-                let leftX = min(assist.frame.x, capture.frame.x)
-                let rightX = max(
-                    assist.frame.x + assist.frame.width, capture.frame.x + capture.frame.width)
+                // The union exists to span BOTH strips; an unmounted capture strip must not
+                // drag the container back to its empty lane (that pinned the freed-band
+                // recentered assist zone at the capture strip's old leading edge).
+                let leftX =
+                    captureVisible ? min(assist.frame.x, capture.frame.x) : assist.frame.x
+                let rightX =
+                    captureVisible
+                    ? max(
+                        assist.frame.x + assist.frame.width,
+                        capture.frame.x + capture.frame.width)
+                    : assist.frame.x + assist.frame.width
                 let width = rightX - leftX
                 HStack(alignment: .bottom, spacing: 8) {
                     if assistVisible {
@@ -1531,10 +1740,13 @@ struct MonitorShell: View {
                         .environment(model)
                         .liveViewGuideAnchor(.viewAssist)
                         .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
-                        .frame(
-                            maxWidth: captureVisible ? .infinity : CGFloat(assist.frame.width),
-                            alignment: .leading
-                        )
+                        // Always the zone's own width — the ternary here used to hand the strip
+                        // `.infinity` when the capture strip was visible, which is exactly when it
+                        // must be bounded: the tool row then took the whole band and squeezed the
+                        // capture bar into a sliver at the trailing edge. The zone already carries
+                        // the right answer for both cases: half the band when a capture strip
+                        // shares it, its own centred width when a watcher has the band alone.
+                        .frame(maxWidth: CGFloat(assist.frame.width), alignment: .leading)
                         .layoutPriority(0)
                         .frame(maxHeight: .infinity)
                     }
@@ -1550,7 +1762,9 @@ struct MonitorShell: View {
                 }
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 // Photography centres the strip under the centred feed (cinema keeps the
-                // assist-then-strip leading flow).
+                // assist-then-strip leading flow). The freed band needs no alignment override:
+                // its zone is the layout's own, and the
+                // strip's scroller fills whatever width the zone hands it.
                 .frame(
                     width: CGFloat(width), height: CGFloat(assist.frame.height),
                     alignment: MonitorBottomBandAlignment.alignment(
@@ -1678,20 +1892,6 @@ struct MonitorShell: View {
                 }
             }
 
-            // Punch-in quick key, on the feed's far edge OPPOSITE the recenter/50-50 lane, level
-            // with it. Landscape stacks those two bottom-left, so the punch-in takes bottom-right.
-            if magnificationKeyMounts {
-                let size: CGFloat = 40
-                let laneY =
-                    map.assistStrip.map { CGFloat($0.frame.y) - 30 }
-                    ?? CGFloat(context.viewportHeight) - 40
-                magnificationKey(size: size)
-                    .position(
-                        x: CGFloat(map.feed.x + map.feed.width) - 10 - size / 2,
-                        y: min(laneY, CGFloat(map.feed.y + map.feed.height) - 10 - size / 2)
-                    )
-            }
-
             // MF focus-by-wire scrub: beside the right system rail whenever the operator has
             // switched the Focus dial on (default off) and the body is in an AF focus mode —
             // video and photo alike. Refusals are transient, so the strip never hides on one.
@@ -1704,6 +1904,30 @@ struct MonitorShell: View {
                         y: CGFloat(context.viewportHeight) / 2
                     )
                     .transition(.opacity)
+            }
+
+            // Watcher control key: centred above the bottom band, CLEAR of the assist
+            // toolbar's lane — the old feed-anchored bottom-center mount landed inside that
+            // band, half-under the toolbar's tools.
+            if model.videoSource == .relay, !model.interfaceLocked,
+                model.chromeEditorMode == nil,
+                model.relayHoldsControl || model.relayAllowsControlRequests
+            {
+                let keyY =
+                    map.assistStrip.map { CGFloat($0.frame.y) - 28 }
+                    ?? CGFloat(context.viewportHeight) - 60
+                WatcherControlKey()
+                    .environment(model)
+                    .position(x: CGFloat(deck.midX), y: keyY)
+            } else if model.relayControlSurrendered, !model.interfaceLocked,
+                model.chromeEditorMode == nil
+            {
+                let keyY =
+                    map.assistStrip.map { CGFloat($0.frame.y) - 28 }
+                    ?? CGFloat(context.viewportHeight) - 60
+                BroadcasterControlKey()
+                    .environment(model)
+                    .position(x: CGFloat(deck.midX), y: keyY)
             }
         }
     }
@@ -1740,11 +1964,27 @@ struct MonitorShell: View {
         // Command wants a full-height control grid regardless of the persisted aspect; `.fit16x9`
         // for the zone maths yields the topBar→systemBar span it needs.
         let persistedAspect = model.preferences.portraitFeedAspect
-        // Photography always lays out as fit: the stills frame is 3:2/1:1/16:9 per image area
-        // (passed as the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
+        // Photography lays out as fit: the stills frame is 3:2/1:1/16:9 per image area (passed as
+        // the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
+        //
+        // A VERTICAL body is the exception, and the reason is that vertical fill does not crop:
+        // the picture pillarboxes inside the frame rather than over-widening (see
+        // `feedContentWidth`), so the objection above does not apply to it. What fit gives a 2:3
+        // still instead is a feed tall enough to push its own stacked bands off the screen — the
+        // toolbar clips at the right edge, the shutter lands on top of the DRIVE tile, and the
+        // white-balance row falls off the bottom entirely. Fill is the layout that fits, and it is
+        // the one video already uses for the same body position.
         let isPhotography = model.isPhotographyMode
+        // Vertical mode (body on its side) always lays out as FILL: the fill zones are exactly
+        // the vertical viewer — feed spanning topBar→systemBar (the 9:16 picture pillarboxes
+        // inside), the floating vertical assist rail, and the capture bar over the feed's
+        // bottom edge — where fit's stacked toolbar/tile bands would strand the controls.
+        let isVerticalFeed = model.liveFeedRotation.isVertical
+        // Vertical is tested before photography, so a vertically held stills body reaches fill.
         let zoneAspect: PortraitFeedAspect =
-            model.displayMode == .command || isPhotography ? .fit16x9 : persistedAspect
+            model.displayMode == .command
+            ? .fit16x9
+            : isVerticalFeed ? .fill : isPhotography ? .fit16x9 : persistedAspect
         // The stacked-scopes zone must bill only what `PortraitScopesStack` will actually render
         // (photography drops cinema-only scopes; clean drops everything unpinned) — a zone sized
         // to the unfiltered count leaves a dead band between the feed and the toolbar.
@@ -1762,15 +2002,35 @@ struct MonitorShell: View {
             // non-zero (and only for fit + live). Fill/clean/command collapse it to nothing.
             bottomBarHeight: model.chromeSectionMounts(.assistToolbar)
                 ? MonitorPortraitLayout.assistToolbarHeight : 0,
-            portraitFeedAspectRatio: isPhotography
-                ? model.cameraPropertySnapshot.photographyFeedAspect : 16.0 / 9.0
+            portraitFeedAspectRatio: {
+                let source =
+                    isPhotography
+                    ? model.cameraPropertySnapshot.photographyFeedAspect : 16.0 / 9.0
+                return isVerticalFeed ? 1 / source : source
+            }()
         )
         let feed = map.feed
-        let isFill = persistedAspect == .fill && !isPhotography
+        // A vertical body is fill in BOTH modes; only the persisted cinema choice is photography's
+        // to be excluded from. Must agree with `zoneAspect` above — this flag drives the rail, the
+        // floating scopes and the capture strip, and disagreeing with the zone map is how the
+        // controls end up in a lane the layout did not reserve.
+        let isFill = isVerticalFeed || (persistedAspect == .fill && !isPhotography)
+        // Fill's capture bar is chrome like the landscape strip: the zone is only a layout frame,
+        // the per-DISP Camera Values switch decides the mount — and, through this one binding, the
+        // clearances every key that stacks above the bar derives from it.
+        let captureStrip = model.chromeSectionMounts(.cameraValues) ? map.captureStrip : nil
+        // The Fit/Fill quick key mounts only where the choice is real: photography forces fit, a
+        // vertical camera feed forces fill, command has no feed — and lock or the Edit view hides
+        // every on-feed affordance.
+        let aspectToggleMounts =
+            model.displayMode != .command && !isPhotography && !isVerticalFeed
+            && !model.interfaceLocked && model.chromeEditorMode == nil
         // The zone map hands us the feed FRAME; the content aspect-fills within it: over-widen to
         // the source's 16:9 at the frame's height, center via the outer frame, clip to the frame.
         // Fit passes the frame width straight through (16:9 frame == 16:9 content, no crop).
-        let feedContentWidth = isFill ? feed.height * 16 / 9 : feed.width
+        // A vertical feed never over-widens — its 9:16 picture pillarboxes inside the fill frame.
+        let feedContentWidth =
+            isFill && !isVerticalFeed ? feed.height * 16 / 9 : feed.width
 
         ZStack(alignment: .topLeading) {
             // Sized to the FULL physical height explicitly: this ZStack is the safe-area frame
@@ -1805,7 +2065,6 @@ struct MonitorShell: View {
                 .frame(width: feed.width, height: feed.height)
                 .clipped()
                 .offset(x: feed.x, y: feed.y)
-                .simultaneousGesture(pinchAspectGesture)
 
                 // Portrait suppresses the floating scope panels (redundant with the stacked scopes
                 // zone below); feed-anchored assists live inside LiveFeedModule. Mounted with
@@ -1837,7 +2096,9 @@ struct MonitorShell: View {
             // scope/false-colour panels, so it duplicates nothing from the suppressed inner
             // overlay above (that one renders no panels; it survives as the rail-collapse tap
             // catcher).
-            if isFill, model.displayMode == .live {
+            // Not live-only: clean mounts it too, where the policy funnel inside renders exactly
+            // the pinned tools — same as the landscape floating scopes (#256's one-rule contract).
+            if isFill, model.displayMode != .command {
                 // No `.clipped()` here (G2): MovablePanel already clamps panels inside its
                 // bounds, so clipping only ever manifests as a sliced panel edge when a panel
                 // straddles the frame boundary (WAVE/PARADE cut mid-panel on device).
@@ -1890,10 +2151,11 @@ struct MonitorShell: View {
             // The core adapter emits a non-nil `controlsGrid` for every fit-aspect pass, including
             // clean mode where the region collapses to zero height — guard on the frame height so
             // clean shows no grid.
-            if let capture = map.captureStrip {
+            if let capture = captureStrip {
                 MonitorCaptureStrip(fitsWidth: false)
                     .environment(model)
                     .liveViewGuideAnchor(.cameraControls)
+                    .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
                     .opacity(model.interfaceLocked ? 0.4 : 1)
                     .frame(width: capture.frame.width, height: capture.frame.height)
                     .offset(x: capture.frame.x, y: capture.frame.y)
@@ -1904,8 +2166,11 @@ struct MonitorShell: View {
                 // and shifts the tiles down by it; fit-mode live tiles carry no band. The timecode
                 // isn't lock-dimmed (live status, like the top bar); only the tiles dim.
                 let isCommand = model.displayMode == .command
-                let tcBand: CGFloat = isCommand ? 80 : 0
-                if isCommand {
+                // A body that runs no timecode gets no hero band — the grid takes the space back
+                // rather than heading the dashboard with a frozen 00:00:00:00.
+                let showsHeroTimecode = isCommand && model.cameraReportsTimecode
+                let tcBand: CGFloat = showsHeroTimecode ? 80 : 0
+                if showsHeroTimecode {
                     PortraitCommandTimecode()
                         .environment(model)
                         .padding(.horizontal, 12)
@@ -1919,8 +2184,11 @@ struct MonitorShell: View {
                 )
                 .environment(model)
                 .liveViewGuideAnchor(.cameraControls)
+                // A no-op in command, where the tiles are the mode itself, not configurable chrome.
+                .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
                 .padding(.horizontal, 12)
-                .opacity(model.interfaceLocked ? 0.4 : 1)
+                .opacity(model.interfaceLocked || model.relayControlSurrendered ? 0.4 : 1)
+                .allowsHitTesting(!model.relayControlSurrendered)
                 .frame(width: grid.frame.width, height: grid.frame.height - tcBand)
                 .offset(x: grid.frame.x, y: grid.frame.y + tcBand)
             }
@@ -1932,6 +2200,7 @@ struct MonitorShell: View {
                 MonitorAssistStrip(axis: .horizontal, collapsible: false)
                     .environment(model)
                     .liveViewGuideAnchor(.viewAssist)
+                    .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
                     .opacity(model.interfaceLocked ? 0.4 : 1)
                     .frame(width: assist.frame.width - 24, height: assist.frame.height - 8)
                     .offset(x: assist.frame.x + 12, y: assist.frame.y + 4)
@@ -1945,19 +2214,25 @@ struct MonitorShell: View {
             // Assist rail (fill only): collapsed pill on the feed's bottom-left; expanded spans the
             // feed height. Fit mode uses the horizontal toolbar above instead.
             // `axis: .vertical, collapsible: true` renders the collapse pill.
-            if model.displayMode != .command, isFill {
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+            if model.displayMode != .command, isFill,
+                model.chromeSectionMounts(.assistToolbar)
+            {
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 // The bar no longer overlays the feed, so the expanded rail spans the feed from
-                // a plain margin rather than clearing the info bar's height.
+                // a plain margin rather than clearing the info bar's height — and it ends above
+                // the capture strip when that chrome mounts, never over it (the same rule as
+                // Android's portraitFillAssistRailFrame).
                 let railTop = feed.y + 10
-                let railHeight = feed.height - 10
+                let railBottom = captureStrip.map(\.frame.y) ?? (feed.y + feed.height)
+                let railHeight = max(0, railBottom - railTop - 10)
                 MonitorAssistStrip(
                     axis: .vertical, collapsible: true, feedHeight: railHeight,
                     expanded: $railExpanded
                 )
                 .environment(model)
                 .liveViewGuideAnchor(.viewAssist)
+                .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .frame(
                     width: railExpanded ? MonitorAssistStrip.expandedWidth : 44,
@@ -1972,6 +2247,70 @@ struct MonitorShell: View {
                 )
             }
 
+            // Watcher control key: center-bottom over the feed, CLEAR of the assist lane. In fit
+            // the horizontal toolbar owns a band across the feed bottom — the key sits above it
+            // (a feed-anchored mount used to land inside that band, half-under the toolbar). In
+            // fill it clears the capture strip like the rail's collapsed pill does. Same overlay
+            // layer as the rail and recenter keys, so taps land the same way theirs do.
+            if model.displayMode != .command, model.videoSource == .relay,
+                !model.interfaceLocked,
+                model.chromeEditorMode == nil,
+                model.relayHoldsControl || model.relayAllowsControlRequests
+            {
+                let keyHeight: CGFloat = 40
+                let controlsHeight = captureStrip?.frame.height ?? 0
+                let laneTop =
+                    map.assistStrip?.frame.y
+                    ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
+                WatcherControlKey()
+                    .environment(model)
+                    .frame(width: feed.width, height: keyHeight)
+                    .offset(x: feed.x, y: laneTop - keyHeight - 8)
+            } else if model.displayMode != .command, model.relayControlSurrendered,
+                !model.interfaceLocked,
+                model.chromeEditorMode == nil
+            {
+                let keyHeight: CGFloat = 40
+                let controlsHeight = captureStrip?.frame.height ?? 0
+                let laneTop =
+                    map.assistStrip?.frame.y
+                    ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
+                BroadcasterControlKey()
+                    .environment(model)
+                    .frame(width: feed.width, height: keyHeight)
+                    .offset(x: feed.x, y: laneTop - keyHeight - 8)
+            }
+
+            // Fit/Fill quick key — the feed frame's own bottom-right corner control, replacing
+            // the old Display-tab picker row. The recenter and 50/50 keys stack above it in the
+            // same trailing lane while it shows.
+            if aspectToggleMounts {
+                let size: CGFloat = 40
+                let controlsHeight = captureStrip?.frame.height ?? 0
+                let bottomClearance = isFill ? controlsHeight + 10 : 10
+                Button {
+                    model.preferences.portraitFeedAspect =
+                        persistedAspect == .fill ? .fit16x9 : .fill
+                } label: {
+                    Image(
+                        systemName: persistedAspect == .fill
+                            ? "arrow.down.right.and.arrow.up.left"
+                            : "arrow.up.left.and.arrow.down.right"
+                    )
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                    .frame(width: size, height: size)
+                    .background(.black.opacity(0.55), in: Circle())
+                    .overlay(Circle().strokeBorder(LiveDesign.hairline, lineWidth: 1))
+                }
+                .buttonStyle(.zcTapTarget)
+                .offset(
+                    x: feed.x + feed.width - size - 10,
+                    y: feed.y + feed.height - size - bottomClearance
+                )
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+
             // Recenter-focus affordance, bottom-right of the feed — the portrait counterpart of
             // the landscape `focusResetButton`. In fill the capture strip overlays the feed
             // bottom, so lift it clear (same clearance as the assist rail); in fit the feed
@@ -1981,10 +2320,12 @@ struct MonitorShell: View {
                 model.chromeEditorMode == nil
             {
                 let size: CGFloat = 40
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 let x = feed.x + feed.width - size - 10
-                let y = feed.y + feed.height - size - bottomClearance
+                let y =
+                    feed.y + feed.height - size - bottomClearance
+                    - (aspectToggleMounts ? size + 10 : 0)
                 Button {
                     model.resetFocusPoint()
                 } label: {
@@ -2005,7 +2346,7 @@ struct MonitorShell: View {
             // bottom-left: the collapsed assist rail already owns that corner in portrait.
             if model.displayMode != .command, splitComparisonKeyMounts {
                 let size: CGFloat = 40
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
+                let controlsHeight = captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 let recenterMounted =
                     model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
@@ -2015,23 +2356,10 @@ struct MonitorShell: View {
                     .offset(
                         x: feed.x + feed.width - size - 10,
                         y: feed.y + feed.height - size - bottomClearance
+                            - (aspectToggleMounts ? size + 10 : 0)
                             - (recenterMounted ? size + 10 : 0)
                     )
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-
-            // Punch-in quick key — the portrait counterpart. Portrait's recenter/50-50 lane is
-            // bottom-RIGHT and the collapsed assist rail owns bottom-LEFT, so the punch-in stacks
-            // directly above that rail: still one thumb-reach from the corner, and clear of both.
-            if model.displayMode != .command, magnificationKeyMounts {
-                let size: CGFloat = 40
-                let controlsHeight = map.captureStrip?.frame.height ?? 0
-                let bottomClearance = isFill ? controlsHeight + 10 : 10
-                magnificationKey(size: size)
-                    .offset(
-                        x: feed.x + 10 + size / 2,
-                        y: feed.y + feed.height - bottomClearance - 44 - 10 - size / 2
-                    )
             }
 
             // Bottom system band. The opaque glass draws only when the band still carries a
@@ -2076,25 +2404,6 @@ struct MonitorShell: View {
         // up by half the overshoot. Top-aligned, the canvas stays rooted at physical 0.
         .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
         .ignoresSafeArea(.container, edges: .all)
-    }
-
-    /// Pinch-to-snap the portrait feed aspect.
-    private var pinchAspectGesture: some Gesture {
-        MagnificationGesture()
-            .onEnded { value in
-                let next: PortraitFeedAspect?
-                if value > 1.15 {
-                    next = .fill
-                } else if value < 0.87 {
-                    next = .fit16x9
-                } else {
-                    next = nil
-                }
-                guard let next, next != model.preferences.portraitFeedAspect else { return }
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    model.preferences.portraitFeedAspect = next
-                }
-            }
     }
 
     private func panelTransition(_ panel: NativeAppModel.ActivePanel) -> AnyTransition {

@@ -38,7 +38,9 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -168,28 +170,19 @@ public class PairingEnvironment(
 /**
  * Production [PairingEnvironment] over the real platform services.
  *
- * [hasLegacySavedCameraProfiles] is true only while upgrading an installation
- * that already has Android camera records from the former shared initiator
- * GUID. It lets that one install retain those camera-side profiles; new
- * installs always receive a fresh private identity.
- *
  * [phaseLogger] receives progress and failure phases. Callers must discard or
  * privately handle the detail value rather than placing it in an anonymous
  * report. Safe phases are also written to logcat.
  */
 public fun realPairingEnvironment(
     context: Context,
-    hasLegacySavedCameraProfiles: Boolean = false,
     phaseLogger: (String, String) -> Unit = { _, _ -> },
 ): PairingEnvironment {
     val joiner = CameraApJoiner(context)
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
     val usbCameraSource = AndroidUsbPtpCameraSource(context)
-    val initiatorGuid =
-        PtpIpInitiatorIdentity(context).guid(
-            preferLegacyStaticIdentity = hasLegacySavedCameraProfiles,
-        )
+    val initiatorGuid = PtpIpInitiatorIdentity.guid
     val combinedPhaseLogger: (String, String) -> Unit = { phase, detail ->
         logCameraSessionPhase(phase, detail)
         phaseLogger(phase, detail)
@@ -626,6 +619,12 @@ public fun PairingExperience(
     onStartHdmiMonitor: () -> Unit,
     onOpenSettings: (() -> Unit)? = null,
     onShowSavedCameras: (() -> Unit)? = null,
+    /**
+     * The way out of the wizard for a device that will not pair a camera — the watcher-only
+     * entry. Opens the camera-list home, where nearby broadcasts are listed and joined; the
+     * list screen owns that choice, the wizard only points at it (the iOS row's rule).
+     */
+    onOpenWatcherList: (() -> Unit)? = null,
     /** Explicit local report handoff when pairing cannot complete (no automatic upload). */
     onShareDiagnostics: (() -> Unit)? = null,
     /**
@@ -655,6 +654,11 @@ public fun PairingExperience(
     // Device title for the connect popup (SSID while joining, camera name after).
     var connectingName by remember { mutableStateOf<String?>(null) }
     var cameraWifiScannerPresented by remember { mutableStateOf(false) }
+    /** A scanned key the operator corrected; null while the scan's own value still stands. */
+    var correctedScanKey by remember { mutableStateOf<String?>(null) }
+    /** A scanned network name the operator corrected; null while the scan's own value stands. */
+    var correctedScanSsid by remember { mutableStateOf<String?>(null) }
+    var wifiOffPromptVisible by remember { mutableStateOf(false) }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     var hdmiCaptureReady by remember { mutableStateOf(false) }
@@ -673,7 +677,9 @@ public fun PairingExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT ->
                 CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST
-            SavedCameraTransport.PHONE_HOTSPOT ->
+            SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
+            ->
                 cameras.firstOrNull { camera ->
                     camera.host == record.host ||
                         SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
@@ -692,6 +698,7 @@ public fun PairingExperience(
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
+            SavedCameraTransport.INFRASTRUCTURE,
             -> environment.createSession(reconnectHost(record))
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
@@ -962,11 +969,13 @@ public fun PairingExperience(
     }
 
     fun connect(host: String) {
+        // The wizard's declared path reaches persistence intact. Router used to collapse into
+        // PHONE_HOTSPOT here — one line that silently reclassified every router camera.
         val transport =
-            if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
-                SavedCameraTransport.CAMERA_ACCESS_POINT
-            } else {
-                SavedCameraTransport.PHONE_HOTSPOT
+            when (flow.path) {
+                PairingPath.CAMERA_ACCESS_POINT -> SavedCameraTransport.CAMERA_ACCESS_POINT
+                PairingPath.WIFI_NETWORK -> SavedCameraTransport.INFRASTRUCTURE
+                else -> SavedCameraTransport.PHONE_HOTSPOT
             }
         val discoveredName = cameras.firstOrNull { it.host == host }?.name
         if (discoveredName != null) connectingName = discoveredName
@@ -1056,6 +1065,10 @@ public fun PairingExperience(
 
     fun joinCameraAp(ssid: String, passphrase: String?) {
         if (ssid.isBlank()) return
+        if (!isWifiRadioEnabled(context)) {
+            wifiOffPromptVisible = true
+            return
+        }
         joinedSsid = ssid
         connectingName = ssid
         phase = PairingPhase.Joining
@@ -1092,6 +1105,10 @@ public fun PairingExperience(
      * reconnects, never a fresh pairing.
      */
     fun connectMyCamera() {
+        if (!isWifiRadioEnabled(context)) {
+            wifiOffPromptVisible = true
+            return
+        }
         cameraWifiScannerPresented = true
     }
 
@@ -1291,6 +1308,7 @@ public fun PairingExperience(
                             onConnectUsbCamera = ::connectUsb,
                             hdmiCaptureReady = hdmiCaptureReady,
                             onStartHdmiMonitor = onStartHdmiMonitor,
+                            onOpenWatcherList = onOpenWatcherList,
                             compact = compactStep,
                             tightChrome = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -1330,6 +1348,7 @@ public fun PairingExperience(
                             onConnectUsbCamera = ::connectUsb,
                             hdmiCaptureReady = hdmiCaptureReady,
                             onStartHdmiMonitor = onStartHdmiMonitor,
+                            onOpenWatcherList = onOpenWatcherList,
                             compact = viewportWidth < 480.dp,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
@@ -1341,7 +1360,11 @@ public fun PairingExperience(
             when (val active = phase) {
                 PairingPhase.Idle -> null
                 is PairingPhase.ReadyToJoin ->
-                    ConnectionPopupPhase.ReadyToJoin(active.key, active.keyFromScan)
+                    ConnectionPopupPhase.ReadyToJoin(
+                        active.key,
+                        active.keyFromScan,
+                        ssid = active.ssid,
+                    )
                 PairingPhase.Joining -> ConnectionPopupPhase.JoiningWifi
                 PairingPhase.Handshaking -> ConnectionPopupPhase.Handshaking
                 is PairingPhase.Pairing -> ConnectionPopupPhase.Pairing
@@ -1356,9 +1379,16 @@ public fun PairingExperience(
                 phase = popup,
                 onConnect = {
                     (phase as? PairingPhase.ReadyToJoin)?.let { staged ->
-                        joinCameraAp(staged.ssid, staged.key)
+                        // The CORRECTED key when the operator fixed a misread character,
+                        // otherwise the one the scan produced.
+                        joinCameraAp(
+                            correctedScanSsid?.takeIf(String::isNotBlank) ?: staged.ssid,
+                            correctedScanKey ?: staged.key,
+                        )
                     }
                 },
+                onKeyEdited = { correctedScanKey = it },
+                onSsidEdited = { correctedScanSsid = it },
                 onDismiss = ::cancelWork,
                 onShareDiagnostics =
                     onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },
@@ -1384,6 +1414,9 @@ public fun PairingExperience(
                 onDismiss = { cameraWifiScannerPresented = false },
                 onDiagnosticPhase = onDiagnosticPhase,
             )
+        }
+        if (wifiOffPromptVisible) {
+            WifiOffPromptDialog(onDismiss = { wifiOffPromptVisible = false })
         }
         // Keep scanning while the Ready-to-join card is up.
         val readySsid = (phase as? PairingPhase.ReadyToJoin)?.ssid
@@ -1457,6 +1490,38 @@ private fun PortraitIntroHeader(
             Spacer(Modifier.height(8.dp))
             PairingShareDiagnosticsLink(onClick = share)
         }
+    }
+}
+
+/**
+ * "Watching another device? Open the camera list" — the iOS wizard row, verbatim: a
+ * watcher-only device never pairs, so the wizard is the only screen it would ever see.
+ */
+@Composable
+private fun PairingWatcherListLink(onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(StartupColors.tile.copy(alpha = 0.4f))
+            .border(1.dp, StartupColors.border.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            stringResource(R.string.pairing_watcher_question),
+            color = StartupColors.muted,
+            fontSize = 13.sp,
+        )
+        Text(
+            stringResource(R.string.pairing_watcher_action),
+            color = StartupColors.accent,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.weight(1f))
+        Text("›", color = StartupColors.muted, fontSize = 15.sp)
     }
 }
 
@@ -1585,6 +1650,7 @@ private fun StepCard(
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
     hdmiCaptureReady: Boolean,
     onStartHdmiMonitor: () -> Unit,
+    onOpenWatcherList: (() -> Unit)?,
     compact: Boolean,
     tightChrome: Boolean = false,
     modifier: Modifier = Modifier,
@@ -1624,7 +1690,11 @@ private fun StepCard(
                         onRequestCamera = onRequestCameraPermission,
                     )
                 PairingStep.CHOOSE_PATH ->
-                    ChoosePathBody(onChoose = onChoose, compact = compact)
+                    ChoosePathBody(
+                        onChoose = onChoose,
+                        compact = compact,
+                        onOpenWatcherList = onOpenWatcherList,
+                    )
                 PairingStep.PREPARE ->
                     NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
                 PairingStep.NETWORK -> NetworkBody(path = flow.path)
@@ -1852,31 +1922,33 @@ private fun PermissionStatusPill(
 private fun ChoosePathBody(
     onChoose: (PairingPath) -> Unit,
     compact: Boolean,
+    onOpenWatcherList: (() -> Unit)?,
 ) {
     // iOS `transportCards`: portrait stacks the cards inside the step body's
     // scroll; landscape puts them side by side with wrapping copy. Cards group
     // several paths, so the operator picks a kind of connection first and the
     // specific one second.
-    if (compact) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (compact) {
             for (card in PairingCard.entries) {
                 PathChoiceCard(card, onChoose, Modifier.fillMaxWidth())
             }
-        }
-    } else {
-        Row(
-            Modifier.height(IntrinsicSize.Max),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            for (card in PairingCard.entries) {
-                PathChoiceCard(
-                    card,
-                    onChoose,
-                    Modifier.weight(1f).fillMaxHeight(),
-                    tight = true,
-                )
+        } else {
+            Row(
+                Modifier.height(IntrinsicSize.Max),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                for (card in PairingCard.entries) {
+                    PathChoiceCard(
+                        card,
+                        onChoose,
+                        Modifier.weight(1f).fillMaxHeight(),
+                        tight = true,
+                    )
+                }
             }
         }
+        onOpenWatcherList?.let { PairingWatcherListLink(onClick = it) }
     }
 }
 
@@ -2196,6 +2268,33 @@ private fun DiscoverBody(
         HdmiDiscoverBody(hdmiCaptureReady, onStartHdmiMonitor)
         return
     }
+    var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
+    takeOverTarget?.let { held ->
+        AlertDialog(
+            onDismissRequest = { takeOverTarget = null },
+            title = { Text(stringResource(R.string.pairing_take_over_title)) },
+            text = {
+                Text(
+                    held.heldByDeviceName?.takeIf(String::isNotBlank)?.let {
+                        stringResource(R.string.pairing_take_over_message_named, it)
+                    } ?: stringResource(R.string.pairing_take_over_message),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        takeOverTarget = null
+                        onConnectCamera(held)
+                    },
+                ) { Text(stringResource(R.string.action_take_over)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { takeOverTarget = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
             EmptyDiscoveryCard(
@@ -2208,7 +2307,17 @@ private fun DiscoverBody(
                 Row(
                     Modifier.fillMaxWidth()
                         .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
-                        .clickable { onConnectCamera(camera) }
+                        .clickable {
+                            // Connecting to a held camera drops the holder's session — the same
+                            // single-initiator mechanism the discovery shield exists to avoid.
+                            // The row names whose it is; this stops the tap being the whole
+                            // decision.
+                            if (camera.isHeldByAnotherDevice) {
+                                takeOverTarget = camera
+                            } else {
+                                onConnectCamera(camera)
+                            }
+                        }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2225,14 +2334,21 @@ private fun DiscoverBody(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
+                        // The holder replaces "nearby": on this row the question is not
+                        // where the camera is, it is who has it.
                         Text(
-                            stringResource(R.string.pairing_wifi_nearby),
+                            camera.heldByLabel
+                                ?: stringResource(R.string.pairing_wifi_nearby),
                             color = StartupColors.muted,
                             fontSize = 11.sp,
                         )
                     }
                     Text(
-                        stringResource(R.string.action_connect),
+                        if (camera.isHeldByAnotherDevice) {
+                            stringResource(R.string.action_take_over)
+                        } else {
+                            stringResource(R.string.action_connect)
+                        },
                         color = StartupColors.darkText,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,

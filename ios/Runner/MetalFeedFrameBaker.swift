@@ -1,6 +1,7 @@
 import CoreImage
 @preconcurrency import Metal
 import UIKit
+import os
 
 /// Bakes monitor effects into a reusable Metal texture **off the main thread** for `MetalLiveView`.
 ///
@@ -23,11 +24,32 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     private let stateLock = NSLock()
     private var bakedState = BakedState()
     private var pendingRequest: BakeRequest?
+    /// Last aspect-mismatch witness logged (#115) — one line per source→drawable signature.
+    private var lastCropSignature: String?
     private var pendingOnComplete: (@Sendable () -> Void)?
     private var workerBusy = false
     private let workingColorSpace =
         CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-    private var ciRenderTexture: MTLTexture?
+    /// Bake targets, cycled — never one texture.
+    ///
+    /// The present samples the published texture on the main thread while the baker renders the
+    /// NEXT frame on its own queue, and the two command buffers have no ordering between them. A
+    /// single reused target therefore let the baker overwrite the very texture the present was
+    /// mid-scale on: rare, one frame, and visible as a flash. Cycling means the texture being
+    /// written is never the one just handed out.
+    ///
+    /// Three deep to match the drawable queue — a present's command buffer can still be in flight
+    /// a frame or two after `draw(in:)` returned, so two would leave the oldest at risk.
+    ///
+    /// Depth alone is a probability, not a guarantee: three bakes completing inside one present's
+    /// command buffer bring the cycle back round to the texture that present is still reading. So
+    /// the present holds the texture it was handed and returns it on completion, and a bake never
+    /// takes a held one — see `retainedTextures` and ``releaseBakedTexture(_:)``.
+    private var ciRenderTextures: [MTLTexture] = []
+    private var nextRenderTexture = 0
+    /// How many presents are still reading each cycled target, keyed by identity. A target with a
+    /// non-zero count is off limits to the baker until every present that took it has completed.
+    private var retainedTextures: [ObjectIdentifier: Int] = [:]
 
     private struct BakedState {
         var texture: MTLTexture?
@@ -91,13 +113,34 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     /// The texture is at **source** resolution cropped to the drawable's aspect, so the caller must
     /// scale it to present — its size is on the texture itself, and only its aspect is guaranteed to
     /// match the drawable.
+    /// The returned texture is RETAINED against reuse until the caller hands it back with
+    /// ``releaseBakedTexture(_:)`` — which must happen on every path, including the ones that give
+    /// up before presenting.
     func bakedTexture(for drawableSize: CGSize, pixelFormat: MTLPixelFormat) -> MTLTexture? {
         stateLock.lock()
         defer { stateLock.unlock() }
         guard bakedState.drawableSize == drawableSize,
-            bakedState.pixelFormat == pixelFormat
+            bakedState.pixelFormat == pixelFormat,
+            let texture = bakedState.texture
         else { return nil }
-        return bakedState.texture
+        retainedTextures[ObjectIdentifier(texture), default: 0] += 1
+        return texture
+    }
+
+    /// Releases a texture taken from ``bakedTexture(for:pixelFormat:)``, freeing it for reuse.
+    ///
+    /// Call from the present command buffer's completion handler, not when `draw(in:)` returns:
+    /// the GPU is still sampling the texture after that.
+    func releaseBakedTexture(_ texture: MTLTexture) {
+        let key = ObjectIdentifier(texture)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let count = retainedTextures[key] else { return }
+        if count <= 1 {
+            retainedTextures[key] = nil
+        } else {
+            retainedTextures[key] = count - 1
+        }
     }
 
     private func runNextBake() {
@@ -136,19 +179,44 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
                 return
             }
 
-            // Crop, do not scale. The pre-scale that used to sit here is what made every Core Image
-            // kernel evaluate at drawable resolution; see `bakeSize`.
+            // Fit, never crop (see `bakeSize`): the bake keeps the source's own aspect, at the
+            // source's own resolution unless the drawable is smaller. In the matched-aspect
+            // common case the scale below is 1 and this is exactly the old crop-free path —
+            // Core Image kernels still evaluate at source resolution.
             let extent = source.extent
             let bakeSize = Self.bakeSize(source: extent.size, drawable: drawableSize)
+            // #115 witness: with fit semantics an aspect disagreement now shows as bars in the
+            // present rather than lost frame edges, but it still means a layout upstream lied
+            // about the aspect — one line per signature says which numbers disagree.
+            if extent.height > 0, drawableSize.height > 0 {
+                let sourceAspect = extent.width / extent.height
+                let drawableAspect = drawableSize.width / drawableSize.height
+                let signature =
+                    "\(Int(extent.width))x\(Int(extent.height))->"
+                    + "\(Int(drawableSize.width))x\(Int(drawableSize.height))"
+                if abs(sourceAspect / drawableAspect - 1) > 0.02,
+                    signature != lastCropSignature
+                {
+                    lastCropSignature = signature
+                    Logger(subsystem: "com.opencapture.openzcine", category: "metal-feed")
+                        .warning(
+                            "metal feed letterboxing \(signature, privacy: .public): source aspect \(String(format: "%.3f", sourceAspect), privacy: .public) vs drawable \(String(format: "%.3f", drawableAspect), privacy: .public)"
+                        )
+                }
+            }
             let width = max(1, Int(bakeSize.width.rounded()))
             let height = max(1, Int(bakeSize.height.rounded()))
-            // Centre the visible window on the source and put it at the texture origin, then flip:
-            // Core Image's origin is bottom-left, a Metal texture's is top-left.
-            let cropX = extent.origin.x + (extent.width - CGFloat(width)) / 2
-            let cropY = extent.origin.y + (extent.height - CGFloat(height)) / 2
+            // Normalize the origin, scale to the bake size, then flip: Core Image's origin is
+            // bottom-left, a Metal texture's is top-left.
+            let scaleX = CGFloat(width) / extent.width
+            let scaleY = CGFloat(height) / extent.height
             let flipped =
                 source
-                .transformed(by: CGAffineTransform(translationX: -cropX, y: -cropY))
+                .transformed(
+                    by: CGAffineTransform(
+                        translationX: -extent.origin.x, y: -extent.origin.y)
+                )
+                .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
                 .transformed(by: CGAffineTransform(scaleX: 1, y: -1))
                 .transformed(by: CGAffineTransform(translationX: 0, y: CGFloat(height)))
             let bounds = CGRect(x: 0, y: 0, width: width, height: height)
@@ -178,23 +246,51 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
         }
     }
 
+    /// Picks this bake's target. Locked: `retainedTextures` is written by the present's thread and
+    /// by command-buffer completion handlers, while this runs on the bake worker.
     private func renderTexture(width: Int, height: Int, pixelFormat: MTLPixelFormat) -> MTLTexture?
     {
-        if let existing = ciRenderTexture,
-            existing.width == width,
-            existing.height == height,
-            existing.pixelFormat == pixelFormat
-        {
-            return existing
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let matches =
+            ciRenderTextures.count == Self.bakeTextureDepth
+            && ciRenderTextures.allSatisfy {
+                $0.width == width && $0.height == height && $0.pixelFormat == pixelFormat
+            }
+        if !matches {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: pixelFormat, width: width, height: height, mipmapped: false)
+            descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
+            descriptor.storageMode = .private
+            let built = (0..<Self.bakeTextureDepth).compactMap { _ in
+                device.makeTexture(descriptor: descriptor)
+            }
+            guard built.count == Self.bakeTextureDepth else { return nil }
+            ciRenderTextures = built
+            nextRenderTexture = 0
+            // The old targets are gone from the cycle, but a present handed one before the resize
+            // still holds it and still has to be able to give it back.
+            retainedTextures = retainedTextures.filter { key, _ in
+                ciRenderTextures.contains { ObjectIdentifier($0) == key }
+            }
         }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: pixelFormat, width: width, height: height, mipmapped: false)
-        descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
-        descriptor.storageMode = .private
-        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-        ciRenderTexture = texture
-        return texture
+        // Take the next FREE target rather than the next one: a held target is still being read
+        // by a present, and writing it is exactly the flash this cycle exists to prevent. When all
+        // three are held the bake is dropped, which shows the last good frame for another beat —
+        // the right failure, and one the caller already handles.
+        for offset in 0..<ciRenderTextures.count {
+            let index = (nextRenderTexture + offset) % ciRenderTextures.count
+            let texture = ciRenderTextures[index]
+            if retainedTextures[ObjectIdentifier(texture)] == nil {
+                nextRenderTexture = index + 1
+                return texture
+            }
+        }
+        return nil
     }
+
+    /// How many bake targets cycle. Matches the drawable queue's depth — see `ciRenderTextures`.
+    private static let bakeTextureDepth = 3
 
     /// Pixel size of the bake target: the **source** resolution, cropped to the drawable's aspect.
     ///
@@ -212,15 +308,24 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     /// bakes at panel size — rendering more pixels than can be shown would make this slower than the
     /// path it replaces (the demo stills are the case that does this).
     static func bakeSize(source: CGSize, drawable: CGSize) -> CGSize {
+        // The upper bound is Metal's own maximum texture dimension: a wider "source" is a CI
+        // generator's unbounded extent (CGRect.infinite's size is greatestFiniteMagnitude —
+        // FINITE, so `isFinite` alone misses it), not a picture.
         guard source.width.isFinite, source.height.isFinite,
             source.width > 0, source.height > 0,
+            source.width <= 16_384, source.height <= 16_384,
             drawable.width > 0, drawable.height > 0
         else { return drawable }
-        let drawableAspect = drawable.width / drawable.height
-        let cropped =
-            source.width / source.height > drawableAspect
-            ? CGSize(width: source.height * drawableAspect, height: source.height)
-            : CGSize(width: source.width, height: source.width / drawableAspect)
-        return cropped.width > drawable.width ? drawable : cropped
+        // FIT, never crop: the bake keeps the source's OWN aspect, downscale-bounded by the
+        // drawable so an out-resolving source stays as cheap as the crop it replaces. The
+        // present letterboxes the result into the drawable — so a frame/aspect disagreement
+        // anywhere upstream shows as bars, never as lost frame edges (#115: the operator is
+        // judging framing, and the old crop-to-drawable silently ate a DCI-4K signal's sides).
+        let scale = min(drawable.width / source.width, drawable.height / source.height, 1)
+        let fitted = CGSize(width: source.width * scale, height: source.height * scale)
+        // A source so degenerate it fits below a pixel (CGRect.infinite's size is
+        // greatestFiniteMagnitude — FINITE, so the guard above misses it) falls back too.
+        guard fitted.width >= 1, fitted.height >= 1 else { return drawable }
+        return fitted
     }
 }

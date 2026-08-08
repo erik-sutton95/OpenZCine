@@ -23,12 +23,29 @@ class MonitorSessionRecoveryTest {
      * [base] and stopping once [budget] attempts have failed. Keeps the
      * sequencing under test without a JNI hop.
      */
-    private class FakeSchedule(private val base: Long = 100L, private val budget: Int = 8) :
-        SessionRetryScheduleBridge {
+    private class FakeSchedule(
+        private val base: Long = 100L,
+        private val budget: Int = 8,
+        private val pauseAfterDrops: Int = Int.MAX_VALUE,
+    ) : SessionRetryScheduleBridge {
+        var dropsNoted = 0
+            private set
+
         override fun retryDelayMillis(failures: Int, jitter: Double): Long? =
             if (failures >= budget) null else base shl failures
 
         override fun maxAutomaticAttempts(): Int = budget
+
+        override fun noteSessionDrop(): Boolean {
+            dropsNoted += 1
+            return dropsNoted >= pauseAfterDrops
+        }
+
+        override fun dropsInStormWindow(): Int = dropsNoted
+
+        override fun resetDropStormGuard() {
+            dropsNoted = 0
+        }
     }
 
     @Test
@@ -136,6 +153,40 @@ class MonitorSessionRecoveryTest {
         assertEquals(3, session.connectCount)
         assertEquals(
             MonitorRecoveryState.WaitingForOperator(attemptsMade = 2),
+            coordinator.recoveryState.value,
+        )
+    }
+
+    @Test
+    fun `clustered drops of a healthy-reconnecting session pause for the operator`() = runTest {
+        // Every reconnect SUCCEEDS, so the per-run failure budget never fires — that is the
+        // storm signature. Only the shared drop-storm ledger can stop the reconnect churn
+        // that wedges the body into a battery pull.
+        val session = RecoverySession(true, true, true)
+        val coordinator =
+            MonitorSessionRecoveryCoordinator(
+                session = session,
+                schedule = FakeSchedule(pauseAfterDrops = 3),
+                jitterSample = { 1.0 },
+                sleep = {},
+            )
+        backgroundScope.launch { coordinator.run() }
+        runCurrent()
+        assertEquals(1, session.connectCount)
+
+        session.loseConnection()
+        runCurrent()
+        session.loseConnection()
+        runCurrent()
+        assertEquals(3, session.connectCount)
+
+        session.loseConnection()
+        runCurrent()
+
+        // The third clustered drop pauses: no further connect, the operator holds the decision.
+        assertEquals(3, session.connectCount)
+        assertEquals(
+            MonitorRecoveryState.PausedAfterRepeatedDrops(drops = 3),
             coordinator.recoveryState.value,
         )
     }

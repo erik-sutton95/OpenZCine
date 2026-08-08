@@ -207,4 +207,70 @@ struct StillCaptureTests {
         #expect(StillCapturePolicy.stars(fromRatingValue: 60) == 3)
         #expect(StillCapturePolicy.stars(fromRatingValue: 24) == 1)
     }
+
+    @Test func afSVideoTapDrivesAutofocusButContinuousDoesNot() {
+        // #272: a video AF-S body has no continuous loop, so moving the box must be followed by
+        // a one-shot drive. AF-C/AF-F chase the box themselves and must not be driven.
+        #expect(
+            StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                focusMode: "AF-S", photography: false))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                focusMode: "AF-C", photography: false))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                focusMode: "AF-F", photography: false))
+    }
+
+    @Test func photographyDrivesEveryAutofocusModeAndManualDrivesNone() {
+        // A stills live view runs no continuous AF until half-press, so even AF-C needs the drive.
+        for mode in ["AF-S", "AF-C", "AF-A", "AF-F"] {
+            #expect(
+                StillCapturePolicy.focusPointNeedsAutofocusDrive(
+                    focusMode: mode, photography: true))
+        }
+        // Manual focus has nothing to acquire, in either chrome.
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: "MF", photography: true))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: "MF", photography: false))
+    }
+
+    @Test func unknownFocusModeKeepsThePhotographyOnlyBehaviour() {
+        #expect(StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: nil, photography: true))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: nil, photography: false))
+        #expect(
+            !StillCapturePolicy.focusPointNeedsAutofocusDrive(focusMode: "", photography: false))
+    }
+
+    @Test func batteryGaugeMapsTheDocumentedStepsToBars() {
+        // #303: BatteryLevel (0x5001) only ever carries 1/20/40/60/80/100, mapping to 1/5..5/5
+        // bars. Rendering the raw number as a percentage is what made the app claim 60% while
+        // the body was at 39%.
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 100) == .bars(5))
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 80) == .bars(4))
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 60) == .bars(3))
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 40) == .bars(2))
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 20) == .bars(1))
+        // 1 is the blinking, shutter-disabled step — not "1%".
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 1) == .critical)
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 1).filledBars == 1)
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 1).isCritical)
+    }
+
+    @Test func batteryGaugeNeverOverstatesAnOffStepValue() {
+        // A body reporting finer than the ZR spec must round UP to the step it sits under, so the
+        // gauge can read low but never high.
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 39) == .bars(2))
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 58) == .bars(3))
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 14) == .bars(1))
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 99) == .bars(5))
+    }
+
+    @Test func batteryGaugeReportsUnknownWithoutAReading() {
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 0) == .unknown)
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: -1) == .unknown)
+        #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 0).filledBars == 0)
+    }
 }

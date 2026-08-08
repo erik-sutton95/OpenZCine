@@ -9,6 +9,7 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import java.util.Locale
+import kotlin.math.ceil
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
 internal const val UNAVAILABLE_TIMECODE = "—:—:—:—"
@@ -28,7 +29,33 @@ internal data class MonitorBatteryPresentation(
     val percent: Int?,
     val label: String,
     val externalPower: Boolean,
+    val urgency: CameraBatteryUrgency = CameraBatteryUrgency.NOMINAL,
+    /** The body's blinking exhaustion step. Only that step pulses. */
+    val pulses: Boolean = false,
 )
+
+/**
+ * How urgently the camera gauge should read, mirroring the shared core's
+ * `CameraBatteryGauge.Urgency`.
+ *
+ * The steps are the operator's, not the body's: three bars or more is "carry on", two is "find a
+ * spare", one is "swap now". Keeping the thresholds in one definition per platform is what stops
+ * iOS and Android warning at different charges for the same reading.
+ */
+internal enum class CameraBatteryUrgency {
+    NOMINAL,
+    LOW,
+    DEPLETED,
+}
+
+/** Mirrors `CameraBatteryGauge.urgency`. An absent reading must not cry wolf. */
+internal fun cameraBatteryUrgency(filledBars: Int?): CameraBatteryUrgency =
+    when (filledBars) {
+        null -> CameraBatteryUrgency.NOMINAL
+        1 -> CameraBatteryUrgency.DEPLETED
+        2 -> CameraBatteryUrgency.LOW
+        else -> CameraBatteryUrgency.NOMINAL
+    }
 
 /**
  * Live-view header timecode retention for one connected camera.
@@ -121,9 +148,49 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String {
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
 
 /** Camera battery label that preserves authoritative external-power-only readback. */
+/** Bars in the camera's gauge, mirroring iOS `CameraBatteryGauge.barCount`. */
+internal const val CAMERA_BATTERY_BAR_COUNT = 5
+
+/**
+ * Gauge markers carried in the readout label. The label is the shared contract between the
+ * readout builder and the chrome that draws it; the chrome recognises these and renders real
+ * segments rather than printing the characters, which never matched the iOS gauge's metrics.
+ */
+internal const val FILLED_BAR = '\u25AE'
+internal const val EMPTY_BAR = '\u25AF'
+
+/**
+ * Filled bars for a raw `BatteryLevel` (0x5001) value, mirroring iOS `CameraBatteryGauge`.
+ *
+ * The property is a five-bar gauge, not a percentage — it only ever carries 1/20/40/60/80/100,
+ * where 1 is the blinking shutter-disabled step. Off-step values round UP to the step they sit
+ * under so the gauge can read low but never high.
+ */
+internal fun cameraBatteryBars(percent: Int?): Int? {
+    val raw = percent ?: return null
+    if (raw <= 0) return null
+    if (raw == 1) return 1
+    val clamped = minOf(100, raw)
+    return maxOf(1, minOf(CAMERA_BATTERY_BAR_COUNT, ceil(clamped / 20.0).toInt()))
+}
+
+/**
+ * The camera battery readout: bars, not a percentage (#303).
+ *
+ * Printing the raw value as "60%" claimed a precision the body never sent — it reads 60 for
+ * anything from 40% to 59%, which is exactly the discrepancy reported from the field.
+ */
 internal fun batteryReadoutLabel(percent: Int?, externalPower: Boolean? = null): String =
-    validBatteryPercent(percent)?.let { "$it%" }
-        ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
+    cameraBatteryBars(validBatteryPercent(percent))?.let { filled ->
+        // Drawn as filled/empty blocks so the readout reads as a gauge rather than a number.
+        // iOS draws real segments; this is the string-based mirror, since the Android readout is
+        // a text label rather than its own view.
+        buildString {
+            repeat(CAMERA_BATTERY_BAR_COUNT) { index ->
+                append(if (index < filled) FILLED_BAR else EMPTY_BAR)
+            }
+        }
+    } ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
 
 /** Builds the battery label and visible power-marker state from authoritative readback. */
 internal fun monitorBatteryPresentation(
@@ -135,6 +202,9 @@ internal fun monitorBatteryPresentation(
         percent = validPercent,
         label = batteryReadoutLabel(validPercent, externalPower),
         externalPower = externalPower == true,
+        urgency = cameraBatteryUrgency(cameraBatteryBars(validPercent)),
+        // Raw 1 is the body's blinking shutter-disabled step, distinct from a steady last bar.
+        pulses = validPercent == 1,
     )
 }
 
@@ -266,6 +336,23 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
         private set
     var media: MonitorMediaStatus by mutableStateOf(PREVIEW_MEDIA)
         private set
+
+    /**
+     * A watcher's readouts arrive over the relay already formatted by the host — apply them
+     * verbatim (iOS `applyRelayState`). Blank fields keep the last value, like [update].
+     */
+    fun applyRelayed(state: com.opencapture.openzcine.relay.MonitorRelayWire.State) {
+        resolution = state.resolutionFrameRate.monitorValueOrNull() ?: resolution
+        codec = state.codec.monitorValueOrNull() ?: codec
+        media =
+            state.mediaStatus?.let {
+                MonitorMediaStatus(
+                    gigabytesFree = it.gigabytesFree.toLong(),
+                    percentFree = it.percentFree.toLong(),
+                    minutesRemaining = it.minutesRemaining,
+                )
+            } ?: media
+    }
 
     fun update(snapshot: CameraPropertySnapshot) {
         // Camera is the source of truth: prefer the control presentation

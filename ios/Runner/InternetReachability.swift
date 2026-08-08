@@ -13,6 +13,13 @@ import Observation
 @MainActor
 @Observable
 final class InternetReachability {
+    /// The app-wide instance. Views MUST use this, never construct their own: a
+    /// `@State private var x = InternetReachability()` default value is re-evaluated on EVERY
+    /// re-init of the view struct and discarded — each throwaway instance started an
+    /// `NWPathMonitor` and fired a nehelper XPC, which over a live feed (monitor chrome
+    /// re-renders per frame) became per-frame radio/IPC churn and the "nehelper sent invalid
+    /// result code" log spam.
+    static let shared = InternetReachability()
     /// Whether the OS currently reports a satisfied (usable) network path.
     ///
     /// Starts `true` so the UI doesn't briefly gate a legitimately-online launch before the first

@@ -20,8 +20,15 @@ public enum CameraWiFiSSID {
         return nikonAccessPointPrefix + suffix
     }
 
-    /// Returns a stored SSID from the saved record, or derives one from its display name.
+    /// Returns the record's access-point SSID: the declared path's own value first, then the
+    /// stored presentation stamp, then a derivation from the display name.
     public static func resolve(for record: PTPIPSavedCameraRecord) -> String? {
+        if let declared = record.path?.accessPointSSID?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !declared.isEmpty
+        {
+            return declared
+        }
         if let stored = record.presentation?.wifiSSID?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !stored.isEmpty
@@ -142,7 +149,11 @@ public enum CameraWiFiJoinPolicy {
         return nil
     }
 
-    /// Returns a join target when a Wi‑Fi connect should prompt iOS to join the camera network first.
+    /// Returns a join target when a Wi‑Fi connect should prompt iOS to join the camera network
+    /// first. PATH-DISPATCHED: only a record whose DECLARED path is the camera's access point
+    /// can ever produce one — hotspot, router, cable and undeclared records return nil by type,
+    /// not by an exclusion chain. (The chain this replaced excluded hotspot by subnet, router by
+    /// evidence tri-state, and still leaked prompts whenever the artifacts disagreed.)
     public static func joinTargetIfNeeded(
         transportKind: CameraTransportKind,
         localAddresses: [String],
@@ -151,43 +162,28 @@ public enum CameraWiFiJoinPolicy {
         connectedSSID: String? = nil
     ) -> JoinTarget? {
         guard transportKind == .ptpIP else { return nil }
+        guard case .cameraAccessPoint? = savedCamera?.path else { return nil }
         guard
             !isOnCameraAccessPoint(
                 localAddresses: localAddresses,
                 connectedSSID: connectedSSID
             )
         else { return nil }
-        // iPhone-hotspot cameras need NO phone-side join: the phone hosts the hotspot and the
-        // camera joins it, so there's nothing for iOS to "switch networks" to. Without this, the
-        // phone would enter the Wi-Fi-join phase (wrong "Tap Join when iOS asks…" copy) and even
-        // attempt to join a network for a camera that's already reachable on the hotspot subnet.
-        if let savedCamera,
-            CameraStartupPolicy.usesIPhoneHotspot(
-                host: savedCamera.host, transport: savedCamera.transport)
-        {
-            return nil
-        }
-        if let discoveredCamera,
-            CameraStartupPolicy.usesIPhoneHotspot(host: discoveredCamera.ip, transport: "")
-        {
-            return nil
-        }
-        // A saved record earns the join prompt only by POSITIVE proof it lives on the camera's
-        // access point — it joined one once, or the operator declared the AP path at pairing.
-        // false and nil both stay put: "the camera is not visible right now" is never fixed by
-        // leaving the current network for a record that never proved it needs to, and applying
-        // that configuration kicks this device off the router — taking the session AND every
-        // relay watcher with it. A fresh pairing (no record yet) keeps the wizard-driven flow.
-        if let savedCamera, savedCamera.pairedViaCameraAccessPoint != true { return nil }
-        // A DISCOVERED camera is by definition reachable on the network this device is already on
-        // — discovery is what found it there. Joining its access point would leave that network to
-        // reach a camera we can already see.
+        // A discovered camera only proves "no join needed" when it was discovered ON the camera's
+        // own access point — at the AP's fixed address. The guard above already restricted this
+        // function to AP setups, so a body found at ANY OTHER address was found on a DIFFERENT
+        // network, and the operator who tapped the Camera AP setup is asking to leave that network
+        // — not to be told the camera is visible from it.
         //
-        // This is what a camera on a set or travel router needs, and it has to be phrased as
-        // reachability rather than as another topology exclusion: the saved record's transport
-        // collapses camera-AP, phone hotspot and router into one "Wi-Fi" string, so the record
-        // cannot tell them apart. Reachability can.
-        if discoveredCamera != nil { return nil }
+        // The blanket "discovered at all" check suppressed the join for precisely the case this
+        // setup exists to serve: switch the camera to its router profile, tap Camera AP, and the
+        // router path's own discovery result silently cancelled the access point's join.
+        if let discoveredCamera,
+            PTPIPPairedHosts.normalizedHost(discoveredCamera.ip)
+                == CameraDiscovery.nikonZRAccessPointHost
+        {
+            return nil
+        }
         guard
             let ssid = resolvedSSID(
                 savedCamera: savedCamera,
@@ -197,49 +193,13 @@ public enum CameraWiFiJoinPolicy {
         return JoinTarget(ssid: ssid)
     }
 
-    /// Target for a proactive Wi‑Fi join attempt on app launch or foreground.
+    /// Target descriptor for the Wi-Fi join machinery — an exact SSID, or the brand prefix used
+    /// by the first-run popup search when no camera is saved yet. (The launch/foreground
+    /// "proactive join" policy that once produced these spontaneously is deleted: the popup
+    /// search and the operator-initiated connect flow are the only producers.)
     public enum ProactiveJoinTarget: Equatable, Sendable {
         case specificSSID(String)
         case ssidPrefix(String)
-    }
-
-    /// Resolves a proactive join target when the phone is off the camera AP subnet.
-    ///
-    /// Prefers a saved camera's exact SSID when available; otherwise matches a nearby Nikon Z AP
-    /// by its shared brand prefix (no saved profile required).
-    public static func proactiveJoinTarget(
-        localAddresses: [String],
-        savedCameras: [PTPIPSavedCameraRecord],
-        connectedSSID: String? = nil
-    ) -> ProactiveJoinTarget? {
-        guard
-            !isOnCameraAccessPoint(
-                localAddresses: localAddresses,
-                connectedSSID: connectedSSID
-            )
-        else { return nil }
-
-        // A SPONTANEOUS join (launch / foreground, nobody tapped anything) is opt-in by
-        // POSITIVE evidence only: a record proves it lives on the camera's AP by having joined
-        // it once, and that connect stamps `true`. Records with no evidence — every record on a
-        // device that cannot read SSIDs, and everything saved before the field existed — must
-        // not volunteer a Wi-Fi reconfiguration prompt on their own; the operator-initiated
-        // connect path still may. This is what finally silences the "join NIKON_…" alert for a
-        // router operator whose records can never earn `false` either.
-        for camera in savedCameras
-        where !camera.isUSBTransport && camera.pairedViaCameraAccessPoint == true {
-            if let ssid = CameraWiFiSSID.resolve(for: camera) {
-                return .specificSSID(ssid)
-            }
-        }
-
-        // The brand-prefix broad match exists for the camera-less first run only; any saved
-        // camera at all means pairing already happened and spontaneous prompting is evidence's
-        // job.
-        if savedCameras.isEmpty {
-            return .ssidPrefix(CameraWiFiSSID.nikonAccessPointBrandPrefix)
-        }
-        return nil
     }
 
     /// Resolves which SSID or prefix should be used when looking up stored Wi‑Fi credentials.

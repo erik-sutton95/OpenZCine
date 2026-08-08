@@ -46,7 +46,9 @@ struct GpuParams {
     // (Log top / LUT bottom).
     float splitOn;                 // 84
     float splitVertical;           // 88
-    float splitPad;                // 92
+    // Horizontal flip for a camera pointed back at the operator. Occupies what was `splitPad`,
+    // so no offset in this block moves — see the mirror note in feed.frag.
+    float mirror;                  // 92
     // Peaking de-log curve (5 points) + source extent for dual-scale Sobel.
     float deLogCurve0to3[4];       // 96
     float deLogCurve4;             // 112
@@ -963,6 +965,7 @@ bool LiveFeedVk_SetPlan(
     float zebraMidtone,
     const float* zebraMidtoneColor3,
     bool aspectFill,
+    bool mirrored,
     bool splitOn,
     bool splitVertical) {
     if (!session) return false;
@@ -977,6 +980,7 @@ bool LiveFeedVk_SetPlan(
     session->params.zebraHighlight = zebraHighlight;
     session->params.zebraMidtone = zebraMidtone;
     session->params.aspectFill = aspectFill ? 1.f : 0.f;
+    session->params.mirror = mirrored ? 1.f : 0.f;
     session->params.splitOn = splitOn ? 1.f : 0.f;
     session->params.splitVertical = splitVertical ? 1.f : 0.f;
     // Preserve sourceSize across plan updates (set when frames upload).

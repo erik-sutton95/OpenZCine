@@ -41,6 +41,8 @@ internal data class FocusFeedGeometry(
     val coordinateWidth: Int?,
     val coordinateHeight: Int?,
     val generation: Long,
+    /** Mirror assist is on, so what the operator points at is the horizontally flipped picture. */
+    val mirrored: Boolean = false,
 ) {
     init {
         require(presentedFeed.hasFinitePositiveSize())
@@ -79,7 +81,10 @@ internal data class FocusFeedGeometry(
         val height = coordinateHeight ?: return null
         if (!acceptsGestureAt(point)) return null
 
-        val normalizedX = ((point.x - presentedFeed.left) / presentedFeed.width).coerceIn(0f, 1f)
+        val tapped = ((point.x - presentedFeed.left) / presentedFeed.width).coerceIn(0f, 1f)
+        // The camera's coordinate space is the unflipped picture, so a tap on the mirrored image
+        // has to be folded back before it becomes an AF point.
+        val normalizedX = if (mirrored) 1f - tapped else tapped
         val normalizedY = ((point.y - presentedFeed.top) / presentedFeed.height).coerceIn(0f, 1f)
         return FocusFeedCoordinate(
             x =
@@ -109,6 +114,7 @@ internal fun focusFeedGeometry(
     coordinateWidth: Int? = null,
     coordinateHeight: Int? = null,
     generation: Long,
+    mirrored: Boolean = false,
 ): FocusFeedGeometry? {
     if (!viewport.hasFinitePositiveSize()) return null
     val presented =
@@ -129,6 +135,7 @@ internal fun focusFeedGeometry(
         coordinateWidth = coordinateWidth.takeIf { hasCoordinateSpace },
         coordinateHeight = coordinateHeight.takeIf { hasCoordinateSpace },
         generation = generation,
+        mirrored = mirrored,
     )
 }
 

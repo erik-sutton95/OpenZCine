@@ -67,7 +67,8 @@ import Testing
         host: "192.168.1.1",
         displayName: "ZR_6001234",
         transport: "Wi-Fi",
-        lastSeenAt: nil
+        lastSeenAt: nil,
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_01234")
     )
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
@@ -80,15 +81,17 @@ import Testing
 }
 
 @Test func cameraWiFiJoinPolicyDoesNotFalsePositiveOnHome1921681Subnet() {
-    // Evidence-stamped AP record: the point under test is that a HOME network sharing the
-    // camera-AP's 192.168.1.0/24 range must not fake "already on the AP" and suppress the join.
-    let saved = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil,
-        pairedViaCameraAccessPoint: true
-    )
+    // Evidence-stamped legacy record, run through the one-time migration first (production
+    // records always are). The point under test: a HOME network sharing the camera-AP's
+    // 192.168.1.0/24 range must not fake "already on the AP" and suppress the join.
+    let saved = PTPIPSavedCameraRecords.typed(
+        PTPIPSavedCameraRecord(
+            host: "192.168.1.1",
+            displayName: "ZR_6001234",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            pairedViaCameraAccessPoint: true
+        ))[0]
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
         localAddresses: ["192.168.1.42"],
@@ -102,12 +105,13 @@ import Testing
 @Test func cameraWiFiJoinPolicySkipsJoinForIPhoneHotspotCameraByTransport() {
     // The phone hosts its Personal Hotspot and the camera joins it — the phone joins nothing, so
     // no "Tap Join" Wi-Fi-join phase (and no spurious join of the phone's own hotspot SSID).
-    let saved = PTPIPSavedCameraRecord(
-        host: "172.20.10.5",
-        displayName: "ZR_6001234",
-        transport: "iPhone Hotspot",
-        lastSeenAt: nil
-    )
+    let saved = PTPIPSavedCameraRecords.typed(
+        PTPIPSavedCameraRecord(
+            host: "172.20.10.5",
+            displayName: "ZR_6001234",
+            transport: "iPhone Hotspot",
+            lastSeenAt: nil
+        ))[0]
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
         localAddresses: ["172.20.10.1"],
@@ -120,12 +124,13 @@ import Testing
 
 @Test func cameraWiFiJoinPolicySkipsJoinForIPhoneHotspotCameraByHost() {
     // Host in the 172.20.10.x hotspot subnet marks a hotspot camera even without a transport label.
-    let saved = PTPIPSavedCameraRecord(
-        host: "172.20.10.7",
-        displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil
-    )
+    let saved = PTPIPSavedCameraRecords.typed(
+        PTPIPSavedCameraRecord(
+            host: "172.20.10.7",
+            displayName: "ZR_6001234",
+            transport: "Wi-Fi",
+            lastSeenAt: nil
+        ))[0]
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
         localAddresses: ["172.20.10.1"],
@@ -178,13 +183,14 @@ import Testing
 }
 
 @Test func cameraWiFiJoinPolicyPromptsWhenOffCameraSubnet() {
-    let saved = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil,
-        pairedViaCameraAccessPoint: true
-    )
+    let saved = PTPIPSavedCameraRecords.typed(
+        PTPIPSavedCameraRecord(
+            host: "192.168.1.1",
+            displayName: "ZR_6001234",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            pairedViaCameraAccessPoint: true
+        ))[0]
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
         localAddresses: ["10.0.0.12"],
@@ -194,71 +200,60 @@ import Testing
     #expect(target == CameraWiFiJoinPolicy.JoinTarget(ssid: "NIKON_ZR_01234"))
 }
 
-@Test func proactiveJoinTargetRequiresPositiveAPEvidence() {
-    // Spontaneous joins are opt-in by evidence: a record that has actually joined the
-    // camera's AP (stamped true) volunteers; one with no evidence — every record on a device
-    // that cannot read SSIDs — must not reconfigure Wi-Fi on its own.
-    let stamped = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "ZR_6001234",
+/// The recurring "join NIKON_…" alert's kill shot: a ROUTER setup can never produce a join
+/// target — not even when the legacy upsert stamped a derived NIKON_… SSID onto its
+/// presentation (which it did, for years, on every network record it saw).
+@Test func routerSetupNeverProducesAJoinTargetEvenWithAStampedSSID() {
+    let router = PTPIPSavedCameraRecord(
+        host: "192.168.1.246",
+        displayName: "ZR_6002199",
         transport: "Wi-Fi",
         lastSeenAt: nil,
-        pairedViaCameraAccessPoint: true
+        presentation: PTPIPSavedCameraPresentation(wifiSSID: "NIKON_ZR_02199"),
+        path: .infrastructure(networkName: nil)
     )
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
+    let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
+        transportKind: .ptpIP,
         localAddresses: ["10.0.0.12"],
-        savedCameras: [stamped]
-    )
-    #expect(target == .specificSSID("NIKON_ZR_01234"))
-}
-
-/// The field shape behind the recurring alert: every record predates the evidence field and
-/// the device never reads SSIDs, so nothing can ever earn `false` either. No evidence, no
-/// spontaneous prompt — the operator-initiated connect path is unaffected.
-@Test func proactiveJoinTargetStaysQuietForAllLegacyRecords() {
-    let legacy = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil
-    )
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
-        localAddresses: ["10.0.0.12"],
-        savedCameras: [legacy]
+        savedCamera: router,
+        discoveredCamera: nil,
+        connectedSSID: "SET-ROUTER"
     )
     #expect(target == nil)
 }
 
-@Test func proactiveJoinTargetSkipsWhenOnCameraSSID() {
-    let saved = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "ZR_6001234",
+/// The poisoned merged record of an existing install, end to end: after migration its router
+/// half stays silent and only its AP half may prompt — and only when the phone is off the AP.
+@Test func migratedPoisonedRecordOnlyPromptsThroughItsAccessPointSetup() {
+    let poisoned = PTPIPSavedCameraRecord(
+        host: "192.168.1.246",
+        displayName: "ZR_6002199",
         transport: "Wi-Fi",
-        lastSeenAt: nil
+        lastSeenAt: nil,
+        presentation: PTPIPSavedCameraPresentation(wifiSSID: "NIKON_ZR_02199"),
+        pairedViaCameraAccessPoint: true,
+        serialNumber: "6002199"
     )
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
-        localAddresses: ["192.168.1.42"],
-        savedCameras: [saved],
-        connectedSSID: "NIKON_ZR_01234"
-    )
-    #expect(target == nil)
-}
-
-@Test func proactiveJoinTargetProceedsOnHome1921681WithoutNikonSSID() {
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
-        localAddresses: ["192.168.1.42"],
-        savedCameras: [],
-        connectedSSID: "HomeNetwork"
-    )
-    #expect(target == .ssidPrefix("NIKON"))
-}
-
-@Test func proactiveJoinTargetUsesPrefixWithNoSavedCameras() {
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
-        localAddresses: ["10.0.0.12"],
-        savedCameras: []
-    )
-    #expect(target == .ssidPrefix("NIKON"))
+    let setups = PTPIPSavedCameraRecords.typed(poisoned)
+    let targets = setups.map { setup in
+        CameraWiFiJoinPolicy.joinTargetIfNeeded(
+            transportKind: .ptpIP,
+            localAddresses: ["10.0.0.12"],
+            savedCamera: setup,
+            discoveredCamera: nil,
+            connectedSSID: "SET-ROUTER"
+        )
+    }
+    #expect(targets.compactMap { $0 } == [CameraWiFiJoinPolicy.JoinTarget(ssid: "NIKON_ZR_02199")])
+    #expect(
+        setups.first { $0.path?.kind == .infrastructure }.flatMap { setup in
+            CameraWiFiJoinPolicy.joinTargetIfNeeded(
+                transportKind: .ptpIP,
+                localAddresses: ["10.0.0.12"],
+                savedCamera: setup,
+                discoveredCamera: nil
+            )
+        } == nil)
 }
 
 @Test func proactiveJoinSessionPolicyRespectsPersistedUserDenied() {
@@ -382,13 +377,14 @@ import Testing
 /// The AP-path row keeps its prompt: a record that PROVED it lives on the camera's access point
 /// still offers the join when the camera is not visible on the current network.
 @Test func cameraWiFiJoinPolicyStillJoinsForAnAPProvenRecordOnDrop() {
-    let saved = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil,
-        pairedViaCameraAccessPoint: true
-    )
+    let saved = PTPIPSavedCameraRecords.typed(
+        PTPIPSavedCameraRecord(
+            host: "192.168.1.1",
+            displayName: "ZR_6001234",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            pairedViaCameraAccessPoint: true
+        ))[0]
     let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
         transportKind: .ptpIP,
         localAddresses: ["10.99.0.7"],
@@ -397,46 +393,6 @@ import Testing
         connectedSSID: "HOME-WIFI"
     )
     #expect(target?.ssid == "NIKON_ZR_01234")
-}
-
-/// The proactive launch join must not fish for a router camera's derived SSID either — and when
-/// every saved camera is known to live off the AP path, the brand-prefix fallback is pure noise.
-@Test func proactiveJoinTargetSuppressedWhenAllCamerasAreOffTheAPPath() {
-    let routerCamera = PTPIPSavedCameraRecord(
-        host: "10.99.0.20",
-        displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil,
-        pairedViaCameraAccessPoint: false
-    )
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
-        localAddresses: ["10.99.0.7"],
-        savedCameras: [routerCamera]
-    )
-    #expect(target == nil)
-}
-
-/// An AP-paired camera beside a router one keeps its proactive join.
-@Test func proactiveJoinTargetPrefersTheAPPairedCamera() {
-    let routerCamera = PTPIPSavedCameraRecord(
-        host: "10.99.0.20",
-        displayName: "Z6_7005555",
-        transport: "Wi-Fi",
-        lastSeenAt: nil,
-        pairedViaCameraAccessPoint: false
-    )
-    let apCamera = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil,
-        pairedViaCameraAccessPoint: true
-    )
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
-        localAddresses: ["10.99.0.7"],
-        savedCameras: [routerCamera, apCamera]
-    )
-    #expect(target == .specificSSID("NIKON_ZR_01234"))
 }
 
 /// The reconnect upsert usually carries no topology evidence; it must not erase what pairing
@@ -460,28 +416,57 @@ import Testing
     #expect(records.first?.pairedViaCameraAccessPoint == false)
 }
 
-/// The field shape behind the persistent "join NIKON_…" prompt on the router path: the SAME
-/// physical body often exists twice — the router record with `false` evidence beside a legacy
-/// record from its AP days with none. Once anything proves off-AP use, a no-evidence record may
-/// not volunteer its stored SSID; only positive AP evidence still may.
-@Test func proactiveJoinTargetIgnoresLegacyRecordsOnceOffAPUseIsProven() {
-    let routerCamera = PTPIPSavedCameraRecord(
-        host: "10.99.0.20",
-        displayName: "ZR_6001234",
+/// Tapping the Camera AP setup must offer its join even when the camera is reachable elsewhere.
+///
+/// The guard this pins used to be a blanket "discovered at all → no join needed". Every record
+/// reaching it is already an access-point setup, so that read as: if the camera is visible on ANY
+/// network, do not join its own one. Switch the body to its router profile and tap Camera AP, and
+/// the ROUTER path's discovery result silently cancelled the ACCESS POINT path's join — the exact
+/// cross-path leak the typed setups exist to prevent.
+@Test func apSetupStillJoinsWhenTheCameraIsDiscoveredOnAnotherNetwork() {
+    let record = PTPIPSavedCameraRecord(
+        host: CameraDiscovery.nikonZRAccessPointHost,
+        displayName: "ZR_6002199",
         transport: "Wi-Fi",
         lastSeenAt: nil,
-        pairedViaCameraAccessPoint: false
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
     )
-    let legacyTwin = PTPIPSavedCameraRecord(
-        host: "192.168.1.1",
-        displayName: "Nikon ZR legacy",
+    // The same body, answering on the house network.
+    let onRouter = DiscoveredCamera(
+        ip: "192.168.1.246", name: "ZR_6002199", source: .bonjour)
+
+    let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
+        transportKind: .ptpIP,
+        localAddresses: ["192.168.1.88"],
+        savedCamera: record,
+        discoveredCamera: onRouter,
+        connectedSSID: nil
+    )
+    #expect(target?.ssid == "NIKON_ZR_6002199")
+}
+
+/// …and must NOT re-offer it when the camera is discovered at the access point's own address,
+/// which is what "already on the camera's AP" looks like when iOS refuses to name the network.
+@Test func apSetupDoesNotRejoinWhenTheCameraAnswersOnTheAccessPointItself() {
+    let record = PTPIPSavedCameraRecord(
+        host: CameraDiscovery.nikonZRAccessPointHost,
+        displayName: "ZR_6002199",
         transport: "Wi-Fi",
         lastSeenAt: nil,
-        presentation: PTPIPSavedCameraPresentation(wifiSSID: "NIKON_ZR_02199")
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
     )
-    let target = CameraWiFiJoinPolicy.proactiveJoinTarget(
-        localAddresses: ["10.99.0.7"],
-        savedCameras: [routerCamera, legacyTwin]
+    let onAccessPoint = DiscoveredCamera(
+        ip: CameraDiscovery.nikonZRAccessPointHost,
+        name: "ZR_6002199",
+        source: .bonjour
     )
-    #expect(target == nil)
+
+    #expect(
+        CameraWiFiJoinPolicy.joinTargetIfNeeded(
+            transportKind: .ptpIP,
+            localAddresses: ["192.168.1.88"],
+            savedCamera: record,
+            discoveredCamera: onAccessPoint,
+            connectedSSID: nil
+        ) == nil)
 }

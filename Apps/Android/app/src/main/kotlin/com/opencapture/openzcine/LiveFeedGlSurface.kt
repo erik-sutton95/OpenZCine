@@ -220,6 +220,7 @@ internal class LegacyLiveFeedSurfaceState {
     private val disposed = AtomicBoolean(false)
     private var plan: FeedEffectsRenderPlan? = null
     private var aspectFill: Boolean = false
+    private var mirrored: Boolean = false
     private val lifecycleResumed = AtomicBoolean(false)
 
     var renderFailed: Boolean by mutableStateOf(false)
@@ -241,12 +242,13 @@ internal class LegacyLiveFeedSurfaceState {
         surface.get()?.let(::drainFrameTo)
     }
 
-    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean) {
+    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean, mirrored: Boolean) {
         if (disposed.get()) return
         if (this.plan !== plan) renderFailed = false
         this.plan = plan
         this.aspectFill = aspectFill
-        surface.get()?.update(plan, aspectFill)
+        this.mirrored = mirrored
+        surface.get()?.update(plan, aspectFill, mirrored)
     }
 
     fun attach(next: LegacyLiveFeedGlSurface) {
@@ -269,7 +271,7 @@ internal class LegacyLiveFeedSurfaceState {
             }
         }
         val currentPlan = plan
-        if (currentPlan != null) next.update(currentPlan, aspectFill)
+        if (currentPlan != null) next.update(currentPlan, aspectFill, mirrored)
         if (lifecycleResumed.get()) {
             next.onResume()
             drainFrameTo(next)
@@ -349,9 +351,10 @@ internal class LegacyLiveFeedGlSurface(context: Context) : GLSurfaceView(context
         requestRender()
     }
 
-    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean) {
+    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean, mirrored: Boolean) {
         feedRenderer.plan.set(plan)
         feedRenderer.aspectFill = aspectFill
+        feedRenderer.mirrored = mirrored
         requestRender()
     }
 
@@ -371,6 +374,7 @@ private class LegacyLiveFeedGlRenderer(
     val plan = AtomicReference<FeedEffectsRenderPlan?>(null)
 
     @Volatile var aspectFill: Boolean = false
+    @Volatile var mirrored: Boolean = false
     var onFailure: ((FeedEffectsRenderPlan, Throwable) -> Unit)? = null
 
     private var surfaceWidth = 0
@@ -427,6 +431,7 @@ private class LegacyLiveFeedGlRenderer(
                 inputHeight.toFloat(),
                 viewport.width.toFloat(),
                 viewport.height.toFloat(),
+                mirrored,
             )
             GLES20.glViewport(0, 0, surfaceWidth, surfaceHeight)
         } catch (error: Exception) {

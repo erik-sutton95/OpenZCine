@@ -1,5 +1,69 @@
 import Foundation
 
+/// The broadcaster's latency-vs-quality stance, chosen by the operator in Sharing settings.
+///
+/// Both profiles keep the adaptive bitrate ladder and the skip-don't-queue delivery rule; the
+/// profile only moves the knobs where a little latency genuinely buys picture:
+/// - a longer keyframe interval spends fewer bits on keyframes (each is 3–8× a predicted frame),
+///   which the rate controller reinvests in every other frame;
+/// - a deeper per-viewer in-flight window rides out link jitter instead of skipping, and every
+///   skip avoided is a broken reference chain and a forced keyframe avoided.
+///
+/// B-frames were considered and REJECTED for both profiles: reordering would break the
+/// skip-and-resume architecture (frames must be droppable per-viewer without corrupting the
+/// chain for others) and would need decode-side timestamp reordering the monitor's
+/// newest-frame-wins contract has no use for.
+public enum RelayEncoderProfile: String, CaseIterable, Codable, Equatable, Sendable {
+    /// Tightest glass-to-glass path — today's defaults. The right stance for pulling focus.
+    case lowLatency
+    /// Trades roughly four frames of latency (~130 ms at 30 fps) for steadier quality.
+    case quality
+
+    public var title: String {
+        switch self {
+        case .lowLatency: "Low latency"
+        case .quality: "Quality"
+        }
+    }
+
+    /// Upper bound on the encoder's own keyframe cadence. Forced keyframes (joins, resumes)
+    /// are unaffected — a joiner never waits longer in either profile.
+    public var maxKeyframeInterval: Int {
+        switch self {
+        case .lowLatency: 50
+        case .quality: 120
+        }
+    }
+
+    /// Frames a viewer may have queued-but-undrained before new ones are skipped.
+    public var maxInFlightFramesPerPeer: Int {
+        switch self {
+        case .lowLatency: 2
+        case .quality: 4
+        }
+    }
+}
+
+/// Where "the camera feed is starving" begins, given what this session's feed does when the
+/// relay is NOT competing with it.
+///
+/// A fixed floor alone sets the equilibrium in the wrong place: the ladder stops helping the
+/// moment the feed clears the floor, so a 35 fps session pins at 20-something while the relay
+/// keeps the rest of the channel. Anchoring the threshold to the session's own unloaded
+/// baseline makes the ladder keep stepping until the operator's monitor gets its rate back.
+/// The absolute floor remains for sessions with no measured baseline yet.
+public enum RelayCameraStarvePolicy {
+    /// Below any healthy live-view cadence, above a suffocated one.
+    public static let absoluteFloorFPS: Double = 15
+    /// Fraction of the unloaded baseline under which the relay counts as the cause.
+    public static let baselineFraction: Double = 0.72
+
+    public static func starveThresholdFPS(soloBaselineFPS: Double) -> Double {
+        guard soloBaselineFPS > 0 else { return absoluteFloorFPS }
+        return max(absoluteFloorFPS, soloBaselineFPS * baselineFraction)
+    }
+}
+
 /// Steps the relay's video bitrate against observed congestion.
 ///
 /// The broadcaster serves every viewer from ONE encode, so the stream must fit the slowest link

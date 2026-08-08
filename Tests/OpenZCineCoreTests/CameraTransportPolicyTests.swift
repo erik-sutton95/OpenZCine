@@ -152,3 +152,139 @@ import Testing
 
     #expect(availability == .available(discovered))
 }
+
+@Test func routerSetupReadsOfflineWhileOnTheCameraAccessPoint() {
+    // On the camera's own AP the body is discovered — over a network the router setup
+    // cannot use. The name-match fallback must not light it.
+    let router = PTPIPSavedCameraRecord(
+        host: "192.168.1.20",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .infrastructure(networkName: "StudioNet")
+    )
+    let overAP = DiscoveredCamera(ip: "192.168.0.1", name: "ZR_6002199", source: .bonjour)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router,
+            discoveredCameras: [overAP],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .offline)
+    // Off the AP the same discovery keeps lighting it (the DHCP-moved-host case).
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router,
+            discoveredCameras: [overAP],
+            connectedHost: nil,
+            onCameraAccessPoint: false
+        ) == .available(overAP))
+    // The AP setup itself, and cable paths, are untouched by the flag.
+    let apSetup = PTPIPSavedCameraRecord(
+        host: "192.168.0.1",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .cameraAccessPoint(ssid: "NikonZR_123")
+    )
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [overAP],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(overAP))
+    let usb = PTPIPSavedCameraRecord(
+        host: "usb:abc123",
+        displayName: "ZR_6002199",
+        transport: "USB-C",
+        lastSeenAt: Date(),
+        path: .usbC
+    )
+    let usbDiscovered = DiscoveredCamera(ip: "usb:ABC123", name: "ZR_6002199", source: .usb)
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: usb,
+            discoveredCameras: [usbDiscovered],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(usbDiscovered))
+}
+
+@Test func cameraAPSetupReadsOfflineOffItsNetworkEvenWhenItsHostAnswers() {
+    // Home-router collision: the AP setup's host is the fixed convention address, which a
+    // home network can also occupy (the router itself, or a DHCP lease). Something answering
+    // there while the phone is NOT on the camera's AP must not light the AP chip — this was
+    // "Camera AP reads green while phone and camera both sit on the home router".
+    let apSetup = PTPIPSavedCameraRecord(
+        host: "192.168.1.1",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_02199")
+    )
+    let phantom = DiscoveredCamera(ip: "192.168.1.1", name: "ZR_6002199", source: .subnetProbe)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [phantom],
+            connectedHost: nil,
+            onCameraAccessPoint: false
+        ) == .offline)
+    // On the camera's own network the same host match keeps lighting it.
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [phantom],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(phantom))
+    // A connected session at that address off the AP network belongs to whatever network
+    // the phone is on — never to the AP setup.
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: apSetup,
+            discoveredCameras: [],
+            connectedHost: "192.168.1.1",
+            onCameraAccessPoint: false
+        ) == .offline)
+}
+
+@Test func hotspotDiscoveryLightsOnlyTheHotspotSetup() {
+    // A body found over the phone's hotspot (fixed 172.20.10.x subnet) must light the
+    // Hotspot setup and never the Router one — and a router-network discovery must not
+    // light the Hotspot setup.
+    let router = PTPIPSavedCameraRecord(
+        host: "192.168.1.20",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .infrastructure(networkName: nil)
+    )
+    let hotspot = PTPIPSavedCameraRecord(
+        host: "172.20.10.2",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: Date(),
+        path: .phoneHotspot
+    )
+    let overHotspot = DiscoveredCamera(ip: "172.20.10.3", name: "ZR_6002199", source: .bonjour)
+    let overRouter = DiscoveredCamera(ip: "192.168.1.77", name: "ZR_6002199", source: .bonjour)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router, discoveredCameras: [overHotspot], connectedHost: nil) == .offline)
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: hotspot, discoveredCameras: [overHotspot], connectedHost: nil)
+            == .available(overHotspot))
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: hotspot, discoveredCameras: [overRouter], connectedHost: nil) == .offline)
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router, discoveredCameras: [overRouter], connectedHost: nil)
+            == .available(overRouter))
+}

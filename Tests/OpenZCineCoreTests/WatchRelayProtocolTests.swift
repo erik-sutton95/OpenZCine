@@ -40,6 +40,46 @@ struct WatchRelayProtocolTests {
         )
     }
 
+    /// The relay publishes on every camera-property write, so this comparison is what keeps a
+    /// running timecode from putting a state message on the link beside every frame.
+    @Test("A ticking timecode or FPS readout is not a state change")
+    func liveReadoutsDoNotCountAsStateChange() {
+        let state = sampleState()
+        let ticked = WatchRelayState(
+            recordState: state.recordState,
+            timecode: Timecode(on: true, hour: 1, minute: 2, second: 3, frame: 5),
+            mediaStatus: state.mediaStatus,
+            media: state.media,
+            cameraBatteryPercent: state.cameraBatteryPercent,
+            cameraName: state.cameraName,
+            isRecording: state.isRecording,
+            connection: state.connection,
+            feedLive: state.feedLive,
+            liveFPS: "24.00")
+        #expect(ticked != state)
+        #expect(ticked.matchesIgnoringLiveReadouts(state))
+    }
+
+    @Test("A stills-mode flip is a state change")
+    func modeFlipCountsAsStateChange() {
+        let state = sampleState()
+        let photography = WatchRelayState(
+            recordState: state.recordState,
+            timecode: state.timecode,
+            mediaStatus: state.mediaStatus,
+            media: state.media,
+            cameraBatteryPercent: state.cameraBatteryPercent,
+            cameraName: state.cameraName,
+            isRecording: state.isRecording,
+            connection: state.connection,
+            feedLive: state.feedLive,
+            liveFPS: state.liveFPS,
+            isPhotography: true,
+            shotsRemaining: "7621",
+            feedAspectRatio: 1.5)
+        #expect(!photography.matchesIgnoringLiveReadouts(state))
+    }
+
     @Test("State round-trips through its envelope")
     func stateEnvelopeRoundTrips() throws {
         let state = sampleState()

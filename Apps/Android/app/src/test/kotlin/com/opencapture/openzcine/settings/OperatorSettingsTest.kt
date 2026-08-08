@@ -15,6 +15,38 @@ import kotlin.test.assertTrue
 class OperatorSettingsTest {
     private val store = TestSharedPreferences()
 
+    /** Spelled out rather than read from the source: a test that reads it asserts nothing. */
+    private val stockPins =
+        setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.DESQ, AssistTool.MIRROR)
+
+    @Test
+    fun `clean view ships with the tools that make it a picture`() {
+        val settings = OperatorSettings(store)
+
+        assertEquals(stockPins, settings.cleanViewPinnedTools)
+        assertTrue(settings.isPinnedToCleanView(AssistTool.LUT))
+        assertFalse(settings.isPinnedToCleanView(AssistTool.ZEBRA))
+    }
+
+    @Test
+    fun `an operator who pinned nothing keeps nothing pinned`() {
+        // Absent key means "never chose" and seeds the stock set; an explicitly empty stored set
+        // means "chose nothing" and must survive a reload untouched.
+        OperatorSettings(store).apply { stockPins.forEach(::toggleCleanViewPin) }
+        assertEquals(emptySet(), OperatorSettings(store).cleanViewPinnedTools)
+    }
+
+    @Test
+    fun `resetting the pins restores what DISP 2 ships with`() {
+        val settings = OperatorSettings(store)
+        settings.toggleCleanViewPin(AssistTool.LUT)
+        settings.toggleCleanViewPin(AssistTool.ZEBRA)
+        settings.resetCleanViewPins()
+
+        assertEquals(stockPins, settings.cleanViewPinnedTools)
+        assertEquals(stockPins, OperatorSettings(store).cleanViewPinnedTools)
+    }
+
     @Test
     fun `readouts default visible`() {
         val settings = OperatorSettings(store)
@@ -46,7 +78,7 @@ class OperatorSettingsTest {
         assertEquals(FeedZebraUnit.IRE, settings.feedEffectsConfiguration.zebraUnit)
         assertEquals(100f, settings.feedEffectsConfiguration.zebraHighlightIre)
         assertEquals(55f, settings.feedEffectsConfiguration.zebraMidtoneIre)
-        assertEquals(ScopeWaveformMode.LUMA, settings.scopeAssistConfiguration.waveformMode)
+        assertEquals(ScopeWaveformMode.RGB, settings.scopeAssistConfiguration.waveformMode)
         assertEquals(ScopeParadeMode.RGB, settings.scopeAssistConfiguration.paradeMode)
         assertEquals(ScopeVectorscopeZoom.X1, settings.scopeAssistConfiguration.vectorscopeZoom)
         assertTrue(settings.selectedGuideRatios.isEmpty())
@@ -458,7 +490,7 @@ class OperatorSettingsTest {
         settings.scopeAssistConfiguration =
             settings.scopeAssistConfiguration.copy(
                 waveformScale = 2f,
-                waveformMode = ScopeWaveformMode.RGB,
+                waveformMode = ScopeWaveformMode.LUMA,
                 waveformGuides = ScopeGuideLines(clip = false, crush = true, middle = false),
                 waveformBrightness = 250,
                 paradeScale = 0f,
@@ -484,7 +516,7 @@ class OperatorSettingsTest {
         assertEquals(0f, restored.feedEffectsConfiguration.zebraMidtoneIre)
         assertEquals(FeedZebraStripeColor.GREEN, restored.feedEffectsConfiguration.zebraMidtoneColor)
         assertEquals(ScopeAssistConfiguration.MAX_SCALE, restored.scopeAssistConfiguration.waveformScale)
-        assertEquals(ScopeWaveformMode.RGB, restored.scopeAssistConfiguration.waveformMode)
+        assertEquals(ScopeWaveformMode.LUMA, restored.scopeAssistConfiguration.waveformMode)
         assertEquals(
             ScopeGuideLines(clip = false, crush = true, middle = false),
             restored.scopeAssistConfiguration.waveformGuides,
@@ -715,7 +747,7 @@ class OperatorSettingsTest {
         settings.scopeAssistConfiguration =
             ScopeAssistConfiguration(
                 waveformScale = 1.4f,
-                waveformMode = ScopeWaveformMode.RGB,
+                waveformMode = ScopeWaveformMode.LUMA,
                 waveformGuides = ScopeGuideLines(false, false, false),
                 waveformBrightness = 180,
                 paradeScale = 1.3f,
@@ -743,7 +775,7 @@ class OperatorSettingsTest {
 
         assertEquals(FeedEffectsConfiguration(), restored.feedEffectsConfiguration)
         assertEquals(1.4f, restored.scopeAssistConfiguration.waveformScale)
-        assertEquals(ScopeWaveformMode.LUMA, restored.scopeAssistConfiguration.waveformMode)
+        assertEquals(ScopeWaveformMode.RGB, restored.scopeAssistConfiguration.waveformMode)
         assertEquals(ScopeGuideLines(), restored.scopeAssistConfiguration.waveformGuides)
         assertEquals(100, restored.scopeAssistConfiguration.waveformBrightness)
         assertEquals(1.3f, restored.scopeAssistConfiguration.paradeScale)

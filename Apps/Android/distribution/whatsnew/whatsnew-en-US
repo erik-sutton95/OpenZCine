@@ -1,5 +1,5 @@
-- Fixed: a USB-C error or unplug could crash the app; the Wi-Fi scanner survives bad frames.
-- Fixed: aperture, ISO and shutter changes on the camera reach the app promptly.
-- Fixed: HEIF photos missing from the media browser; a second body keeps its settings.
-- Fixed: cameras on 10.x networks are found now; they were silently skipped.
-- New: connect in two choices - Wireless (camera AP, hotspot, Router) or Cable Link, now with HDMI capture-cable monitoring. Plus per-DISP settings, magnifier.
+- New: Share This Feed — other devices watch what you see, and can ask for camera control.
+- New: one camera keeps a setup per way of connecting, including several Wi-Fi networks, each nameable with its own Stream Preset and Quality Bias.
+- New: vertical camera mode, and the mirror assist for a camera facing you.
+- Fixed: the camera is found on subnets it could not be found on before.
+- Fixed: a Wi-Fi connection no longer asks you to join the camera's own network.

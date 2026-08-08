@@ -68,6 +68,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
             return "\(label) timed out."
         case .unexpectedPacket(let expected, let actual):
             return "Expected \(expected), got PTP-IP packet \(actual.rawValue)."
+        case .initFailed(.busy):
+            return
+                "Another device is connected to this camera. Disconnect it there, then try again."
         case .initFailed(let reason):
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
@@ -157,7 +160,8 @@ final class NativeCameraConnectionStore {
     func upsertSavedCamera(
         host: String, displayName: String, transport: String,
         onCameraAccessPoint: Bool? = nil,
-        serialNumber: String? = nil
+        serialNumber: String? = nil,
+        path: CameraPath? = nil
     ) {
         var records = PTPIPSavedCameraRecords.upserting(
             host: host,
@@ -166,12 +170,19 @@ final class NativeCameraConnectionStore {
             lastSeenAt: Date(),
             pairedViaCameraAccessPoint: onCameraAccessPoint,
             serialNumber: serialNumber,
+            path: path,
             into: savedCameras()
         )
-        if let ssid = CameraWiFiSSID.deriveSSID(fromCameraName: displayName),
-            transport.trimmingCharacters(in: .whitespacesAndNewlines)
-                .caseInsensitiveCompare(PTPIPSavedCameraRecord.usbTransportLabel) != .orderedSame
-        {
+        // The presentation SSID stamp is for the CAMERA-AP setup — stamping a derived
+        // "NIKON_…" onto every network record is what taught router records to prompt joins.
+        // An untyped call (legacy path) keeps the old stamp so migration can still read it.
+        let stampsSSID: Bool
+        switch path?.kind {
+        case .cameraAccessPoint: stampsSSID = true
+        case nil: stampsSSID = !PTPIPSavedCameraRecord.isUSBTransportLabel(transport)
+        default: stampsSSID = false
+        }
+        if stampsSSID, let ssid = CameraWiFiSSID.deriveSSID(fromCameraName: displayName) {
             records = PTPIPSavedCameraRecords.updatingWiFiSSID(
                 host: host,
                 wifiSSID: ssid,
@@ -201,6 +212,31 @@ final class NativeCameraConnectionStore {
             in: savedCameras()
         )
         saveSavedCameras(records)
+    }
+
+    func updateSavedCameraStreamSettings(
+        host: String,
+        pathKind: CameraPath.Kind?,
+        streamPreset: OperatorPreferences.StreamPreset?,
+        qualityBias: OperatorPreferences.QualityBias?
+    ) {
+        saveSavedCameras(
+            PTPIPSavedCameraRecords.updatingStreamSettings(
+                host: host,
+                pathKind: pathKind,
+                streamPreset: streamPreset,
+                qualityBias: qualityBias,
+                in: savedCameras()
+            )
+        )
+    }
+
+    func updateSavedCameraSetupName(
+        host: String, pathKind: CameraPath.Kind?, setupName: String?
+    ) {
+        saveSavedCameras(
+            PTPIPSavedCameraRecords.updatingSetupName(
+                host: host, pathKind: pathKind, setupName: setupName, in: savedCameras()))
     }
 
     func forgetPairing(host: String) {
@@ -354,6 +390,9 @@ final class NativeCameraSession: @unchecked Sendable {
     private var establishmentSummary: String
     private let metricsLock = NSLock()
     private(set) var lastCommandRoundTripMilliseconds: Double?
+    /// Bytes-per-second across frame fetches. Guarded by `metricsLock` with the round-trip average
+    /// above; read through `linkThroughput`.
+    private var throughput = LinkThroughputSampler()
 
     /// The physical link kind carrying this session (drives transport labels in the UI).
     var transportKind: CameraTransportKind { transport.kind }
@@ -364,10 +403,34 @@ final class NativeCameraSession: @unchecked Sendable {
         return lastCommandRoundTripMilliseconds
     }
 
+    /// Folds one frame transfer into the link's measured throughput.
+    private func recordFrameTransfer(bytes: Int, startedAt: Date) {
+        let seconds = Date().timeIntervalSince(startedAt)
+        metricsLock.lock()
+        throughput.record(bytes: bytes, seconds: seconds)
+        metricsLock.unlock()
+    }
+
+    /// Measured link throughput, or `nil` before the first frame. Same lock as the round-trip
+    /// average: both are written from the streaming path and read from the main actor.
+    var linkThroughput: LinkThroughputSampler {
+        metricsLock.lock()
+        defer { metricsLock.unlock() }
+        return throughput
+    }
+
     private func recordCommandRoundTrip(startedAt: Date) {
         let milliseconds = Date().timeIntervalSince(startedAt) * 1000
         metricsLock.lock()
-        lastCommandRoundTripMilliseconds = milliseconds
+        // EWMA, not a raw overwrite: this figure paces the between-frames polls and feeds the
+        // link-health bars, and a single outlier used to swing the poll stride 4↔20 in one
+        // sample. α=0.25 tracks genuine latency shifts within a few samples while absorbing
+        // one-off jitter.
+        if let previous = lastCommandRoundTripMilliseconds {
+            lastCommandRoundTripMilliseconds = previous + 0.25 * (milliseconds - previous)
+        } else {
+            lastCommandRoundTripMilliseconds = milliseconds
+        }
         metricsLock.unlock()
     }
 
@@ -451,6 +514,9 @@ final class NativeCameraSession: @unchecked Sendable {
     /// - failures with their own fallback or recovery copy (`savedProfileRequired` → re-pair
     ///   flow, `rejectedInitiator` → "create a Connect to PC profile", Local Network permission,
     ///   pairing errors);
+    /// - `initFailed(.busy)` — the body TOLD us another initiator holds it; a 1 s retry cannot
+    ///   succeed and doubles the init load on a session slot mid-handoff (audit M5, the
+    ///   two-device wedge). The busy path gets its own slower single retry in the connect flow;
     /// - cancellation (the operator already abandoned the attempt).
     ///
     /// Errors outside `NativeCameraSessionError` are raw socket/NW failures — transient.
@@ -461,12 +527,19 @@ final class NativeCameraSession: @unchecked Sendable {
         switch sessionError {
         case .noHost, .localNetworkPermissionDenied, .pairingRejected,
             .pairingChallengeUnavailable, .savedProfileRequired,
-            .initFailed(.rejectedInitiator):
+            .initFailed(.rejectedInitiator), .initFailed(.busy):
             return false
         case .connectionFailed, .connectionClosed, .timeout, .unexpectedPacket,
             .invalidPacketLength, .operationRejected, .objectRatingRejected, .initFailed:
             return true
         }
+    }
+
+    /// Whether an establish failure is the body answering "another initiator holds me."
+    static func isBusyEstablishFailure(_ error: Error) -> Bool {
+        guard let sessionError = error as? NativeCameraSessionError else { return false }
+        if case .initFailed(.busy) = sessionError { return true }
+        return false
     }
 
     func close() {
@@ -518,11 +591,14 @@ final class NativeCameraSession: @unchecked Sendable {
     /// Parameter1 = 0 clears the queue after the read so the same events aren't processed twice.
     /// Empty on any non-OK answer (the op is capability-checked by the caller). [verify-on-HW]
     func pollDeviceEvents() async -> [PTPEvent] {
+        let startedAt = Date()
         guard
             let result = try? await transact(
                 operationCode: .getEventEx, parameters: [0], dataPhase: .dataIn),
             result.operationResponse.responseCode == .ok
         else { return [] }
+        // A small, regular command — the honest RTT sample for poll pacing and link health.
+        recordCommandRoundTrip(startedAt: startedAt)
         return PTPNikonEventList.parse(Array(result.data))
     }
 
@@ -608,7 +684,9 @@ final class NativeCameraSession: @unchecked Sendable {
     }
 
     func liveViewFrameJPEG() async throws -> Data {
-        try await liveViewFrame().jpeg
+        // Always bounded: an unbounded fetch would hold the serial transaction gate forever if
+        // the body wedges mid-frame (audit finding #14 — this was the one nil-deadline caller).
+        try await liveViewFrame(deadline: .seconds(10)).jpeg
     }
 
     /// Fetches the next live-view frame. `deadline` bounds the fetch so a camera that accepts
@@ -620,10 +698,18 @@ final class NativeCameraSession: @unchecked Sendable {
     /// a stuck nil-deadline fetch holds the serial transaction gate, starving every other command
     /// ("connected but frozen, and all control dead").
     func liveViewFrame(deadline: Duration? = nil) async throws -> PTPLiveViewFrame {
+        // Deliberately NOT an RTT sample: a frame fetch carries the whole JPEG, so its duration
+        // measures payload transfer, not command latency — feeding it into the poll pacing made
+        // the stride react to picture size as if the link had slowed. Small commands
+        // (`pollDeviceEvents`, keep-alive) own the RTT signal.
+        //
+        // It is exactly the right sample for THROUGHPUT, though, which is a different question
+        // nobody was asking. On a narrow link that is the binding constraint — a body can answer a
+        // keep-alive in 30 ms and still need a second and a half to move one frame.
         let startedAt = Date()
         let result = try await transact(
             operationCode: .getLiveViewImageEx, dataPhase: .dataIn, deadline: deadline)
-        recordCommandRoundTrip(startedAt: startedAt)
+        recordFrameTransfer(bytes: result.data.count, startedAt: startedAt)
         guard result.operationResponse.responseCode == .ok else {
             throw NativeCameraSessionError.operationRejected(
                 .getLiveViewImageEx,

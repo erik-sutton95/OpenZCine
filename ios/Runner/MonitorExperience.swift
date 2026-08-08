@@ -253,26 +253,145 @@ struct LiveFeedModule: View {
     /// 0→1: how much of the AF box outline has traced in during a lock long-press.
     @State private var lockProgress: CGFloat = 0
 
-    private var punchInScale: CGFloat {
-        CGFloat(
-            Magnification.scale(
-                factor: model.assistConfiguration.magnification.factor.scale,
-                isActive: model.magnificationActive))
+    // MARK: Pinch zoom
+    //
+    // The fixed-factor MAG tool (button + factor drum, AF-box-anchored) is retired in favour of
+    // direct manipulation: pinch anywhere on the feed and it zooms about the pinch, drag to pan,
+    // pinch out (or below ~1.05×) to snap back — the Photos-app contract. The transform still
+    // goes LAST and wraps the WHOLE overlay stack (see `Magnification` for why), so the AF box
+    // and guides magnify with the picture.
+    /// Committed zoom, 1 when not zoomed.
+    @State private var zoomScale: CGFloat = 1
+    /// Committed pan, applied after the CENTER-anchored scale.
+    @State private var zoomOffset: CGSize = .zero
+    /// In-flight pinch factor; the render derives the live transform from it every frame.
+    @GestureState private var pinchFactor: CGFloat = 1
+    /// The in-flight pinch's start location in feed coordinates — the point the zoom pivots on.
+    @GestureState private var pinchStart: CGPoint? = nil
+    /// In-flight pan translation.
+    @GestureState private var panDelta: CGSize = .zero
+
+    private static let maximumZoom: CGFloat = 8
+
+    private var isZoomed: Bool { zoomScale > 1.001 }
+
+    /// Pan bound with a center-anchored scale: the picture overflows the frame by
+    /// `size·(scale−1)/2` on each side, and the offset may travel exactly that far — the
+    /// content edge pins to the frame edge. The bound falls to zero as the scale falls to 1,
+    /// which is what re-centers the picture on the way out of a zoom (the Photos feel):
+    /// clamping DURING the gesture is load-bearing, not just a commit-time tidy.
+    private func clampedOffset(_ offset: CGSize, size: CGSize, scale: CGFloat) -> CGSize {
+        let limitX = size.width * (scale - 1) / 2
+        let limitY = size.height * (scale - 1) / 2
+        return CGSize(
+            width: min(max(offset.width, -limitX), limitX),
+            height: min(max(offset.height, -limitY), limitY))
     }
 
-    /// The focus box the punch-in is pinned to, read fresh each frame so moving the point — on the
-    /// body or by tap — takes the magnified view with it. Falls back to centre with no box to aim at.
-    private var punchInAnchor: UnitPoint {
-        let focus = model.liveViewFocus
-        let index = Magnification.anchorBoxIndex(
-            boxCount: focus?.boxes.count ?? 0, selectedBoxIndex: focus?.selectedBoxIndex)
-        let box = index.flatMap { focus?.boxes[$0] }
-        let anchor = Magnification.anchor(
-            boxCenterX: box?.centerX,
-            boxCenterY: box?.centerY,
-            coordinateWidth: focus?.coordinateWidth ?? 0,
-            coordinateHeight: focus?.coordinateHeight ?? 0)
-        return UnitPoint(x: anchor.x, y: anchor.y)
+    /// The live transform, derived fresh every frame from the committed state and whatever
+    /// gesture is in flight. One exact formula instead of anchor bookkeeping: with a
+    /// center-anchored scale, keeping the content point under the fingers pinned while the
+    /// factor changes is `O′ = (f − c) − ((f − c) − O)·m` with `s′ = s·m` — for pinching in
+    /// AND out, so both directions track the fingers at the same rate. The factor is clamped
+    /// BEFORE it is applied, so pinching past 1× accumulates no dead travel to unwind.
+    private func liveZoomTransform(size: CGSize) -> (scale: CGFloat, offset: CGSize) {
+        var scale = zoomScale
+        var offset = zoomOffset
+        if let start = pinchStart {
+            let target = min(max(zoomScale * pinchFactor, 1), Self.maximumZoom)
+            let factor = zoomScale > 0 ? target / zoomScale : 1
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            offset = CGSize(
+                width: (start.x - center.x) - ((start.x - center.x) - offset.width) * factor,
+                height: (start.y - center.y) - ((start.y - center.y) - offset.height) * factor)
+            scale = target
+        }
+        if scale > 1.001 {
+            offset.width += panDelta.width
+            offset.height += panDelta.height
+        }
+        return (scale, clampedOffset(offset, size: size, scale: scale))
+    }
+
+    /// Applies the derived zoom transform: a CENTER-anchored scale then the offset, in that
+    /// order — the pair every formula above is written against.
+    private struct FeedZoomTransform: ViewModifier {
+        let transform: (scale: CGFloat, offset: CGSize)
+        func body(content: Content) -> some View {
+            content
+                .scaleEffect(transform.scale, anchor: .center)
+                .offset(transform.offset)
+        }
+    }
+
+    private func zoomGestures(size: CGSize) -> some Gesture {
+        let pinch = MagnifyGesture()
+            .updating($pinchFactor) { value, state, _ in
+                state = value.magnification
+            }
+            .updating($pinchStart) { value, state, _ in
+                // Every pinch pivots on its own start point — held for the gesture's life,
+                // reset by the state machinery when the fingers lift.
+                if state == nil { state = value.startLocation }
+            }
+            .onEnded { value in
+                let (scale, offset) = liveZoomTransformEnding(
+                    magnification: value.magnification,
+                    start: value.startLocation,
+                    size: size)
+                if scale < 1.05 {
+                    withAnimation(.spring(duration: 0.25)) {
+                        zoomScale = 1
+                        zoomOffset = .zero
+                    }
+                } else {
+                    zoomScale = scale
+                    zoomOffset = offset
+                }
+            }
+        return zoomGesturesTail(size: size, pinch: pinch)
+    }
+
+    /// The end-of-pinch transform, computed from the gesture value itself — `@GestureState`
+    /// has already reset by `onEnded`, so the live helper can't serve the commit.
+    private func liveZoomTransformEnding(
+        magnification: CGFloat, start: CGPoint, size: CGSize
+    ) -> (scale: CGFloat, offset: CGSize) {
+        let target = min(max(zoomScale * magnification, 1), Self.maximumZoom)
+        let factor = zoomScale > 0 ? target / zoomScale : 1
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let offset = CGSize(
+            width: (start.x - center.x) - ((start.x - center.x) - zoomOffset.width) * factor,
+            height: (start.y - center.y)
+                - ((start.y - center.y) - zoomOffset.height) * factor)
+        return (target, clampedOffset(offset, size: size, scale: target))
+    }
+
+    private func zoomGesturesTail(size: CGSize, pinch: some Gesture) -> some Gesture {
+        // ONE drag recognizer serves both roles — pan while zoomed, the DISP swipe when not.
+        // Two drags on the same surface (a 1pt pan beside the old 28pt swipe) arbitrate
+        // unpredictably: the earlier-recognizing pan starved the swipe even while inert.
+        let pan = DragGesture(minimumDistance: 1)
+            .updating($panDelta) { value, state, _ in
+                guard isZoomed else { return }
+                state = value.translation
+            }
+            .onEnded { value in
+                if isZoomed {
+                    zoomOffset = clampedOffset(
+                        CGSize(
+                            width: zoomOffset.width + value.translation.width,
+                            height: zoomOffset.height + value.translation.height),
+                        size: size, scale: zoomScale)
+                } else {
+                    // Down → clean (DISP 2); up → live (DISP 1). Same thresholds the dedicated
+                    // swipe used, so the feel is unchanged.
+                    let dy = value.translation.height
+                    guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
+                    model.setDisplayMode(dy > 0 ? .clean : .live)
+                }
+            }
+        return pinch.simultaneously(with: pan)
     }
 
     var body: some View {
@@ -296,22 +415,31 @@ struct LiveFeedModule: View {
                     else { return nil }
                     return Double(size.width / size.height)
                 }()
+                // Vertical mode: the body is on its side (header byte 839), so the DISPLAYED
+                // frame is the source frame's inverse aspect and the picture rotates upright
+                // inside it. The rotation wraps the whole feed stack — raster, AF boxes, zoom,
+                // gestures — so every existing coordinate mapping keeps operating in the
+                // camera's own (pre-rotation) space.
+                let feedRotation = model.liveFeedRotation
+                let sourceAspect =
+                    hdmiAspect
+                    ?? (isPhotography
+                        ? model.cameraPropertySnapshot.photographyFeedAspect
+                        : MonitorFeedLayout.aspectRatio)
                 let feedFrame = MonitorFeedLayout.fullBleedFrame(
                     viewportWidth: viewportWidth,
                     viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
                     safeArea: safeArea,
                     horizontalDirection: horizontalDirection,
-                    aspect: hdmiAspect
-                        ?? (isPhotography
-                            ? model.cameraPropertySnapshot.photographyFeedAspect
-                            : MonitorFeedLayout.aspectRatio),
-                    centered: isPhotography
+                    aspect: feedRotation.isVertical ? 1 / sourceAspect : sourceAspect,
+                    centered: isPhotography || feedRotation.isVertical
                 )
                 let imageWidth = CGFloat(feedFrame.width)
                 let imageHeight = CGFloat(feedFrame.height)
                 ZStack(alignment: .leading) {
                     Color.black
-                    feedImage(width: imageWidth, height: imageHeight)
+                    rotatedFeedImage(
+                        width: imageWidth, height: imageHeight, rotation: feedRotation)
                     FeedVignette()
                     FeedGrain()
                 }
@@ -325,12 +453,45 @@ struct LiveFeedModule: View {
                     height: CGFloat(fixedContentHeight ?? Double(proxy.size.height)),
                     alignment: .topLeading
                 )
+                // Portrait's fixed band clips the small-overflow vertical fill (core layout's
+                // width-bound frame) instead of letting it paint over the chrome above/below.
+                // Landscape full-bleed must stay unclipped — its safe-area escape depends on it.
+                .modifier(ClipToBandWhenFixed(active: fixedContentHeight != nil))
                 .offset(x: CGFloat(canvasOffsetX))
             }
         }
         // The safe-area escape belongs to the landscape full-bleed mount only; with a fixed
         // content height (portrait), it would re-expand the proposal and shift the box up.
         .modifier(FullBleedWhenMeasured(active: fixedContentHeight == nil))
+    }
+
+    /// Clips the feed container to its band only when portrait hands it a fixed height; the
+    /// landscape full-bleed mount keeps its unbounded overflow (safe-area escape).
+    private struct ClipToBandWhenFixed: ViewModifier {
+        let active: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if active {
+                content.clipped()
+            } else {
+                content
+            }
+        }
+    }
+
+    /// Lays the feed stack out in the camera's own frame (width/height swapped when the body is
+    /// vertical), then rotates it upright into the displayed footprint. Gesture locations report
+    /// in the pre-rotation space, so tap-to-focus and the AF overlay need no coordinate changes.
+    @ViewBuilder private func rotatedFeedImage(
+        width: CGFloat, height: CGFloat, rotation: PTPLiveViewRotation
+    ) -> some View {
+        if rotation == .landscape {
+            feedImage(width: width, height: height)
+        } else {
+            let swap = rotation.isVertical
+            feedImage(width: swap ? height : width, height: swap ? width : height)
+                .rotationEffect(.degrees(rotation.displayDegreesClockwise))
+                .frame(width: width, height: height)
+        }
     }
 
     @ViewBuilder private func feedImage(width: CGFloat, height: CGFloat) -> some View {
@@ -345,17 +506,28 @@ struct LiveFeedModule: View {
                 DemoFocusPointerSurface(model: model, size: CGSize(width: width, height: height))
             }
         }
-        // Punch-in goes LAST and wraps the WHOLE stack, not the raster — see `Magnification`. The
-        // AF box and focus ring are siblings of the raster, so scaling the raster alone would leave
-        // them behind at unmagnified positions over a magnified picture.
-        //
-        // Anchoring on the box also fixes tap-to-focus while punched in for free: SwiftUI reports
-        // gesture locations in the pre-transform space, so a tap still lands on the source pixel
-        // under the finger.
-        .scaleEffect(punchInScale, anchor: punchInAnchor)
+        // The zoom goes LAST and wraps the WHOLE stack, not the raster — see `Magnification`. The
+        // AF box and focus ring are siblings of the raster, so scaling the raster alone would
+        // leave them behind at unmagnified positions over a magnified picture. Gesture locations
+        // do NOT follow: the focus gestures attach outside this transform, so a tap reports where
+        // the finger landed in the FRAME, not which source pixel sits under it — field-verified
+        // (zoomed tap moved the AF point to the unzoomed position). `unzoomedFeedPoint` inverts
+        // this same transform on the way into `setFocusPoint`.
+        .modifier(
+            FeedZoomTransform(
+                transform: liveZoomTransform(size: CGSize(width: width, height: height))
+            )
+        )
         .frame(width: width, height: height)
         .clipped()
         .contentShape(Rectangle())
+        .simultaneousGesture(zoomGestures(size: CGSize(width: width, height: height)))
+        .onChange(of: model.videoSource) { _, _ in
+            // A source switch reframes the picture; a held-over zoom would magnify the wrong
+            // thing at the wrong spot.
+            zoomScale = 1
+            zoomOffset = .zero
+        }
         // Vertical swipe switches output mode (down → clean, up → live); long-press app-locks the
         // focus point; a tap moves it. Disambiguated by motion/hold/count, in that priority.
         .gesture(feedGesture(width: width, height: height))
@@ -398,21 +570,11 @@ struct LiveFeedModule: View {
         }
     }
 
-    /// Composed feed gesture: a vertical swipe switches output mode, else a tap moves the focus
-    /// point; `exclusively` keeps one alive per touch. (The app-lock long-press is a *separate*
-    /// simultaneous gesture — see the feed-image modifiers — so it fires mid-hold instead of being
-    /// held back behind this swipe's exclusivity.)
+    /// Tap moves the focus point. The DISP swipe lives on the zoom pan recognizer now (see
+    /// `zoomGestures`), so this is taps only; drags never read as taps — movement past the
+    /// system slop fails tap recognition on its own.
     private func feedGesture(width: CGFloat, height: CGFloat) -> some Gesture {
-        let size = CGSize(width: width, height: height)
-        return
-            DragGesture(minimumDistance: 28)
-            .onEnded { value in
-                let dy = value.translation.height
-                guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
-                // Down → clean (DISP 2); up → live (DISP 1).
-                model.setDisplayMode(dy > 0 ? .clean : .live)
-            }
-            .exclusively(before: focusTapGestures(size: size))
+        focusTapGestures(size: CGSize(width: width, height: height))
     }
 
     private func focusTapGestures(size: CGSize) -> some Gesture {
@@ -422,8 +584,25 @@ struct LiveFeedModule: View {
         // out of the feed gesture.
         SpatialTapGesture()
             .onEnded { value in
-                model.setFocusPoint(at: value.location, feedSize: size)
+                model.setFocusPoint(
+                    at: unzoomedFeedPoint(value.location, size: size), feedSize: size)
             }
+    }
+
+    /// Maps a tap from the frame's space back to the unzoomed picture's.
+    ///
+    /// The focus gestures attach OUTSIDE `FeedZoomTransform`, so on a pinched-in feed a tap
+    /// reports the finger's frame position while the subject under it sits somewhere else in
+    /// source space. The render's forward transform is `P = center + (C - center)*scale + offset`
+    /// (center-anchored scale, then offset); this is that, solved for `C`. Derived from the live
+    /// transform rather than the committed state so a tap mid-gesture still lands true.
+    private func unzoomedFeedPoint(_ point: CGPoint, size: CGSize) -> CGPoint {
+        let transform = liveZoomTransform(size: size)
+        guard transform.scale > 1.0001 else { return point }
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        return CGPoint(
+            x: center.x + (point.x - center.x - transform.offset.width) / transform.scale,
+            y: center.y + (point.y - center.y - transform.offset.height) / transform.scale)
     }
 }
 
@@ -445,10 +624,23 @@ private struct LiveFrameRaster: View {
             width: width,
             height: height
         )
-        .scaleEffect(
-            desqueezeScale(model.assistConfiguration.desqueeze), anchor: .center
-        )
+        .scaleEffect(feedScale, anchor: .center)
         .clipped()
+    }
+
+    /// De-squeeze and mirror are the same kind of thing — a transform of the raster alone — so they
+    /// ride one `scaleEffect` rather than stacking two. The mirror is a negative x scale, which is
+    /// why it lands here and not in the effects graph: this node is above BOTH feed renderers, so
+    /// the Metal path and the `UIImageView` fallback flip identically and neither had to learn it.
+    ///
+    /// Sibling overlays are deliberately outside this: guides, grid and crosshair are symmetric so
+    /// a flip would not show, and the horizon reads the phone's own gyro rather than the picture —
+    /// mirroring it would be wrong. The AF boxes DO describe positions in the picture and are
+    /// handled where they are drawn.
+    private var feedScale: CGSize {
+        let squeeze = desqueezeScale(model.assistConfiguration.desqueeze)
+        guard model.liveFeedMirrored else { return squeeze }
+        return CGSize(width: -squeeze.width, height: squeeze.height)
     }
 }
 
@@ -513,7 +705,8 @@ private struct DemoProcessedLiveFrameView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
-        view.contentMode = .scaleAspectFill
+        // Fit, never fill: an aspect mismatch letterboxes instead of cropping (#115).
+        view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
         // Match `LiveFrameView`: the 4K still's intrinsic size must not expand this representable
         // beyond SwiftUI's feed frame and turn the outer clip into an accidental digital zoom.
@@ -627,7 +820,8 @@ private struct LiveFeedFocusOverlay: View {
             // Focus metadata repeats identically on most frames — the Equatable guard skips the
             // Canvas redraw unless a box, lock, or progress changed.
             LiveFocusBoxOverlay(
-                focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress
+                focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
+                mirrored: model.liveFeedMirrored
             )
             .equatable()
             // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
@@ -920,33 +1114,134 @@ private struct LiveFeedWaitingOverlay: View {
                         .foregroundStyle(LiveDesign.text.opacity(0.55))
                         .frame(maxWidth: 400)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        model.retryRelayJoin()
-                    } label: {
-                        Text("Try again")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(LiveDesign.text.opacity(0.8))
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
+                    if model.relayJoinNeedsPasscode {
+                        RelayJoinPasscodeEntry()
+                            .padding(.top, 2)
+                    } else {
+                        Button {
+                            model.retryRelayJoin()
+                        } label: {
+                            Text("Try again")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(LiveDesign.text.opacity(0.8))
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 8)
+                                .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, 2)
                 }
             }
         }
     }
 }
 
+/// The watcher's ask/give-back, on the glass where the watching happens — control is exercised
+/// mid-take, not inside a settings sheet. One pill reflecting the token, so the control and its
+/// state cannot disagree. Mounted from the zone-aware chrome overlay (MonitorUnified), which
+/// knows the assist toolbar's band — a feed-anchored bottom-center mount sat INSIDE that band
+/// in landscape, half-under the toolbar.
+struct WatcherControlKey: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        Button {
+            if model.relayHoldsControl {
+                model.releaseRelayControl()
+            } else {
+                model.requestRelayControl()
+            }
+        } label: {
+            Text(model.relayHoldsControl ? "GIVE BACK CONTROL" : "ASK FOR CONTROL")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .kerning(0.8)
+                .foregroundStyle(model.relayHoldsControl ? LiveDesign.accent : LiveDesign.text)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(.black.opacity(0.55), in: Capsule())
+                .overlay(
+                    Capsule().strokeBorder(
+                        model.relayHoldsControl ? LiveDesign.accent : LiveDesign.hairline,
+                        lineWidth: 1))
+        }
+        .buttonStyle(.zcTapTarget)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+    }
+}
+
+/// The broadcaster's side of the token, where the watcher's pill sits on their glass: while a
+/// watcher holds control this device's camera keys stand down, and this is the way back. The
+/// reclaim needs no cooperation from the holder — this device owns the session.
+struct BroadcasterControlKey: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        Button {
+            model.reclaimRelayControl()
+        } label: {
+            HStack(spacing: 8) {
+                Text("REVOKE CONTROL")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .kerning(0.8)
+                    .foregroundStyle(LiveDesign.accent)
+                if let holder = model.relayControlHeldBy {
+                    Text(holder)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(LiveDesign.text.opacity(0.7))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(.black.opacity(0.55), in: Capsule())
+            .overlay(Capsule().strokeBorder(LiveDesign.accent, lineWidth: 1))
+        }
+        .buttonStyle(.zcTapTarget)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+    }
+}
+
+/// The broadcast asked for a passcode: four digits, joined on completion. Lives on the empty
+/// feed where the refusal reason is already showing.
+private struct RelayJoinPasscodeEntry: View {
+    @Environment(NativeAppModel.self) private var model
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("0000", text: $draft)
+            .keyboardType(.numberPad)
+            .textContentType(.oneTimeCode)
+            .multilineTextAlignment(.center)
+            .font(.system(size: 22, weight: .semibold, design: .monospaced))
+            .foregroundStyle(LiveDesign.text.opacity(0.9))
+            .frame(width: 132)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(LiveDesign.text.opacity(0.12)))
+            .focused($focused)
+            .onAppear { focused = true }
+            .onChange(of: draft) { _, next in
+                let digits = String(next.filter(\.isNumber).prefix(4))
+                if digits != next { draft = digits }
+                if digits.count == 4 {
+                    model.submitRelayPasscode(digits)
+                    draft = ""
+                }
+            }
+    }
+}
+
 /// Renders the live-view feed through a single long-lived `UIImageView`: the streaming loop swaps
 /// `model.liveFrameImage` ~30×/sec with a display-ready bitmap, and reusing one view keeps
-/// live-view memory flat over long sessions. `.scaleAspectFill` + clipping mirrors `.scaledToFill()`.
+/// live-view memory flat over long sessions. `.scaleAspectFit` + clipping keeps a mismatched picture whole (#115).
 private struct LiveFrameView: UIViewRepresentable {
     let image: UIImage
 
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
-        view.contentMode = .scaleAspectFill
+        // Fit, never fill: an aspect mismatch letterboxes instead of cropping (#115).
+        view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
         // Let SwiftUI's frame drive the size rather than the image's intrinsic size.
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -971,12 +1266,15 @@ struct LiveFocusBoxOverlay: View, Equatable {
     var locked: Bool = false
     /// 0→1 while long-pressing the AF box to lock it: how much of box 0's outline has drawn in.
     var lockProgress: CGFloat = 0
+    /// Whether the picture underneath is flipped left-to-right. The camera's box coordinates never
+    /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
+    var mirrored: Bool = false
 
     nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
         // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
         // properties of `focus`, so its memberwise == already covers them.
         lhs.focus == rhs.focus && lhs.locked == rhs.locked
-            && lhs.lockProgress == rhs.lockProgress
+            && lhs.lockProgress == rhs.lockProgress && lhs.mirrored == rhs.mirrored
     }
 
     /// Idle AF-box white opacity — slightly transparent so acquired/tracking green reads as a
@@ -1005,8 +1303,9 @@ struct LiveFocusBoxOverlay: View, Equatable {
                     for (index, box) in focus.boxes.enumerated() {
                         let boxWidth = CGFloat(box.width) * scaleX
                         let boxHeight = CGFloat(box.height) * scaleY
+                        let centerX = CGFloat(box.centerX) * scaleX
                         let rect = CGRect(
-                            x: CGFloat(box.centerX) * scaleX - boxWidth / 2,
+                            x: (mirrored ? size.width - centerX : centerX) - boxWidth / 2,
                             y: CGFloat(box.centerY) * scaleY - boxHeight / 2,
                             width: boxWidth,
                             height: boxHeight
@@ -1154,27 +1453,7 @@ struct BatteryRailModule: View {
         }
     }
 
-    /// The combined battery gauges (Dynamic-Island rails): two bare rows above the island,
-    /// each a device icon beside a battery-shaped outline with the number inside — narrow
-    /// enough to sit inside the rail lane without touching the feed.
-    private var batteryPill: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            BatteryIndicator(
-                percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: "iphone",
-                isCamera: false,
-                isCharging: model.phoneBatteryCharging,
-                layout: .pillRow
-            )
-            BatteryIndicator(
-                percent: model.cameraState.cameraBatteryPercent,
-                deviceSystemName: "camera",
-                isCamera: true,
-                isCharging: model.cameraBatteryCharging,
-                layout: .pillRow
-            )
-        }
-    }
+    private var batteryPill: some View { BatteryGaugeStack() }
 
     private func phoneBatteryIndicator(compact: Bool) -> some View {
         BatteryIndicator(
@@ -1196,30 +1475,40 @@ struct BatteryRailModule: View {
     }
 }
 
-/// Inline phone + camera battery row for width-constrained (4:3-ish iPad) landscape layouts,
-/// mounted beside the lock button at the zone map's `.batteryInline` cluster frame. Reuses the
-/// portrait top bar's single-row `BatteryIndicator` presentation.
-struct BatteryInlineCluster: View {
+/// The combined battery gauges (Dynamic-Island rails, and the iPad's inline cluster): two bare
+/// rows, each a device icon beside a battery-shaped outline with the number inside — narrow
+/// enough to sit inside the rail lane without touching the feed.
+struct BatteryGaugeStack: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 14) {
+        VStack(alignment: .leading, spacing: 5) {
             BatteryIndicator(
                 percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: "iphone",
+                deviceSystemName: deviceSymbol,
                 isCamera: false,
                 isCharging: model.phoneBatteryCharging,
-                layout: .inline
+                layout: .pillRow
             )
             BatteryIndicator(
                 percent: model.cameraState.cameraBatteryPercent,
                 deviceSystemName: "camera",
                 isCamera: true,
                 isCharging: model.cameraBatteryCharging,
-                layout: .inline
+                layout: .pillRow
             )
         }
     }
+
+    private var deviceSymbol: String {
+        UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+    }
+}
+
+/// Inline phone + camera battery cluster for width-constrained (4:3-ish iPad) landscape layouts,
+/// mounted beside the lock button at the zone map's `.batteryInline` cluster frame.
+struct BatteryInlineCluster: View {
+    var body: some View { BatteryGaugeStack() }
 }
 
 /// A single tappable exposure readout (label + value) that opens its picker above the capture bar.
@@ -1497,6 +1786,36 @@ private enum AssistHaptics {
     }
 }
 
+/// Keeps a ``ScrollEdgeFades`` in step with a horizontal scroller's real position.
+///
+/// The tolerances are not arbitrary. A `GlassPanel`'s leading and trailing padding is reported as
+/// content width, so a row sitting flush at its end still claims ~23pt of scrollable slack — a
+/// trailing chevron would never clear. The leading edge carries no such slack, so a few points is
+/// enough there. Below iOS 18 there is no cheap way to observe scroll geometry, so both edges hint
+/// permanently: a chevron that over-promises beats a row that looks complete when it is not.
+struct ScrollEdgeReporter: ViewModifier {
+    @Binding var edges: ScrollEdgeFades
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .onScrollGeometryChange(for: ScrollEdgeFades.self) { geometry in
+                    let remaining =
+                        geometry.contentSize.width - geometry.containerSize.width
+                        - geometry.contentOffset.x
+                    return ScrollEdgeFades(
+                        leading: geometry.contentOffset.x > 6,
+                        trailing: remaining > 28
+                    )
+                } action: { _, fades in
+                    edges = fades
+                }
+        } else {
+            content.onAppear { edges = ScrollEdgeFades(leading: true, trailing: true) }
+        }
+    }
+}
+
 /// Tracks which edges of the assist toolbar fade out to hint at off-screen tools.
 struct ScrollEdgeFades: Equatable {
     var leading: Bool
@@ -1667,10 +1986,24 @@ struct BatteryIndicator: View {
     var isCharging: Bool = false
     var layout: Layout = .rail
 
+    /// Drives the exhausted gauge's pulse. Only ever set while ``batteryPulses``.
+    @State private var batteryPulsePhase = false
+
     /// Standard SF battery glyph whose fill reflects the charge percent. The Nikon ZR reports
     /// battery as discrete steps (1/20/40/60/80/100 %), so the camera readout naturally lands on
     /// 20/40/60/80/100 % (and 1 % when critical) rather than a misleadingly precise figure.
     private var batterySymbol: String {
+        // Camera: pick the glyph from the bar count so the icon and the readout cannot disagree.
+        if let cameraGauge {
+            switch cameraGauge.filledBars {
+            case 0: return "battery.0percent"
+            case 1: return "battery.25percent"
+            case 2: return "battery.25percent"
+            case 3: return "battery.50percent"
+            case 4: return "battery.75percent"
+            default: return "battery.100percent"
+            }
+        }
         let bucket = percent
         switch bucket {
         case ..<13: return "battery.0percent"
@@ -1681,19 +2014,91 @@ struct BatteryIndicator: View {
         }
     }
 
-    /// The readout under the glyph: charge percent for both the camera and the phone.
+    /// The camera's gauge, as the body reports it (nil for the phone, which is a real percentage).
+    private var cameraGauge: CameraBatteryGauge? {
+        isCamera ? CameraBatteryGauge.gauge(rawBatteryLevel: percent) : nil
+    }
+
+    /// The readout under the glyph.
+    ///
+    /// The phone is a true percentage. The camera is NOT: `BatteryLevel` is a five-bar gauge that
+    /// only ever carries 1/20/40/60/80/100, so printing it as "60%" claimed a precision the body
+    /// never sent and read 20 points high mid-step (#303). Bars are what the camera itself shows.
     private var readout: String {
-        "\(percent)%"
+        guard let cameraGauge else { return "\(percent)%" }
+        switch cameraGauge {
+        case .unknown: return "—"
+        case .critical, .bars: return "\(cameraGauge.filledBars)/\(CameraBatteryGauge.barCount)"
+        }
+    }
+
+    /// The camera's gauge drawn as segments — the body shows bars, so the monitor shows bars.
+    ///
+    /// The phone keeps its numeral: it reports a true percentage, and the two readings should not
+    /// look like the same kind of measurement (#303).
+    // An unknown gauge falls through to the dash, never to an empty meter. A watcher that is not
+    // being sent a battery reading was drawing five hollow bars in warning red — which reads as
+    // "this camera is flat", the most alarming thing the indicator can say, on no evidence at all.
+    @ViewBuilder
+    private func gaugeReadout(size: CGFloat) -> some View {
+        if let cameraGauge, cameraGauge != .unknown {
+            let filled = cameraGauge.filledBars
+            HStack(spacing: max(1, size * 0.18)) {
+                ForEach(0..<CameraBatteryGauge.barCount, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: max(0.5, size * 0.12), style: .continuous)
+                        .fill(index < filled ? batteryTint : LiveDesign.text.opacity(0.22))
+                        .frame(width: max(1.5, size * 0.42), height: size)
+                }
+            }
+            // The glow rides the same pulse as the fill, so the exhausted gauge reads at a glance
+            // in a bright room where a colour change alone would not.
+            .shadow(color: batteryTint.opacity(batteryPulses ? 0.9 : 0), radius: size * 0.5)
+            .opacity(batteryPulses && batteryPulsePhase ? 0.35 : 1)
+            .animation(
+                batteryPulses
+                    ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true) : .default,
+                value: batteryPulsePhase
+            )
+            .onAppear { if batteryPulses { batteryPulsePhase = true } }
+            .onChange(of: batteryPulses) { _, pulses in batteryPulsePhase = pulses }
+            .accessibilityElement()
+            .accessibilityLabel(
+                "Camera battery \(filled) of \(CameraBatteryGauge.barCount) bars"
+                    + (batteryPulses ? ", exhausted" : ""))
+        } else {
+            Text(readout)
+                .font(.system(size: size + 2.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(LiveDesign.text.opacity(0.72))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
     }
 
     private var isLow: Bool {
-        isCamera ? percent < 10 : percent <= 15
+        guard let cameraGauge else { return percent <= 15 }
+        // The body's own threshold: one bar left, or the blinking exhausted step.
+        return cameraGauge.filledBars <= 1
     }
 
+    /// Charge reads as colour before it reads as a count: an operator glancing down should know
+    /// whether to reach for a spare without counting bars. The thresholds are the shared core's
+    /// (`CameraBatteryGauge.Urgency`), so the two platforms cannot warn at different charges.
     private var batteryTint: Color {
-        if isLow { return .red }
-        return isCamera ? LiveDesign.accent : LiveDesign.text.opacity(0.85)
+        guard let cameraGauge else {
+            return isLow ? .red : (isCamera ? LiveDesign.accent : LiveDesign.text.opacity(0.85))
+        }
+        switch cameraGauge.urgency {
+        // Muted rather than a signal green: a healthy battery should not compete with the
+        // record tally for attention.
+        case .nominal: return Color(red: 0.42, green: 0.80, blue: 0.53)
+        case .low: return .orange
+        case .depleted: return .red
+        }
     }
+
+    /// The body's blinking exhaustion step, mirrored. Only that step pulses — a steady red bar is
+    /// "nearly out", a pulsing one is "the shutter is already disabled".
+    private var batteryPulses: Bool { cameraGauge?.pulses ?? false }
 
     var body: some View {
         switch layout {
@@ -1719,13 +2124,9 @@ struct BatteryIndicator: View {
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(batteryTint)
                 }
-                Text("\(percent)")
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(batteryTint)
-                    // "100" plus the charging bolt is wider than the outline — shrink the
-                    // digits to keep the readout inside the battery body.
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
+                // Bars for the camera, numeral for the phone (#303). Sized to sit inside the
+                // battery outline alongside the charging bolt.
+                gaugeReadout(size: 7.5)
             }
             .frame(width: 26, height: 15)
             .overlay {
@@ -1762,9 +2163,7 @@ struct BatteryIndicator: View {
                 .font(.system(size: 18, weight: .regular))
                 .foregroundStyle(batteryTint)
                 .overlay { chargingOverlay }
-            Text(readout)
-                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.72))
+            gaugeReadout(size: 8)
             Image(systemName: deviceSystemName)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(LiveDesign.muted)
@@ -1781,9 +2180,7 @@ struct BatteryIndicator: View {
                 .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(batteryTint)
                 .overlay { chargingOverlay }
-            Text(readout)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.72))
+            gaugeReadout(size: 6.5)
         }
         .frame(
             width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
@@ -1801,9 +2198,7 @@ struct BatteryIndicator: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(batteryTint)
                 .overlay { chargingOverlay }
-            Text(readout)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.72))
+            gaugeReadout(size: 10)
             Image(systemName: deviceSystemName)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(LiveDesign.muted)

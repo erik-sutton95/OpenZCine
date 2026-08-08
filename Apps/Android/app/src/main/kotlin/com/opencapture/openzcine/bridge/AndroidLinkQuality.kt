@@ -19,7 +19,12 @@ public data class SwiftLiveViewRequest(
 ) {
     init {
         require(imageSize in 1..3) { "Preview image size must be 1...3." }
-        require(compression in 1..3) { "Preview compression must be 1...3." }
+        // 6-value Nikon enum (Basic/Normal/Fine x size/quality priority). The old 1..3 bound
+        // silently discarded EVERY preview request whose bias resolved to 0 (latency) or 5
+        // (detail) — the require threw inside parseLiveViewRequest's runCatching, so size,
+        // compression AND cadence were all dropped with no log. The Swift twin was widened for
+        // exactly this reason; this bound must match it.
+        require(compression in 0..5) { "Preview compression must be 0...5." }
         require(frameIntervalNanoseconds in MIN_FRAME_INTERVAL_NANOS..MAX_FRAME_INTERVAL_NANOS) {
             "Preview interval must be between ${MIN_FRAME_INTERVAL_NANOS}ns and ${MAX_FRAME_INTERVAL_NANOS}ns."
         }
@@ -37,7 +42,8 @@ public data class SwiftLiveViewRequest(
         const val MAX_FRAME_INTERVAL_NANOS = 100_000_000L
         /** Always 60 Hz. */
         const val STANDARD_FRAME_INTERVAL_NANOS = MIN_FRAME_INTERVAL_NANOS
-        val DEFAULT = SwiftLiveViewRequest(2, 2, STANDARD_FRAME_INTERVAL_NANOS)
+        /** Balanced-bias values the Swift policy actually emits (size 2, compression 3). */
+        val DEFAULT = SwiftLiveViewRequest(2, 3, STANDARD_FRAME_INTERVAL_NANOS)
     }
 }
 
@@ -149,6 +155,11 @@ internal data class LinkHealthInput(
     val isRecoveringStream: Boolean,
     val isUsbTransport: Boolean,
     val resetSignalBars: Boolean,
+    /**
+     * Measured link throughput, or null before the first frame. Appended to the caption because
+     * the score cannot say whether a healthy-latency link is simply too narrow for the preset.
+     */
+    val throughputMegabitsPerSecond: Double? = null,
 )
 
 /** Injectable coarse JNI seam that prevents Kotlin from duplicating health rules. */
@@ -175,6 +186,8 @@ internal object ProductionLinkHealthBridge : LinkHealthBridge {
                 isRecoveringStream = input.isRecoveringStream,
                 isUsbTransport = input.isUsbTransport,
                 resetSignalBars = input.resetSignalBars,
+                throughputMegabitsPerSecond = input.throughputMegabitsPerSecond ?: 0.0,
+                hasThroughput = input.throughputMegabitsPerSecond != null,
             ) ?: return null
         return parseLinkHealthPresentation(payload)
     }
