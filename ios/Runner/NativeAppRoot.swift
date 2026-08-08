@@ -4523,7 +4523,7 @@ final class NativeAppModel {
         let cameras =
             (try? await discoveryService.discover(
                 guid: guid,
-                priorityHosts: savedCameras.map(\.host),
+                priorityHosts: discoveryPriorityHosts,
                 excludedHosts: { [weak self] in
                     self?.hostsServedByVisibleBroadcasts() ?? []
                 },
@@ -4539,6 +4539,34 @@ final class NativeAppModel {
         startDiscoveryLoop(resetResults: false)
     }
 
+    /// Every address a discovery pass should be dialling, and where each came from.
+    ///
+    /// The probe pass already logs the hosts it TRIED; this says what it should have tried, which
+    /// is the only way to see an address going missing between the saved list and the wire. A
+    /// field log showed a tapped setup at 192.168.1.246 absent from a trusted list that carried
+    /// its three siblings — unanswerable from the trying side alone.
+    private var discoveryPriorityHosts: [String] {
+        var hosts = savedCameras.map(\.host)
+        // An armed watch's anchor is the camera the operator is standing in front of; its address
+        // belongs in every pass for as long as the watch lives, whatever the saved list says.
+        if let anchor = pendingSetupIntent?.anchor.host, !hosts.contains(anchor) {
+            hosts.append(anchor)
+        }
+        // The address this attempt is actually dialling, for the same reason.
+        if !cameraHost.isEmpty, !hosts.contains(cameraHost) { hosts.append(cameraHost) }
+        return hosts
+    }
+
+    private func logDiscoveryPriorityHosts() {
+        let listing =
+            savedCameras
+            .map { "\($0.host)/\($0.pathKind?.rawValue ?? "untyped")" }
+            .joined(separator: " ")
+        logConnection(
+            "discovery priority saved=[\(listing)] "
+                + "intent=\(pendingSetupIntent?.anchor.host ?? "none") dialling=\(cameraHost)")
+    }
+
     /// One-line verdict per discovery pass while a setup watch is armed — the stuck-"Searching…"
     /// diagnosis line. Read in Console as `setup-watch`.
     ///
@@ -4549,6 +4577,7 @@ final class NativeAppModel {
     /// passes before the first active one could fulfill.
     private func logSetupWatchPass(cameras: [DiscoveredCamera]) {
         guard let intent = pendingSetupIntent else { return }
+        logDiscoveryPriorityHosts()
         let listing = cameras.map { "\($0.ip)/\($0.displayName)/\($0.source)" }
             .joined(separator: " ")
         logConnection(
@@ -4665,7 +4694,7 @@ final class NativeAppModel {
             do {
                 cameras = try await discoveryService.discover(
                     guid: guid,
-                    priorityHosts: savedCameras.map(\.host),
+                    priorityHosts: discoveryPriorityHosts,
                     excludedHosts: { [weak self] in
                         self?.hostsServedByVisibleBroadcasts() ?? []
                     },
