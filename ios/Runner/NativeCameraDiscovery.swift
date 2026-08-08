@@ -273,19 +273,30 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                 // sweep aimed a real Init at all 254 hosts of one subnet, which is both slower and
                 // more disturbance than this is across a dozen.
                 let scan = await withTaskGroup(of: (String, Bool, String).self) { group in
-                    for host in chunk {
-                        group.addTask {
-                            let outcome = await PTPIPTransport.probePort(host: host)
-                            return (host, outcome.isOpen, outcome.verdict)
-                        }
+                    // A bounded window, not the whole chunk at once — see `sweepScanWidth` for why
+                    // patience, not width, is what finds a camera on Wi-Fi.
+                    var pending = chunk.makeIterator()
+                    var inFlight = 0
+                    while inFlight < Self.sweepScanWidth, let host = pending.next() {
+                        group.addTask { await Self.scanOutcome(host: host) }
+                        inFlight += 1
                     }
                     var open: [String] = []
                     var tally: [String: Int] = [:]
+                    var gateways: [String] = []
                     for await (host, isOpen, verdict) in group {
                         if isOpen { open.append(host) }
                         tally[verdict, default: 0] += 1
+                        // The subnet's .1 is the control host: a router is reachable, warm in the
+                        // ARP cache and certain to refuse 15740 fast. "refused" there means the
+                        // network is right and the camera is simply not listening; anything else
+                        // means the sweep never reached the network at all.
+                        if host.hasSuffix(".1") { gateways.append("\(host)=\(verdict)") }
+                        if let next = pending.next() {
+                            group.addTask { await Self.scanOutcome(host: next) }
+                        }
                     }
-                    return (open: open.sorted(), tally: tally)
+                    return (open: open.sorted(), tally: tally, gateways: gateways.sorted())
                 }
                 hostsToIdentify = scan.open
                 // Always, not only on a hit: a sweep that opens nothing is exactly the case that
@@ -296,7 +307,8 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                     .map { "\($0.key)=\($0.value)" }
                     .joined(separator: " ")
                 logConnection(
-                    "discovery sweep scan open=[\(scan.open.joined(separator: " "))] \(tally)")
+                    "discovery sweep scan open=[\(scan.open.joined(separator: " "))] \(tally) "
+                        + "gw=[\(scan.gateways.joined(separator: " "))]")
             }
             guard !hostsToIdentify.isEmpty else { continue }
             // PASS TWO, narrow: the Init that separates a camera from anything else listening on
@@ -409,6 +421,31 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
         }
         if error is CancellationError { return "cancelled" }
         return "\(nsError.domain)-\(nsError.code)"
+    }
+
+    /// How many hosts the mute scan dials at once, and how long each is given to answer.
+    ///
+    /// The bound was 250 ms, and a ZR on Wi-Fi cannot answer in 250 ms. Measured on hardware
+    /// 2026-08-04 for the presence probe: an idle body takes ~1.0–1.2 s to answer a dial, because
+    /// its radio is in power-save and only listens on its beacon cadence. So the sweep asked the
+    /// whole subnet a question and hung up before the camera was awake to hear it — every pass,
+    /// however plainly the camera was sitting there. `probeHostAlive` already allows 1.5 s for the
+    /// same body for the same reason; this is that number, not a new guess.
+    ///
+    /// The width bound comes with it: 254 simultaneous 1.5 s connects would be 254 blocked sockets
+    /// and 254 near-simultaneous ARP requests for addresses nobody holds. 48 is under libdispatch's
+    /// worker cap, so the window is what limits the burst rather than the thread pool's mood.
+    ///
+    /// ponytail: a /24 now costs ~8 s instead of ~1 s. That is the local subnet, swept first and
+    /// the one that matters; if the widened ladder's wall clock ever hurts, give the speculative
+    /// subnets the impatient bound and keep this one for the subnets we stand in.
+    private static let sweepScanWidth = 48
+    private static let sweepScanTimeoutMilliseconds: UInt64 = 1_500
+
+    private static func scanOutcome(host: String) async -> (String, Bool, String) {
+        let outcome = await PTPIPTransport.probePort(
+            host: host, timeoutMilliseconds: sweepScanTimeoutMilliseconds)
+        return (host, outcome.isOpen, outcome.verdict)
     }
 
     /// How many consecutive sweeps have found nothing, per network.
@@ -603,10 +640,17 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
 
     private func probe(host: String, guid: Data) async throws -> DiscoveredCamera? {
         guard
+            // 1.8 s, not the 650 ms this waited for years. Same hardware measurement as the
+            // sweep's bound: an idle ZR on Wi-Fi answers a dial in ~1.0–1.2 s, its radio being in
+            // power-save and listening only on the beacon cadence. 650 ms hung up before the body
+            // was awake to hear the question, and the pass then reported "no-camera" — the most
+            // confident possible way of saying we did not wait. The bound is per wait, so the Init
+            // ack gets its own; it costs a pass nothing when the host answers, and the trusted
+            // list is a handful of addresses probed in parallel.
             let name = try await PTPIPTransport.probeCameraName(
                 host: host,
                 guid: guid,
-                timeoutMilliseconds: 650
+                timeoutMilliseconds: 1_800
             )
         else {
             return nil

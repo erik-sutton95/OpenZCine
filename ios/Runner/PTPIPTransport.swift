@@ -135,9 +135,14 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
     /// The same probe, keeping WHY it failed.
     ///
     /// A sweep that opens nothing looks identical whether every host refused (nothing listening,
-    /// network right), had no route (wrong network), or timed out (unreachable — or this device
-    /// starving under a wide fan-out, which a 250 ms bound cannot distinguish from a dead host).
-    /// The counts separate those three, and a sweep is only worth trusting once they do.
+    /// network right), had no route (wrong network), or timed out (unreachable, or the wait was
+    /// simply shorter than the network took to answer). The counts separate those, and a sweep is
+    /// only worth trusting once they do.
+    ///
+    /// The verdict is read off the SOCKET, not off the thrown error: every failure here arrives
+    /// wrapped in `NativeCameraSessionError`, whose NSError domain is this module's and never
+    /// `NSPOSIXErrorDomain` — classifying the wrapper sorted all 254 hosts of a subnet into
+    /// "other" and made the whole tally a tautology (field logs, 2026-08-08).
     static func probePort(
         host rawHost: String,
         timeoutMilliseconds: UInt64 = 250
@@ -155,15 +160,18 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
             socket.close()
             return (true, "open")
         } catch {
+            let code = socket.lastErrno
             socket.close()
-            let nsError = error as NSError
-            guard nsError.domain == NSPOSIXErrorDomain else { return (false, "other") }
-            switch Int32(nsError.code) {
+            if case NativeCameraSessionError.timeout = error { return (false, "timeout") }
+            switch code {
+            case 0: return (false, "other")
             case ECONNREFUSED: return (false, "refused")
             case EHOSTUNREACH: return (false, "no-route")
             case ENETUNREACH: return (false, "no-network")
             case ETIMEDOUT, ETIME: return (false, "timeout")
-            default: return (false, "posix-\(nsError.code)")
+            case EMFILE, ENFILE: return (false, "no-fds")
+            case EACCES, EPERM: return (false, "denied")
+            default: return (false, "errno-\(code)")
             }
         }
     }
@@ -464,6 +472,13 @@ final class PTPIPSocket: @unchecked Sendable {
 
     /// Reused `recv` scratch (serial-queue-owned) — see `receiveOnQueue` for why.
     private var receiveScratch: [UInt8] = []
+
+    /// The errno behind the last `socketError` this socket raised, or 0 if it never raised one.
+    ///
+    /// `NativeCameraSessionError` carries a sentence, not a code, and a sentence cannot be
+    /// counted. The reachability probe reads this to say WHY a host did not answer; nothing else
+    /// should — the wrapped message is what a person reads.
+    fileprivate private(set) var lastErrno: Int32 = 0
 
     func start() async throws {
         try await performOnQueue { try self.connectOnQueue() }
@@ -809,6 +824,7 @@ final class PTPIPSocket: @unchecked Sendable {
     }
 
     private func socketError(_ code: Int32, context: String) -> NativeCameraSessionError {
+        lastErrno = code
         if code == EACCES {
             return .connectionFailed(
                 "iOS denied \(context) to \(host):\(port). Confirm Local Network is enabled and that the phone is on the camera network."
