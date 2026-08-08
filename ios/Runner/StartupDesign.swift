@@ -3,9 +3,16 @@ import SwiftUI
 
 /// Maps technical connection/discovery status strings to operator-friendly copy for startup screens.
 enum StartupConnectionCopy {
-    static func friendly(_ raw: String) -> String {
+    /// - Parameter path: how the attempt reaches the camera, where it is known. These lines are
+    ///   matched on the TEXT of a status, which carries no idea of which path produced it — so a
+    ///   cable failure was being answered with "check Wi‑Fi", sending the operator to inspect a
+    ///   radio this attempt never used. `nil` keeps the Wi‑Fi wording, right for every path with a
+    ///   network.
+    static func friendly(_ raw: String, path: CameraPath.Kind? = nil) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
+        let checkTheLink =
+            path == .usbC || path == .hdmiCapture ? "Check the cable" : "Check Wi‑Fi"
 
         let lower = trimmed.lowercased()
         if lower.contains("imagecapturecore") {
@@ -15,7 +22,7 @@ enum StartupConnectionCopy {
         }
         if lower.contains("ptp-ip") || lower.contains("ptp ip") {
             if lower.contains("no") && (lower.contains("service") || lower.contains("answered")) {
-                return "Couldn't reach the camera. Check Wi‑Fi and try again."
+                return "Couldn't reach the camera. \(checkTheLink) and try again."
             }
             if lower.contains("handshake") || lower.contains("rejected") {
                 return "The camera didn't accept the connection. Check Connect to PC and try again."
@@ -48,7 +55,7 @@ enum StartupConnectionCopy {
                 "OpenZCine needs local network access. Allow it in Settings → OpenZCine → Local Network."
         }
         if lower.contains("timed out") {
-            return "The camera didn't respond in time. Check Wi‑Fi and try again."
+            return "The camera didn't respond in time. \(checkTheLink) and try again."
         }
         if lower.contains("closed the connection") {
             return "The camera ended the connection. Try again."
@@ -2202,13 +2209,36 @@ struct StartupFirstPairWizardView: View {
         }
     }
 
-    /// The step heading, overridden where a path makes the generic wording wrong: HDMI capture
-    /// finds nothing and pairs with nothing, so "Find and pair" would misdescribe the whole step.
+    /// The step heading, in the terms of the path the operator actually chose.
+    ///
+    /// The generic titles describe the SHAPE of the wizard, not what any one path does in it, and
+    /// on three of the five that reads as a different instruction from the one on screen: "Set up
+    /// the network" over a cable, over a step whose whole content is "check you are both already
+    /// on the same network", or over "turn on your hotspot". HDMI already had an override here
+    /// because "Find and pair" misdescribed a step that finds nothing and pairs with nothing; the
+    /// same was true elsewhere and only that one case had been noticed.
     private var stepTitle: String {
-        if step == .discoverAndPair, model.firstPairTransportMethod == .hdmiCapture {
+        switch (step, model.firstPairTransportMethod) {
+        case (.prepareCamera, .hdmiCapture):
+            // The camera is half of it; the capture device is the half that has to be right.
+            return "Prepare the camera and capture device"
+        case (.connectNetwork, .usbC):
+            return "Connect the cable"
+        case (.connectNetwork, .cameraAccessPoint):
+            return "Join the camera's Wi-Fi"
+        case (.connectNetwork, .phoneHotspot):
+            return "Turn on your hotspot"
+        case (.connectNetwork, .wiFiNetwork):
+            // A CHECK, not a setup: the app joins nothing here and neither does the operator.
+            return "Get both on one network"
+        case (.discoverAndPair, .hdmiCapture):
             return "Connect the capture device"
+        case (.discoverAndPair, .phoneHotspot):
+            // The direction is the whole point of this path: the camera joins the phone.
+            return "Wait for the camera"
+        default:
+            return step.title
         }
-        return step.title
     }
 
     // MARK: - Right column: current step

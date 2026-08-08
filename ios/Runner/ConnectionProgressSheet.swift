@@ -64,7 +64,8 @@ struct ConnectionProgressSheet: View {
         return ConnectionProgressCopy.statusDetail(
             phase: .failed,
             deviceName: deviceName,
-            friendlyError: nil
+            friendlyError: nil,
+            path: model.connectionProgressPathKind
         )
     }
 
@@ -121,7 +122,8 @@ struct ConnectionProgressSheet: View {
         return ConnectionProgressCopy.statusDetail(
             phase: phase,
             deviceName: deviceName,
-            friendlyError: nil
+            friendlyError: nil,
+            path: model.connectionProgressPathKind
         )
     }
 

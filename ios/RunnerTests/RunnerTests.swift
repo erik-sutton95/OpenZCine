@@ -1910,3 +1910,44 @@ extension RunnerTests {
         XCTAssertEqual(records.count, 2, "hosts: \(records.map(\.host))")
     }
 }
+
+extension RunnerTests {
+    /// Failure copy is matched on the TEXT of a status, which carries no idea which path produced
+    /// it — so a cable failure used to be answered with "check Wi-Fi", sending the operator to
+    /// inspect a radio the attempt never used.
+    func testCableFailuresAreNotToldToCheckWiFi() {
+        let timedOut = "PTP-IP connect timed out"
+        XCTAssertTrue(
+            StartupConnectionCopy.friendly(timedOut, path: .usbC).contains("Check the cable"))
+        XCTAssertTrue(
+            StartupConnectionCopy.friendly(timedOut, path: .hdmiCapture).contains("Check the cable")
+        )
+
+        // Every path with a network keeps the Wi-Fi wording, including an unknown one.
+        for network in [CameraPath.Kind.cameraAccessPoint, .infrastructure, .phoneHotspot] {
+            XCTAssertTrue(
+                StartupConnectionCopy.friendly(timedOut, path: network).contains("Check Wi"),
+                "\(network) should still be told to check Wi-Fi")
+        }
+        XCTAssertTrue(StartupConnectionCopy.friendly(timedOut).contains("Check Wi"))
+    }
+
+    /// The wizard's step headings describe the SHAPE of the wizard, not what any one path does in
+    /// it — "Set up the network" over a cable is a different instruction from the one on screen.
+    func testEveryPathsNetworkStepIsTitledForWhatItActuallyDoes() {
+        // The generic title survives only where it is still true.
+        XCTAssertEqual(
+            NativeAppModel.FirstPairWizardStep.connectNetwork.title, "Set up the network")
+        XCTAssertEqual(NativeAppModel.FirstPairWizardStep.discoverAndPair.title, "Find and pair")
+        // HDMI never visits the network step; every other path does, and each needs its own words.
+        XCTAssertFalse(
+            NativeAppModel.FirstPairWizardStep.sequence(
+                transport: .hdmiCapture, skipsPermissions: false
+            ).contains(.connectNetwork))
+        // Camera-AP pairing ends at the network step — nothing to find afterwards.
+        XCTAssertFalse(
+            NativeAppModel.FirstPairWizardStep.sequence(
+                transport: .cameraAccessPoint, skipsPermissions: false
+            ).contains(.discoverAndPair))
+    }
+}

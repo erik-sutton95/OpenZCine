@@ -802,6 +802,10 @@ final class NativeAppModel {
     var isConnectionProgressPresented = false
     var connectionProgressDeviceName = ""
     var connectionProgressIsUSB = false
+    /// How the attempt on screen reaches the camera, for copy that would otherwise name the wrong
+    /// thing — "check your network" over a cable sends the operator to inspect something this
+    /// attempt never touches. `nil` before a path is known, which keeps the network wording.
+    var connectionProgressPathKind: CameraPath.Kind?
     /// Failure text pinned for the progress sheet when a failure is surfaced. The sheet must not
     /// read the live `connectionMessage` for this — the discovery loop overwrites that field on
     /// every iteration, which put stale copy ("Found 1 camera.") on the failed card.
@@ -2433,6 +2437,7 @@ final class NativeAppModel {
         connectionProgressDeviceName = ConnectionProgressCopy.resolveDisplayName(
             rawName: camera.displayName, savedCamera: camera)
         connectionProgressIsUSB = kind == .usbC
+        connectionProgressPathKind = kind
         connectionProgressShowsFailure = false
         connectionFailureDetail = ""
         connectionPhase = .discovering
@@ -2537,6 +2542,7 @@ final class NativeAppModel {
         cameraWiFiJoinKeyFromScan = cameFromScan
         connectionProgressDeviceName = ssid
         connectionProgressIsUSB = false
+        connectionProgressPathKind = nil
         connectionProgressShowsFailure = false
         connectionFailureDetail = ""
         connectionPhase = .readyToJoin
@@ -2596,7 +2602,7 @@ final class NativeAppModel {
 
     /// Plain-language version of `connectionMessage` for startup screens.
     var userFacingConnectionMessage: String {
-        StartupConnectionCopy.friendly(connectionMessage)
+        StartupConnectionCopy.friendly(connectionMessage, path: connectionProgressPathKind)
     }
 
     /// Active sheet phase derived from connection flags and explicit phase updates.
@@ -2765,6 +2771,7 @@ final class NativeAppModel {
     private func presentCameraWiFiJoinProgress(deviceName: String) {
         connectionProgressDeviceName = deviceName
         connectionProgressIsUSB = false
+        connectionProgressPathKind = nil
         connectionProgressShowsFailure = false
         connectionFailureDetail = ""
         connectionPhase = .joiningWiFi
@@ -3318,6 +3325,10 @@ final class NativeAppModel {
             host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix)
             || discoveredCamera?.isUSB == true
             || savedCamera?.isUSBTransport == true
+        // The tapped setup's own declaration when there is one; otherwise all we can honestly say
+        // is whether this is a cable, which is the only distinction the copy actually turns on.
+        connectionProgressPathKind =
+            savedCamera?.pathKind ?? (connectionProgressIsUSB ? .usbC : nil)
         connectionProgressShowsFailure = false
         connectionFailureDetail = ""
         connectionPhase = .handshaking
@@ -3921,7 +3932,7 @@ final class NativeAppModel {
         _ = knownPairedCamerasCount
         _ = knownMatchedHost
         _ = host
-        return StartupConnectionCopy.friendly(baseError)
+        return StartupConnectionCopy.friendly(baseError, path: connectionProgressPathKind)
     }
 
     func forgetPairingForCurrentHost() {
@@ -4818,6 +4829,7 @@ final class NativeAppModel {
         internetHopActive = false
         connectionProgressDeviceName = cameraWiFiJoinDeviceName()
         connectionProgressIsUSB = false
+        connectionProgressPathKind = nil
         isConnectionProgressPresented = true
         cameraWiFiJoinTask?.cancel()
         cameraWiFiJoinTask = Task { [weak self] in
