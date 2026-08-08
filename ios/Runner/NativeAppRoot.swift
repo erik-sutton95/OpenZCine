@@ -4549,11 +4549,21 @@ final class NativeAppModel {
         var hosts = savedCameras.map(\.host)
         // An armed watch's anchor is the camera the operator is standing in front of; its address
         // belongs in every pass for as long as the watch lives, whatever the saved list says.
-        if let anchor = pendingSetupIntent?.anchor.host, !hosts.contains(anchor) {
-            hosts.append(anchor)
+        //
+        // EXCEPT when the watch exists to add ANOTHER setup of a kind that can repeat. The anchor
+        // is then a sibling — the Wi-Fi setup this camera already has — and its address is on the
+        // network the operator has just left. Dialling it is not a shortcut to the new setup, it
+        // is a connect to somewhere else that fails and reads as the new setup failing.
+        if let intent = pendingSetupIntent, intent.kind != .infrastructure,
+            !hosts.contains(intent.anchor.host)
+        {
+            hosts.append(intent.anchor.host)
         }
-        // The address this attempt is actually dialling, for the same reason.
-        if !cameraHost.isEmpty, !hosts.contains(cameraHost) { hosts.append(cameraHost) }
+        // The address this attempt is actually dialling, for the same reason — and only while one
+        // is actually in flight, or a stale `cameraHost` puts a dead address in every pass.
+        if isEstablishingConnection, !cameraHost.isEmpty, !hosts.contains(cameraHost) {
+            hosts.append(cameraHost)
+        }
         return hosts
     }
 

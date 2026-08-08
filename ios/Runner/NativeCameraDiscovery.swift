@@ -272,22 +272,31 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                 // bytes. This is what makes a wide search affordable and safe at once — the old
                 // sweep aimed a real Init at all 254 hosts of one subnet, which is both slower and
                 // more disturbance than this is across a dozen.
-                hostsToIdentify = await withTaskGroup(of: String?.self) { group in
+                let scan = await withTaskGroup(of: (String, Bool, String).self) { group in
                     for host in chunk {
                         group.addTask {
-                            await PTPIPTransport.probePortOpen(host: host) ? host : nil
+                            let outcome = await PTPIPTransport.probePort(host: host)
+                            return (host, outcome.isOpen, outcome.verdict)
                         }
                     }
                     var open: [String] = []
-                    for await host in group {
-                        if let host { open.append(host) }
+                    var tally: [String: Int] = [:]
+                    for await (host, isOpen, verdict) in group {
+                        if isOpen { open.append(host) }
+                        tally[verdict, default: 0] += 1
                     }
-                    return open.sorted()
+                    return (open: open.sorted(), tally: tally)
                 }
-                if !hostsToIdentify.isEmpty {
-                    logConnection(
-                        "discovery sweep port-open [\(hostsToIdentify.joined(separator: " "))]")
-                }
+                hostsToIdentify = scan.open
+                // Always, not only on a hit: a sweep that opens nothing is exactly the case that
+                // needs explaining, and the tally is what separates "nothing is listening" from
+                // "we never reached anything".
+                let tally =
+                    scan.tally.sorted { $0.key < $1.key }
+                    .map { "\($0.key)=\($0.value)" }
+                    .joined(separator: " ")
+                logConnection(
+                    "discovery sweep scan open=[\(scan.open.joined(separator: " "))] \(tally)")
             }
             guard !hostsToIdentify.isEmpty else { continue }
             // PASS TWO, narrow: the Init that separates a camera from anything else listening on

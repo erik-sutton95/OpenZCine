@@ -129,8 +129,21 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
         host rawHost: String,
         timeoutMilliseconds: UInt64 = 250
     ) async -> Bool {
+        await probePort(host: rawHost, timeoutMilliseconds: timeoutMilliseconds).isOpen
+    }
+
+    /// The same probe, keeping WHY it failed.
+    ///
+    /// A sweep that opens nothing looks identical whether every host refused (nothing listening,
+    /// network right), had no route (wrong network), or timed out (unreachable — or this device
+    /// starving under a wide fan-out, which a 250 ms bound cannot distinguish from a dead host).
+    /// The counts separate those three, and a sweep is only worth trusting once they do.
+    static func probePort(
+        host rawHost: String,
+        timeoutMilliseconds: UInt64 = 250
+    ) async -> (isOpen: Bool, verdict: String) {
         let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty else { return false }
+        guard !host.isEmpty else { return (false, "empty") }
         let socket = PTPIPSocket(
             host: host,
             port: UInt16(ptpIPPort),
@@ -140,10 +153,18 @@ final class PTPIPTransport: CameraTransport, @unchecked Sendable {
         do {
             try await socket.start()
             socket.close()
-            return true
+            return (true, "open")
         } catch {
             socket.close()
-            return false
+            let nsError = error as NSError
+            guard nsError.domain == NSPOSIXErrorDomain else { return (false, "other") }
+            switch Int32(nsError.code) {
+            case ECONNREFUSED: return (false, "refused")
+            case EHOSTUNREACH: return (false, "no-route")
+            case ENETUNREACH: return (false, "no-network")
+            case ETIMEDOUT, ETIME: return (false, "timeout")
+            default: return (false, "posix-\(nsError.code)")
+            }
         }
     }
 
