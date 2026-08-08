@@ -1,5 +1,5 @@
-- New: one camera keeps a separate saved setup per way of connecting, and each remembers its own Stream Preset and Quality Bias.
-- New: the mirror assist flips the picture for a camera facing you.
-- Fixed: a router connection no longer asks you to join the camera's own network.
-- Fixed: a weak link degrades the picture instead of dropping the session.
-- Fixed: photo white balance, [DX] recording modes, and DISP 2 defaults.
+- New: Share This Feed — other devices watch what you see, and can ask for camera control.
+- New: one camera keeps a setup per way of connecting, including several Wi-Fi networks, each nameable with its own Stream Preset and Quality Bias.
+- New: vertical camera mode, and the mirror assist for a camera facing you.
+- Fixed: the camera is found on subnets it could not be found on before.
+- Fixed: a Wi-Fi connection no longer asks you to join the camera's own network.
