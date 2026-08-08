@@ -844,6 +844,10 @@ final class NativeAppModel {
     var cameraWiFiJoinPasswordDraft = ""
     /// True once the draft key came from an on-screen scan (shown in the clear for verification).
     var cameraWiFiJoinKeyFromScan = false
+    /// The staged network's name, editable for the same reason the key is: one OCR pass produced
+    /// both, and either can misread. Seeded when credentials are staged and read back at Connect,
+    /// so a corrected name is the one actually joined.
+    var cameraWiFiJoinSSIDDraft = ""
     /// Whether the on-screen credential scanner is presented over the connect popup.
     var isCameraWiFiScannerPresented = false
     /// "Wi‑Fi is off" prompt shown when a camera-AP flow starts while the radio is disabled.
@@ -2387,7 +2391,13 @@ final class NativeAppModel {
 
     /// Joins the staged camera network after the operator taps Connect in the popup.
     func confirmCameraWiFiJoin() {
-        guard let target = pendingCameraWiFiJoinTarget else { return }
+        guard let rawTarget = pendingCameraWiFiJoinTarget else { return }
+        // The name the operator is looking at, which is the scan's unless they corrected it. A
+        // misread SSID fails differently from a misread key — nothing to join rather than a
+        // refused password — and it used to be uncorrectable for the same reason the key was.
+        let corrected = cameraWiFiJoinSSIDDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target: CameraWiFiJoinPolicy.ProactiveJoinTarget =
+            corrected.isEmpty ? rawTarget : .specificSSID(corrected)
         pendingCameraWiFiJoinTarget = nil
         cameraWiFiJoinTask?.cancel()
         cameraWiFiJoinTask = Task { [weak self] in
@@ -2523,6 +2533,7 @@ final class NativeAppModel {
         guard ensureWiFiRadioIsOnForCameraAPJoin() else { return }
         pendingCameraWiFiJoinTarget = .specificSSID(ssid)
         cameraWiFiJoinPasswordDraft = key
+        cameraWiFiJoinSSIDDraft = ssid
         cameraWiFiJoinKeyFromScan = cameFromScan
         connectionProgressDeviceName = ssid
         connectionProgressIsUSB = false
@@ -2676,6 +2687,7 @@ final class NativeAppModel {
             persistCameraWiFiPassword(draftPassword, ssid: ssid, prefix: ssidPrefix)
             cameraWiFiJoinPasswordDraft = ""
             cameraWiFiJoinKeyFromScan = false
+            cameraWiFiJoinSSIDDraft = ""
             return CameraWiFiPasswordSubmission(ssid: ssid, password: draftPassword)
         }
 
@@ -3258,6 +3270,7 @@ final class NativeAppModel {
         pendingCameraWiFiJoinTarget = nil
         cameraWiFiJoinPasswordDraft = ""
         cameraWiFiJoinKeyFromScan = false
+        cameraWiFiJoinSSIDDraft = ""
         isCameraWiFiScannerPresented = false
         isConnectionProgressPresented = false
         connectionPhase = .idle

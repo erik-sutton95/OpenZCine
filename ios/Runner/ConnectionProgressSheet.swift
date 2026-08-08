@@ -219,21 +219,19 @@ struct ConnectionProgressSheet: View {
                     // The original worry is answered by the field's own behaviour rather than by
                     // refusing input — a `TextField` seeded with the scan keeps its text until
                     // someone deliberately edits it, and nothing here clears on focus.
-                    TextField("Camera key", text: $model.cameraWiFiJoinPasswordDraft)
-                        .font(.body.monospaced())
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .textFieldStyle(.plain)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(
-                            Color(.secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                        .accessibilityLabel("Camera Wi-Fi key")
-                        .accessibilityHint("Scanned from the camera screen. Edit it if it misread.")
-                    Text("Scanned from the camera screen — tap to fix it if a character misread.")
+                    // BOTH fields, because one OCR pass produced both and either can misread.
+                    // A wrong key is refused by the network; a wrong name simply never appears,
+                    // which reads as "the camera isn't there" and is the harder of the two to
+                    // diagnose from the outside.
+                    scannedField(
+                        title: "Network",
+                        text: $model.cameraWiFiJoinSSIDDraft,
+                        accessibilityLabel: "Camera Wi-Fi network name")
+                    scannedField(
+                        title: "Key",
+                        text: $model.cameraWiFiJoinPasswordDraft,
+                        accessibilityLabel: "Camera Wi-Fi key")
+                    Text("Scanned from the camera screen — tap to fix anything that misread.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if model.cameraWiFiJoinHasPasswordDraft {
@@ -245,6 +243,33 @@ struct ConnectionProgressSheet: View {
                 connectButton
             }
         }
+    }
+
+    /// One corrected-scan field: a label above the value, so two of them read as a pair rather
+    /// than as two anonymous boxes.
+    private func scannedField(
+        title: String, text: Binding<String>, accessibilityLabel: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField(title, text: text)
+                .font(.body.monospaced())
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityHint("Scanned from the camera screen. Edit it if it misread.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var connectButton: some View {

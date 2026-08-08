@@ -194,7 +194,9 @@
 
     <!-- Connection progress popup (iOS ConnectionProgressSheet). -->
     <string name="conn_ready_detail">Join %1$s\'s Wi‑Fi network to continue.</string>
-    <string name="conn_scanned_caption">Scanned from the camera screen — tap to fix it if a character misread.</string>
+    <string name="conn_scanned_caption">Scanned from the camera screen — tap to fix anything that misread.</string>
+    <string name="conn_scanned_network">Network</string>
+    <string name="conn_scanned_key">Key</string>
     <string name="conn_connecting_title">Connecting…</string>
     <string name="conn_joining_detail">Joining the camera Wi‑Fi… Keep the camera\'s network screen on. Android may show \"Searching for devices…\" — choose the camera network if asked.</string>
     <string name="conn_searching_title">Searching…</string>

@@ -197,6 +197,8 @@ public fun SavedCamerasExperience(
     // whole row.
     /** A scanned key the operator corrected; null while the scan's own value still stands. */
     var correctedScanKey by remember { mutableStateOf<String?>(null) }
+    /** A scanned network name the operator corrected; null while the scan's own value stands. */
+    var correctedScanSsid by remember { mutableStateOf<String?>(null) }
     var renameSetupTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
     var renameSetupDraft by remember { mutableStateOf("") }
     // An armed add-setup watch (iOS pendingSetupIntent): the sheet's no-match buttons arm it,
@@ -762,7 +764,7 @@ public fun SavedCamerasExperience(
         val staged = phase as? SavedCameraPhase.ReadyToJoin ?: return
         beginReconnectWork(
             record = staged.record,
-            cameraApSsid = staged.ssid,
+            cameraApSsid = correctedScanSsid?.takeIf(String::isNotBlank) ?: staged.ssid,
             // The CORRECTED key when the operator fixed a misread character, otherwise the scan's.
             cameraApKey = correctedScanKey ?: staged.key,
         )
@@ -949,7 +951,11 @@ public fun SavedCamerasExperience(
                 is SavedCameraPhase.ReadyToJoin ->
                     // Prefer the camera AP SSID in the join prompt so the
                     // operator knows which network Android will request.
-                    ConnectionPopupPhase.ReadyToJoin(key = null, keyFromScan = false)
+                    ConnectionPopupPhase.ReadyToJoin(
+                        key = null,
+                        keyFromScan = false,
+                        ssid = (phase as? SavedCameraPhase.ReadyToJoin)?.ssid,
+                    )
                 is SavedCameraPhase.Joining -> ConnectionPopupPhase.JoiningWifi
                 is SavedCameraPhase.Connecting -> ConnectionPopupPhase.Handshaking
                 is SavedCameraPhase.Pairing -> ConnectionPopupPhase.Pairing
@@ -975,6 +981,7 @@ public fun SavedCamerasExperience(
                 phase = popup,
                 onConnect = ::confirmCameraApJoin,
                 onKeyEdited = { correctedScanKey = it },
+                onSsidEdited = { correctedScanSsid = it },
                 onDismiss = ::cancelWork,
                 onShareDiagnostics =
                     onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },

@@ -656,6 +656,8 @@ public fun PairingExperience(
     var cameraWifiScannerPresented by remember { mutableStateOf(false) }
     /** A scanned key the operator corrected; null while the scan's own value still stands. */
     var correctedScanKey by remember { mutableStateOf<String?>(null) }
+    /** A scanned network name the operator corrected; null while the scan's own value stands. */
+    var correctedScanSsid by remember { mutableStateOf<String?>(null) }
     var wifiOffPromptVisible by remember { mutableStateOf(false) }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
@@ -1358,7 +1360,11 @@ public fun PairingExperience(
             when (val active = phase) {
                 PairingPhase.Idle -> null
                 is PairingPhase.ReadyToJoin ->
-                    ConnectionPopupPhase.ReadyToJoin(active.key, active.keyFromScan)
+                    ConnectionPopupPhase.ReadyToJoin(
+                        active.key,
+                        active.keyFromScan,
+                        ssid = active.ssid,
+                    )
                 PairingPhase.Joining -> ConnectionPopupPhase.JoiningWifi
                 PairingPhase.Handshaking -> ConnectionPopupPhase.Handshaking
                 is PairingPhase.Pairing -> ConnectionPopupPhase.Pairing
@@ -1375,10 +1381,14 @@ public fun PairingExperience(
                     (phase as? PairingPhase.ReadyToJoin)?.let { staged ->
                         // The CORRECTED key when the operator fixed a misread character,
                         // otherwise the one the scan produced.
-                        joinCameraAp(staged.ssid, correctedScanKey ?: staged.key)
+                        joinCameraAp(
+                            correctedScanSsid?.takeIf(String::isNotBlank) ?: staged.ssid,
+                            correctedScanKey ?: staged.key,
+                        )
                     }
                 },
                 onKeyEdited = { correctedScanKey = it },
+                onSsidEdited = { correctedScanSsid = it },
                 onDismiss = ::cancelWork,
                 onShareDiagnostics =
                     onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },
