@@ -283,20 +283,21 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                     }
                     var open: [String] = []
                     var tally: [String: Int] = [:]
-                    var gateways: [String] = []
+                    var alive: [String] = []
                     for await (host, isOpen, verdict) in group {
                         if isOpen { open.append(host) }
                         tally[verdict, default: 0] += 1
-                        // The subnet's .1 is the control host: a router is reachable, warm in the
-                        // ARP cache and certain to refuse 15740 fast. "refused" there means the
-                        // network is right and the camera is simply not listening; anything else
-                        // means the sweep never reached the network at all.
-                        if host.hasSuffix(".1") { gateways.append("\(host)=\(verdict)") }
+                        // Which addresses are OCCUPIED, not just how many. A host that refuses is
+                        // a device that exists and is not the camera; a host that times out or has
+                        // no route is an address nobody holds. The counts cannot say whether the
+                        // camera's own address is in the first group — and that is the whole
+                        // question when a sweep comes back empty on a network you can see it on.
+                        if !Self.unoccupiedVerdicts.contains(verdict) { alive.append(host) }
                         if let next = pending.next() {
                             group.addTask { await Self.scanOutcome(host: next) }
                         }
                     }
-                    return (open: open.sorted(), tally: tally, gateways: gateways.sorted())
+                    return (open: open.sorted(), tally: tally, alive: alive.sorted())
                 }
                 hostsToIdentify = scan.open
                 // Always, not only on a hit: a sweep that opens nothing is exactly the case that
@@ -308,7 +309,7 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
                     .joined(separator: " ")
                 logConnection(
                     "discovery sweep scan open=[\(scan.open.joined(separator: " "))] \(tally) "
-                        + "gw=[\(scan.gateways.joined(separator: " "))]")
+                        + "alive=[\(scan.alive.prefix(24).joined(separator: " "))]")
             }
             guard !hostsToIdentify.isEmpty else { continue }
             // PASS TWO, narrow: the Init that separates a camera from anything else listening on
@@ -441,6 +442,10 @@ final class NativeCameraDiscoveryService: @unchecked Sendable {
     /// subnets the impatient bound and keep this one for the subnets we stand in.
     private static let sweepScanWidth = 48
     private static let sweepScanTimeoutMilliseconds: UInt64 = 1_500
+
+    /// Verdicts that mean nobody holds the address, as opposed to somebody holding it and not
+    /// answering on 15740.
+    private static let unoccupiedVerdicts: Set<String> = ["timeout", "no-route", "no-network"]
 
     private static func scanOutcome(host: String) async -> (String, Bool, String) {
         let outcome = await PTPIPTransport.probePort(

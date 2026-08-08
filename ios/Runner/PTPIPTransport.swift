@@ -775,6 +775,19 @@ final class PTPIPSocket: @unchecked Sendable {
                     return
                 }
                 if (pollDescriptor.revents & Int16(POLLHUP | POLLERR | POLLNVAL)) != 0 {
+                    // Ask the socket WHY before calling it closed. A refused connection wakes a
+                    // non-blocking connect with POLLERR and no POLLOUT, and reporting that as
+                    // "the connection closed" both loses the errno and tells an operator the
+                    // opposite of the truth: nothing was ever there to close. SO_ERROR holds the
+                    // real reason — ECONNREFUSED, EHOSTUNREACH — so raise that instead.
+                    var pendingError: Int32 = 0
+                    var pendingErrorLength = socklen_t(MemoryLayout<Int32>.size)
+                    if getsockopt(
+                        descriptor, SOL_SOCKET, SO_ERROR, &pendingError, &pendingErrorLength) == 0,
+                        pendingError != 0
+                    {
+                        throw socketError(pendingError, context: label)
+                    }
                     throw NativeCameraSessionError.connectionClosed
                 }
                 // Woke for some other reason without data ready; poll again.
