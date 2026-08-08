@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.openzcine.transport.CameraDiscovery
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -309,14 +310,19 @@ class SavedCameraRecordsTest {
     }
 
     /**
-     * An access-point stamp on a foreign address describes a session that was never on the
-     * camera's own network. Pinning the host alone used to throw that address away with the
-     * router setup it always was; it becomes its own row instead (shared core's
-     * `splittingAccessPoint`).
+     * A camera-AP record keeps the address it last answered on, and no second row is invented
+     * from it.
+     *
+     * The old rule pinned every access-point record to a fixed 192.168.1.1 and handed the address
+     * it had been carrying to a manufactured infrastructure row. Both halves of that were wrong.
+     * There is no global access-point IP to pin to — 192.168.1.1 is a convention, and it is also
+     * the commonest home-router address there is, so asserting it put a camera's identity on
+     * somebody's gateway. And splitting produced a router setup the operator never made, out of
+     * an address that only ever described one session.
      */
     @Test
-    fun `an access-point record carrying a foreign host splits into both setups`() {
-        val poisoned =
+    fun `an access-point record keeps its last learned address and makes no second row`() {
+        val record =
             SavedCameraRecord(
                 host = "10.0.0.9",
                 cameraName = "ZR_6002199",
@@ -326,21 +332,40 @@ class SavedCameraRecordsTest {
                 customName = "A camera",
             )
 
-        val canonical = SavedCameraRecords.canonicalized(listOf(poisoned))
+        val canonical = SavedCameraRecords.canonicalized(listOf(record))
 
-        assertEquals(2, canonical.size)
-        val accessPoint =
-            canonical.first { it.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
-        val router = canonical.first { it.transport == SavedCameraTransport.INFRASTRUCTURE }
-        // The access point goes back to the address it lives at by definition.
-        assertEquals("192.168.1.1", accessPoint.host)
-        // The foreign address keeps describing what it always described.
-        assertEquals("10.0.0.9", router.host)
-        // The operator's nickname belongs to the camera, so both halves keep it.
+        assertEquals(1, canonical.size)
+        val accessPoint = canonical.single()
+        assertEquals(SavedCameraTransport.CAMERA_ACCESS_POINT, accessPoint.transport)
+        // A dialable host is the last address this setup really answered on. Keep it.
+        assertEquals("10.0.0.9", accessPoint.host)
         assertEquals("A camera", accessPoint.customName)
-        assertEquals("A camera", router.customName)
-        // Two rows answering to one id would collide in the card list and in reconnect targeting.
-        assertEquals(2, canonical.map { it.id }.toSet().size)
+    }
+
+    /**
+     * With nothing dialable to remember, the record waits on a pending key rather than a guess.
+     *
+     * The key is scoped to the SSID so two bodies' access points never share one, and it is not a
+     * network address, so nothing can dial it by mistake before the join has taught us the real
+     * one.
+     */
+    @Test
+    fun `an access-point record with no dialable host waits on a pending key`() {
+        val record =
+            SavedCameraRecord(
+                host = "",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                lastSeenAtEpochMillis = 1_000,
+                wifiSsid = "NIKON_ZR_6002199",
+                customName = "A camera",
+            )
+
+        val pinned = SavedCameraRecords.pinnedToAccessPoint(record)
+
+        assertEquals("ap:NIKON_ZR_6002199", pinned.host)
+        assertEquals(pinned.host, pinned.profileID)
+        assertFalse(CameraDiscovery.isDialableHost(pinned.host))
     }
 
     /** An access-point record already at the access point's address has nothing to hand over. */
