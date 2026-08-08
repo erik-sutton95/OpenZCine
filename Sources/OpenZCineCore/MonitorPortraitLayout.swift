@@ -199,4 +199,44 @@ public enum MonitorPortraitLayout {
                 controls: controls, systemBar: systemBar)
         }
     }
+
+    /// Width of the assist rail when the operator expands it.
+    public static let assistRailExpandedWidth = 60.0
+
+    /// The collapsed rail's pill, and the margin it keeps from every edge it touches.
+    public static let assistRailCollapsedSize = 44.0
+    public static let assistRailEdgeInset = 10.0
+
+    /// Where the portrait FILL-mode assist rail sits: down the feed's leading edge, ending above
+    /// the capture strip rather than under it.
+    ///
+    /// This arithmetic existed twice — inline in the iOS portrait overlay and again in Android's
+    /// `portraitFillAssistRailFrame` — and the two had already drifted apart. Android clamped the
+    /// capture strip's top into the feed before measuring from it; iOS did not, so a strip
+    /// reported above the feed (a transient during a rotation or a chrome remount) gave iOS a
+    /// negative span where Android gave a sane one. The collapsed pill was worse: iOS placed it
+    /// from the FEED's bottom minus the strip height, Android from the STRIP's top, and those
+    /// agree only while the strip is flush with the feed — which is the common case, and exactly
+    /// why nobody noticed.
+    ///
+    /// - Parameters:
+    ///   - feed: the live feed's frame.
+    ///   - captureStripTop: the y of the capture strip when that chrome mounts; `nil` when the
+    ///     rail may run to the feed's bottom edge.
+    ///   - expanded: whether the operator has opened the rail.
+    public static func fillAssistRail(
+        feed: MonitorLayoutRegion,
+        captureStripTop: Double?,
+        expanded: Bool
+    ) -> MonitorLayoutRegion {
+        let edge = assistRailEdgeInset
+        let feedBottom = feed.maxY
+        // A strip outside the feed says nothing usable about where the rail must stop.
+        let railBottom = captureStripTop.map { min(max($0, feed.y), feedBottom) } ?? feedBottom
+        let top = feed.y + edge
+        let width = expanded ? assistRailExpandedWidth : assistRailCollapsedSize
+        let height = expanded ? max(0, railBottom - top - edge) : assistRailCollapsedSize
+        let y = expanded ? top : max(top, railBottom - height - edge)
+        return MonitorLayoutRegion(x: feed.x + edge, y: y, width: width, height: height)
+    }
 }

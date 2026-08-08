@@ -1172,21 +1172,12 @@ internal fun portraitFillAssistRailFrame(
     feed: ZoneFrame,
     captureStrip: ZoneFrame?,
     expanded: Boolean,
-): ZoneFrame {
-    val edge = 10f
-    val width = if (expanded) 60f else 44f
-    val feedBottom = feed.y + feed.height
-    val railBottom = captureStrip?.y?.coerceIn(feed.y, feedBottom) ?: feedBottom
-    val top = feed.y + edge
-    val height = if (expanded) max(0f, railBottom - top - edge) else 44f
-    val y =
-        if (expanded) {
-            top
-        } else {
-            max(top, railBottom - height - edge)
-        }
-    return ZoneFrame(feed.x + edge, y, width, height)
-}
+): ZoneFrame =
+    MonitorPortraitLayout.fillAssistRail(
+        feed = feed,
+        captureStripTop = captureStrip?.y,
+        expanded = expanded,
+    )
 
 /** The actionable ISO/shutter/iris/focus/WB strip shared by both orientations. */
 @Composable

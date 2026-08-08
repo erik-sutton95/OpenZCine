@@ -184,3 +184,59 @@ func assistToolbarIsZeroHeightInCleanAndCommand(mode: DispMode) {
     #expect(z.feed.y == z.topBar.maxY)
     #expect(abs((z.feed.y + z.feed.height) - z.systemBar.y) < 0.5)
 }
+
+// MARK: - Fill-mode assist rail
+
+/// The rail runs down the feed's leading edge and stops above the capture strip, never under it.
+@Test func theExpandedRailEndsAboveTheCaptureStrip() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+    let rail = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 540, expanded: true)
+
+    #expect(rail.x == 10)
+    #expect(rail.y == 110)
+    #expect(rail.width == MonitorPortraitLayout.assistRailExpandedWidth)
+    // 540 (strip top) − 110 (rail top) − 10 (margin)
+    #expect(rail.height == 420)
+    #expect(rail.maxY <= 540)
+}
+
+/// With no capture strip mounted the rail may run to the feed's own bottom edge.
+@Test func withNoCaptureStripTheRailRunsToTheFeedBottom() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+    let rail = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: nil, expanded: true)
+
+    #expect(rail.height == 480)
+    #expect(rail.maxY == 590)
+}
+
+/// The collapsed pill is a fixed square that sits just above whatever the rail must clear.
+@Test func theCollapsedPillClearsTheCaptureStrip() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+    let rail = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 540, expanded: false)
+
+    #expect(rail.width == MonitorPortraitLayout.assistRailCollapsedSize)
+    #expect(rail.height == MonitorPortraitLayout.assistRailCollapsedSize)
+    // 540 − 44 − 10
+    #expect(rail.y == 486)
+}
+
+/// A capture strip reported outside the feed is not evidence about where the rail must stop.
+///
+/// This is where the two shells had drifted: one clamped the strip into the feed before measuring
+/// from it and the other did not, so the same transient produced a sane rail on Android and a
+/// collapsed one on iOS.
+@Test func aCaptureStripOutsideTheFeedCannotProduceANegativeRail() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+
+    let above = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 20, expanded: true)
+    #expect(above.height == 0)
+    #expect(above.y >= feed.y)
+
+    let below = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 9_000, expanded: true)
+    #expect(below.maxY <= feed.maxY)
+}

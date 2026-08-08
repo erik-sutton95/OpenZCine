@@ -2217,15 +2217,19 @@ struct MonitorShell: View {
             if model.displayMode != .command, isFill,
                 model.chromeSectionMounts(.assistToolbar)
             {
-                let controlsHeight = captureStrip?.frame.height ?? 0
-                let bottomClearance = isFill ? controlsHeight + 10 : 10
-                // The bar no longer overlays the feed, so the expanded rail spans the feed from
-                // a plain margin rather than clearing the info bar's height — and it ends above
-                // the capture strip when that chrome mounts, never over it (the same rule as
-                // Android's portraitFillAssistRailFrame).
-                let railTop = feed.y + 10
-                let railBottom = captureStrip.map(\.frame.y) ?? (feed.y + feed.height)
-                let railHeight = max(0, railBottom - railTop - 10)
+                // The rule lives in the shared policy, not here and again in Kotlin. It used to
+                // be written twice, and the two copies had already drifted: this side measured
+                // the collapsed pill from the FEED's bottom minus the strip height while Android
+                // measured from the STRIP's top, which agree only while the strip is flush with
+                // the feed — the common case, and why nobody noticed.
+                let feedRegion = MonitorLayoutRegion(
+                    x: feed.x, y: feed.y, width: feed.width, height: feed.height)
+                let expandedRail = MonitorPortraitLayout.fillAssistRail(
+                    feed: feedRegion, captureStripTop: captureStrip.map(\.frame.y), expanded: true)
+                let collapsedRail = MonitorPortraitLayout.fillAssistRail(
+                    feed: feedRegion, captureStripTop: captureStrip.map(\.frame.y), expanded: false)
+                let railTop = expandedRail.y
+                let railHeight = expandedRail.height
                 MonitorAssistStrip(
                     axis: .vertical, collapsible: true, feedHeight: railHeight,
                     expanded: $railExpanded
@@ -2235,15 +2239,13 @@ struct MonitorShell: View {
                 .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .frame(
-                    width: railExpanded ? MonitorAssistStrip.expandedWidth : 44,
-                    height: railExpanded ? railHeight : 44,
+                    width: railExpanded ? expandedRail.width : collapsedRail.width,
+                    height: railExpanded ? railHeight : collapsedRail.height,
                     alignment: .bottomLeading
                 )
                 .offset(
-                    x: feed.x + 10,
-                    y: railExpanded
-                        ? railTop
-                        : feed.y + feed.height - 44 - bottomClearance
+                    x: railExpanded ? expandedRail.x : collapsedRail.x,
+                    y: railExpanded ? railTop : collapsedRail.y
                 )
             }
 
