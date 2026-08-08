@@ -102,7 +102,12 @@ class RelayWatchControllerTest {
                 ),
             )
             assertTrue(
-                latched.await(5, TimeUnit.SECONDS),
+                // Bounds LIVENESS, not the deadline: what is under test is the 300 ms above, and
+                // this only has to outlast it. Generous because the controller's work runs on
+                // `Dispatchers.Default`, which on a CI runner is sized to cores and shared with
+                // the other 880-odd tests and the lint pass in the same job — the old five
+                // seconds was arbitrary, and it lost that race once in two runs of one commit.
+                latched.await(30, TimeUnit.SECONDS),
                 "the decode deadline never latched jpeg-only",
             )
             val (_, rejoinHello) = host.acceptHello()
