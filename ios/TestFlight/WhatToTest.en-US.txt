@@ -12,8 +12,8 @@ Fixes
 - The camera is found on networks it could not be found on before, including one whose address sits on a different subnet from your phone's.
 - Scanned Wi-Fi details can be corrected. If OCR misreads a character in the network name or the key, tap either and fix it instead of starting over.
 - A Wi-Fi connection no longer asks you to join the camera's own network, and saved setups no longer read as offline while you are on that network.
-- A weak or busy link degrades the picture instead of dropping the session.
-- Arming the Bluetooth shutter no longer sets your phone to half volume.
+- A weak or busy link degrades the picture instead of dropping the session, and screen recording while you share your feed no longer walks the watcher's picture behind the action.
+- A watcher granted camera control can now start and stop the take. The record confirmation is asked once, on the device you pressed the button on.
 - The occasional single bright frame in live view should be gone. Please report it if you still see one.
 - Changes made on the camera reach the app quickly again - the aperture ring, ISO or shutter used to take twenty seconds, or in video never.
 - Unplugging the cable or power-cycling the camera used to wedge the app. Both recover on their own, or offer Retry connection.
@@ -22,6 +22,6 @@ What to test
 
 - Save the same body on two different Wi-Fi networks. Each should stay its own setup with its own Stream Preset and Quality Bias, and renaming one should not touch the other.
 - Turn the camera on its side, in video and in photo. The picture should stay upright and the controls should still be reachable.
-- Turn on Share This Feed on a connected device, open the app on a second one, and ask for control from the watcher.
+- Turn on Share This Feed, ask for control from the second device, and start a take from it. Then screen-record on the sharing device and check the watcher stays with the action.
 - Watch a dim high-ISO shot with Feed Noise Reduction on and off, then step the Feed Upscaler through Fast, Quality and AI on the same framing.
 - Pair a camera by scanning its screen, and deliberately correct a character in the key before connecting.
