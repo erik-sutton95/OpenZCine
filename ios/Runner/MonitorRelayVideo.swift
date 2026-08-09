@@ -119,6 +119,12 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
 
     /// Encodes one frame. `completion` receives nil when the encoder is unavailable — the caller
     /// falls back to JPEG rather than dropping the picture.
+    ///
+    /// This queue is a plain FIFO and holds EVERYTHING it is given: it applies no backpressure of
+    /// its own, and it cannot, because only the caller knows which frame is the newest. Callers
+    /// gate on `RelayEncodeLane` — an encoder slowed by anything else on the hardware block (a
+    /// screen recording, most visibly) otherwise banks every frame it is offered and hands the
+    /// watcher a picture that runs later by the second.
     func encode(_ image: CGImage, completion: @escaping @Sendable (EncodedFrame?) -> Void) {
         queue.async { completion(self.encodeSync(image)) }
     }

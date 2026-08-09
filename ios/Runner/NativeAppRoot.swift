@@ -1032,6 +1032,13 @@ final class NativeAppModel {
     @ObservationIgnored private var latestRelayFrameMetadata: MonitorRelayFrameMetadata?
     /// Hardware HEVC for the outgoing stream; created with broadcasting, torn down with it.
     @ObservationIgnored private var relayVideoEncoder: MonitorRelayVideoEncoder?
+    /// Frames handed to the hardware encoder but not yet returned. The encoder's own queue is a
+    /// plain FIFO with no bound, so nothing below this stops a source that outruns it — see
+    /// `RelayEncodeLane`.
+    @ObservationIgnored private var relayEncodeLane = RelayEncodeLane()
+    /// The same bound for the JPEG degrade path, which compresses off the main actor and is
+    /// therefore just as capable of being handed more frames than it is finishing.
+    @ObservationIgnored private var relayJPEGLane = RelayEncodeLane()
     /// Steps the outgoing bitrate against viewer backpressure; reset with each broadcast.
     @ObservationIgnored private var relayBitrateAdaptation = RelayBitrateAdaptation()
     /// Whether the running advertisement includes peer-to-peer, so a session that later proves
@@ -1504,9 +1511,21 @@ final class NativeAppModel {
             broadcastRelayFrameAsJPEG(image: image, metadata: metadata, host: relayHost)
             return
         }
+        // The encoder is a STAGE, and it falls behind on its own: an iOS screen recording takes
+        // its share of the same hardware block, so the encode drops under the source rate while
+        // every viewer link still reports clear — the skip above never fires, and the encoder's
+        // queue (an unbounded FIFO) keeps every frame. That is the "watcher runs seconds late,
+        // then snaps to live when the recording stops" report: a backlog draining at full speed.
+        // Same rule as the link layer, one layer up — the newest frame wins, the rest are
+        // dropped. Nothing is encoded, so no viewer is missing a reference and no keyframe is
+        // owed. Deliberately NOT fed to the bitrate ladder above: this is contention for the
+        // encoder, not for the channel, and shrinking the stream is not the answer to it.
+        guard relayEncodeLane.admit() else { return }
         relayVideoEncoder.encode(cgImage) { [weak self] encoded in
             Task { @MainActor in
-                guard let self, let relayHost = self.relayHost, self.isRelayBroadcasting else {
+                guard let self else { return }
+                self.relayEncodeLane.release()
+                guard let relayHost = self.relayHost, self.isRelayBroadcasting else {
                     return
                 }
                 guard let encoded else {
@@ -1535,15 +1554,28 @@ final class NativeAppModel {
         image: UIImage, metadata: MonitorRelayFrameMetadata, host: MonitorRelayHost,
         onlyJPEGPeers: Bool = false
     ) {
+        // The same bound as the encoder's, for a differently-shaped version of the same fault:
+        // a detached task per frame does not queue, it RUNS, so a compress slower than the
+        // source multiplies live tasks — each holding a whole frame — until the memory or the
+        // CPU gives. One guard here covers all three callers (no encoder, encoder failed, and
+        // the twin for jpeg-only watchers). The two frames the lane does allow can still finish
+        // in either order, which costs a watcher one frame period; unbounded fan-out bounds that
+        // at nothing at all.
+        guard relayJPEGLane.admit() else { return }
         let handoff = UVCFrameHandoff(image: image)
-        Task.detached(priority: .utility) {
-            guard let jpeg = handoff.image.jpegData(compressionQuality: 0.6) else { return }
-            await MainActor.run {
-                if onlyJPEGPeers {
-                    host.broadcastJPEGFallback(frameMetadata: metadata, image: jpeg)
-                } else {
-                    host.broadcast(frameMetadata: metadata, image: jpeg)
-                }
+        // Awaited FROM the main actor rather than hopping back TO it: the lane is main-actor
+        // state, and a weak reference carried INTO a detached task is task-isolated, which
+        // cannot then be read by a main-actor closure. The compress still runs off the actor.
+        Task { [weak self] in
+            let jpeg = await Task.detached(priority: .utility) {
+                handoff.image.jpegData(compressionQuality: 0.6)
+            }.value
+            self?.relayJPEGLane.release()
+            guard let jpeg else { return }
+            if onlyJPEGPeers {
+                host.broadcastJPEGFallback(frameMetadata: metadata, image: jpeg)
+            } else {
+                host.broadcast(frameMetadata: metadata, image: jpeg)
             }
         }
     }
