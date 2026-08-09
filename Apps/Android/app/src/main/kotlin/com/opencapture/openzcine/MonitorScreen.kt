@@ -123,6 +123,7 @@ import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFeedRotation
 import com.opencapture.openzcine.core.LiveFocusResult
+import com.opencapture.openzcine.core.metadataOnly
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
@@ -1813,6 +1814,7 @@ internal fun MonitorScreen(
                 healthFrameSource as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
                     ?: return@LaunchedEffect
             swiftSource.currentStreamFrames
+                .metadataOnly()
                 .conflate()
                 .collect(actualLinkHealth::recordFrame)
         }
@@ -1834,6 +1836,7 @@ internal fun MonitorScreen(
                 return@LaunchedEffect
             }
             source.frames
+                .metadataOnly()
                 .conflate()
                 .collect { frame ->
                     withContext(Dispatchers.Main.immediate) {
@@ -1948,6 +1951,7 @@ internal fun MonitorScreen(
                 return@LaunchedEffect
             }
             monitorFrameSource.frames
+                .metadataOnly()
                 .conflate()
                 .collect { frame ->
                     liveAudioLevels = frame.audioLevels

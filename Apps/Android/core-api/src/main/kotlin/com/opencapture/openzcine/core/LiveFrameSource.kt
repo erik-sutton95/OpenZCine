@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.core
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * One camera-derived channel in the live-view audio meter.
@@ -188,6 +189,38 @@ public open class LiveFrame(
     public val measuredFramesPerSecond: Double? = null,
     public val rotation: LiveFeedRotation = LiveFeedRotation.LANDSCAPE,
 )
+
+/** Shared empty payload for metadata-only frames — never allocated per frame. */
+private val NO_PIXELS: ByteArray = ByteArray(0)
+
+/**
+ * The same frames without their pixels, for consumers that never look at them.
+ *
+ * A live-view JPEG is ~150 KB, which lands in ART's large-object space, and the pump produces one
+ * per frame. Four independent collectors subscribe to this stream — link health, timecode, audio
+ * meters, and the display — and each keeps its own conflated buffer. Three of the four read only
+ * `timecode`, `audioLevels` and timing, yet every one of them pinned a JPEG for as long as it held
+ * a frame. On a 21 MB heap that is a collection every few seconds with ~100 ms of pause, and a feed
+ * that runs then bogs down (Galaxy A12, measured 2026-08-09: 63% janky frames, 57-81 large objects
+ * freed per GC — one per frame).
+ *
+ * Strip BEFORE `conflate()`, never after: the point is that the buffer holds no pixels. The small
+ * object allocated here is ordinary heap and collected cheaply, unlike the array it drops.
+ */
+public fun Flow<LiveFrame>.metadataOnly(): Flow<LiveFrame> =
+    map { frame ->
+        LiveFrame(
+            timestampNanos = frame.timestampNanos,
+            jpegData = NO_PIXELS,
+            isRecording = frame.isRecording,
+            audioLevels = frame.audioLevels,
+            focus = frame.focus,
+            level = frame.level,
+            timecode = frame.timecode,
+            measuredFramesPerSecond = frame.measuredFramesPerSecond,
+            rotation = frame.rotation,
+        )
+    }
 
 /**
  * Emits live-view frames for a connected camera.
