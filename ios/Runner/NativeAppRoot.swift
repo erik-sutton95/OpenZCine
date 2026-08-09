@@ -7897,7 +7897,32 @@ final class NativeAppModel {
     /// suppress redundant observable writes rather than frames.
     private func publishLiveFrameDisplay(image: UIImage, focus: PTPLiveViewFocusInfo?) {
         if liveFrameImage !== image { liveFrameImage = image }
-        if liveViewFocus != focus { liveViewFocus = focus }
+        if liveViewFocus != focus {
+            dismissInstantReviewIfAutofocusEngaged(previous: liveViewFocus, next: focus)
+            liveViewFocus = focus
+        }
+    }
+
+    /// A half-press on the body clears the review at once, instead of the operator waiting out a
+    /// countdown they have already decided to abandon.
+    ///
+    /// There is no half-press signal on the wire, so this reads the thing a half-press CAUSES:
+    /// autofocus running. Header byte 42 is idle until the body drives AF, so the transition out
+    /// of idle is the press. Shooting two or three frames in a row is exactly when the delay is
+    /// felt, and exactly when the operator's finger is already back on the button.
+    ///
+    /// A TRANSITION, never a level: in AF-C and AF-F the body focuses continuously while live view
+    /// runs, so AF is already engaged when the review opens and stays that way. Testing the level
+    /// would dismiss every review the instant it appeared. This costs the shortcut in those modes
+    /// — which is today's behaviour, not a regression — and never fires when nobody pressed.
+    private func dismissInstantReviewIfAutofocusEngaged(
+        previous: PTPLiveViewFocusInfo?, next: PTPLiveViewFocusInfo?
+    ) {
+        guard instantReview != nil,
+            previous?.focusResult == PTPLiveViewFocusInfo.FocusResult.unknown,
+            let engaged = next?.focusResult, engaged != .unknown
+        else { return }
+        dismissInstantReview()
     }
 
     /// One shared scope sample per throttle tick, feeding histogram, waveform, parade and traffic

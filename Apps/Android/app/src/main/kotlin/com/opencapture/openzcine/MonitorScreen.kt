@@ -122,6 +122,7 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFeedRotation
+import com.opencapture.openzcine.core.LiveFocusResult
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
@@ -2058,6 +2059,33 @@ internal fun MonitorScreen(
         // portrait fill centre-crops the image and every feed-aligned overlay
         // through the same content-rect resolver. Command unmounts the feed.
         val feedFocus = liveFeedPresentation.focus
+
+        // A half-press on the body clears the instant review at once, instead of the operator
+        // waiting out a countdown they have already decided to abandon. Twin of iOS
+        // `dismissInstantReviewIfAutofocusEngaged`.
+        //
+        // There is no half-press on the wire, so this reads what a half-press CAUSES: autofocus
+        // running. The body reports no focus result until it drives AF, so leaving UNKNOWN is the
+        // press. Shooting two or three frames in a row is exactly when the wait is felt, and
+        // exactly when the finger is already back on the button.
+        //
+        // A TRANSITION, never a level: in AF-C and AF-F the body focuses continuously while live
+        // view runs, so AF is already engaged when the review opens and stays that way — testing
+        // the level would dismiss every review the instant it appeared. The shortcut is simply
+        // unavailable in those modes, which is today's behaviour rather than a regression.
+        val feedFocusResult = feedFocus?.result
+        var previousFocusResult by remember { mutableStateOf<LiveFocusResult?>(null) }
+        LaunchedEffect(feedFocusResult) {
+            val previous = previousFocusResult
+            previousFocusResult = feedFocusResult
+            if (instantReviewState != null &&
+                previous == LiveFocusResult.UNKNOWN &&
+                feedFocusResult != null &&
+                feedFocusResult != LiveFocusResult.UNKNOWN
+            ) {
+                instantReview.dismiss()
+            }
+        }
         val feedContent =
             liveFeedContentRect(
                 containerWidth = feedPointerSize.width.toFloat(),
