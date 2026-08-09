@@ -217,11 +217,17 @@ internal fun liveOverlayFeedRect(
     )
 }
 
-/** Maps one camera-coordinate AF box into [feed]'s actual visible image rect. */
+/**
+ * Maps one camera-coordinate AF box into [feed]'s actual visible image rect.
+ *
+ * [mirrored] folds the box across the feed the same way the shader folds the picture, so the
+ * outline stays on the subject it belongs to when the mirror assist is on.
+ */
 internal fun liveFocusBoxRect(
     focus: LiveFocusInfo,
     box: LiveFocusBox,
     feed: LiveOverlayRect,
+    mirrored: Boolean = false,
 ): LiveOverlayRect? {
     if (
         focus.coordinateWidth <= 0 ||
@@ -237,8 +243,9 @@ internal fun liveFocusBoxRect(
     val scaleY = feed.height / focus.coordinateHeight
     val width = box.width * scaleX
     val height = box.height * scaleY
+    val centerX = box.centerX * scaleX
     return LiveOverlayRect(
-        left = feed.left + box.centerX * scaleX - width / 2f,
+        left = feed.left + (if (mirrored) feed.width - centerX else centerX) - width / 2f,
         top = feed.top + box.centerY * scaleY - height / 2f,
         width = width,
         height = height,
@@ -437,6 +444,7 @@ internal fun LiveFrameMetadataOverlay(
                     lockProgress = focusLockProgress,
                     alpha = focusBoxAlpha,
                     editModifier = focusBoxEditModifier,
+                    mirrored = configuration.mirrorEnabled,
                 )
             }
             if (levelEnabled) {
@@ -484,12 +492,13 @@ private fun CameraFocusOverlay(
     lockProgress: Float,
     alpha: Float = 1f,
     editModifier: Modifier? = null,
+    mirrored: Boolean = false,
 ) {
     if (focus == null || focus.boxes.isEmpty()) return
     val description =
         focus.accessibilityDescription() +
             if (locked) " Focus point position locked in app." else ""
-    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed)
+    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed, mirrored)
     // The Edit view's outline and badge go on the primary AF box, not the whole feed — a dashed
     // rectangle round the entire image would name nothing.
     if (editModifier != null && primaryRect != null) {
@@ -519,7 +528,7 @@ private fun CameraFocusOverlay(
         var lockLabelSize by remember { mutableStateOf(IntSize.Zero) }
         Canvas(Modifier.fillMaxSize()) {
             focus.boxes.forEachIndexed { index, box ->
-                val rect = liveFocusBoxRect(focus, box, feed) ?: return@forEachIndexed
+                val rect = liveFocusBoxRect(focus, box, feed, mirrored) ?: return@forEachIndexed
                 val color = focusBoxColor(focus, index)
                 val radius = min(min(rect.width, rect.height) * 0.12f, 7.dp.toPx())
                 drawRoundRect(

@@ -25,11 +25,24 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     /// Camera-fed exposure indicator (the body's own metering needle).
     case evMeter = "EV"
     case desqueeze = "DE-SQ"
+    /// Flips the monitored picture left-to-right, for a body pointed back at the person watching
+    /// it. A display convenience only: the recording is never mirrored, and neither is anything
+    /// that measures the frame.
+    case mirror = "MIRROR"
     case instantReview = "PLAY"
     /// Monitoring punch-in for critical focus (see `Magnification`).
     case magnification = "MAG"
 
     public var id: String { rawValue }
+
+    /// Retired from every operator-facing surface; the case survives only so stored payloads
+    /// decode. Magnification became direct manipulation (pinch the feed) — a toolbar/settings
+    /// row for it is a control for a tool that no longer exists.
+    public var isRetired: Bool { self == .magnification }
+
+    /// The tool set UI and defaults build from — `allCases` minus retired tools. Decode paths
+    /// filter through this too, so a blob persisted before a retirement stops resurfacing it.
+    public static var activeCases: [MonitorAssistTool] { allCases.filter { !$0.isRetired } }
 
     /// Whether long-pressing the toolbar button opens a quick-settings popup. Tap still toggles the
     /// tool on/off. Framing aids and LUT carry richer pickers; analysis tools expose compact
@@ -41,8 +54,9 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
             .guides, .grid,
             .crosshair, .level, .desqueeze, .instantReview, .magnification:
             true
-        case .audioMeters, .evMeter:
-            // Tap-only tools — the meters carry no operator-tunable options.
+        case .audioMeters, .evMeter, .mirror:
+            // Tap-only tools — the meters carry no operator-tunable options, and a left-to-right
+            // flip has nothing to tune: it is on or it is not.
             false
         }
     }
@@ -61,7 +75,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
 
     /// Framing aids on the bottom assist toolbar (Display ▸ Frame & Composition Tools).
     public static let framingBarTools: [MonitorAssistTool] = [
-        .guides, .grid, .crosshair, .level, .desqueeze,
+        .guides, .grid, .crosshair, .level, .desqueeze, .mirror,
     ]
 
     /// Scope-type tools: rendered as panels (floating in landscape/portrait-fill, stacked in
@@ -89,6 +103,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .level: "Horizon"
         case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
+        case .mirror: "Mirror"
         case .instantReview: "Instant Playback"
         case .magnification: "Magnification"
         }
@@ -482,14 +497,17 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         qualityBias: QualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
         scopeActivationOrder: [MonitorAssistTool] = [],
-        cleanViewPinnedTools: Set<MonitorAssistTool> = [],
+        cleanViewPinnedTools: Set<MonitorAssistTool> = Self.cleanViewDefaultPinnedTools,
         cleanChrome: DisplayChromeVisibility = .cleanDefaults,
         commandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoDisplayChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoCleanChrome: DisplayChromeVisibility = .cleanDefaults,
         photoCommandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         splitComparisonEnabled: Bool = false,
-        splitComparisonOrientation: SplitComparisonOrientation = .vertical
+        splitComparisonOrientation: SplitComparisonOrientation = .vertical,
+        relayEncoderProfile: RelayEncoderProfile = .lowLatency,
+        relayWatcherPasscode: String = "",
+        relayAllowsControlRequests: Bool = true
     ) {
         self.dispOrder = dispOrder
         self.enabledDispModes = Self.normalizedEnabledDispModes(enabledDispModes)
@@ -517,6 +535,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.photoCommandChrome = photoCommandChrome
         self.splitComparisonEnabled = splitComparisonEnabled
         self.splitComparisonOrientation = splitComparisonOrientation
+        self.relayEncoderProfile = relayEncoderProfile
+        self.relayWatcherPasscode = relayWatcherPasscode
+        self.relayAllowsControlRequests = relayAllowsControlRequests
     }
 
     /// Stock defaults — forwards to ``defaults``.
@@ -551,8 +572,12 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
     /// newest activation. Drives the portrait-fit recency-based 2-scope display selection.
     public var scopeActivationOrder: [MonitorAssistTool]
-    /// The view-assist tools DISP 2 shows. Empty by default — clean is a bare image out of the
-    /// box; see ``MonitorChromePolicy``.
+    /// The view-assist tools DISP 2 shows; see ``MonitorChromePolicy``.
+    ///
+    /// Defaults to ``cleanViewDefaultPinnedTools`` rather than nothing. Clean strips the *chrome*
+    /// — the rail, the readouts, the buttons — but an operator on DISP 2 is still judging a
+    /// picture, and a grade, a focus aid and the two geometry corrections are what make it the
+    /// right picture rather than a raw one.
     public var cleanViewPinnedTools: Set<MonitorAssistTool>
     /// DISP 2's chrome. Defaults to ``DisplayChromeVisibility/cleanDefaults`` — the bare image.
     public var cleanChrome: DisplayChromeVisibility
@@ -573,6 +598,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// ``splitComparisonEnabled`` so switching the comparison off and on again keeps the
     /// operator's choice.
     public var splitComparisonOrientation: SplitComparisonOrientation
+    /// The broadcaster's latency-vs-quality stance for the relay encoder.
+    public var relayEncoderProfile: RelayEncoderProfile
+    /// Watchers must enter this to receive the broadcast; empty means open. Four digits by UI
+    /// convention, but the wire and the check treat it as an opaque string.
+    public var relayWatcherPasscode: String
+    /// Whether watchers may ask for camera control at all.
+    public var relayAllowsControlRequests: Bool
 
     /// The chrome configuration `mode` renders on the `capture` side of the camera. Each pair owns
     /// its own set, so the operator can build a full DISP 1, a bare DISP 2 and a stripped DISP 3
@@ -643,6 +675,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case cleanChromeV2
         case photoDisplayChrome, photoCleanChrome, photoCommandChrome
         case splitComparisonEnabled, splitComparisonOrientation
+        case relayEncoderProfile
+        case relayWatcherPasscode, relayAllowsControlRequests
     }
 
     public init(from decoder: any Decoder) throws {
@@ -711,11 +745,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             liveViewVisibleAssistTools = []
             playbackVisibleAssistTools = []
         }
-        // Added with the clean-view pin (#256). Absent in every older payload — decode to empty so
-        // an upgrade lands on the documented default (clean is bare) rather than resetting.
+        // Added with the clean-view pin (#256). The key is absent only in payloads written
+        // before it existed, i.e. by an operator who never pinned anything — so absent decodes to
+        // the documented default rather than to empty. Anyone who HAS touched the set wrote it,
+        // and gets back exactly what they chose.
         cleanViewPinnedTools =
             try Self.decodeAssistToolSetIfPresent(from: container, forKey: .cleanViewPinnedTools)
-            ?? []
+            ?? Self.cleanViewDefaultPinnedTools
         // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
         // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
         // the documented bare image, and DISP 3 inherits the old global set so a rail or battery
@@ -752,6 +788,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         splitComparisonOrientation =
             try container.decodeIfPresent(
                 SplitComparisonOrientation.self, forKey: .splitComparisonOrientation) ?? .vertical
+        relayEncoderProfile =
+            try container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile)
+            ?? .lowLatency
+        relayWatcherPasscode =
+            try container.decodeIfPresent(String.self, forKey: .relayWatcherPasscode) ?? ""
+        relayAllowsControlRequests =
+            try container.decodeIfPresent(Bool.self, forKey: .relayAllowsControlRequests) ?? true
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -780,6 +823,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(photoCommandChrome, forKey: .photoCommandChrome)
         try container.encode(splitComparisonEnabled, forKey: .splitComparisonEnabled)
         try container.encode(splitComparisonOrientation, forKey: .splitComparisonOrientation)
+        try container.encode(relayEncoderProfile, forKey: .relayEncoderProfile)
+        try container.encode(relayWatcherPasscode, forKey: .relayWatcherPasscode)
+        try container.encode(relayAllowsControlRequests, forKey: .relayAllowsControlRequests)
     }
 
     /// Live-monitor assist visibility. Prefer ``visibleAssistTools(for:)`` when the context is known.
@@ -799,7 +845,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         dispOrder: [.live, .clean, .command],
         enabledDispModes: Set(DispMode.allCases),
         displayChrome: DisplayChromeVisibility(),
-        assistToolbarOrder: MonitorAssistTool.allCases,
+        assistToolbarOrder: MonitorAssistTool.activeCases,
         exposureBarVisibleControls: Set(MonitorAssistTool.exposureBarTools),
         framingBarVisibleControls: Set(MonitorAssistTool.framingBarTools),
         liveViewVisibleAssistTools: [],
@@ -823,8 +869,20 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         splitComparisonOrientation: .vertical
     )
 
+    /// What DISP 2 shows out of the box: the grade, the focus aid, and the two corrections that
+    /// change the picture's geometry rather than decorate it.
+    ///
+    /// Clean is not "no tools" — it is no *chrome*. A de-squeezed, mirrored, graded image with
+    /// peaking on is still a clean image; it is the rail and the readouts that make a monitor busy.
+    public static let cleanViewDefaultPinnedTools: Set<MonitorAssistTool> = [
+        .lut, .peaking, .desqueeze, .mirror,
+    ]
+
     /// Whether `tool` should appear on the bottom assist toolbar (LUT is always shown).
     public func isAssistToolbarButtonVisible(_ tool: MonitorAssistTool) -> Bool {
+        // Retired from the bar: zoom is a pinch on the feed now, not a tool to arm. The case
+        // survives so stored payloads keep decoding.
+        if tool == .magnification { return false }
         if MonitorAssistTool.exposureBarTools.contains(tool) {
             return exposureBarVisibleControls.contains(tool)
         }
@@ -874,13 +932,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         from container: KeyedDecodingContainer<K>, forKey key: K
     ) throws -> [MonitorAssistTool] {
         let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.allCases)
+        let valid = Set(MonitorAssistTool.activeCases)
         let decoded = raw.compactMap(MonitorAssistTool.init(rawValue:)).filter {
             valid.contains($0)
         }
         // Tools introduced after the order was first persisted append at the end — without
         // this, a saved order simply never shows a new tool.
-        return decoded + MonitorAssistTool.allCases.filter { !decoded.contains($0) }
+        return decoded + MonitorAssistTool.activeCases.filter { !decoded.contains($0) }
     }
 
     /// Same as ``decodeAssistToolArray`` but tolerates an absent key (returns `nil` instead of
@@ -890,7 +948,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     ) throws -> [MonitorAssistTool]? {
         guard container.contains(key) else { return nil }
         let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.allCases)
+        let valid = Set(MonitorAssistTool.activeCases)
         return raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) }
     }
 
@@ -909,7 +967,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     ) throws -> Set<MonitorAssistTool>? {
         guard container.contains(key) else { return nil }
         let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.allCases)
+        let valid = Set(MonitorAssistTool.activeCases)
         return Set(raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) })
     }
 
@@ -961,7 +1019,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// (present in the order, absent from the visible set) stay hidden.
     public mutating func reconcileAssistTools() {
         let present = Set(assistToolbarOrder)
-        for (index, tool) in MonitorAssistTool.allCases.enumerated() where !present.contains(tool) {
+        for (index, tool) in MonitorAssistTool.activeCases.enumerated()
+        where !present.contains(tool) {
             assistToolbarOrder.insert(tool, at: min(index, assistToolbarOrder.count))
             if MonitorAssistTool.exposureBarTools.contains(tool) {
                 exposureBarVisibleControls.insert(tool)
@@ -1556,7 +1615,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
 
         public init(
             waveformScale: Double = defaultScale,
-            waveformMode: WaveformMode = .luma,
+            waveformMode: WaveformMode = .rgb,
             waveformGuides: GuideLines = GuideLines(),
             waveformBrightness: Int = defaultBrightness,
             paradeScale: Double = defaultScale,
@@ -1651,7 +1710,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             waveformScale = Self.clampedScale(
                 try c.decodeIfPresent(Double.self, forKey: .waveformScale) ?? Self.defaultScale)
-            waveformMode = try c.decodeIfPresent(WaveformMode.self, forKey: .waveformMode) ?? .luma
+            waveformMode = try c.decodeIfPresent(WaveformMode.self, forKey: .waveformMode) ?? .rgb
             waveformGuides =
                 try c.decodeIfPresent(GuideLines.self, forKey: .waveformGuides) ?? GuideLines()
             let brightnessCalibrationVersion = try c.decodeIfPresent(
@@ -1922,13 +1981,15 @@ public enum DispOrder {
 /// Pure helpers for the persisted assist-toolbar order.
 public enum AssistToolbarOrder {
     /// Every tool in its canonical position.
-    public static let `default` = MonitorAssistTool.allCases
+    public static let `default` = MonitorAssistTool.activeCases
 
     /// Reconciles a persisted order with the current tool set (same rules as ``CommandGridOrder``).
+    /// Retired tools drop out here too, so an order persisted before a retirement stops
+    /// resurfacing the dead tool's row.
     public static func reconciled(_ order: [MonitorAssistTool]) -> [MonitorAssistTool] {
         var seen = Set<MonitorAssistTool>()
-        var result = order.filter { seen.insert($0).inserted }
-        for tool in MonitorAssistTool.allCases where !seen.contains(tool) {
+        var result = order.filter { !$0.isRetired && seen.insert($0).inserted }
+        for tool in MonitorAssistTool.activeCases where !seen.contains(tool) {
             result.append(tool)
             seen.insert(tool)
         }

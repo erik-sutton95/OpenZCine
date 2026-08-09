@@ -155,3 +155,88 @@ func assistToolbarIsZeroHeightInCleanAndCommand(mode: DispMode) {
         aspect: .fit16x9, scopeCount: 0)
     #expect(abs(z.feed.height - 390 * 9 / 16) < 0.5)
 }
+
+// Vertical camera (rotated feed, aspect < 1): the fit feed binds to the space above the
+// scopes/toolbar/system bands instead of running under them. Landscape-or-wider ratios keep
+// their historical unclamped frames (covered by the 16:9 and photography tests above).
+@Test func verticalAspectClampsLiveFitFeedAboveTheBands() {
+    let sa = MonitorEdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0)
+    let z = MonitorPortraitLayout.zones(
+        viewportWidth: 390, viewportHeight: 844, safeArea: sa, mode: .live,
+        aspect: .fit16x9, scopeCount: 1, assistToolbarHeight: 58,
+        feedAspectRatio: 9.0 / 16.0)
+    // Natural height would be 390 × 16/9 ≈ 693 — far past the bands. Span 629 − (96 + 58) = 475.
+    #expect(abs(z.feed.height - 475) < 0.5)
+    #expect(z.feed.y == z.topBar.maxY)
+    #expect(z.scopes.y == z.feed.y + z.feed.height)
+    #expect(z.scopes.height == 96)
+    #expect(z.assistToolbar.y == z.scopes.maxY)
+    #expect(abs(z.assistToolbar.maxY - z.systemBar.y) < 0.5)
+    #expect(z.controls.height == 0)
+}
+
+@Test func verticalAspectCleanFeedFillsTheSpanExactly() {
+    let sa = MonitorEdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0)
+    let z = MonitorPortraitLayout.zones(
+        viewportWidth: 390, viewportHeight: 844, safeArea: sa, mode: .clean,
+        aspect: .fit16x9, scopeCount: 0, feedAspectRatio: 9.0 / 16.0)
+    // Clean centres in the topBar→systemBar span (629): the clamp lands it exactly on the span.
+    #expect(z.feed.y == z.topBar.maxY)
+    #expect(abs((z.feed.y + z.feed.height) - z.systemBar.y) < 0.5)
+}
+
+// MARK: - Fill-mode assist rail
+
+/// The rail runs down the feed's leading edge and stops above the capture strip, never under it.
+@Test func theExpandedRailEndsAboveTheCaptureStrip() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+    let rail = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 540, expanded: true)
+
+    #expect(rail.x == 10)
+    #expect(rail.y == 110)
+    #expect(rail.width == MonitorPortraitLayout.assistRailExpandedWidth)
+    // 540 (strip top) − 110 (rail top) − 10 (margin)
+    #expect(rail.height == 420)
+    #expect(rail.maxY <= 540)
+}
+
+/// With no capture strip mounted the rail may run to the feed's own bottom edge.
+@Test func withNoCaptureStripTheRailRunsToTheFeedBottom() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+    let rail = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: nil, expanded: true)
+
+    #expect(rail.height == 480)
+    #expect(rail.maxY == 590)
+}
+
+/// The collapsed pill is a fixed square that sits just above whatever the rail must clear.
+@Test func theCollapsedPillClearsTheCaptureStrip() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+    let rail = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 540, expanded: false)
+
+    #expect(rail.width == MonitorPortraitLayout.assistRailCollapsedSize)
+    #expect(rail.height == MonitorPortraitLayout.assistRailCollapsedSize)
+    // 540 − 44 − 10
+    #expect(rail.y == 486)
+}
+
+/// A capture strip reported outside the feed is not evidence about where the rail must stop.
+///
+/// This is where the two shells had drifted: one clamped the strip into the feed before measuring
+/// from it and the other did not, so the same transient produced a sane rail on Android and a
+/// collapsed one on iOS.
+@Test func aCaptureStripOutsideTheFeedCannotProduceANegativeRail() {
+    let feed = MonitorLayoutRegion(x: 0, y: 100, width: 390, height: 500)
+
+    let above = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 20, expanded: true)
+    #expect(above.height == 0)
+    #expect(above.y >= feed.y)
+
+    let below = MonitorPortraitLayout.fillAssistRail(
+        feed: feed, captureStripTop: 9_000, expanded: true)
+    #expect(below.maxY <= feed.maxY)
+}

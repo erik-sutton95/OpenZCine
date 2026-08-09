@@ -3,6 +3,9 @@ layout(location = 0) in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D uFeed;
 layout(set = 0, binding = 1) uniform sampler2D uLut;
+// LIMITS' two Swift-baked cubes: the zone colour and the zone weight, same strip packing as uLut.
+layout(set = 0, binding = 3) uniform sampler2D uLimitsPaint;
+layout(set = 0, binding = 4) uniform sampler2D uLimitsWeight;
 // std140 layout must match GpuParams in live_feed_vk_renderer.cpp — offsets in the comments there,
 // including the pad members that keep the two in step. Edit both, then `just android-shaders`.
 layout(set = 0, binding = 2) uniform Params {
@@ -22,12 +25,19 @@ layout(set = 0, binding = 2) uniform Params {
     // against a horizontal one (Log top, LUT bottom). See `SplitComparison` in shared core.
     float splitOn;
     float splitVertical;
-    float splitPad;
+    // Horizontal flip for a camera pointed back at the operator: 1 mirrors, 0 does not. Takes the
+    // slot that was `splitPad`, so no offset in this block moves.
+    float mirror;
     vec4 deLogCurve0to3;
     float deLogCurve4;
     float deLogPad;
     vec2 sourceSize;
-    vec4 pad;
+    // LIMITS: the two cubes' edge sizes and the on flag. They take three of the four floats that
+    // used to be `pad`, so no offset above moves and the block still rounds to 144 bytes.
+    float limitsPaintSize;
+    float limitsWeightSize;
+    float limitsOn;
+    float limitsPad;
 } u;
 
 const vec3 LUMA709 = vec3(0.2126, 0.7152, 0.0722);
@@ -46,9 +56,14 @@ const float ZEBRA_GAIN = 40.0;
 const float ZEBRA_HALF_WIDTH = 5.0 / 255.0;
 const float STRIPE_PITCH = 14.14;
 
-vec3 grade(vec3 c) {
-    if (u.lutSize < 2.0) return c;
-    float n = u.lutSize;
+// One trilinear lookup into a strip-packed cube (`width = n*n`, `height = n`, blue slices tiling
+// along x — what the AGSL adapter uploads and what `LiveFeedVk_SetPlan` copies in unchanged). Two
+// bilinear taps on adjacent blue slices, mixed: the same interpolation `CIColorCube` performs.
+//
+// Shared by the LUT and both LIMITS cubes. The GLES and AGSL shaders write this out three times
+// because neither GLSL ES 1.00 nor SkSL can take a sampler as a parameter; GLSL 4.5 can, so here
+// the three stages cannot drift apart.
+vec3 cubeLookup(sampler2D cube, float n, vec3 c) {
     float b = clamp(c.b, 0.0, 1.0) * (n - 1.0);
     float s0 = floor(b);
     float s1 = min(s0 + 1.0, n - 1.0);
@@ -56,7 +71,12 @@ vec3 grade(vec3 c) {
     float y = clamp(c.g, 0.0, 1.0) * (n - 1.0) + 0.5;
     vec2 lo = vec2((s0 * n + x) / (n * n), y / n);
     vec2 hi = vec2((s1 * n + x) / (n * n), y / n);
-    return mix(texture(uLut, lo).rgb, texture(uLut, hi).rgb, b - s0);
+    return mix(texture(cube, lo).rgb, texture(cube, hi).rgb, b - s0);
+}
+
+vec3 grade(vec3 c) {
+    if (u.lutSize < 2.0) return c;
+    return cubeLookup(uLut, u.lutSize, c);
 }
 
 // Focus peaking measures BLUR RADIUS, not edge contrast: the operator run on the
@@ -120,9 +140,27 @@ float peakingRoberts(float a, float b, float c, float d) {
 }
 
 void main() {
-    vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+    // The mirror folds the SAMPLING coordinate, so everything read through `uv` — the picture and
+    // peaking's neighbourhood alike — flips together and the overlay stays on its edge. The split
+    // boundary deliberately does not: it reads raw `vUv` because it is a question about where the
+    // pixel lands for the operator, not about the picture.
+    vec2 uv = vec2(mix(vUv.x, 1.0 - vUv.x, u.mirror), 1.0 - vUv.y);
     vec3 source = texture(uFeed, uv).rgb;
     vec3 color = splitIsGradedSide(vUv) ? grade(source) : source;
+
+    // LIMITS paints the crush and clip zones over the picture the operator is already looking at:
+    // grade first, then composite the zone colour through the zone weight. Both cubes measure the
+    // RAW `source`, never `color` — the zones are a statement about what the camera sent, so a LUT
+    // must not be able to move them. Same order, same two cubes and the same measure-the-source
+    // split as iOS (`LiveFrameProcessor.outputCIImage` blends the paint over the graded image
+    // through the weight mask) and as the GLES shader.
+    //
+    // Both sizes are checked, not just the flag: a paint cube without its weight mask would flood
+    // the whole frame at full opacity, which is worse than no warning at all.
+    if (u.limitsOn > 0.5 && u.limitsPaintSize >= 2.0 && u.limitsWeightSize >= 2.0) {
+        float weight = clamp(cubeLookup(uLimitsWeight, u.limitsWeightSize, source).r, 0.0, 1.0);
+        color = mix(color, cubeLookup(uLimitsPaint, u.limitsPaintSize, source), weight);
+    }
 
     if (u.peakingOn > 0.5) {
         vec2 sourceSize = max(u.sourceSize, vec2(1.0));

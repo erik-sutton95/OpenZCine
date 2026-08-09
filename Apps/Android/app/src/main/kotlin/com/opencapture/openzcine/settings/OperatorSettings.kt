@@ -324,29 +324,6 @@ public enum class LocalDesqueezeRatio(
     }
 }
 
-/**
- * Live-view punch-in factors, mirroring the shared core's
- * `AssistConfiguration.Magnification.Factor`.
- *
- * A closed set on purpose: this is a focus check, and a continuous zoom invites fiddling with a
- * number that has no right answer.
- */
-public enum class LocalMagnificationFactor(
-    /** Operator-facing label, also the accessibility wording. */
-    public val label: String,
-    /** The scale applied to the settled feed rect. */
-    public val scale: Float,
-) {
-    X2("2x", 2f),
-    X3("3x", 3f),
-    X4("4x", 4f),
-    ;
-
-    internal companion object {
-        fun fromStoredName(value: String?): LocalMagnificationFactor? =
-            entries.firstOrNull { it.name == value }
-    }
-}
 
 /** The source axis compressed by an anamorphic capture. */
 public enum class LocalDesqueezeOrientation(
@@ -455,7 +432,7 @@ public data class ScopeGuideLines(
 @Immutable
 public data class ScopeAssistConfiguration(
     public val waveformScale: Float = DEFAULT_SCALE,
-    public val waveformMode: ScopeWaveformMode = ScopeWaveformMode.LUMA,
+    public val waveformMode: ScopeWaveformMode = ScopeWaveformMode.RGB,
     public val waveformGuides: ScopeGuideLines = ScopeGuideLines(),
     public val waveformBrightness: Int = DEFAULT_BRIGHTNESS,
     public val paradeScale: Float = DEFAULT_SCALE,
@@ -555,6 +532,12 @@ public data class LocalFramingAssistConfiguration(
     public val evMeterEnabled: Boolean = false,
     /** Whether the local de-squeeze presentation is applied. */
     public val desqueezeEnabled: Boolean,
+    /**
+     * Whether the monitored picture is flipped left-to-right, for a body pointed
+     * back at the person watching it. Display only — the recording, the scopes
+     * and every camera-reported coordinate stay in the true orientation.
+     */
+    public val mirrorEnabled: Boolean = false,
     /** Named chip when the factor matches a preset (UI highlight). */
     public val desqueezeRatio: LocalDesqueezeRatio,
     /** Applied squeeze factor in 1.0…2.0 (source of truth for rendering). */
@@ -562,9 +545,7 @@ public data class LocalFramingAssistConfiguration(
     /** The source axis compressed by the anamorphic capture. */
     public val desqueezeOrientation: LocalDesqueezeOrientation,
     /** Whether the punch-in tool is on, i.e. whether its quick key is on the feed. */
-    public val magnificationEnabled: Boolean = false,
     /** The punch-in factor the quick key applies. */
-    public val magnificationFactor: LocalMagnificationFactor = LocalMagnificationFactor.X2,
 ) {
     /** Whether at least one selected guide is currently visible. */
     public val drawsGuides: Boolean
@@ -604,7 +585,6 @@ public data class LocalFramingAssistConfiguration(
 
     /**
      * The punch-in scale to apply to the whole settled feed stack. Mirrors the shared core's
-     * `Magnification.scale(factor:isActive:)`.
      *
      * Exactly 1 when inactive, so the feed can apply it unconditionally and punching out lands on a
      * framing identical to never having punched in — not a re-derived one. That identity is what
@@ -616,11 +596,6 @@ public data class LocalFramingAssistConfiguration(
      * own layer over the de-squeeze rather than multiplied into it, because the two need different
      * origins — de-squeeze about the centre, punch-in about the focus box.
      */
-    public fun magnificationScale(isActive: Boolean): Float {
-        if (!isActive || !magnificationEnabled) return 1f
-        val scale = magnificationFactor.scale
-        return if (scale.isFinite() && scale > 1f) scale else 1f
-    }
 
     /** Local vertical monitor scale after applying the selected de-squeeze. */
     public val verticalPresentationScale: Float
@@ -632,43 +607,7 @@ public data class LocalFramingAssistConfiguration(
             }
 }
 
-/**
- * Which AF box the punch-in follows (iOS `Magnification.anchorBoxIndex`).
- *
- * The subject the body selected, else the AF area (box 0). With subject detection on, the selected
- * box is the face or eye actually being focused — at 4× the difference between "the face" and "the
- * eye" is the whole question, so the enclosing AF rectangle is the wrong target.
- */
-internal fun magnificationAnchorBoxIndex(boxCount: Int, selectedBoxIndex: Int?): Int? {
-    if (boxCount <= 0) return null
-    val selected = selectedBoxIndex ?: return 0
-    return if (selected in 0 until boxCount) selected else 0
-}
 
-/**
- * The punch-in's fixed point, in unit coordinates of the feed rect (iOS `Magnification.anchor`).
- *
- * The camera's own focus box, not the middle of the frame: focus is rarely in the middle of the
- * shot, so centring magnifies whatever happens to be there instead of the thing being focused.
- *
- * It is the FIXED POINT of the scale, not a point moved to the middle — the box stays where it is
- * drawn and the picture grows outward around it. That is what keeps the result in bounds at every
- * factor without clamping, and identical near an edge as in the middle.
- */
-internal fun magnificationAnchor(
-    boxCenterX: Int?,
-    boxCenterY: Int?,
-    coordinateWidth: Int,
-    coordinateHeight: Int,
-): Pair<Float, Float> {
-    val centre = 0.5f to 0.5f
-    if (boxCenterX == null || boxCenterY == null) return centre
-    if (coordinateWidth <= 0 || coordinateHeight <= 0) return centre
-    val x = boxCenterX.toFloat() / coordinateWidth.toFloat()
-    val y = boxCenterY.toFloat() / coordinateHeight.toFloat()
-    if (!x.isFinite() || !y.isFinite()) return centre
-    return x.coerceIn(0f, 1f) to y.coerceIn(0f, 1f)
-}
 
 /**
  * Persisted operator preferences — the Android counterpart of the iOS shell's
@@ -707,6 +646,21 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         public fun toggle() {
             value = !value
         }
+    }
+
+    /** One persisted string: Compose-observable value, write-through on set. */
+    public inner class Text internal constructor(
+        public val key: String,
+        public val default: String,
+    ) {
+        private val state = mutableStateOf(preferences.getString(key, default) ?: default)
+
+        public var value: String
+            get() = state.value
+            set(new) {
+                state.value = new
+                preferences.edit().putString(key, new).apply()
+            }
     }
 
     // Display chrome — maps to iOS `DisplayChromeVisibility`. One set per (DISP mode, capture
@@ -913,6 +867,23 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         Toggle("controls.mediaRemoteShutter.v1", default = true)
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
+
+    // Sharing (the monitor relay) — iOS `relayWatcherPasscode` / `relayAllowsControlRequests`.
+    // The share switch itself is runtime state, exactly like iOS's `isRelayBroadcasting`.
+    public val relayWatcherPasscode: Text = Text("sharing.watcherPasscode", default = "")
+    public val relayAllowsControlRequests: Toggle =
+        Toggle("sharing.allowsControlRequests", default = true)
+    /**
+     * Broadcast priority — iOS `relayEncoderProfile`. Stored as the shared core's raw value so
+     * the two shells persist the same thing, and read back through
+     * [com.opencapture.openzcine.core.RelayEncoderProfile.fromWireValue], which falls back to the
+     * tightest path rather than trusting whatever is on disk.
+     */
+    public val relayEncoderProfile: Text =
+        Text(
+            "sharing.encoderProfile",
+            default = com.opencapture.openzcine.core.RelayEncoderProfile.LOW_LATENCY.wireValue,
+        )
     /**
      * Enables the live-view focus-by-wire scrub strip in video and photo mode (**default off**).
      * Surfaced as a row inside the FOCUS popup rather than Operator Setup, mirroring the iOS
@@ -942,9 +913,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val evMeterAssistEnabled: Toggle = Toggle("assist.local.evMeter", default = false)
     public val desqueezeEnabled: Toggle =
         Toggle(DESQUEEZE_ENABLED_KEY, default = legacyDesqueezeWasEnabled())
+    /** Flips the monitored picture left-to-right; never touches the recording. */
+    public val mirrorEnabled: Toggle = Toggle("assist.local.mirror.v1", default = false)
     /** Puts the punch-in quick key on the feed; the punch-in itself is session-only. */
-    public val magnificationEnabled: Toggle =
-        Toggle("assist.local.magnification.enabled.v1", default = false)
     /** Shows the shared Swift meter's RGB edge blocks on the histogram. */
     public val histogramTrafficLightsEnabled: Toggle =
         Toggle("assist.scopes.histogramTrafficLights.v1", default = true)
@@ -962,7 +933,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     private val desqueezeRatioState = mutableStateOf(loadDesqueezeRatio())
     private val desqueezeFactorState = mutableStateOf(loadDesqueezeFactor())
     private val desqueezeOrientationState = mutableStateOf(loadDesqueezeOrientation())
-    private val magnificationFactorState = mutableStateOf(loadMagnificationFactor())
     private val splitComparisonOrientationState = mutableStateOf(loadSplitComparisonOrientation())
     private val levelStyleState = mutableStateOf(loadLevelStyle())
     private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
@@ -1047,12 +1017,24 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         persistEnabledDisplayModes(enabled)
     }
 
+    /**
+     * Writes a stream-settings pick onto the setup it was made on, when there is a live one.
+     *
+     * A slot rather than a store handle: these settings belong to the connected setup, and only
+     * the activity knows which that is. Set when a camera is accepted, cleared on disconnect —
+     * so a pick made with nothing connected still moves the live value and simply has nowhere
+     * durable to live, which is the honest outcome.
+     */
+    public var activeSetupStreamSettingsWriter:
+        ((LiveViewStreamPreset?, LiveViewQualityBias?) -> Unit)? = null
+
     /** Requested preview-size profile, resolved by Swift before live view starts. */
     public var streamPreset: LiveViewStreamPreset
         get() = streamPresetState.value
         set(new) {
             streamPresetState.value = new
             preferences.edit().putString(STREAM_PRESET_KEY, new.name).apply()
+            activeSetupStreamSettingsWriter?.invoke(new, null)
         }
 
     /** Requested preview-compression profile, resolved by Swift rather than Kotlin. */
@@ -1061,7 +1043,28 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         set(new) {
             qualityBiasState.value = new
             preferences.edit().putString(QUALITY_BIAS_KEY, new.name).apply()
+            activeSetupStreamSettingsWriter?.invoke(null, new)
         }
+
+    /**
+     * Seeds the live values from the setup a session just established over, without writing back.
+     *
+     * The setter above is for an operator's pick; this is the setup telling the app what it runs
+     * at. Routing this through the setter would write the resolved value straight back onto the
+     * record and turn every default into a stored choice — after which the path rule could never
+     * apply again.
+     */
+    public fun adoptSetupStreamSettings(
+        streamPreset: LiveViewStreamPreset,
+        qualityBias: LiveViewQualityBias,
+    ) {
+        streamPresetState.value = streamPreset
+        qualityBiasState.value = qualityBias
+        preferences.edit()
+            .putString(STREAM_PRESET_KEY, streamPreset.name)
+            .putString(QUALITY_BIAS_KEY, qualityBias.name)
+            .apply()
+    }
 
     /**
      * Portrait feed fit/fill choice, persisted across monitor sessions.
@@ -1143,12 +1146,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         }
 
     /** The punch-in factor the feed's magnify key applies; persisted immediately on change. */
-    public var magnificationFactor: LocalMagnificationFactor
-        get() = magnificationFactorState.value
-        set(new) {
-            magnificationFactorState.value = new
-            preferences.edit().putString(MAGNIFICATION_FACTOR_KEY, new.name).apply()
-        }
 
     /** The source axis compressed by the selected local anamorphic factor. */
     public var desqueezeOrientation: LocalDesqueezeOrientation
@@ -1207,7 +1204,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.LEVEL -> levelAssistEnabled.toggle()
             AssistTool.EV -> evMeterAssistEnabled.toggle()
             AssistTool.DESQ -> desqueezeEnabled.toggle()
-            AssistTool.MAG -> magnificationEnabled.toggle()
+            AssistTool.MIRROR -> mirrorEnabled.toggle()
             else -> Unit
         }
     }
@@ -1221,7 +1218,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.LEVEL -> levelAssistEnabled.value
             AssistTool.EV -> evMeterAssistEnabled.value
             AssistTool.DESQ -> desqueezeEnabled.value
-            AssistTool.MAG -> magnificationEnabled.value
+            AssistTool.MIRROR -> mirrorEnabled.value
             else -> false
         }
 
@@ -1368,8 +1365,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 desqueezeRatio = desqueezeRatio,
                 desqueezeFactor = desqueezeFactor,
                 desqueezeOrientation = desqueezeOrientation,
-                magnificationEnabled = magnificationEnabled.value,
-                magnificationFactor = magnificationFactor,
+                mirrorEnabled = mirrorEnabled.value,
             )
 
     private val assistToolbarOrderState = mutableStateOf(loadAssistToolbarOrder())
@@ -1418,7 +1414,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     /**
      * View-assist tools the operator pinned to survive clean view (DISP 2).
-     * Empty by default — clean is a bare image out of the box (#256).
+     *
+     * Defaults to [CLEAN_VIEW_DEFAULT_PINNED_TOOLS] rather than nothing: DISP 2 strips the
+     * *chrome*, but an operator on it is still judging a picture.
      */
     public val cleanViewPinnedTools: Set<AssistTool>
         get() = cleanViewPinnedToolsState.value
@@ -1437,10 +1435,15 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .apply()
     }
 
-    /** Clears the clean-view keep list, restoring the stock bare image. */
+    /** Restores the clean-view keep list to the tools DISP 2 ships with. */
     public fun resetCleanViewPins() {
-        cleanViewPinnedToolsState.value = emptySet()
-        preferences.edit().putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, linkedSetOf()).apply()
+        cleanViewPinnedToolsState.value = CLEAN_VIEW_DEFAULT_PINNED_TOOLS
+        preferences.edit()
+            .putStringSet(
+                CLEAN_VIEW_PINNED_TOOLS_KEY,
+                CLEAN_VIEW_DEFAULT_PINNED_TOOLS.mapTo(linkedSetOf()) { it.name },
+            )
+            .apply()
     }
 
 
@@ -1465,11 +1468,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         val defaultOrder = AssistTool.entries.toList()
         assistToolbarOrderState.value = defaultOrder
         visibleAssistToolsState.value = defaultOrder.toSet()
-        cleanViewPinnedToolsState.value = emptySet()
+        cleanViewPinnedToolsState.value = CLEAN_VIEW_DEFAULT_PINNED_TOOLS
         preferences.edit()
             .putString(ASSIST_TOOLBAR_ORDER_KEY, defaultOrder.joinToString(separator = ",") { it.name })
             .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, defaultOrder.mapTo(linkedSetOf()) { it.name })
-            .putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, linkedSetOf())
+            .putStringSet(
+                CLEAN_VIEW_PINNED_TOOLS_KEY,
+                CLEAN_VIEW_DEFAULT_PINNED_TOOLS.mapTo(linkedSetOf()) { it.name },
+            )
             .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
@@ -1507,7 +1513,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             levelAssistEnabled,
             evMeterAssistEnabled,
             desqueezeEnabled,
-            magnificationEnabled,
         )
 
     private fun loadDisplayModeOrder(): List<MonitorDisplayMode> {
@@ -1610,14 +1615,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             editor.putBoolean(EV_METER_VISIBILITY_MIGRATED_KEY, true)
             changed = true
         }
-        if (!preferences.getBoolean(MAGNIFICATION_VISIBILITY_MIGRATED_KEY, false)) {
-            // MAG joined the framing group after its migration marker shipped, same as LEVEL.
-            // Add it exactly once so an existing custom toolbar sees the punch-in, then retain
-            // every later manual hide.
-            migrated += AssistTool.MAG
-            editor.putBoolean(MAGNIFICATION_VISIBILITY_MIGRATED_KEY, true)
-            changed = true
-        }
         if (changed) {
             editor.putStringSet(VISIBLE_ASSIST_TOOLS_KEY, migrated.mapTo(linkedSetOf()) { it.name }).apply()
         }
@@ -1629,11 +1626,15 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
      * install: an absent key means the operator never pinned anything, which is
      * exactly the documented default (clean is bare), so no migration is needed.
      */
-    private fun loadCleanViewPinnedTools(): Set<AssistTool> =
-        preferences.getStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, emptySet())
-            ?.mapNotNull(AssistTool::fromStoredName)
-            ?.toSet()
-            .orEmpty()
+    private fun loadCleanViewPinnedTools(): Set<AssistTool> {
+        // An ABSENT key belongs to an operator who never pinned anything, so it decodes to the
+        // stock set rather than to empty. Anyone who did touch the set wrote it — including
+        // writing it empty — and gets back exactly what they picked.
+        val stored =
+            preferences.getStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, null)
+                ?: return CLEAN_VIEW_DEFAULT_PINNED_TOOLS
+        return stored.mapNotNull(AssistTool::fromStoredName).toSet()
+    }
 
     private fun legacyGuideWasVisible(): Boolean = legacyGuideRatio() != null
 
@@ -1696,10 +1697,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             preferences.getString(DESQUEEZE_ORIENTATION_KEY, null),
         ) ?: LocalDesqueezeOrientation.HORIZONTAL
 
-    private fun loadMagnificationFactor(): LocalMagnificationFactor =
-        LocalMagnificationFactor.fromStoredName(
-            preferences.getString(MAGNIFICATION_FACTOR_KEY, null),
-        ) ?: LocalMagnificationFactor.X2
 
     private fun loadSplitComparisonOrientation(): FeedSplitOrientation =
         FeedSplitOrientation.fromStoredName(
@@ -1779,7 +1776,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         fun waveformMode(): ScopeWaveformMode =
             preferences.getString(SCOPE_WAVEFORM_MODE_KEY, null)
                 ?.let { stored -> ScopeWaveformMode.entries.firstOrNull { it.name == stored } }
-                ?: ScopeWaveformMode.LUMA
+                ?: ScopeWaveformMode.RGB
         fun paradeMode(): ScopeParadeMode =
             preferences.getString(SCOPE_PARADE_MODE_KEY, null)
                 ?.let { stored -> ScopeParadeMode.entries.firstOrNull { it.name == stored } }
@@ -1873,11 +1870,11 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     /** Defaults mirror `OperatorPreferences.defaults` in the shared core — keep them in step. */
     private fun loadStreamPreset(): LiveViewStreamPreset =
         LiveViewStreamPreset.fromStoredName(preferences.getString(STREAM_PRESET_KEY, null))
-            ?: LiveViewStreamPreset.QUALITY
+            ?: LiveViewStreamPreset.SHIPPED_DEFAULT
 
     private fun loadQualityBias(): LiveViewQualityBias =
         LiveViewQualityBias.fromStoredName(preferences.getString(QUALITY_BIAS_KEY, null))
-            ?: LiveViewQualityBias.BALANCED
+            ?: LiveViewQualityBias.SHIPPED_DEFAULT
 
     private fun loadPortraitFeedAspect(): PortraitFeedAspect =
         PortraitFeedAspect.fromStoredName(
@@ -1891,6 +1888,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
         const val VISIBLE_ASSIST_TOOLS_KEY = "display.assistToolbar.visible.v1"
         const val CLEAN_VIEW_PINNED_TOOLS_KEY = "display.assistToolbar.cleanViewPinned.v1"
+
+        /**
+         * What DISP 2 ships with — shared core's `cleanViewDefaultPinnedTools`. A grade, a focus
+         * aid and the two geometry corrections are what make clean the right picture rather than
+         * a raw one.
+         */
+        val CLEAN_VIEW_DEFAULT_PINNED_TOOLS: Set<AssistTool> =
+            setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.DESQ, AssistTool.MIRROR)
         const val TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY =
             "display.assistToolbar.trafficLights.visibility.migrated.v1"
         const val AUDIO_METERS_VISIBILITY_MIGRATED_KEY =
@@ -1912,9 +1917,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val DESQUEEZE_RATIO_KEY = "assist.local.desqueeze.ratio.v2"
         const val DESQUEEZE_FACTOR_KEY = "assist.local.desqueeze.factor.v1"
         const val DESQUEEZE_ORIENTATION_KEY = "assist.local.desqueeze.orientation.v2"
-        const val MAGNIFICATION_FACTOR_KEY = "assist.local.magnification.factor.v1"
-        const val MAGNIFICATION_VISIBILITY_MIGRATED_KEY =
-            "assist.toolbar.magnificationVisibility.migrated.v1"
         const val SPLIT_COMPARISON_ORIENTATION_KEY = "assist.lut.splitComparison.orientation.v1"
         const val LEGACY_FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val LEGACY_DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"

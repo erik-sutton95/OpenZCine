@@ -123,3 +123,33 @@ import Testing
     )
     #expect(detail == "Couldn't reach the camera. Check Wi‑Fi and try again.")
 }
+
+/// Two of the progress lines name a NETWORK, and over a cable that is the wrong noun: it sends an
+/// operator to inspect a thing the attempt never touches.
+@Test func cableAttemptsAreNotToldToCheckTheirNetwork() {
+    for cable in [CameraPath.Kind.usbC, .hdmiCapture] {
+        #expect(
+            ConnectionProgressCopy.statusDetail(
+                phase: .discovering, deviceName: "Nikon ZR", friendlyError: nil, path: cable
+            ) == "Looking for Nikon ZR on the cable.")
+        #expect(
+            ConnectionProgressCopy.statusDetail(
+                phase: .failed, deviceName: "Nikon ZR", friendlyError: nil, path: cable
+            ) == "Check the cable and try again.")
+    }
+
+    // Every path that HAS a network keeps the network wording, including an unknown one.
+    for network in [CameraPath.Kind.cameraAccessPoint, .infrastructure, .phoneHotspot, nil] {
+        #expect(
+            ConnectionProgressCopy.statusDetail(
+                phase: .discovering, deviceName: "Nikon ZR", friendlyError: nil, path: network
+            ) == "Looking for Nikon ZR on your network.")
+    }
+
+    // A real error still wins over either default.
+    #expect(
+        ConnectionProgressCopy.statusDetail(
+            phase: .failed, deviceName: "Nikon ZR", friendlyError: "The camera said no.",
+            path: .usbC
+        ) == "The camera said no.")
+}

@@ -16,9 +16,15 @@
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
-    <uses-permission
-        android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="32" />
+    <!-- Below 33 this is what NSD discovery needs. From 33 up, discovery uses
+        NEARBY_WIFI_DEVICES above and this is asked for one narrower job: reading the NAME of the
+        network this device is on, which Android gates behind location because an SSID can be
+        looked up geographically. A camera can be reached from a studio router, a home one and a
+        location's, and the name is the only thing that tells those setups apart — an address
+        cannot, because it changes with the lease. Asked for at the moment a router setup needs
+        naming, never at launch, and a refusal costs the operator nothing but the ability to keep
+        more than one router setup per camera. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- Android 12 requires COARSE alongside FINE; approximate is enough for NSD. -->
     <uses-permission
         android:name="android.permission.ACCESS_COARSE_LOCATION"

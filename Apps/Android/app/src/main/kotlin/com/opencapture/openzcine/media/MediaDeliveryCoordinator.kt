@@ -107,6 +107,19 @@ internal class MediaDeliveryCoordinator(
     private val generation = AtomicLong(0L)
     private var workJob: Job? = null
 
+    /**
+     * The Frame.io run stays on the media surface that owns the network hop, project pick, and
+     * result sentence — but the overlay's Cancel is here, so the running job is registered here
+     * too. Cancelling only [workJob] (null for the whole upload) left Cancel doing nothing while
+     * a multi-gigabyte upload continued.
+     */
+    private var externalJob: Job? = null
+
+    /** Cache pre-pass store; the same private root the media surfaces resolve artifacts from. */
+    private val cacheStore: MediaCacheStore by lazy {
+        MediaCacheStore(appContext.noBackupFilesDir.resolve("media-cache").toPath())
+    }
+
     var overlayState by mutableStateOf<MediaDeliveryOverlayState?>(null)
         private set
     var completionToast by mutableStateOf<String?>(null)
@@ -124,25 +137,53 @@ internal class MediaDeliveryCoordinator(
         generation.incrementAndGet()
         workJob?.cancel()
         workJob = null
+        externalJob?.cancel()
+        externalJob = null
         overlayState = null
         isExpanded = false
     }
+
+    /**
+     * Registers the media surface's Frame.io job so [cancel] reaches the upload it is narrating.
+     * Pass null when that job finishes.
+     */
+    fun trackExternalDelivery(job: Job?) {
+        externalJob = job
+        // A run that ends during the cache pre-pass — nothing cached, so no upload state ever
+        // follows — must still take its own progress bar down.
+        if (job == null && overlayState?.isCaching == true && workJob?.isActive != true) {
+            overlayState = null
+            isExpanded = false
+        }
+    }
+
+    /**
+     * Caches the selection from the camera and reports it on the shared overlay, for the one
+     * destination whose upload the media surface still drives itself (Frame.io).
+     */
+    suspend fun cacheFromCamera(
+        destination: MediaDeliveryKind,
+        selection: List<MediaDeliverySelection>,
+        cameraTransferAvailable: Boolean,
+    ): MediaDeliveryCachePass = runCachePass(destination, selection, cameraTransferAvailable)
 
     /**
      * Stages complete cache entries, optionally bakes a LUT, then opens the
      * system share sheet. Progress is published for the full prep path.
      */
     fun beginNativeShare(
-        items: List<MediaDeliveryWorkItem>,
+        selection: List<MediaDeliverySelection>,
         configuration: MediaDeliveryConfiguration,
+        cameraTransferAvailable: Boolean,
         onShareReady: (List<StagedMediaShare>, String?) -> Unit,
     ) {
-        if (items.isEmpty()) return
+        if (selection.isEmpty()) return
         start(
             destination = MediaDeliveryKind.NATIVE_SHARE,
-            items = items,
+            selection = selection,
             configuration = configuration,
-        ) { prepared, gen ->
+            cameraTransferAvailable = cameraTransferAvailable,
+        ) { prepared, items, uncachedCount, gen ->
             if (generation.get() != gen) return@start
             publish(
                 MediaDeliveryOverlayState(
@@ -153,9 +194,14 @@ internal class MediaDeliveryCoordinator(
                     filename = items.last().clip.filename,
                 ),
             )
+            // A clip the camera wouldn't hand over rides along in the share text rather than
+            // disappearing between selection and chooser (iOS `partialNote`).
             val metadata =
-                mediaDeliveryMetadataSummary(items.map { it.clip })
-                    .takeIf { configuration.includeMetadata }
+                listOfNotNull(
+                    uncachedClipsMessage(uncachedCount).takeIf { uncachedCount > 0 },
+                    mediaDeliveryMetadataSummary(items.map { it.clip })
+                        .takeIf { configuration.includeMetadata },
+                ).joinToString(separator = "\n").ifEmpty { null }
             val shareCache = appContext.cacheDir.toPath()
             val stager = MediaShareStager(shareCache)
             try {
@@ -189,39 +235,41 @@ internal class MediaDeliveryCoordinator(
 
     /** Stages + optional LUT bake, then writes complete videos to Gallery. */
     fun beginSaveToPhotos(
-        items: List<MediaDeliveryWorkItem>,
+        selection: List<MediaDeliverySelection>,
         configuration: MediaDeliveryConfiguration,
+        cameraTransferAvailable: Boolean,
     ) {
-        if (items.isEmpty()) return
-        val savableItems =
-            items.filter {
+        if (selection.isEmpty()) return
+        val savableSelection =
+            selection.filter {
                 it.clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
                     it.clip.contentKind == MediaContentKind.STILL_PHOTO
             }
-        if (savableItems.isEmpty()) {
-            showToast("No complete cached video or photo is ready to save.")
+        if (savableSelection.isEmpty()) {
+            showToast("No video or photo in the selection can be saved to Gallery.")
             return
         }
         start(
             destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
-            items = savableItems,
+            selection = savableSelection,
             configuration = configuration,
-        ) { prepared, gen ->
+            cameraTransferAvailable = cameraTransferAvailable,
+        ) { prepared, items, uncachedCount, gen ->
             if (generation.get() != gen) return@start
             publish(
                 MediaDeliveryOverlayState(
                     destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
-                    totalClips = savableItems.size,
-                    clipIndex = savableItems.size,
+                    totalClips = items.size,
+                    clipIndex = items.size,
                     clipFraction = 0.85,
-                    filename = savableItems.last().clip.filename,
+                    filename = items.last().clip.filename,
                 ),
             )
             val artifacts =
                 prepared.mapIndexed { index, preparedArtifact ->
                     MediaGalleryArtifact.fromStagedShare(
                         preparedArtifact.share,
-                        mediaCaptureTimestampMillis(savableItems[index].clip.captureDate)
+                        mediaCaptureTimestampMillis(items[index].clip.captureDate)
                             .takeIf { configuration.includeMetadata },
                     )
                 }
@@ -233,7 +281,16 @@ internal class MediaDeliveryCoordinator(
                         }
                     }
                 if (generation.get() != gen) return@start
-                finish(gen, toast = result.operatorMessage(MediaGalleryOmissions()))
+                finish(
+                    gen,
+                    toast =
+                        result.operatorMessage(
+                            MediaGalleryOmissions(
+                                nonVideoCount = selection.size - savableSelection.size,
+                                incompleteCount = uncachedCount,
+                            ),
+                        ),
+                )
             } finally {
                 cleanupPrepared(prepared)
             }
@@ -277,7 +334,9 @@ internal class MediaDeliveryCoordinator(
                 showToast(state.message)
             }
             FrameioDeliveryState.Idle -> {
-                if (workJob?.isActive != true) {
+                // Idle also arrives while the media surface is still caching this run's clips
+                // from the camera; clearing then would erase the pre-pass overlay mid-transfer.
+                if (workJob?.isActive != true && externalJob?.isActive != true) {
                     // Leave toast alone; only clear active bar when idle and no local job.
                     if (overlayState?.destination == MediaDeliveryKind.FRAMEIO) {
                         overlayState = null
@@ -288,11 +347,35 @@ internal class MediaDeliveryCoordinator(
         }
     }
 
+    /** Publishes the sequential camera-cache pre-pass on the shared overlay (iOS `isCaching`). */
+    private suspend fun runCachePass(
+        destination: MediaDeliveryKind,
+        selection: List<MediaDeliverySelection>,
+        cameraTransferAvailable: Boolean,
+    ): MediaDeliveryCachePass =
+        cacheSelectionForDelivery(
+            selection = selection,
+            cacheStore = cacheStore,
+            cameraTransferAvailable = cameraTransferAvailable,
+        ) { index, count, item, fraction ->
+            publish(
+                MediaDeliveryOverlayState(
+                    destination = destination,
+                    totalClips = count,
+                    clipIndex = index,
+                    clipFraction = fraction,
+                    filename = item.clip.filename,
+                    isCaching = true,
+                ),
+            )
+        }
+
     private fun start(
         destination: MediaDeliveryKind,
-        items: List<MediaDeliveryWorkItem>,
+        selection: List<MediaDeliverySelection>,
         configuration: MediaDeliveryConfiguration,
-        afterPrepare: suspend (List<PreparedClip>, Long) -> Unit,
+        cameraTransferAvailable: Boolean,
+        afterPrepare: suspend (List<PreparedClip>, List<MediaDeliveryWorkItem>, Int, Long) -> Unit,
     ) {
         val gen = generation.incrementAndGet()
         workJob?.cancel()
@@ -300,18 +383,35 @@ internal class MediaDeliveryCoordinator(
         publish(
             MediaDeliveryOverlayState(
                 destination = destination,
-                totalClips = items.size,
+                totalClips = selection.size,
                 clipIndex = 1,
                 clipFraction = 0.0,
-                filename = items.first().clip.filename,
+                filename = selection.first().clip.filename,
             ),
         )
         workJob =
             scope.launch {
                 val shareCache = appContext.cacheDir.toPath()
                 val stager = MediaShareStager(shareCache)
-                val prepared = ArrayList<PreparedClip>(items.size)
+                val prepared = ArrayList<PreparedClip>(selection.size)
                 try {
+                    // One job spans cache → export → hand-off, so Cancel stops the whole run.
+                    val pass = runCachePass(destination, selection, cameraTransferAvailable)
+                    val items = pass.items
+                    if (generation.get() != gen) return@launch
+                    if (items.isEmpty()) {
+                        finish(
+                            gen,
+                            toast =
+                                if (pass.uncachedCount > 0) {
+                                    "${uncachedClipsMessage(pass.uncachedCount)} " +
+                                        "Check the camera connection and try again."
+                                } else {
+                                    "Nothing in the selection is ready to deliver."
+                                },
+                        )
+                        return@launch
+                    }
                     items.forEachIndexed { index, item ->
                         ensureActive()
                         if (generation.get() != gen) return@launch
@@ -363,7 +463,7 @@ internal class MediaDeliveryCoordinator(
                             }
                         prepared += PreparedClip(share = baked.share, prepared = baked)
                     }
-                    afterPrepare(prepared, gen)
+                    afterPrepare(prepared, items, pass.uncachedCount, gen)
                 } catch (error: CancellationException) {
                     cleanupPrepared(prepared)
                     if (generation.get() == gen) {

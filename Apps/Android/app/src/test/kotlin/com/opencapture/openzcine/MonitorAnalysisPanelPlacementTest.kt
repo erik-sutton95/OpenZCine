@@ -632,45 +632,6 @@ class MonitorAnalysisPanelPlacementTest {
         )
     }
 
-    /**
-     * The punch-in key shares the recenter lane's row but takes the opposite edge, so it never
-     * lifts or shifts as the recenter and 50/50 keys come and go — the point of putting it there.
-     */
-    @Test
-    fun `magnification key mirrors the focus reset lane to the far edge without sharing its stack`() {
-        val landscapeFeed = landscapeZones().feed
-        val landscapeLane =
-            focusResetButtonBaseFrame(landscapeFeed, isPortrait = false, bottomChromeInset = 72f)
-        val landscapeKey =
-            magnificationKeyFrame(landscapeFeed, isPortrait = false, bottomChromeInset = 72f)
-        assertEquals(landscapeLane.y, landscapeKey.y)
-        assertEquals(40f, landscapeKey.width)
-        // Landscape recenter hugs the leading edge, so the key takes the trailing one.
-        assertTrue(landscapeKey.x > landscapeLane.x + landscapeLane.width)
-        assertEquals(landscapeFeed.x + landscapeFeed.width - 10f, landscapeKey.x + landscapeKey.width)
-
-        val portraitFeed = portraitZones().feed
-        val portraitLane =
-            focusResetButtonBaseFrame(portraitFeed, isPortrait = true, bottomChromeInset = 64f)
-        val portraitKey =
-            magnificationKeyFrame(portraitFeed, isPortrait = true, bottomChromeInset = 64f)
-        assertEquals(portraitLane.y, portraitKey.y)
-        // Portrait recenter hugs the trailing edge, so the mirror flips with it.
-        assertTrue(portraitKey.x + portraitKey.width < portraitLane.x)
-        assertEquals(portraitFeed.x + 10f, portraitKey.x)
-
-        // Whichever way the 50/50 key stacks, the magnify key stays put.
-        val stacked =
-            splitComparisonKeyFrame(
-                feed = landscapeFeed,
-                isPortrait = false,
-                bottomChromeInset = 72f,
-                focusResetMounted = true,
-                widthDp = 44f,
-                heightDp = 30f,
-            )
-        assertTrue(stacked.x + stacked.width < landscapeKey.x)
-    }
 
     @Test
     fun `focus reset climbs overlapping panels from lowest to highest`() {

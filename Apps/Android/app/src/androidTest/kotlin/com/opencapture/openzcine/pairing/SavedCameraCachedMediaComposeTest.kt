@@ -32,13 +32,18 @@ class SavedCameraCachedMediaComposeTest {
         composeRule.setContent {
             OpenZCineTheme {
                 Box(Modifier.fillMaxSize().background(Color.Black).padding(16.dp)) {
+                    val record = camera("camera-a", "A Camera")
                     SavedCameraRow(
-                        record = camera("camera-a", "A Camera"),
-                        isDiscovered = false,
+                        group = listOf(record),
+                        active = record,
+                        isDiscovered = { false },
                         enabled = true,
                         onConnect = {},
                         onRename = {},
                         onRemove = {},
+                        onAddSetup = {},
+                        onForgetSetup = {},
+                onRenameSetup = {},
                     )
                 }
             }

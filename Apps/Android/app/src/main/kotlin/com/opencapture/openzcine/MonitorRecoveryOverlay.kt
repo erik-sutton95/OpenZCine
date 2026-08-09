@@ -19,6 +19,12 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -46,10 +52,24 @@ internal fun MonitorRecoveryOverlay(
     modifier: Modifier = Modifier,
 ) {
     if (state is MonitorRecoveryState.Idle) return
+    // The first automatic retry fires immediately and usually heals a blip within a second —
+    // flashing the full card for that was the "retry prompt for like a sec" (iOS twin). The
+    // card waits out a short grace on attempt 1; attempt 2+ and the give-up state show at once.
+    var graceElapsed by remember { mutableStateOf(false) }
+    LaunchedEffect(state !is MonitorRecoveryState.Idle) {
+        graceElapsed = false
+        delay(2_500)
+        graceElapsed = true
+    }
+    val firstQuietAttempt =
+        state is MonitorRecoveryState.Retrying && state.attempt <= 1 && !graceElapsed
+    if (firstQuietAttempt) return
     val camera = cameraName.trim().ifBlank { stringResource(R.string.recovery_generic_camera) }
     val title =
         when (state) {
             is MonitorRecoveryState.Retrying -> stringResource(R.string.recovery_retrying_title)
+            is MonitorRecoveryState.PausedAfterRepeatedDrops ->
+                stringResource(R.string.recovery_storm_title)
             else -> stringResource(R.string.recovery_lost_title)
         }
     val detail =
@@ -71,6 +91,8 @@ internal fun MonitorRecoveryOverlay(
                         state.attemptsMade,
                     ),
                 )
+            is MonitorRecoveryState.PausedAfterRepeatedDrops ->
+                stringResource(R.string.recovery_storm_detail, camera, state.drops)
             MonitorRecoveryState.Idle -> ""
         }
 

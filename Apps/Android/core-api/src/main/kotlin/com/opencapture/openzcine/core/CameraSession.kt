@@ -481,8 +481,13 @@ public data class CameraPropertySnapshot(
     val shutterAngle: String? = null,
     /** Current aperture label. */
     val iris: String? = null,
-    /** White-balance mode label. */
+    /** MOVIE white-balance mode label (`MovWhiteBalance`). */
     val whiteBalanceMode: String? = null,
+    /**
+     * STILLS white-balance mode label (`WhiteBalance`, 0x5005) — a different camera setting that
+     * happens to decode through the same table. See [activeWhiteBalanceMode].
+     */
+    val stillWhiteBalanceMode: String? = null,
     /** White-balance colour temperature in Kelvin when the body reports one. */
     val whiteBalanceKelvin: Int? = null,
     /** Recording resolution label. */
@@ -578,7 +583,21 @@ public data class CameraPropertySnapshot(
     val evIndicatorLit: Boolean? = null,
     /** Current descriptor-dependent camera-control capabilities. */
     val controlCapabilities: CameraControlCapabilities = CameraControlCapabilities(),
-)
+) {
+    /**
+     * The white-balance mode belonging to the side of the camera currently on screen.
+     *
+     * Falls back to the other one only when its own has never been reported, so a body that has
+     * only ever pushed one of the two still reads out — but a value from the wrong side never
+     * overwrites a value from the right one. Mirrors shared-core `activeWBMode(photography:)`.
+     */
+    public fun activeWhiteBalanceMode(photography: Boolean): String? =
+        if (photography) {
+            stillWhiteBalanceMode ?: whiteBalanceMode
+        } else {
+            whiteBalanceMode ?: stillWhiteBalanceMode
+        }
+}
 
 /** The non-terminal reason an Android property refresh could not update the snapshot. */
 public enum class CameraPropertyRefreshFailure {

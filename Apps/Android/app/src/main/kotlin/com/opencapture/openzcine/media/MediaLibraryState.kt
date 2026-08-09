@@ -453,6 +453,7 @@ internal class MediaLibraryListingCheckpoint(
     private val commitCatalog: (List<MediaClipRecord>, Boolean) -> List<MediaClipRecord>,
 ) {
     private val clipsByIdentity = LinkedHashMap<String, MediaClipRecord>()
+    private val listedIdentities = LinkedHashSet<String>()
     private var dirty = false
     private var committed = false
 
@@ -468,6 +469,7 @@ internal class MediaLibraryListingCheckpoint(
         check(!committed) { "Camera listing checkpoint is already committed." }
         addedClips.forEach { incoming ->
             val key = incoming.libraryKey(cameraID)
+            listedIdentities += key
             val merged = mergeAuthoritativeObjectSize(clipsByIdentity[key], incoming)
             if (clipsByIdentity[key] != merged) {
                 clipsByIdentity[key] = merged
@@ -475,7 +477,9 @@ internal class MediaLibraryListingCheckpoint(
             }
         }
         removedObjects.forEach { identity ->
-            if (clipsByIdentity.remove(identity.libraryKey(cameraID)) != null) dirty = true
+            val key = identity.libraryKey(cameraID)
+            listedIdentities -= key
+            if (clipsByIdentity.remove(key) != null) dirty = true
         }
     }
 
@@ -485,10 +489,32 @@ internal class MediaLibraryListingCheckpoint(
      * loading, so commit re-reads exact current identities and carries any
      * authoritative size resolved during that window over the stale sentinel
      * held by this checkpoint.
+     *
+     * The index is a CACHE of what the card holds; the camera is the truth. A
+     * pass that walked every object may therefore drop the rows it never saw —
+     * clips deleted in-camera, which otherwise stayed in the grid forever as
+     * ghosts that cannot play, share, or be deleted (iOS `applyCameraRemoval`).
+     * Only a COMPLETE pass may prune: a cancelled or failed one has simply not
+     * reached the rest of the card yet. A row with a complete local copy
+     * survives with its identity intact, because the cache artifact is keyed on
+     * exactly that (storage, handle, date, name).
      */
-    fun commit(): List<MediaClipRecord> {
+    fun commit(
+        prunesUnlistedClips: Boolean = false,
+        hasLocalCopy: (MediaClipRecord) -> Boolean = { false },
+    ): List<MediaClipRecord> {
         check(!committed) { "Camera listing checkpoint is already committed." }
         committed = true
+        if (prunesUnlistedClips) {
+            val ghosts =
+                clipsByIdentity.filterKeys { it !in listedIdentities }
+                    .filterValues { !hasLocalCopy(it) }
+                    .keys
+            if (ghosts.isNotEmpty()) {
+                ghosts.forEach(clipsByIdentity::remove)
+                dirty = true
+            }
+        }
         val candidate =
             MediaLibraryFiltering.sort(
                 clipsByIdentity.values.toList(),

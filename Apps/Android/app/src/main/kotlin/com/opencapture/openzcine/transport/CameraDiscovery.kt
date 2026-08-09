@@ -18,7 +18,23 @@ data class DiscoveredCamera(
     val name: String,
     val host: String,
     val port: Int,
-)
+    /**
+     * The device that says it is holding this camera, when one does. A held camera
+     * is deliberately never probed — a PTP `Init` from a second initiator drops the
+     * first one's session — but shielded is not the same as absent, and dropping it
+     * from the list is what leaves an operator searching for a camera the app can
+     * already name. See iOS `DiscoverySource.heldByAnotherDevice`.
+     */
+    val heldByDeviceName: String? = null,
+) {
+    /** Whether another device holds this camera, so connecting would take it from them. */
+    val isHeldByAnotherDevice: Boolean
+        get() = heldByDeviceName != null
+
+    /** What the row says under the name — the holder if there is one, else nothing. */
+    val heldByLabel: String?
+        get() = heldByDeviceName?.takeIf(String::isNotBlank)?.let { "In use by \$it" }
+}
 
 /**
  * Platform-free mDNS browse events — the thin seam over [android.net.nsd.NsdManager]
@@ -29,7 +45,13 @@ sealed interface NsdEvent {
     data class ServiceFound(val serviceName: String) : NsdEvent
 
     /** A found service resolved to a reachable host/port. */
-    data class ServiceResolved(val serviceName: String, val host: String, val port: Int) : NsdEvent
+    data class ServiceResolved(
+        val serviceName: String,
+        val host: String,
+        val port: Int,
+        /** DNS-SD TXT attributes, UTF-8 decoded. The relay directory reads `ch` from here. */
+        val attributes: Map<String, String> = emptyMap(),
+    ) : NsdEvent
 
     /** A previously found service disappeared from the network. */
     data class ServiceLost(val serviceName: String) : NsdEvent
@@ -48,9 +70,8 @@ interface NsdBrowser {
 
 /**
  * Camera discovery over mDNS/NSD, mirroring the iOS Bonjour browse
- * (`ios/Runner/NativeCameraDiscovery.swift`): the ZR advertises `_ptp._tcp`,
- * and in camera-AP mode it always sits at a fixed address
- * ([NIKON_ZR_ACCESS_POINT_HOST]) with no mDNS required.
+ * (`ios/Runner/NativeCameraDiscovery.swift`): the ZR advertises `_ptp._tcp`.
+ * Camera-AP mode rediscovers on the live link after join — no fixed AP IP.
  */
 class CameraDiscovery(private val browser: NsdBrowser) {
     /**
@@ -87,17 +108,47 @@ class CameraDiscovery(private val browser: NsdBrowser) {
         const val PTP_IP_PORT: Int = 15740
 
         /**
-         * Fixed camera address when the phone joins the ZR's own access
-         * point — mirrors `CameraDiscovery.nikonZRAccessPointHost` in the
-         * shared Swift core.
-         */
-        const val NIKON_ZR_ACCESS_POINT_HOST: String = "192.168.1.1"
-
-        /**
          * Prefix of the camera's own access-point SSID (e.g. `NIKON_ZR_01234`)
          * — mirrors `CameraWiFiSSID.nikonAccessPointPrefix` in the shared core.
          */
         const val NIKON_ZR_SSID_PREFIX: String = "NIKON_ZR_"
+
+        /**
+         * Non-dialable host key for an access-point setup with no learned address.
+         * Mirrors Swift `CameraDiscovery.pendingAccessPointHostPrefix`.
+         */
+        const val PENDING_ACCESS_POINT_HOST_PREFIX: String = "ap:"
+
+        fun pendingAccessPointHostKey(ssid: String?): String {
+            val trimmed = ssid?.trim().orEmpty()
+            return if (trimmed.isNotEmpty()) {
+                PENDING_ACCESS_POINT_HOST_PREFIX + trimmed
+            } else {
+                PENDING_ACCESS_POINT_HOST_PREFIX + "pending"
+            }
+        }
+
+        fun isAccessPointHostKey(host: String): Boolean =
+            host.startsWith(PENDING_ACCESS_POINT_HOST_PREFIX)
+
+        /**
+         * The `a.b.c` of a dotted IPv4 address, or null when it is not one.
+         *
+         * Mirrors Swift `CameraDiscovery.subnetBase(for:)`. A /24 is an assumption, and a
+         * deliberate one: it is what a sweep enumerates and what tells two Wi‑Fi setups apart.
+         * The real prefix is a separate question, asked only when a diagnosis needs it.
+         */
+        fun subnetBase(host: String): String? {
+            val trimmed = host.trim()
+            if (!isSupportedPtpIpDiscoveryHost(trimmed)) return null
+            return trimmed.substringBeforeLast('.').takeIf { it.count { ch -> ch == '.' } == 2 }
+        }
+
+        fun isDialableHost(host: String): Boolean {
+            if (host.isBlank() || isAccessPointHostKey(host)) return false
+            if (host.startsWith("usb:", ignoreCase = true)) return false
+            return isSupportedPtpIpDiscoveryHost(host)
+        }
 
         /**
          * Whether an NSD-resolved host is usable by the current PTP-IP stack.
@@ -108,8 +159,11 @@ class CameraDiscovery(private val browser: NsdBrowser) {
          * ranges. Keep the small parser here instead of crossing JNI: discovery must remain
          * safe and JVM-testable when the optional Swift library is not installed.
          *
-         * The default shared policy deliberately excludes `10/8`, even though it is RFC 1918,
-         * so mDNS discovery does not broaden the camera search beyond the iOS default scope.
+         * Mirrors the shared policy (`CameraDiscovery.swift isPrivateIPv4`): all three RFC 1918
+         * ranges INCLUDING `10/8` — set and travel routers commonly hand out 10.x, and iOS
+         * added it deliberately for exactly that. This filter previously excluded 10/8 (with a
+         * comment claiming the core agreed, which had since stopped being true): a camera on a
+         * 10.x router was discoverable on iOS and invisible on Android.
          */
         internal fun isSupportedPtpIpDiscoveryHost(host: String): Boolean {
             val octets = host.split('.')
@@ -122,16 +176,10 @@ class CameraDiscovery(private val browser: NsdBrowser) {
                 }
             if (values.any { it !in 0..255 }) return false
 
-            return (values[0] == 172 && values[1] in 16..31) ||
+            return values[0] == 10 ||
+                (values[0] == 172 && values[1] in 16..31) ||
                 (values[0] == 192 && values[1] == 168)
         }
 
-        /** Direct-host camera for the camera-AP case; no mDNS browse needed. */
-        fun accessPointCamera(): DiscoveredCamera =
-            DiscoveredCamera(
-                name = "Nikon ZR",
-                host = NIKON_ZR_ACCESS_POINT_HOST,
-                port = PTP_IP_PORT,
-            )
     }
 }

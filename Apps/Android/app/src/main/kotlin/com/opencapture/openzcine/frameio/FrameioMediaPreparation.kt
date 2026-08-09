@@ -338,6 +338,10 @@ internal class AndroidFrameioArtifactPreparer(
                             "The LUT-baked export did not produce a complete video.",
                         )
                     }
+                    // Transformer muxes video and audio only, so the camera's start timecode has
+                    // to be carried across or an NLE can no longer conform this proxy to its
+                    // master. Best effort — never fail a delivery over metadata.
+                    MediaTimecodeTrack.copyTimecodeTrack(artifact.share.file, target)
                     Files.size(target)
                 }
             return FrameioPreparedArtifact(

@@ -92,12 +92,19 @@ internal fun MediaDeliveryPopup(
     frameioController: FrameioDeliveryController?,
     preferredDestination: MediaDeliveryDestination? = null,
     busy: Boolean = false,
+    /**
+     * Pulls the selection off the camera before the internet hop leaves its Wi‑Fi. On the camera
+     * access point this is the only moment the clips are still reachable, so caching afterwards —
+     * as the upload path does on every other network — would find nothing.
+     */
+    onCacheBeforeHop: suspend () -> Unit = {},
     onDismiss: () -> Unit,
     onNativeShare: (MediaDeliveryConfiguration) -> Unit,
     onSaveToGallery: (MediaDeliveryConfiguration) -> Unit,
     onFrameioDeliver: (FrameioDeliveryOptions) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    var cachingForHop by remember { mutableStateOf(false) }
     var step by
         remember(preferredDestination) {
             mutableStateOf(
@@ -163,7 +170,8 @@ internal fun MediaDeliveryPopup(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
             ) {
-                if (!busy && !hopBusy) onDismiss()
+                // Dismissing mid-pre-pass would cancel the transfer with the popup's scope.
+                if (!busy && !hopBusy && !cachingForHop) onDismiss()
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -264,7 +272,12 @@ internal fun MediaDeliveryPopup(
                             MediaDeliveryDestination.FRAMEIO -> {
                                 if (frameioHopGate) {
                                     FrameioHopSection(
-                                        hopBusy = hopBusy,
+                                        busyLabel =
+                                            when {
+                                                cachingForHop -> "Caching from camera…"
+                                                hopBusy -> "Switching networks…"
+                                                else -> null
+                                            },
                                         onHop = { showHopConfirm = true },
                                     )
                                 } else if (frameioController != null) {
@@ -340,7 +353,15 @@ internal fun MediaDeliveryPopup(
                 androidx.compose.material3.TextButton(
                     onClick = {
                         showHopConfirm = false
-                        scope.launch { frameioController.beginInternetHop() }
+                        scope.launch {
+                            cachingForHop = true
+                            try {
+                                onCacheBeforeHop()
+                            } finally {
+                                cachingForHop = false
+                            }
+                            frameioController.beginInternetHop()
+                        }
                     },
                 ) { Text("Hop") }
             },
@@ -496,13 +517,13 @@ private fun FooterActionButton(title: String, enabled: Boolean, onClick: () -> U
 }
 
 @Composable
-private fun FrameioHopSection(hopBusy: Boolean, onHop: () -> Unit) {
+private fun FrameioHopSection(busyLabel: String?, onHop: () -> Unit) {
     Text(
         "Frame.io needs the internet. Hop off the camera's Wi‑Fi to pick a project and upload — the camera reconnects automatically when you're done.",
         style = chromeStyle(13f, FontWeight.Medium),
         color = LiveDesign.muted,
     )
-    if (hopBusy) {
+    if (busyLabel != null) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -513,7 +534,7 @@ private fun FrameioHopSection(hopBusy: Boolean, onHop: () -> Unit) {
                 strokeWidth = 2.dp,
             )
             Text(
-                "Switching networks…",
+                busyLabel,
                 style = chromeStyle(13f, FontWeight.Medium),
                 color = LiveDesign.muted,
             )

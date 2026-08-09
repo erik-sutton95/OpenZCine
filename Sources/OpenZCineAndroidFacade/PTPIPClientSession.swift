@@ -20,13 +20,20 @@
 import Foundation
 import OpenZCineCore
 
-/// Stable Android PTP-IP initiator identity kept separate from the iOS camera profile.
+/// PTP-IP initiator identity for Android — deliberately the *same* identity iOS presents.
+///
+/// Nikon keys a paired-computer profile to the initiator GUID, so sharing it means one
+/// camera-side profile serves every OpenZCine install on either platform: pair a body once
+/// from any device and the rest connect straight to that profile. Android used to send its
+/// own GUID, which made it a stranger to a body paired from an iPhone (`rejectedInitiator`).
 public enum AndroidPTPIPInitiator {
-    /// The 16-byte Android GUID retained across reconnects and upgrades.
-    public static let appGUID = Data("OpenZCineAndroid".utf8)
+    /// Mirrors ``PTPIPInitiator/appGUID``. The Kotlin side sends the same bytes over JNI
+    /// (`PtpIpInitiatorIdentity.guid`); this is the default for the facade's own callers.
+    public static let appGUID = PTPIPInitiator.appGUID
 
-    /// Android's paired-initiator display name.
-    public static let friendlyName = "OpenZCine Android"
+    /// Mirrors ``PTPIPInitiator/friendlyName`` so a profile looks identical whichever
+    /// platform created it.
+    public static let friendlyName = PTPIPInitiator.friendlyName
 }
 
 #if canImport(Android)
@@ -91,6 +98,9 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "\(label) timed out."
         case .unexpectedPacket(let expected, let actual):
             return "Expected \(expected), got PTP-IP packet \(actual.rawValue)."
+        case .initFailed(.busy):
+            return
+                "Another device is connected to this camera. Disconnect it there, then try again."
         case .initFailed(let reason):
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
@@ -390,10 +400,12 @@ private struct AndroidRawControlCatalog: Sendable {
                     ? WhiteBalanceKelvinPolicy.kelvinOptions : [])
                 + stillWhiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
         } else {
-            whiteBalanceValues =
-                (whiteBalanceModes.contains { $0.label == "Color temp" }
+            // Same R3D rule as the iOS drum: no automatic WB presets while recording R3D NE.
+            whiteBalanceValues = PTPCameraPropertyDecoders.whiteBalanceOptions(
+                advertised: (whiteBalanceModes.contains { $0.label == "Color temp" }
                     ? whiteBalanceKelvin.map(\.label) : [])
-                + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+                    + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label),
+                codec: properties.fileType)
         }
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: resolutionFrameRate,
@@ -516,17 +528,21 @@ private struct AndroidRawControlCatalog: Sendable {
         usesNikonZRFallbacks: Bool
     ) -> PTPCameraScreenSizeMode? {
         let currentCodec = recognizedCurrentCodec(properties.fileType)
-        let bareTarget = PTPIPClientSession.bareRecordingModeLabel(label)
-        return screenSizes.first { mode in
-            let presented = screenSizeLabel(
+        // Shared-core ordering, not a first(where:) over OR'd comparisons: the loose clause strips
+        // the `[FX]`/`[DX]` tag from both sides, so a picked `[DX]` label used to land on whichever
+        // FX mode came first. See `pickedModeIndex`.
+        let presentationLabels = screenSizes.map { mode in
+            screenSizeLabel(
                 for: mode,
                 currentCodec: currentCodec,
                 usesNikonZRFallbacks: usesNikonZRFallbacks)
-            if presented == label || mode.label == label { return true }
-            guard !bareTarget.isEmpty else { return false }
-            return PTPIPClientSession.bareRecordingModeLabel(mode.label) == bareTarget
-                || PTPIPClientSession.bareRecordingModeLabel(presented) == bareTarget
         }
+        return NikonZRRawCropPresentation.pickedModeIndex(
+            for: label,
+            presentationLabels: presentationLabels,
+            modeLabels: screenSizes.map(\.label)
+        )
+        .map { screenSizes[$0] }
     }
 
     /// Matches a packed raw to a catalog mode by exact bytes, then by decoded WxH+fps.
@@ -636,6 +652,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// measurements independently of `commandLifecycleLock`.
     private let roundTripLock = NSLock()
     private var latestRoundTripMillisecondsStorage: Double?
+    /// Bytes-per-second across frame fetches, under the same lock as the round-trip average.
+    private var throughputStorage = LinkThroughputSampler()
+    /// The live-view pump's watchdog state, republished every poll and cleared when the pump exits.
+    /// Shares `roundTripLock` with the other two link measurements the health score reads: same
+    /// reader (one score tick), same writer (the pump, which already takes this leaf lock per frame
+    /// in `recordFrameTransfer`).
+    private var liveViewStreamHealthStorage: AndroidLiveViewStreamHealth?
 
     /// Live-view pump state, guarded by `liveViewCondition` (never by
     /// `transactionLock` — the pump holds that per transaction, and stop/join
@@ -743,7 +766,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase(.handshaking, "")
         switch strategy {
         case .savedProfile:
-            return try connectSavedProfile(
+            return try connectSavedProfileSettlingHandoff(
                 host: host,
                 port: port,
                 guid: guid,
@@ -762,7 +785,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             )
         case .restoreProfileThenPairing:
             do {
-                return try connectSavedProfile(
+                return try connectSavedProfileSettlingHandoff(
                     host: host,
                     port: port,
                     guid: guid,
@@ -785,6 +808,43 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     onPhase: onPhase
                 )
             }
+        }
+    }
+
+    /// "Another initiator holds me." The one case this clears by itself is the handoff: the
+    /// other device just disconnected and the body is still tearing its session down. One retry
+    /// after a settle long enough for any teardown — never a fast hammer, which lands
+    /// mid-teardown and wedges the body's network stack (iOS twin: `establishSession`'s busy
+    /// arm). A second busy answer means the other device is genuinely still connected; its
+    /// dedicated copy surfaces. Pairing attempts never come through here — a body on its
+    /// pairing wizard must not be re-probed.
+    private static func connectSavedProfileSettlingHandoff(
+        host: String,
+        port: UInt16,
+        guid: Data,
+        friendlyName: String,
+        timeoutMilliseconds: Int32,
+        onPhase: (CameraConnectionPhase, String) -> Void
+    ) throws -> PTPIPClientSession {
+        do {
+            return try connectSavedProfile(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
+        } catch PTPIPClientSessionError.initFailed(.busy) {
+            Thread.sleep(forTimeInterval: 5)
+            return try connectSavedProfile(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
         }
     }
 
@@ -3164,14 +3224,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 Thread.sleep(forTimeInterval: 0.12)
             }
         }
-        // Photography: moving the point alone never focuses (video's
-        // continuous AF does that part) — drive AF like a half-press, with a
-        // short DeviceReady drain so the body isn't left mid-drive. Subject
-        // tracking latches through the same area change, exactly as in video.
-        // Out-of-focus or a still-busy timeout stays silent; the AF box state
-        // in the header tells the story. [verify-on-HW]
-        if StillCapturePolicy.prefersPhotographyChrome(
-            selector: androidPropertySnapshot.captureSelector)
+        // Moving the point alone never focuses — drive AF like a half-press, with
+        // a short DeviceReady drain so the body isn't left mid-drive. Subject
+        // tracking latches through the same area change. Out-of-focus or a
+        // still-busy timeout stays silent; the AF box state in the header tells
+        // the story.
+        //
+        // This used to key on photography alone, on the assumption that video
+        // always runs continuous AF. A video AF-S body has no such loop, so the
+        // tap moved the box and focused nothing — #272, where AF-F "worked" only
+        // because the camera's own loop chased the box. [verify-on-HW]
+        if StillCapturePolicy.focusPointNeedsAutofocusDrive(
+            focusMode: androidPropertySnapshot.focusMode,
+            photography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector))
         {
             _ = try? transactExpectingOK(.afDrive)
             for _ in 0..<4 {
@@ -3564,6 +3630,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 // event payloads are skipped, while valid-but-unknown event
                 // codes still surface through PTPEvent.rawEventCode.
                 let packet = try event.readPacket()
+                if packet.type == .probeRequest {
+                    // Liveness ping (CIPA DC-005): the body treats a missing ProbeResponse
+                    // as a dead initiator and closes the whole session. Answer immediately;
+                    // a failed send means the link is genuinely gone and ends the drain.
+                    try event.send(PTPIPPacket(type: .probeResponse, payload: packet.payload))
+                    continue
+                }
                 guard let parsed = try? PTPEvent(from: packet) else { continue }
                 onEvent(parsed)
             } catch let error as PTPIPClientSessionError {
@@ -3931,7 +4004,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// thread is running and neither callback has fired yet. `onFrame` and
     /// `onEnded` are then all delivered from that one pump thread; `onEnded`
     /// fires exactly once, after the final frame, whether the stream ends by
-    /// `stopLiveView`, `disconnect`, or a transport error.
+    /// `stopLiveView`, `disconnect`, a transport error, or a watchdog stall.
     ///
     /// Backpressure is latest-wins by construction: frames are *pulled* one at
     /// a time and delivered synchronously, so a slow consumer polls less often
@@ -3991,7 +4064,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(
             commandTransactionTimeout + 2)
         while liveViewPumpActive {
-            guard liveViewCondition.wait(until: deadline) else { return }
+            guard liveViewCondition.wait(until: deadline) else {
+                // The pump overran the bound (a trickling read can hold one transaction alive
+                // past any per-poll timeout). Un-latch the flag so the NEXT start can proceed —
+                // a permanently stuck `liveViewPumpActive` turned every later start into
+                // `liveViewAlreadyActive` and a full reconnect loop. The zombie pump still sees
+                // stopRequested and exits when its read finally returns; its transactions
+                // serialize behind the transaction lock, so the worst case is delay, not
+                // corruption.
+                liveViewPumpActive = false
+                return
+            }
         }
     }
 
@@ -4020,8 +4103,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         for event in events { sink(event) }
     }
 
-    /// Pump body: fetch → deliver → sleep-to-schedule, until stop or a
-    /// transport error, then best-effort `EndLiveView` and exactly one
+    /// Pump body: fetch → deliver → sleep-to-schedule, until stop, a stall, or
+    /// a transport error, then best-effort `EndLiveView` and exactly one
     /// `onEnded`.
     private func runLiveViewPump(
         frameIntervalNanoseconds: UInt64,
@@ -4031,10 +4114,27 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let startNanos = Self.monotonicNanoseconds()
         var pollIndex: UInt64 = 0
         var framesSinceDeviceEventPoll = 0
+        // Arrival is not liveness. A wedged body keeps answering `GetLiveViewImageEx` with the
+        // same cached JPEG, so every frame parses, every readout claims health, and a dead stream
+        // sits there indefinitely (#283). The shared ``LiveViewWatchdog`` is the ONE definition of
+        // that rule — same thresholds the iOS shell runs, so a stall is a stall on both platforms.
+        var watchdog = LiveViewWatchdog()
+        var bodyBusyHoldStart: Date?
         while !liveViewStopIsRequested() {
             do {
+                // The frame fetch is the only transfer big enough to measure the LINK by: a
+                // keep-alive answers in milliseconds on a link too narrow to carry the operator's
+                // preset. Deliberately not an RTT sample — see `recordRoundTrip`.
+                let transferStartNanos = Self.monotonicNanoseconds()
                 let result = try transactExpectingOK(.getLiveViewImageEx, dataPhase: .dataIn)
+                recordFrameTransfer(
+                    bytes: result.data.count,
+                    seconds: Double(Self.monotonicNanoseconds() &- transferStartNanos) / 1e9)
                 let frame = try PTPLiveViewObject.frame(from: result.data)
+                // Signed with the payload, and BEFORE delivery, so the clock measures the camera's
+                // stream rather than the Kotlin consumer's — a replayed cached JPEG is then read
+                // as the stall it is instead of a healthy stream.
+                watchdog.recordGoodFrame(at: Date(), signature: LiveFrameSignature.of(frame.jpeg))
                 focusFrameCondition.lock()
                 latestLiveViewFocus = frame.focus
                 focusFrameGeneration &+= 1
@@ -4052,21 +4152,66 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     deliverPolledDeviceEvents()
                 }
             } catch is PTPLiveViewObjectError {
-                // A single unparsable frame is stream jitter, not a stream
-                // death — skip it, like the iOS watchdog's bad-frame budget.
+                // A single unparsable frame is stream jitter, not a stream death — skip it. The
+                // watchdog's consecutive-bad budget is what separates jitter from a body emitting
+                // garbage, and a good frame clears the streak.
+                watchdog.recordBadFrame()
             } catch let error as PTPIPClientSessionError {
                 // Nikon returns DeviceBusy around movie-rec start/stop and during
                 // body-side encoder handoff. Treating that as stream death called
                 // EndLiveView, and StartLiveView often fails for the rest of the
                 // take — operator-visible as a frozen feed until recording stops.
                 if case .operationRejected(_, .deviceBusy) = error {
-                    // Fall through to schedule sleep and retry the next poll.
+                    // Fall through to schedule sleep and retry the next poll — but only until the
+                    // watchdog's no-frame window, instead of forever. iOS restarts on the FIRST
+                    // busy answer; keeping the retry and bounding it leaves Android strictly more
+                    // patient than the baseline, while a busy spell that outlasts the whole stall
+                    // window still ends the stream — it is a frozen feed by any definition.
                 } else {
                     break  // Hard rejection / closed session: the stream is over.
                 }
             } catch {
                 break  // Transport error: the stream is over.
             }
+            watchdog.check(at: Date())
+            // The signal bars' ONLY honest view of this loop. Neither value can be observed from
+            // Kotlin — the bad frame was swallowed by the catch above and never crossed JNI, and
+            // the shell can only time arrivals — so the score read a degrading body as healthy
+            // right up to the restart. Published per poll, and as a timestamp, so freshness keeps
+            // ageing while a dying fetch sits blocked in the socket read above.
+            publishLiveViewStreamHealth(
+                AndroidLiveViewStreamHealth(
+                    lastGoodFrameAt: watchdog.lastGoodFrameAt,
+                    consecutiveBadFrames: watchdog.consecutiveBadFrames))
+            if watchdog.status == .stalled {
+                // A replaying body whose COMMAND channel still answers is busy on its own screen —
+                // a menu, playback, image review — not dead. Ending the stream restarts it, and
+                // `StartLiveView` forces the body back to its shooting screen: that is what kept
+                // slamming the operator's menu shut every few seconds (#297). Hold with slow pulls
+                // instead; a changed payload ends the hold by itself, and the bounded window keeps
+                // a genuinely wedged body (#283) self-healing, just on a patient clock.
+                //
+                // The probe costs a transaction, so it is only asked on the replay stall it can
+                // explain — a silent link would pay the whole socket timeout to learn nothing.
+                let commandChannelAnswers =
+                    watchdog.isRepeatingLastFrame && (try? pollStillReleaseReadiness()) != nil
+                if BodyBusyHoldPolicy.shouldHold(
+                    isRepeatingLastFrame: watchdog.isRepeatingLastFrame,
+                    commandChannelAnswers: commandChannelAnswers)
+                {
+                    let holdStart = bodyBusyHoldStart ?? Date()
+                    bodyBusyHoldStart = holdStart
+                    if Date().timeIntervalSince(holdStart) < BodyBusyHoldPolicy.maxHoldSeconds {
+                        Thread.sleep(forTimeInterval: BodyBusyHoldPolicy.holdPullIntervalSeconds)
+                        continue
+                    }
+                }
+                // Ending the pump IS the recovery signal: `onEnded` is what the Kotlin frame
+                // source restarts on, and it escalates to a session reconnect after a few rapid
+                // ends — the same restart-then-reconnect two-step the iOS loop runs.
+                break
+            }
+            bodyBusyHoldStart = nil
             // Absolute schedule: poll k is due at start + k × interval. When a
             // fetch overruns, re-anchor to now instead of accumulating debt —
             // an elapsed>=interval gate against a paced source only ever locks
@@ -4080,6 +4225,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 pollIndex = elapsed / frameIntervalNanoseconds
             }
         }
+
+        // No pump, no pump-authored health: the shell's own observations take back over rather than
+        // a frozen streak outliving the stream that produced it (and a restarted pump publishing
+        // its predecessor's verdict on the first poll).
+        publishLiveViewStreamHealth(nil)
 
         // Release the camera's encoder before signalling the stream end —
         // never leave the body streaming to nobody (the heat-audit EndLiveView
@@ -4133,6 +4283,34 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return latestRoundTripMillisecondsStorage
     }
 
+    /// Measured link throughput, or `nil` before the first frame of this session.
+    public func latestLinkThroughputMegabitsPerSecond() -> Double? {
+        roundTripLock.lock()
+        defer { roundTripLock.unlock() }
+        return throughputStorage.megabitsPerSecond
+    }
+
+    /// Live-view stream health as the PUMP sees it, or `nil` when no pump is running — the
+    /// shell's own frame observations then stand. See ``AndroidLiveViewStreamHealth`` for why
+    /// Kotlin cannot produce either value itself.
+    public func latestLiveViewStreamHealth() -> AndroidLiveViewStreamHealth? {
+        roundTripLock.lock()
+        defer { roundTripLock.unlock() }
+        return liveViewStreamHealthStorage
+    }
+
+    private func publishLiveViewStreamHealth(_ health: AndroidLiveViewStreamHealth?) {
+        roundTripLock.lock()
+        liveViewStreamHealthStorage = health
+        roundTripLock.unlock()
+    }
+
+    private func recordFrameTransfer(bytes: Int, seconds: Double) {
+        roundTripLock.lock()
+        throughputStorage.record(bytes: bytes, seconds: seconds)
+        roundTripLock.unlock()
+    }
+
     private func recordRoundTrip(startNanoseconds: UInt64, endNanoseconds: UInt64) {
         guard endNanoseconds > startNanoseconds else { return }
         let milliseconds = Double(endNanoseconds - startNanoseconds) / 1_000_000
@@ -4165,6 +4343,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         // Bound every remaining join before waiting: EndLiveView, media stop,
         // and CloseSession all inherit the shortened command timeout.
         command?.timeoutMilliseconds = 2_000
+        // The event socket gets the same shortened bound: the drain can be blocked in the
+        // liveness-probe answer's send against a stalled link, and teardown holds the
+        // command-lifecycle lock while it waits for the drain to exit.
+        event?.timeoutMilliseconds = 2_000
         #if os(Android)
             // USB shares the same 2 s teardown budget as Wi‑Fi CloseSession.
             // (executeTransactionSynchronously still takes an explicit deadline.)
@@ -4367,8 +4549,36 @@ final class PosixTCPSocket: @unchecked Sendable {
                 newDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
                 socklen_t(MemoryLayout<Int32>.size))
         #endif
-        // ponytail: the iOS twin's keepalive timer tuning arrives with the
-        // Android reconnect machinery — connect/read/disconnect doesn't idle.
+        // Match the iOS twin's socket tuning: keepalive detects a half-open link (an AP that
+        // dropped the association without a FIN) within ~30 s instead of never, and the
+        // enlarged receive window absorbs the ~100 KB per-frame JPEG bursts a lossy AP delivers
+        // in clumps — the default window turns transient congestion into stalled reads.
+        var keepAlive: Int32 = 1
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_KEEPALIVE, &keepAlive,
+            socklen_t(MemoryLayout<Int32>.size))
+        var keepIdle: Int32 = 10
+        var keepInterval: Int32 = 5
+        var keepCount: Int32 = 4
+        #if canImport(Darwin)
+            setsockopt(
+                newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPALIVE, &keepIdle,
+                socklen_t(MemoryLayout<Int32>.size))
+        #else
+            setsockopt(
+                newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPIDLE, &keepIdle,
+                socklen_t(MemoryLayout<Int32>.size))
+        #endif
+        setsockopt(
+            newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPINTVL, &keepInterval,
+            socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(
+            newDescriptor, Int32(IPPROTO_TCP), TCP_KEEPCNT, &keepCount,
+            socklen_t(MemoryLayout<Int32>.size))
+        var receiveBuffer: Int32 = 512 * 1024
+        setsockopt(
+            newDescriptor, SOL_SOCKET, SO_RCVBUF, &receiveBuffer,
+            socklen_t(MemoryLayout<Int32>.size))
 
         let flags = fcntl(newDescriptor, F_GETFL, 0)
         if flags >= 0 {
@@ -4425,7 +4635,6 @@ final class PosixTCPSocket: @unchecked Sendable {
 
     func send(_ packet: PTPIPPacket) throws {
         let data = Data(packet.serializedBytes)
-        let descriptor = try currentDescriptor()
         #if canImport(Darwin)
             let sendFlags: Int32 = 0
         #else
@@ -4435,6 +4644,8 @@ final class PosixTCPSocket: @unchecked Sendable {
         try data.withUnsafeBytes { rawBuffer in
             guard let base = rawBuffer.baseAddress else { return }
             while offset < data.count {
+                // Re-read per iteration — see readExact's fd-reuse note.
+                let descriptor = try currentDescriptor()
                 try waitForDescriptor(descriptor, events: Int16(POLLOUT), label: "\(label) send")
                 let sent = platformSend(
                     descriptor, base.advanced(by: offset), data.count - offset, sendFlags)
@@ -4469,8 +4680,11 @@ final class PosixTCPSocket: @unchecked Sendable {
     }
 
     private func readExact(byteCount: Int) throws -> Data {
-        let descriptor = try currentDescriptor()
         while readBuffer.availableCount < byteCount {
+            // Re-read per iteration: a close() from teardown recycles the fd number, and a
+            // stale cached descriptor would silently recv() off whatever socket the OS handed
+            // that number to next — a cross-connection PTP stream desync.
+            let descriptor = try currentDescriptor()
             try waitForDescriptor(descriptor, events: Int16(POLLIN), label: "\(label) receive")
             let remaining = byteCount - readBuffer.availableCount
             let maximumLength = min(max(remaining, 4096), 256 * 1024)

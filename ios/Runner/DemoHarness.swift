@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 import UIKit
 import os
@@ -22,6 +23,10 @@ enum DemoHarness {
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
     static let panelTab = value("ZC_DEMO_PANEL_TAB")
+    /// `ZC_DEMO_WIZARD_EXPANDED=1` seeds the wizard transport card's nested options open —
+    /// expansion is a tap, unreachable headless, and the expanded overflow is what screenshots
+    /// must check.
+    static let wizardExpanded = flag("ZC_DEMO_WIZARD_EXPANDED")
     /// `ZC_DEMO_LIVE_GUIDE_STEP=camera|assist|system` opens a deterministic guide card.
     static let liveGuideStep = value("ZC_DEMO_LIVE_GUIDE_STEP")
     /// `ZC_DEMO_RED_BLOCKED=ap|off` forces the RED download blocked state for screenshots.
@@ -35,11 +40,48 @@ enum DemoHarness {
     /// `ZC_DEMO_CPU_FEED=1` forces the old `UIImageView` feed path back, for an A/B against the
     /// default GPU-native renderer. See `FeedRenderMode`.
     static let forceCPUFeed = flag("ZC_DEMO_CPU_FEED")
+    /// `ZC_DEMO_FEED_SCALER=lanczos|metalfx|super` seeds which upscaler the feed starts on, for an
+    /// A/B on a device that supports more than one. Prefix match, so `metal` and `super` do. The
+    /// Display settings row switches it live; this is for a launch that has to start there.
+    /// See `FeedUpscaleSwitch`.
+    static let forcedFeedUpscaler = value("ZC_DEMO_FEED_SCALER").flatMap { raw in
+        FeedUpscaler.allCases.first { $0.rawValue.lowercased().hasPrefix(raw.lowercased()) }
+    }
+    /// `ZC_DEMO_SR_STAGE=input` presents the super-resolution model's INPUT buffer instead of its
+    /// output, converted back the same way.
+    ///
+    /// The two colour legs fail identically from the outside — a buffer nobody wrote reads as flat
+    /// green either way — so this splits them: a picture here means the write leg works and the
+    /// fault is downstream of the model; green here means the write leg is what is silent.
+    static let superResolutionStage = value("ZC_DEMO_SR_STAGE")
+    /// `ZC_DEMO_DENOISE=<0…1>` runs VideoToolbox's temporal noise filter over the live feed at
+    /// that strength. Env rather than a tool because it is unproven: the super-resolution
+    /// processor in the same family completes without error and writes nothing, and this is the
+    /// experiment that says whether that is one broken processor or the whole family.
+    static let liveDenoiseStrength = value("ZC_DEMO_DENOISE").flatMap(Float.init)
+    /// `ZC_DEMO_CPU_DECODE=1` forces the ImageIO decode back, for an A/B against the hardware
+    /// JPEG path. See `FrameDecoder`.
+    static let forcesCPUJPEGDecode = flag("ZC_DEMO_CPU_DECODE")
+
+    /// `ZC_DEMO_BLOCK_SMOOTH=<strength>` (0…1) enables variance-gated flat-region smoothing, and
+    /// `ZC_DEMO_BLOCK_GATE=<levels>` sets the flatness threshold it disengages at (default 5, in
+    /// levels out of 255). `ZC_DEMO_BLOCK_DITHER=<levels>` adds masking noise (try 2–4).
+    ///
+    /// Env rather than a setting because none of these have been calibrated against a real camera
+    /// frame — they exist to be swept on hardware and relaunched, and the winning numbers become a
+    /// real operator control (and a shared-core constant for the Android shells) afterwards.
+    static let blockSmoothStrength = value("ZC_DEMO_BLOCK_SMOOTH").flatMap(Double.init)
+    static let blockSmoothGateLevels = value("ZC_DEMO_BLOCK_GATE").flatMap(Double.init)
+    static let blockDitherLevels = value("ZC_DEMO_BLOCK_DITHER").flatMap(Double.init)
     /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
     /// rasterizer — the baseline for pixel-diff look-regression checks.
     static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")
     /// `ZC_DEMO_WIFI_SCANNER=scan|manual` opens the Wi-Fi credential scanner for screenshots.
     static let cameraWiFiScannerMode = value("ZC_DEMO_WIFI_SCANNER")
+    /// `ZC_DEMO_WIFI_OFF=1` makes the camera-AP flows treat the Wi-Fi radio as switched off, so
+    /// the "Wi-Fi is off" prompt can be captured — the Simulator borrows the Mac's radio and can
+    /// never reach that state for real.
+    static let wiFiRadioOff = flag("ZC_DEMO_WIFI_OFF")
     /// `ZC_DEMO_PLAYBACK_CLEAN_VIEW=1` opens the clip player with its chrome already hidden, so
     /// the clean view and its "tap to show controls" hint can be captured headlessly. Synthetic
     /// taps do not reach this app, so the state is otherwise only reachable by hand.
@@ -223,6 +265,15 @@ enum DemoHarness {
                 if model.liveFrameImage == nil {
                     model.demoSelectFeedImage(1)
                 }
+                if let raw = env["ZC_DEMO_FEED_ROTATION"].flatMap(UInt8.init),
+                    let rotation = PTPLiveViewRotation(rawValue: raw)
+                {
+                    // Vertical-mode capture: stage the body-rotation byte (1 grip up, 2 grip
+                    // down, 3 upside down) so the rotated feed layout can be screenshot
+                    // without a camera. The demo still is landscape, so its content reads
+                    // sideways — exactly what a vertically held body sends before rotation.
+                    model.liveFeedRotation = rotation
+                }
                 if env["ZC_DEMO_CODEC_DESCRIPTOR"] == "1" {
                     // Demo/screenshot affordance: stage a Z6III-shaped `MovFileType` descriptor
                     // (H.264 8-bit, plus H.265 at BOTH depths) and put the body on H.265 10-bit,
@@ -250,6 +301,22 @@ enum DemoHarness {
                     // Demo/screenshot affordance: launch straight into a DISP mode (live/clean/
                     // command) for headless mode-state captures.
                     model.displayMode = mode
+                }
+                if let raw = env["ZC_DEMO_RELAY_END_AFTER"], let seconds = Int(raw) {
+                    // Verification affordance: a deliberate operator disconnect on a timer, so
+                    // the broadcast-ended path (watchers kicked to the camera list) can be
+                    // proven from a second simulator without tapping this one.
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
+                        model.disconnect()
+                    }
+                }
+                if let holder = env["ZC_DEMO_RELAY_HOLDER"], !holder.isEmpty {
+                    // Demo/screenshot affordance: stage the surrendered-control broadcast state
+                    // (a watcher holds the token) so the dimmed strip + REVOKE pill are
+                    // capturable without a second device.
+                    model.isRelayBroadcasting = true
+                    model.relayControlHeldBy = holder
                 }
                 if env["ZC_DEMO_RECORDING"] == "1" {
                     // Demo/screenshot affordance: stage the recording state (REC chip, tally
@@ -296,10 +363,23 @@ enum DemoHarness {
                         model.captureStill()
                     }
                 }
+                if env["ZC_DEMO_WATCHER"] == "1" {
+                    // Watcher-chrome screenshot hook: the demo feed keeps pumping frames, but the
+                    // chrome derives from availability — `.relay` source WITHOUT camera control
+                    // (the demo session normally counts as control, so suppress it) unmounts
+                    // record/capture and arms the freed-band zone refinement, exactly as on a
+                    // real joined watcher.
+                    model.videoSource = .relay
+                    model.demoSuppressesCameraControl = true
+                }
                 if env["ZC_DEMO_RELAY_HOST"] == "1" {
                     // Verification affordance: broadcast the demo still through the real relay
                     // path so a second simulator can join and prove the whole chain. Demo-only, so
                     // the ticker deliberately runs for the app's lifetime.
+                    if let code = env["ZC_DEMO_RELAY_PASSCODE"] {
+                        // Before the broadcast starts, so the listener comes up already gated.
+                        model.setRelayWatcherPasscode(code)
+                    }
                     model.setRelayBroadcasting(true)
                     if env["ZC_DEMO_RELAY_GRANT"] == "1" {
                         // Auto-answer the first request so the grant path runs without a tap.
@@ -602,13 +682,17 @@ enum DemoHarness {
                 }
                 if let raw = env["ZC_DEMO_SESSION_LOST"] {
                     // Demo/screenshot affordance: stage the dropped-session recovery affordance
-                    // over the held frame (`retrying` mid-loop, anything else = budget spent), so
-                    // the #253/#254 recovery UI can be captured without unplugging a real camera.
+                    // over the held frame (`retrying` mid-loop, `storm` = drop-storm pause,
+                    // anything else = budget spent), so the #253/#254 recovery UI can be
+                    // captured without unplugging a real camera.
                     model.connectionProgressDeviceName = "Nikon ZR"
-                    model.forceSessionRecoveryState(
-                        raw == "retrying"
-                            ? .retrying(attempt: 2, maxAttempts: 8)
-                            : .waitingForOperator(attemptsMade: 8))
+                    let staged: SessionRecoveryState =
+                        switch raw {
+                        case "retrying": .retrying(attempt: 2, maxAttempts: 8)
+                        case "storm": .pausedAfterRepeatedDrops(drops: 3)
+                        default: .waitingForOperator(attemptsMade: 8)
+                        }
+                    model.forceSessionRecoveryState(staged)
                 }
                 if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
                     // Demo/screenshot affordance: start in a specific display mode (live/clean/command).
@@ -637,6 +721,20 @@ enum DemoHarness {
                         ]
                     )
                 }
+            }
+            if superResolutionStage == "input" {
+                FeedUpscaleSwitch.presentsSuperResolutionInput = true
+            }
+            if let strength = liveDenoiseStrength {
+                LiveDenoiseSwitch.shared.strength = strength
+                LiveDenoiseSwitch.shared.enabled = strength > 0
+            }
+            if let upscaler = forcedFeedUpscaler {
+                // Outside the AUTOSTART block: the settings row that shows this is reachable
+                // without a demo session, and a real camera session is the point of the A/B.
+                // Through `supported(or:)` like every other entry — naming an upscaler this device
+                // does not have must land somewhere real, not on a setting that reads as active.
+                FeedUpscaleSwitch.shared.upscaler = .supported(or: upscaler)
             }
             if env["ZC_DEMO_OPEN_RED"] != nil {
                 // Demo/screenshot affordance: open the RED download cover on launch (pair with
@@ -680,9 +778,27 @@ enum DemoHarness {
                 // covers the non-autostart launch path.
                 model.preferences.portraitFeedAspect = aspect
             }
+            if let endpoint = env["ZC_DEMO_RELAY_JOIN_HOST"],
+                let colon = endpoint.lastIndex(of: ":"),
+                let port = UInt16(endpoint[endpoint.index(after: colon)...])
+            {
+                // Direct-endpoint join (host:port), bypassing Bonjour — cross-platform wire
+                // verification through adb forward, where mDNS cannot cross network segments.
+                let host = String(endpoint[..<colon])
+                model.joinRelay(
+                    MonitorRelayDiscovery(
+                        id: "direct", name: "Direct",
+                        endpoint: .hostPort(
+                            host: NWEndpoint.Host(host),
+                            port: NWEndpoint.Port(rawValue: port) ?? 15_750)))
+            }
             if env["ZC_DEMO_RELAY_JOIN"] == "1" {
                 // Verification affordance: browse for a broadcasting device and join the first one
                 // that appears, so the viewer half needs no taps to reach.
+                if let code = env["ZC_DEMO_RELAY_JOIN_PASSCODE"] {
+                    // Stands in for the code the operator typed on a previous join.
+                    model.demoRelayJoinPasscode = code
+                }
                 Task { @MainActor in
                     model.startRelayBrowsing()
                     for _ in 0..<120 {
@@ -736,11 +852,20 @@ enum DemoHarness {
                 store.upsertSavedCamera(
                     host: "10.99.0.20", displayName: "ZR_6002199", transport: "Wi-Fi",
                     onCameraAccessPoint: false, serialNumber: "6002199")
+                // A SECOND router on another subnet — the two-router state is only reachable
+                // headless from here, and it is the one the chip qualifier exists for.
+                store.upsertSavedCamera(
+                    host: "192.168.129.66", displayName: "ZR_6002199", transport: "Wi-Fi",
+                    onCameraAccessPoint: false, serialNumber: "6002199")
                 store.upsertSavedCamera(
                     host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C",
                     serialNumber: "6002199")
+                // A ZR-shaped name so the access-point SSID derives, which is what makes this an
+                // access-point setup you can actually JOIN — and the only way the tab's
+                // ready-to-join ring is reachable headless. A name that derives no SSID is a real
+                // state too, but it renders as the plain dark dot.
                 store.upsertSavedCamera(
-                    host: "192.168.1.1", displayName: "Z6_7005555", transport: "Wi-Fi",
+                    host: "192.168.1.1", displayName: "ZR_7005555", transport: "Wi-Fi",
                     onCameraAccessPoint: true, serialNumber: "7005555")
                 model.showSavedCameras()
             }
@@ -760,7 +885,13 @@ enum DemoHarness {
                 // Demo/screenshot affordance: stage the scanned-credentials join popup over the
                 // startup screen — the scanner itself needs a physical camera screen to point at.
                 // The value picks the staged phase: "joining"/"failed", anything else ⇒ ready.
-                model.applyScannedCameraWiFi(ssid: "NIKON_ZR_01234", key: "a1b2c3d4")
+                // "scan" stages it keyless — the "+ Add setup → Camera AP" shape, where the
+                // card's own button has to open the scanner over this sheet.
+                if raw == "scan" {
+                    model.applyManualCameraWiFi(ssid: "NIKON_ZR_01234", key: "")
+                } else {
+                    model.applyScannedCameraWiFi(ssid: "NIKON_ZR_01234", key: "a1b2c3d4")
+                }
                 if raw == "joining" {
                     model.connectionPhase = .joiningWiFi
                 } else if raw == "confirm" {

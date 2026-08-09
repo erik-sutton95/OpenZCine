@@ -11,12 +11,25 @@ import Testing
 
 @testable import OpenZCineAndroidFacade
 
-@Test func androidInitiatorIdentityIsStableAndDistinctFromIOS() {
-    #expect(Array(AndroidPTPIPInitiator.appGUID) == Array("OpenZCineAndroid".utf8))
+/// Android presents the SAME initiator identity as iOS, deliberately.
+///
+/// Nikon keys a paired-computer profile to these bytes, so sharing them means one camera-side
+/// profile serves every OpenZCine install on either platform — pair a body once from any device
+/// and the rest connect to that profile. A distinct Android identity made every Android install a
+/// stranger to a body paired from an iPhone, which the camera refuses with `rejectedInitiator`.
+///
+/// This test previously pinned the opposite contract. It is the reason the two must not drift
+/// apart again by accident: changing either value strands every profile already in the field.
+@Test func androidInitiatorIdentityMatchesIOS() {
+    #expect(AndroidPTPIPInitiator.appGUID == PTPIPInitiator.appGUID)
     #expect(AndroidPTPIPInitiator.appGUID.count == 16)
-    #expect(AndroidPTPIPInitiator.appGUID != PTPIPInitiator.appGUID)
-    #expect(AndroidPTPIPInitiator.friendlyName == "OpenZCine Android")
-    #expect(AndroidPTPIPInitiator.friendlyName != PTPIPInitiator.friendlyName)
+    #expect(AndroidPTPIPInitiator.friendlyName == PTPIPInitiator.friendlyName)
+    // The Kotlin side sends these same bytes over JNI; its own test pins them literally.
+    #expect(
+        Array(AndroidPTPIPInitiator.appGUID) == [
+            0x4F, 0x70, 0x65, 0x6E, 0x5A, 0x43, 0x69, 0x6E,
+            0x65, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+        ])
 }
 
 struct PTPIPClientSessionTests {
@@ -1263,6 +1276,39 @@ struct PTPIPClientSessionTests {
         #expect(writes.count == 1)
         #expect(writes[0].property == PTPPropertyCode.movieRecordScreenSize.rawValue)
         #expect(writes[0].data == Data(ByteCoding.uint64LE(enum25)))
+    }
+
+    /// The sibling above picks between two FX modes, so the crop tag never enters the match — which
+    /// is why it stayed green while tapping `[DX] 4K · 25p` wrote the FX mode above it. Here the two
+    /// modes share a bare camera label and differ ONLY by image area, so a match that strips the tag
+    /// picks whichever is listed first. FX is listed first deliberately.
+    @Test func pickingADXResolutionWritesTheDXModeNotTheFXOneAboveIt() throws {
+        let fx4K25 = UInt64(4_032) << 48 | UInt64(2_268) << 32 | UInt64(25) << 16
+        let dx4K25 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(25) << 16
+
+        let r3d: UInt32 = 0x0031_0A03
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = r3d
+        options.movieRecordScreenSizeRaw = fx4K25
+        options.descriptorEnumOverrides[.movieFileType] = [r3d]
+        options.screenSizeModesByFileType = [r3d: [fx4K25, dx4K25]]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        let offered = bootstrap.controls.resolutionFrameRates
+        // The tags are the only thing telling these two apart on the picker.
+        #expect(offered.filter { $0.hasPrefix("[FX] ") }.count == 1)
+        let dxLabel = try #require(offered.first { $0.hasPrefix("[DX] ") })
+
+        let before = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.resolutionFrameRate, label: dxLabel)
+        let writes = Array(server.receivedPropertyWrites().dropFirst(before))
+        #expect(writes.count == 1)
+        #expect(writes[0].property == PTPPropertyCode.movieRecordScreenSize.rawValue)
+        #expect(writes[0].data == Data(ByteCoding.uint64LE(dx4K25)))
     }
 
     @Test func screenSizeReadbackMatchesOnDecodedGeometryNotExactBytes() {

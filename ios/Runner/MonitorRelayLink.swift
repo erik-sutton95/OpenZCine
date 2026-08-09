@@ -49,6 +49,14 @@ private func relayParameters(includePeerToPeer: Bool = true) -> NWParameters {
     // pulling focus against.
     if let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
         tcp.noDelay = true
+        // A vanished peer (battery death, out of range) must not pin state for the TCP
+        // retransmission eternity: a watcher holding the control token kept it — and kept the
+        // broadcaster's own controls stood down — until the OS gave up, minutes later. ~25 s
+        // to a dead-peer verdict.
+        tcp.enableKeepalive = true
+        tcp.keepaliveIdle = 10
+        tcp.keepaliveInterval = 5
+        tcp.keepaliveCount = 3
     }
     return parameters
 }
@@ -58,9 +66,130 @@ struct MonitorRelayDiscovery: Identifiable, Equatable {
     let id: String
     let name: String
     let endpoint: NWEndpoint
+    /// The camera host this broadcast is serving, from the advertisement's TXT record. Any
+    /// device that can SEE the broadcast must not PTP-probe this address: the body accepts one
+    /// initiator, and a foreign Init against a served camera is exactly the "main device drops
+    /// when a watcher comes or goes" failure — the watcher's own camera-list scan knocking the
+    /// broadcaster's session over.
+    let servedCameraHost: String?
+    /// False for a "camera in use" beacon: a device holding a session WITHOUT sharing. The row
+    /// stays out of the list — there is nothing to join — but the probe shield engages exactly
+    /// as for a broadcast.
+    let isWatchable: Bool
+
+    init(
+        id: String, name: String, endpoint: NWEndpoint, servedCameraHost: String? = nil,
+        isWatchable: Bool = true
+    ) {
+        self.id = id
+        self.name = name
+        self.endpoint = endpoint
+        self.servedCameraHost = servedCameraHost
+        self.isWatchable = isWatchable
+    }
 
     static func == (lhs: MonitorRelayDiscovery, rhs: MonitorRelayDiscovery) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id && lhs.servedCameraHost == rhs.servedCameraHost
+            && lhs.isWatchable == rhs.isWatchable
+    }
+}
+
+/// Advertises "this camera is in use" while a device holds a session WITHOUT sharing.
+///
+/// Same service type and `ch=` key as the relay advertisement, flagged not-watchable — so every
+/// other device's probe exclusion engages exactly as it does for a broadcast, and no list shows
+/// a joinable row. This closes the sharing-off knock: a second device's open camera list was
+/// PTP-probing the held camera freely because the shield only keyed off broadcasts.
+@MainActor
+final class CameraInUseBeacon {
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "com.opencapture.openzcine.in-use-beacon")
+
+    func start(hostName: String, servedCameraHost: String) {
+        stop()
+        guard !servedCameraHost.isEmpty,
+            let listener = try? NWListener(using: relayParameters(includePeerToPeer: false))
+        else { return }
+        var txt = NWTXTRecord()
+        txt[MonitorRelayProtocol.servedCameraTXTKey] = servedCameraHost
+        txt[MonitorRelayProtocol.watchableTXTKey] = "0"
+        // A DISTINCT service name: the beacon's cancel() is asynchronous, and a real broadcast
+        // starting under the same name races mDNS conflict resolution into an "iPhone (2)"
+        // rename — which breaks the watchers' saved-passcode key and rejoin-by-name match.
+        // The beacon is never rendered or joined, so its name only needs to not collide.
+        listener.service = NWListener.Service(
+            name: "\(hostName) in-use", type: MonitorRelayProtocol.serviceType, txtRecord: txt)
+        // Advertise-only: the port exists because Bonjour needs one, not to serve anyone.
+        listener.newConnectionHandler = { connection in connection.cancel() }
+        listener.stateUpdateHandler = { state in
+            if case .failed(let error) = state {
+                logConnection("in-use beacon failed: \(error)")
+            }
+        }
+        listener.start(queue: queue)
+        self.listener = listener
+        logConnection("in-use beacon up ch=\(servedCameraHost)")
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+    }
+}
+
+/// Unicast twin of the Bonjour advertisement: answers one TCP connection on the fixed presence
+/// port with a single `RelayPresence` JSON line, then closes. Managed networks filter multicast
+/// between wireless clients — silently eating mDNS — and unicast survives; discovery's sweep
+/// reads this to keep the broadcast list and the probe shield alive there, and to PROVE the
+/// filtering when Bonjour lists nothing.
+@MainActor
+final class RelayPresenceServer {
+    private var listener: NWListener?
+    private var presence: RelayPresence?
+    private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-presence")
+
+    /// Publishes the device's current presence, or stops answering with `nil`.
+    func update(_ presence: RelayPresence?) {
+        self.presence = presence
+        guard let presence else {
+            if listener != nil { logConnection("presence responder off") }
+            listener?.cancel()
+            listener = nil
+            return
+        }
+        logConnection(
+            "presence responder on (w=\(presence.w) ch=\(presence.ch ?? "nil")"
+                + " p=\(presence.p.map(String.init) ?? "nil"))")
+        startIfNeeded()
+    }
+
+    private func startIfNeeded() {
+        guard listener == nil,
+            let port = NWEndpoint.Port(rawValue: MonitorRelayProtocol.presenceTCPPort),
+            let listener = try? NWListener(using: .tcp, on: port)
+        else {
+            if listener == nil { logConnection("presence server bind failed") }
+            return
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            connection.start(queue: self?.queue ?? .global())
+            Task { @MainActor [weak self] in
+                guard let line = self?.presence?.encodedLine() else {
+                    connection.cancel()
+                    return
+                }
+                connection.send(
+                    content: line,
+                    completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        listener.stateUpdateHandler = { state in
+            if case .failed(let error) = state {
+                logConnection("presence server failed: \(error)")
+            }
+        }
+        listener.start(queue: queue)
+        self.listener = listener
     }
 }
 
@@ -81,7 +210,15 @@ final class MonitorRelayHost {
     /// A connected viewer, and how it introduced itself.
     private struct Peer {
         let connection: NWConnection
+        /// This peer's framing state. Owned HERE, on the main actor, so the socket callback
+        /// ships only bytes — a reader captured across both isolation domains is a data-race
+        /// diagnostic on newer compilers (and they are right: nothing proved the regions apart).
+        let reader = MonitorRelayStreamReader()
         var name: String
+        /// False while a required passcode has not been presented. An unauthorized peer
+        /// receives the host hello and NOTHING else — no state, no frames — until its own
+        /// hello carries the right code.
+        var authorized: Bool
         /// Frames handed to the socket and not yet reported processed. The backpressure signal:
         /// a peer that stops draining stops being sent to, rather than being queued for.
         var inFlightFrames = 0
@@ -89,6 +226,9 @@ final class MonitorRelayHost {
         /// backpressure cannot resume on a predicted frame — it would decode into smearing.
         /// True until this peer has been sent a keyframe.
         var needsKeyframe = true
+        /// From the hello's codec declaration (absent = true, legacy). A jpeg-only peer —
+        /// hardware whose decoders reject the HEVC stream — gets the JPEG twin of each frame.
+        var acceptsHEVC = true
     }
 
     /// Fired when some peer is waiting on a keyframe the current stream position cannot give it.
@@ -108,34 +248,63 @@ final class MonitorRelayHost {
 
     private var listener: NWListener?
     private var peers: [ObjectIdentifier: Peer] = [:]
+    /// Watchers must present this to receive anything beyond the hello; empty means open.
+    var watcherPasscode = ""
+    /// Whether watcher control requests are entertained at all. Broadcast in the state payload
+    /// so watchers hide the ask instead of sending requests into a void.
+    var allowsControlRequests = true
     private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-host")
     /// Sent to every viewer that connects, so a late joiner is not staring at nothing until the
     /// next state change happens to come along.
     private var latestState: MonitorRelayState?
     private var hostName = ""
     private var cameraName: String?
+    private var servedCameraHost: String?
+    /// The port actually bound, reported once the listener is ready. The model remembers it
+    /// across host instances and asks for it back: watchers resolve this host through Bonjour
+    /// SRV records that outlive a listener by their TTL, so a restart that moves the port
+    /// strands every watcher dialing the corpse (measured as a minutes-long RST storm).
+    private(set) var boundPort: UInt16?
+    var onListening: (@MainActor (UInt16?) -> Void)?
 
     /// `includePeerToPeer` should be true only when the camera occupies this device's Wi-Fi
     /// (camera-AP session) — that is the case peer-to-peer exists for. Everywhere else the AWDL
     /// advertisement would time-slice the very radio the camera stream and every viewer flow
     /// ride, for a path no viewer needs.
-    func start(hostName: String, cameraName: String?, includePeerToPeer: Bool) {
+    func start(
+        hostName: String, cameraName: String?, servedCameraHost: String? = nil,
+        includePeerToPeer: Bool, preferredPort: UInt16? = nil
+    ) {
         stop()
         self.hostName = hostName
         self.cameraName = cameraName
+        self.servedCameraHost = servedCameraHost
         do {
-            let listener = try NWListener(
-                using: relayParameters(includePeerToPeer: includePeerToPeer))
-            listener.service = NWListener.Service(
-                name: hostName, type: MonitorRelayProtocol.serviceType)
+            let listener = try makeListener(
+                includePeerToPeer: includePeerToPeer, preferredPort: preferredPort)
+            listener.service = advertisedService()
             listener.newConnectionHandler = { [weak self] connection in
                 Task { @MainActor in self?.accept(connection) }
             }
-            listener.stateUpdateHandler = { [weak self] state in
-                guard case .failed(let error) = state else { return }
-                Task { @MainActor in
-                    self?.onFailure?("Sharing stopped: \(error.localizedDescription)")
-                    self?.stop()
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                switch state {
+                case .ready:
+                    let port = listener?.port?.rawValue
+                    Task { @MainActor in
+                        guard let self, listener === self.listener else { return }
+                        self.boundPort = port
+                        self.onListening?(port)
+                    }
+                case .failed(let error):
+                    Task { @MainActor in
+                        // Identity-guarded like `.ready`: a late failure from a listener the
+                        // broadcast bounce already replaced must not tear down its successor.
+                        guard let self, listener === self.listener else { return }
+                        self.onFailure?("Sharing stopped: \(error.localizedDescription)")
+                        self.stop()
+                    }
+                default:
+                    break
                 }
             }
             listener.start(queue: queue)
@@ -146,10 +315,69 @@ final class MonitorRelayHost {
         }
     }
 
+    /// Binds the remembered port when it is still free so redials against stale Bonjour records
+    /// land on a LIVE listener; falls back to an ephemeral port rather than failing the whole
+    /// broadcast over a squatter.
+    private func makeListener(
+        includePeerToPeer: Bool, preferredPort: UInt16?
+    ) throws -> NWListener {
+        if let preferredPort, let port = NWEndpoint.Port(rawValue: preferredPort) {
+            if let listener = try? NWListener(
+                using: relayParameters(includePeerToPeer: includePeerToPeer), on: port)
+            {
+                return listener
+            }
+        }
+        return try NWListener(using: relayParameters(includePeerToPeer: includePeerToPeer))
+    }
+
+    /// The Bonjour advertisement, carrying the served camera's host in TXT so every device that
+    /// can see the broadcast keeps its discovery probes off that address.
+    private func advertisedService() -> NWListener.Service {
+        var txt = NWTXTRecord()
+        if let servedCameraHost, !servedCameraHost.isEmpty {
+            txt[MonitorRelayProtocol.servedCameraTXTKey] = servedCameraHost
+        }
+        return NWListener.Service(
+            name: hostName, type: MonitorRelayProtocol.serviceType, txtRecord: txt)
+    }
+
+    /// Re-registers the advertisement with a new camera name / served host — a TXT update, not a
+    /// listener bounce, so connections, the port, and watching devices are untouched. Covers the
+    /// broadcast-before-connect order, where the camera's identity arrives after `start`.
+    func updateServedCamera(cameraName: String?, servedCameraHost: String?) {
+        guard self.cameraName != cameraName || self.servedCameraHost != servedCameraHost else {
+            return
+        }
+        self.cameraName = cameraName
+        self.servedCameraHost = servedCameraHost
+        listener?.service = advertisedService()
+    }
+
     func stop() {
+        stop(notifyingViewers: nil)
+    }
+
+    /// Ends the broadcast. With a reason, every connected viewer is told the broadcast ended
+    /// (the same `joinDenied` frame a refused join gets) BEFORE its socket closes — a watcher
+    /// must distinguish "the operator ended this" (leave to the camera list) from a dead
+    /// network (keep the held frame and retry). The socket is cancelled once the send lands,
+    /// the same flush the passcode refusal uses.
+    func stop(notifyingViewers reason: String?) {
         listener?.cancel()
         listener = nil
-        for peer in peers.values { peer.connection.cancel() }
+        if let reason {
+            let denial = encode(
+                MonitorRelayJoinDenied(reason: reason, passcodeRequired: false))
+            for peer in peers.values {
+                let connection = peer.connection
+                connection.send(
+                    content: MonitorRelayFraming.encode(kind: .joinDenied, payload: denial),
+                    completion: .contentProcessed { _ in connection.cancel() })
+            }
+        } else {
+            for peer in peers.values { peer.connection.cancel() }
+        }
         peers.removeAll()
         controlHolder = nil
         controlHolderName = nil
@@ -161,7 +389,8 @@ final class MonitorRelayHost {
 
     private func accept(_ connection: NWConnection) {
         relayLogger.info("relay host: viewer connected (\(self.peers.count + 1) total)")
-        peers[ObjectIdentifier(connection)] = Peer(connection: connection, name: "A device")
+        peers[ObjectIdentifier(connection)] = Peer(
+            connection: connection, name: "A device", authorized: watcherPasscode.isEmpty)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
             switch state {
@@ -183,10 +412,10 @@ final class MonitorRelayHost {
                     version: MonitorRelayProtocol.version, hostName: hostName,
                     cameraName: cameraName)),
             to: connection)
-        if let latestState {
+        if let latestState, peers[ObjectIdentifier(connection)]?.authorized == true {
             send(kind: .state, payload: encode(latestState), to: connection)
         }
-        receive(on: connection, reader: MonitorRelayStreamReader())
+        receive(on: connection)
     }
 
     private func drop(_ connection: NWConnection) {
@@ -212,29 +441,35 @@ final class MonitorRelayHost {
         onPeerCountChanged?(count)
     }
 
-    /// Viewer → host traffic. Only the control handshake travels this way today.
-    private func receive(on connection: NWConnection, reader: MonitorRelayStreamReader) {
+    /// Viewer → host traffic. Only the control handshake travels this way today. All framing
+    /// happens on the main actor against the peer's own reader; a dropped peer ends its loop
+    /// by its reader disappearing with it. (The previous shape captured the reader across both
+    /// isolation domains — a data-race diagnostic on newer compilers, and they were right that
+    /// nothing proved the regions apart.)
+    private func receive(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             [weak self, weak connection] data, _, isComplete, error in
             guard let connection else { return }
-            var messages: [MonitorRelayFraming.Decoded] = []
-            if let data, !data.isEmpty {
-                do {
-                    messages = try reader.append(data)
-                } catch {
-                    // A desynchronised stream cannot be recovered by reading further.
-                    Task { @MainActor in self?.drop(connection) }
-                    return
-                }
-            }
             Task { @MainActor in
-                guard let self else { return }
+                guard let self,
+                    let reader = self.peers[ObjectIdentifier(connection)]?.reader
+                else { return }
+                var messages: [MonitorRelayFraming.Decoded] = []
+                if let data, !data.isEmpty {
+                    do {
+                        messages = try reader.append(data)
+                    } catch {
+                        // A desynchronised stream cannot be recovered by reading further.
+                        self.drop(connection)
+                        return
+                    }
+                }
                 for message in messages { self.handle(message, from: connection) }
                 if isComplete || error != nil {
                     self.drop(connection)
                     return
                 }
-                self.receive(on: connection, reader: reader)
+                self.receive(on: connection)
             }
         }
     }
@@ -250,9 +485,35 @@ final class MonitorRelayHost {
                     MonitorRelayHello.self, from: message.payload)
             else { return }
             peers[key]?.name = hello.hostName
+            peers[key]?.acceptsHEVC = hello.acceptsHEVC
             if controlHolder == key { controlHolderName = hello.hostName }
+            if peers[key]?.authorized == false {
+                if hello.passcode == watcherPasscode {
+                    peers[key]?.authorized = true
+                    if let latestState {
+                        send(kind: .state, payload: encode(latestState), to: connection)
+                    }
+                } else {
+                    // Refused, with the reason on the wire — a watcher staring at a silent
+                    // black feed cannot tell a passcode from a broken network. Dropped after
+                    // the send lands so the refusal is not cancelled with the socket.
+                    relayLogger.info("relay host: viewer refused (passcode)")
+                    let denial = encode(
+                        MonitorRelayJoinDenied(
+                            reason: "This broadcast asks for a passcode.",
+                            passcodeRequired: true))
+                    connection.send(
+                        content: MonitorRelayFraming.encode(kind: .joinDenied, payload: denial),
+                        completion: .contentProcessed { [weak self] _ in
+                            Task { @MainActor in self?.drop(connection) }
+                        })
+                }
+            }
         case .requestControl:
-            guard let peer = peers[key] else { return }
+            guard let peer = peers[key], peer.authorized else { return }
+            // Policy off → the request is not entertained; the state payload already told the
+            // watcher, so anything landing here is a stale UI racing the policy change.
+            guard allowsControlRequests else { return }
             pendingRequest = key
             pendingRequestName = peer.name
             onControlChanged?()
@@ -266,7 +527,7 @@ final class MonitorRelayHost {
                     MonitorRelayCommand.self, from: message.payload)
             else { return }
             onCommand?(command)
-        case .state, .frame, .controlToken:
+        case .state, .frame, .controlToken, .joinDenied:
             break  // Host → viewer only.
         }
     }
@@ -314,15 +575,40 @@ final class MonitorRelayHost {
     }
 
     /// Frames a peer may have queued but not yet drained before new ones stop being offered.
-    /// Two = one on the wire and one behind it; more is latency the viewer can never win back.
-    private static let maxInFlightFramesPerPeer = 2
+    /// Low latency: two = one on the wire and one behind it. Quality: four rides out link
+    /// jitter instead of skipping — every skip avoided is a broken reference chain and a
+    /// forced keyframe avoided, which is where the profile's quality actually comes from.
+    /// Mutable so a live profile change adopts the new window without tearing the listener
+    /// down — a listener bounce moves the port and strands every watcher on a stale Bonjour
+    /// SRV record for its TTL.
+    private var maxInFlightFramesPerPeer: Int
+
+    init(profile: RelayEncoderProfile = .lowLatency) {
+        maxInFlightFramesPerPeer = profile.maxInFlightFramesPerPeer
+    }
+
+    /// Adopts a new profile's per-peer window on the LIVE broadcast; the encoder swap beside it
+    /// carries the rest of the profile. Connections and the advertisement stay up.
+    func adoptProfile(_ profile: RelayEncoderProfile) {
+        maxInFlightFramesPerPeer = profile.maxInFlightFramesPerPeer
+    }
 
     /// Whether at least one viewer could accept a frame right now. Checked BEFORE the encode:
     /// when every peer is saturated, encoding would burn the hardware block on a frame nobody
     /// receives — and because nothing is encoded, the encoder's reference chain stays exactly
     /// where every viewer's is, so resuming needs no keyframe.
     var hasPeerReadyForFrame: Bool {
-        peers.values.contains { $0.inFlightFrames < Self.maxInFlightFramesPerPeer }
+        // Authorized only: frames are never sent to an unauthenticated peer, whose in-flight
+        // count is permanently zero — counting it kept the congestion signal reading "ready"
+        // (so the bitrate ladder's saturation half never fired) the whole time a lurker sat on
+        // a passcoded broadcast.
+        peers.values.contains { $0.authorized && $0.inFlightFrames < maxInFlightFramesPerPeer }
+    }
+
+    /// Whether any authorized peer declared it cannot decode HEVC — those peers get the JPEG
+    /// twin of each frame (`broadcastJPEGFallback`) instead of the encoded stream.
+    var hasJPEGOnlyPeers: Bool {
+        peers.values.contains { $0.authorized && !$0.acceptsHEVC }
     }
 
     func broadcast(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
@@ -331,15 +617,19 @@ final class MonitorRelayHost {
             let payload = try? MonitorRelayFramePayload.encode(
                 metadata: frameMetadata, image: image)
         else { return }
+        let isHEVC = frameMetadata.codec == MonitorRelayProtocol.FrameCodec.hevc
         let framed = MonitorRelayFraming.encode(kind: .frame, payload: payload)
         var keyframeWanted = false
-        for (key, peer) in peers {
+        for (key, peer) in peers where peer.authorized {
+            // Codec negotiation: a peer that declared jpeg-only never receives HEVC — its
+            // frames arrive via `broadcastJPEGFallback` instead.
+            if isHEVC && !peer.acceptsHEVC { continue }
             // A monitor shows the newest frame or it is not a monitor. A peer that has not
             // drained is SKIPPED, never queued for: fire-and-forget sends buffer without bound,
             // so a link slower than the source accumulates minutes of latency that presents as
             // "no picture at all". The state and control messages stay unconditional — they are
             // tiny, and a late reading is better than none.
-            guard peer.inFlightFrames < Self.maxInFlightFramesPerPeer else {
+            guard peer.inFlightFrames < maxInFlightFramesPerPeer else {
                 // Skipping breaks this peer's reference chain; it resumes on the next keyframe.
                 peers[key]?.needsKeyframe = true
                 keyframeWanted = true
@@ -362,8 +652,31 @@ final class MonitorRelayHost {
         if keyframeWanted { onKeyframeNeeded?() }
     }
 
+    /// The JPEG twin of an HEVC frame, for peers that declared jpeg-only. Same backpressure
+    /// discipline; JPEG frames are all keyframes, so a resuming peer never waits.
+    func broadcastJPEGFallback(frameMetadata: MonitorRelayFrameMetadata, image: Data) {
+        guard hasJPEGOnlyPeers else { return }
+        guard
+            let payload = try? MonitorRelayFramePayload.encode(
+                metadata: frameMetadata, image: image)
+        else { return }
+        let framed = MonitorRelayFraming.encode(kind: .frame, payload: payload)
+        for (key, peer) in peers where peer.authorized && !peer.acceptsHEVC {
+            guard peer.inFlightFrames < maxInFlightFramesPerPeer else { continue }
+            peers[key]?.needsKeyframe = false
+            peers[key]?.inFlightFrames += 1
+            peer.connection.send(
+                content: framed,
+                completion: .contentProcessed { [weak self] _ in
+                    Task { @MainActor in self?.peers[key]?.inFlightFrames -= 1 }
+                })
+        }
+    }
+
     private func broadcast(kind: MonitorRelayProtocol.Kind, payload: Data) {
-        for peer in peers.values { send(kind: kind, payload: payload, to: peer.connection) }
+        for peer in peers.values where peer.authorized {
+            send(kind: kind, payload: payload, to: peer.connection)
+        }
     }
 
     private func send(kind: MonitorRelayProtocol.Kind, payload: Data, to connection: NWConnection) {
@@ -385,7 +698,10 @@ final class MonitorRelayBrowser {
     private(set) var results: [MonitorRelayDiscovery] = []
     var onResults: (@MainActor ([MonitorRelayDiscovery]) -> Void)?
 
-    private var browser: NWBrowser?
+    private var listBrowser: NWBrowser?
+    private var txtBrowser: NWBrowser?
+    /// Rows per browser, keyed by service name; a broadcast lists if EITHER browser sees it.
+    private var rowsByDescriptor: [String: [String: MonitorRelayDiscovery]] = [:]
     private let queue = DispatchQueue(label: "com.opencapture.openzcine.relay-browser")
 
     /// `includePeerToPeer` browses over AWDL as well — which time-slices the radio the browsing
@@ -393,30 +709,109 @@ final class MonitorRelayBrowser {
     /// AP-session broadcast is only visible that way); a viewer session browsing to keep its
     /// rejoin watchdog sighted does NOT — it only needs to re-find a broadcast it could already
     /// reach, and AWDL under a decoding watcher costs the same fps it costs a broadcaster.
+    ///
+    /// TWO browsers on purpose. Listing must never hinge on `.bonjourWithTXTRecord`: that
+    /// descriptor is the only way to RECEIVE the served-camera `ch=` key (plain `.bonjour`
+    /// never delivers TXT — the original drop-storm hole), but a live report has a broadcast
+    /// missing from a watcher's list since the descriptor swap, so the battle-tested plain
+    /// browse runs alongside it. Rows come from either; `ch=` enriches from whichever browser
+    /// delivered metadata. Both log state and results — a silent browser is how "not in the
+    /// list, and the camera keeps dropping" went undiagnosable.
     func start(includePeerToPeer: Bool = true) {
         stop()
+        // The LIST browser runs the plainest possible recipe (bare `.tcp`, no peer-to-peer, no
+        // service class) — live hardware showed a device whose relay browse returned NOTHING
+        // under the tuned parameters while a plain browse on the same device delivered
+        // instantly. Listing and the probe shield must ride the recipe that provably works
+        // everywhere; the TXT browser keeps peer-to-peer so a camera-AP session's broadcast
+        // (reachable only over AWDL) still surfaces through the merge.
+        listBrowser = makeBrowser(
+            label: "list",
+            descriptor: .bonjour(type: MonitorRelayProtocol.serviceType, domain: nil),
+            parameters: .tcp)
+        txtBrowser = makeBrowser(
+            label: "txt",
+            descriptor: .bonjourWithTXTRecord(type: MonitorRelayProtocol.serviceType, domain: nil),
+            parameters: relayParameters(includePeerToPeer: includePeerToPeer))
+    }
+
+    private func makeBrowser(
+        label: String, descriptor: NWBrowser.Descriptor, parameters: NWParameters
+    ) -> NWBrowser {
+        logConnection("relay browse[\(label)] starting")
         let browser = NWBrowser(
-            for: .bonjour(type: MonitorRelayProtocol.serviceType, domain: nil),
-            using: relayParameters(includePeerToPeer: includePeerToPeer))
+            for: descriptor,
+            using: parameters)
+        browser.stateUpdateHandler = { state in
+            // `.failed`/`.waiting` carry the network's own reason — PolicyDenied here is the
+            // Local Network permission signal (TN3179: there is no query API, only this).
+            switch state {
+            case .failed(let error), .waiting(let error):
+                logConnection("relay browse[\(label)] state=\(state) error=\(error)")
+            default:
+                break
+            }
+        }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             let discoveries = results.compactMap { result -> MonitorRelayDiscovery? in
                 guard case .service(let name, _, _, _) = result.endpoint else { return nil }
+                var servedCameraHost: String?
+                var isWatchable = true
+                if case .bonjour(let txt) = result.metadata {
+                    servedCameraHost = txt[MonitorRelayProtocol.servedCameraTXTKey]
+                    isWatchable = txt[MonitorRelayProtocol.watchableTXTKey] != "0"
+                }
                 return MonitorRelayDiscovery(
-                    id: name, name: name, endpoint: result.endpoint)
+                    id: name, name: name, endpoint: result.endpoint,
+                    servedCameraHost: servedCameraHost, isWatchable: isWatchable)
             }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            let listing = discoveries.map {
+                "\($0.name)(ch=\($0.servedCameraHost ?? "nil")\($0.isWatchable ? "" : " beacon"))"
+            }
+            .joined(separator: " ")
+            logConnection("relay browse[\(label)] results=\(discoveries.count) [\(listing)]")
             Task { @MainActor in
-                self?.results = discoveries
-                self?.onResults?(discoveries)
+                self?.mergeResults(discoveries, from: label)
             }
         }
         browser.start(queue: queue)
-        self.browser = browser
+        return browser
+    }
+
+    private func mergeResults(_ discoveries: [MonitorRelayDiscovery], from label: String) {
+        // The same service appears once per interface (infrastructure + AWDL under
+        // includePeerToPeer) — keep whichever copy carries the probe shield; a unique-keys
+        // dictionary here is a trap, not an invariant.
+        rowsByDescriptor[label] = Dictionary(
+            discoveries.map { ($0.name, $0) },
+            uniquingKeysWith: { first, second in
+                first.servedCameraHost == nil ? second : first
+            })
+        var merged: [String: MonitorRelayDiscovery] = [:]
+        for rows in rowsByDescriptor.values {
+            for (name, row) in rows {
+                let existing = merged[name]
+                // Insert if new; upgrade only to a row that carries the probe shield.
+                if existing == nil
+                    || (existing?.servedCameraHost == nil && row.servedCameraHost != nil)
+                {
+                    merged[name] = row
+                }
+            }
+        }
+        let sorted = merged.values.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        results = sorted
+        onResults?(sorted)
     }
 
     func stop() {
-        browser?.cancel()
-        browser = nil
+        listBrowser?.cancel()
+        listBrowser = nil
+        txtBrowser?.cancel()
+        txtBrowser = nil
+        rowsByDescriptor = [:]
         results = []
     }
 }
@@ -444,6 +839,12 @@ final class MonitorRelayClient {
     var onControlToken: (@MainActor (MonitorRelayControlToken) -> Void)?
 
     private var connection: NWConnection?
+    /// The adopted session's framing state; nil outside a session. Main-actor-owned on purpose —
+    /// see `receive(on:)`.
+    private var streamReader: MonitorRelayStreamReader?
+    /// The host refused the join (wrong or missing passcode). Fires INSTEAD of a failure state
+    /// so the model can ask for the code rather than showing a dead-link error.
+    var onJoinDenied: (@MainActor (MonitorRelayJoinDenied) -> Void)?
     /// Both candidate transports while the race runs; empty once one is adopted.
     private var racingConnections: [NWConnection] = []
     /// Messages issued before a transport won the race — `introduce` fires immediately after
@@ -536,7 +937,8 @@ final class MonitorRelayClient {
             winner.send(content: framed, completion: .contentProcessed { _ in })
         }
         pendingSends = []
-        receive(reader: MonitorRelayStreamReader())
+        streamReader = MonitorRelayStreamReader()
+        receive(on: winner)
     }
 
     private func candidateFailed(_ candidate: NWConnection, error: NWError) {
@@ -551,6 +953,7 @@ final class MonitorRelayClient {
     }
 
     func stop() {
+        streamReader = nil
         connectTimeout?.cancel()
         connectTimeout = nil
         for candidate in racingConnections { candidate.cancel() }
@@ -562,12 +965,14 @@ final class MonitorRelayClient {
         if state != .idle { update(.idle) }
     }
 
-    /// Introduces this device so a control request can name who is asking.
-    func introduce(deviceName: String) {
+    /// Introduces this device so a control request can name who is asking — and carries the
+    /// watcher passcode when the broadcast requires one.
+    func introduce(deviceName: String, passcode: String? = nil) {
         guard
             let payload = try? JSONEncoder().encode(
                 MonitorRelayHello(
-                    version: MonitorRelayProtocol.version, hostName: deviceName, cameraName: nil))
+                    version: MonitorRelayProtocol.version, hostName: deviceName, cameraName: nil,
+                    passcode: passcode))
         else { return }
         send(kind: .hello, payload: payload)
     }
@@ -592,30 +997,32 @@ final class MonitorRelayClient {
         connection.send(content: framed, completion: .contentProcessed { _ in })
     }
 
-    private func receive(reader: MonitorRelayStreamReader) {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) {
+    /// All framing happens on the main actor against the session's own reader; the connection
+    /// identity guard kills a stale loop the moment a rejoin replaces the session. (A reader
+    /// captured across both isolation domains was a data-race diagnostic on newer compilers.)
+    private func receive(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) {
             [weak self] data, _, isComplete, error in
-            var messages: [MonitorRelayFraming.Decoded] = []
-            if let data, !data.isEmpty {
-                do {
-                    messages = try reader.append(data)
-                } catch {
-                    Task { @MainActor in
-                        self?.update(.failed("The relay stream desynchronised."))
-                        self?.stop()
-                    }
-                    return
-                }
-            }
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.connection === connection, let reader = self.streamReader
+                else { return }
+                var messages: [MonitorRelayFraming.Decoded] = []
+                if let data, !data.isEmpty {
+                    do {
+                        messages = try reader.append(data)
+                    } catch {
+                        self.update(.failed("The relay stream desynchronised."))
+                        self.stop()
+                        return
+                    }
+                }
                 for message in messages { self.handle(message) }
                 if isComplete || error != nil {
                     self.update(.failed("The broadcasting device disconnected."))
                     self.stop()
                     return
                 }
-                self.receive(reader: reader)
+                self.receive(on: connection)
             }
         }
     }
@@ -652,6 +1059,15 @@ final class MonitorRelayClient {
                     MonitorRelayControlToken.self, from: message.payload)
             else { return }
             onControlToken?(token)
+        case .joinDenied:
+            let denial = try? JSONDecoder().decode(
+                MonitorRelayJoinDenied.self, from: message.payload)
+            onJoinDenied?(
+                denial
+                    ?? MonitorRelayJoinDenied(
+                        reason: "The broadcasting device refused this join.",
+                        passcodeRequired: false))
+            stop()
         case .requestControl, .releaseControl, .command:
             break  // Viewer → host only.
         }

@@ -36,9 +36,20 @@ final class BluetoothShutterMonitor {
     /// Called on each volume press (either direction), already debounced.
     var onTrigger: (() -> Void)?
 
-    /// Mid-scale anchor the volume is pinned to between presses — a press in either direction
-    /// always moves off it, and our own programmatic re-anchor lands exactly back on it.
-    private nonisolated static let anchor: Float = 0.5
+    /// Headroom the anchor keeps from each rail: one iOS volume step (1/16). A press has to be
+    /// able to MOVE the volume to be seen, so an anchor sitting on 0 or 1 loses one direction.
+    private nonisolated static let railHeadroom: Float = 1.0 / 16.0
+
+    /// Where the volume is re-pinned between presses, so a press in either direction always moves
+    /// off it and the level never walks to a rail.
+    ///
+    /// The operator's OWN level, not mid-scale. This used to be a flat 0.5, which meant opening
+    /// the monitor set every phone on earth to half volume — remote or no remote — and any audio
+    /// the operator had running jumped to match. The only thing the mechanism actually needs is a
+    /// step of room in each direction, and almost every real volume setting already has it: an
+    /// anchor taken from where they left it is a no-op for them and works identically for us.
+    /// Only someone sitting exactly at silent or maximum gets moved, and then by one step.
+    private var anchor: Float = 0.5
     /// Two HID reports for one physical press (down+repeat) arrive within ~0.3 s; a camera-body
     /// record toggle also needs breathing room, so presses inside this window are one trigger.
     nonisolated static let debounceInterval: TimeInterval = 0.6
@@ -70,16 +81,22 @@ final class BluetoothShutterMonitor {
     /// direction — remotes differ) outside both the debounce and self-anchor windows is a press.
     nonisolated static func isTrigger(
         newVolume: Float, now: TimeInterval,
-        lastTriggerAt: TimeInterval, lastAnchorAt: TimeInterval
+        lastTriggerAt: TimeInterval, lastAnchorAt: TimeInterval, anchor: Float
     ) -> Bool {
         triggerDecision(
             newVolume: newVolume, now: now,
-            lastTriggerAt: lastTriggerAt, lastAnchorAt: lastAnchorAt) == .trigger
+            lastTriggerAt: lastTriggerAt, lastAnchorAt: lastAnchorAt, anchor: anchor) == .trigger
+    }
+
+    /// The operator's level, held a step clear of each rail so a press in either direction still
+    /// registers. Pure and `nonisolated` so the band is testable without an audio session.
+    nonisolated static func anchor(forCurrentVolume volume: Float) -> Float {
+        min(max(volume, railHeadroom), 1 - railHeadroom)
     }
 
     nonisolated static func triggerDecision(
         newVolume: Float, now: TimeInterval,
-        lastTriggerAt: TimeInterval, lastAnchorAt: TimeInterval
+        lastTriggerAt: TimeInterval, lastAnchorAt: TimeInterval, anchor: Float
     ) -> TriggerDecision {
         if abs(newVolume - anchor) <= 0.001 { return .atAnchor }
         if now - lastTriggerAt < debounceInterval { return .debounced }
@@ -121,6 +138,9 @@ final class BluetoothShutterMonitor {
         eventGeneration += 1
         outputRouteSignature = Self.outputRouteSignature(for: session)
         restoreVolumesByRoute = [outputRouteSignature: session.outputVolume]
+        // Taken from where the operator left it, so for almost everyone the monitor opening
+        // changes nothing they can hear.
+        anchor = Self.anchor(forCurrentVolume: session.outputVolume)
         installVolumeView()
         beginSliderAcquisition()
         // `outputVolume` KVO is Apple's documented observation path. It is the primary detector;
@@ -247,24 +267,24 @@ final class BluetoothShutterMonitor {
         if now < suppressVolumeEventsUntil {
             bluetoothShutterLogger.info(
                 "BT-SHUTTER ignored \(source, privacy: .public) event during audio-route change")
-            if abs(newValue - Self.anchor) > 0.001 { setSystemVolume(Self.anchor) }
+            if abs(newValue - anchor) > 0.001 { setSystemVolume(anchor) }
             return
         }
         let decision = Self.triggerDecision(
             newVolume: newValue, now: now,
-            lastTriggerAt: lastTriggerAt, lastAnchorAt: lastAnchorAt)
+            lastTriggerAt: lastTriggerAt, lastAnchorAt: lastAnchorAt, anchor: anchor)
         bluetoothShutterLogger.info(
             "BT-SHUTTER event source=\(source, privacy: .public) volume=\(newValue, privacy: .public) decision=\(decision.rawValue, privacy: .public)"
         )
         guard decision == .trigger else {
             // Debounced repeat or an echo drift: re-pin so the volume never walks to a rail.
-            if abs(newValue - Self.anchor) > 0.001, now - lastAnchorAt >= Self.selfInflictedWindow {
-                setSystemVolume(Self.anchor)
+            if abs(newValue - anchor) > 0.001, now - lastAnchorAt >= Self.selfInflictedWindow {
+                setSystemVolume(anchor)
             }
             return
         }
         lastTriggerAt = now
-        setSystemVolume(Self.anchor)
+        setSystemVolume(anchor)
         bluetoothShutterLogger.info("BT-SHUTTER dispatching record toggle")
         onTrigger?()
     }
@@ -325,10 +345,14 @@ final class BluetoothShutterMonitor {
         routeRecoveryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(0.2))
             guard !Task.isCancelled, let self, self.isActive else { return }
+            let routeVolume = AVAudioSession.sharedInstance().outputVolume
             if self.restoreVolumesByRoute[signature] == nil {
-                self.restoreVolumesByRoute[signature] =
-                    AVAudioSession.sharedInstance().outputVolume
+                self.restoreVolumesByRoute[signature] = routeVolume
             }
+            // Every route remembers its own level, so the anchor is re-derived rather than
+            // carried across — otherwise plugging in headphones would drag their volume to
+            // whatever the speaker happened to be at.
+            self.anchor = Self.anchor(forCurrentVolume: routeVolume)
             self.installVolumeView()
             self.beginSliderAcquisition()
             self.routeRecoveryTask = nil
@@ -402,7 +426,7 @@ final class BluetoothShutterMonitor {
         bluetoothShutterLogger.info(
             "BT-SHUTTER slider acquired class=\(NSStringFromClass(type(of: slider)), privacy: .public) attempt=\(attempt, privacy: .public)"
         )
-        setSystemVolume(Self.anchor)
+        setSystemVolume(anchor)
     }
 
     private func setSystemVolume(_ value: Float) {

@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.openzcine.ChromeShape
@@ -75,10 +77,8 @@ import kotlin.math.roundToInt
 // Compose ports of the iOS operator-settings primitives (ios/Runner/
 // MonitorControls.swift: SettingsRowCard, SettingsInlineRow,
 // SettingsSwitchInlineRow, SettingsSwitchGraphic, SettingsValueText,
-// SettingsGroupCard, DisplayToggleItem, CloseButton). Same metrics and
-// LiveDesign colors so the two shells render matching settings chrome.
-// ponytail: help "?" badges (iOS HelpBadge popovers) are skipped in v1 — the
-// row copy stands alone; add them when a row genuinely needs explanation.
+// SettingsGroupCard, DisplayToggleItem, CloseButton, HelpBadge). Same metrics
+// and LiveDesign colors so the two shells render matching settings chrome.
 
 /** Ripple-free click carrying a semantics [role] (the settings-panel `chromeClickable`). */
 @Composable
@@ -174,20 +174,34 @@ public fun SettingsResetButton(onClick: () -> Unit) {
  * `SettingsActionPill`). Title is uppercased to match the iOS monospaced pill.
  */
 @Composable
-public fun SettingsActionPill(title: String, onClick: () -> Unit) {
-    Text(
-        title.uppercase(),
-        style = chromeStyle(10.5f, FontWeight.Bold, mono = true),
-        color = LiveDesign.accent,
-        maxLines = 1,
-        letterSpacing = 0.6.sp,
-        modifier =
-            Modifier
-                .background(LiveDesign.accentDim, CircleShape)
-                .border(1.dp, LiveDesign.accent.copy(alpha = 0.5f), CircleShape)
-                .settingsClickable(role = Role.Button, onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-    )
+public fun SettingsActionPill(
+    title: String,
+    icon: ImageVector? = null,
+    tint: Color = LiveDesign.accent,
+    background: Color = LiveDesign.accentDim,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier
+            .background(background, CircleShape)
+            .border(1.dp, tint.copy(alpha = 0.5f), CircleShape)
+            .settingsClickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon?.let {
+            Icon(it, contentDescription = null, tint = tint, modifier = Modifier.size(15.dp))
+        }
+        Text(
+            title.uppercase(),
+            style = chromeStyle(10.5f, FontWeight.Bold, mono = true),
+            color = tint,
+            maxLines = 1,
+            letterSpacing = 0.6.sp,
+        )
+    }
 }
 
 /**
@@ -311,10 +325,15 @@ private fun DashLegend(
  * One label-plus-trailing-control row for a divider-separated card
  * (iOS `SettingsInlineRow`). When [stacked] is true (two-column View Assist
  * cards), the control sits under the title at full width.
+ *
+ * [help] renders the same "?" badge iOS puts beside the title — the copy that
+ * explains what a control actually does lives there, not in a caption, so the
+ * row stays one line until an operator asks.
  */
 @Composable
 public fun SettingsInlineRow(
     title: String,
+    help: String? = null,
     showTopDivider: Boolean = true,
     stacked: Boolean = false,
     trailing: @Composable () -> Unit,
@@ -328,12 +347,18 @@ public fun SettingsInlineRow(
                 Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).padding(vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    title,
-                    style = chromeStyle(12.5f, FontWeight.SemiBold),
-                    color = LiveDesign.text,
-                    maxLines = 2,
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        title,
+                        style = chromeStyle(12.5f, FontWeight.SemiBold),
+                        color = LiveDesign.text,
+                        maxLines = 2,
+                    )
+                    help?.let { SettingsHelpBadge(it) }
+                }
                 trailing()
             }
         } else {
@@ -348,6 +373,7 @@ public fun SettingsInlineRow(
                     color = LiveDesign.text,
                     maxLines = 1,
                 )
+                help?.let { SettingsHelpBadge(it) }
                 Spacer(Modifier.weight(1f))
                 trailing()
             }
@@ -360,13 +386,62 @@ public fun SettingsInlineRow(
 public fun SettingsSwitchRow(
     title: String,
     isOn: Boolean,
+    help: String? = null,
     showTopDivider: Boolean = true,
     stacked: Boolean = false,
     onToggle: () -> Unit,
 ) {
-    SettingsInlineRow(title = title, showTopDivider = showTopDivider, stacked = stacked) {
+    SettingsInlineRow(
+        title = title,
+        help = help,
+        showTopDivider = showTopDivider,
+        stacked = stacked,
+    ) {
         Box(Modifier.settingsClickable(role = Role.Switch, onClick = onToggle)) {
             SettingsSwitchGraphic(isOn = isOn)
+        }
+    }
+}
+
+/**
+ * iOS `HelpBadge`: a quiet "?" beside a row title that reveals the row's help
+ * copy in a glass popover.
+ *
+ * ponytail: a transcription of the private badge in media/PlaybackAssistOptions.kt
+ * (the assist popups own theirs) — settings cannot see it. Hoist one copy if a
+ * third surface ever needs it.
+ */
+@Composable
+public fun SettingsHelpBadge(text: String) {
+    var open by remember { mutableStateOf(false) }
+    val description = stringResource(R.string.settings_help)
+    Box {
+        // A 16dp mark inside a 24dp target. The full 44dp floor would reserve 44dp of ROW
+        // width on every helped row and squeeze the trailing control off a landscape-phone
+        // pane; 24dp still clears the WCAG 2.2 AA target size.
+        Box(
+            Modifier.size(24.dp)
+                .settingsClickable(role = Role.Button) { open = !open }
+                .semantics { contentDescription = description },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier.size(16.dp).border(1.dp, LiveDesign.hairlineStrong, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("?", style = chromeStyle(10f, FontWeight.Bold), color = LiveDesign.muted)
+            }
+        }
+        if (open) {
+            Popup(onDismissRequest = { open = false }) {
+                Box(Modifier.widthIn(max = 280.dp).glass(ChromeShape).padding(10.dp)) {
+                    Text(
+                        text,
+                        style = chromeStyle(11f, FontWeight.Normal),
+                        color = LiveDesign.text,
+                    )
+                }
+            }
         }
     }
 }
@@ -708,7 +783,10 @@ public fun SettingsCrushClipSegmented(
                         selected = active,
                         role = Role.RadioButton,
                         onClick = { if (!active) onSelect(label) },
-                    ),
+                    )
+                    // The segment shows a fraction glyph; the full stop value is what a screen
+                    // reader has to say, so it announces the label rather than "¼".
+                    .semantics { contentDescription = label },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(

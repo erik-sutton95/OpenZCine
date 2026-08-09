@@ -139,6 +139,21 @@ struct MonitorRelayProtocolTests {
         #expect(decoded.cameraName == "Nikon ZR")
     }
 
+    /// Twin of the Kotlin hello vector: the `codecs` key is how a watcher whose hardware cannot
+    /// decode the HEVC stream asks for JPEG. Absent must mean "everything" — that is what keeps
+    /// every pre-negotiation watcher on its HEVC stream.
+    @Test("The hello codec declaration decodes the shared vector; absent means all")
+    func helloCarriesCodecs() throws {
+        let jpegOnly = try JSONDecoder().decode(
+            MonitorRelayHello.self,
+            from: Data(#"{"version":2,"hostName":"Galaxy","codecs":["jpeg"]}"#.utf8))
+        #expect(jpegOnly.codecs == ["jpeg"])
+        #expect(!jpegOnly.acceptsHEVC)
+        let legacy = try JSONDecoder().decode(MonitorRelayHello.self, from: hello())
+        #expect(legacy.codecs == nil)
+        #expect(legacy.acceptsHEVC)
+    }
+
     /// The service type has to match `NSBonjourServices` in the app's Info.plist exactly, or the
     /// browser is denied with no error the operator can act on.
     @Test("The Bonjour service type is a well-formed TCP service")
@@ -150,5 +165,38 @@ struct MonitorRelayProtocolTests {
             .dropFirst()
             .replacingOccurrences(of: "._tcp", with: "")
         #expect(name.count <= 15)
+    }
+
+    /// Twin of the Kotlin `bonjour advertisement constants match the shared contract` pin: the
+    /// TXT keys must match Android byte-for-byte, or the probe shield (`ch`) and the in-use
+    /// beacon flag (`w`) silently stop crossing platforms.
+    @Test("Advertisement constants match the cross-platform contract")
+    func advertisementConstants() {
+        #expect(MonitorRelayProtocol.serviceType == "_openzcine-mon._tcp")
+        #expect(MonitorRelayProtocol.servedCameraTXTKey == "ch")
+        #expect(MonitorRelayProtocol.watchableTXTKey == "w")
+        #expect(MonitorRelayProtocol.presenceTCPPort == 15741)
+    }
+
+    @Test("Presence line round-trips and rejects foreign versions")
+    func presenceLine() {
+        let broadcast = RelayPresence(
+            name: "A-cam iPhone", watchable: true, servedCameraHost: "192.168.1.246",
+            relayPort: 51234)
+        let decoded = RelayPresence.decode(broadcast.encodedLine())
+        #expect(decoded == broadcast)
+        #expect(decoded?.isWatchable == true)
+
+        let beacon = RelayPresence(
+            name: "iPhone", watchable: false, servedCameraHost: "192.168.1.246", relayPort: nil)
+        #expect(RelayPresence.decode(beacon.encodedLine())?.isWatchable == false)
+
+        #expect(RelayPresence.decode(Data("{\"v\":9,\"n\":\"x\",\"w\":1}".utf8)) == nil)
+        #expect(RelayPresence.decode(Data("garbage".utf8)) == nil)
+        // The wire keys are the cross-platform contract (Kotlin twin pins the same literals).
+        let json = String(decoding: broadcast.encodedLine(), as: UTF8.self)
+        for key in ["\"v\"", "\"n\"", "\"w\"", "\"ch\"", "\"p\""] {
+            #expect(json.contains(key))
+        }
     }
 }

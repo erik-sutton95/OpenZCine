@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import WatchConnectivity
 
 /// A minimal `@unchecked Sendable` box for handing a non-`Sendable` value across an isolation hop.
@@ -25,6 +27,8 @@ final class WatchRelay: NSObject {
     /// Called when the watch requests a Record toggle. Returns the result to reply with. Bypasses
     /// the phone-side confirmation alert by design (an unseen phone dialog would strand the take).
     var onToggleRecord: (@MainActor () -> WatchCommandResult)?
+    /// Called when the watch releases the shutter. Routed to the phone's own still-release path.
+    var onCapture: (@MainActor () -> WatchCommandResult)?
     /// Called when watch reachability changes so the owner can re-publish the current state.
     var onReachabilityChanged: (@MainActor () -> Void)?
 
@@ -64,7 +68,7 @@ final class WatchRelay: NSObject {
         session.activate()
     }
 
-    private var isReady: Bool {
+    var isReady: Bool {
         guard let session else { return false }
         return session.activationState == .activated && session.isReachable
     }
@@ -72,15 +76,29 @@ final class WatchRelay: NSObject {
     /// Sends the latest state snapshot, coalescing to only send on change. State is tiny, so every
     /// change is sent; when the watch is unreachable the send is skipped (the watch shows its own
     /// "open OpenZCine on iPhone" placeholder from reachability).
+    ///
+    /// The coalescing latch is only safe because a failed send releases it (below). Video hides a
+    /// stuck latch — the snapshot carries a running timecode, so the next publish differs anyway
+    /// and resends within a frame. Stills have no timecode, so the snapshot goes quiet and a
+    /// single lost send strands the wrist on its last received state until it asks for a resume.
     func ingestState(_ state: WatchRelayState) {
-        guard state != lastSentState else { return }
+        guard lastSentState.map({ !state.matchesIgnoringLiveReadouts($0) }) ?? true else { return }
         guard isReady, let session,
             let data = try? WatchRelayEnvelope.encode(kind: .state, payload: state)
         else { return }
         // Recorded only after an actual send: marking a skipped-while-unreachable state as sent
         // would coalesce every identical re-publish away, and the watch would never get it.
         lastSentState = state
-        session.sendMessageData(data, replyHandler: nil, errorHandler: nil)
+        session.sendMessageData(
+            data, replyHandler: nil,
+            errorHandler: { @Sendable [weak self] _ in
+                // A dropped send must un-record itself, or the coalescing above swallows every
+                // retry and the wrist keeps whatever it last actually received. Only the newest
+                // send may clear the latch — an older failure must not undo a newer success.
+                Task { @MainActor in
+                    if self?.lastSentState == state { self?.lastSentState = nil }
+                }
+            })
     }
 
     /// Buffers the latest frame (drop-stale) and pumps the backpressure send loop. CPU live-view
@@ -164,13 +182,21 @@ final class WatchRelay: NSObject {
 
     /// Picks encode dimensions from the current round-trip estimate: a slow link gets small frames
     /// (they cross faster, raising sustainable fps), a fast link gets larger frames for clarity.
-    /// The fast tier matches the widest watch display (Ultra: 410 px) so the edge-to-edge feed is
-    /// rendered 1:1, not upscaled.
+    ///
+    /// Every tier is 2x the watch's own display, deliberately. Sizing the fast tier to the Ultra's
+    /// 410 px made the unzoomed feed exactly 1:1 and left the crown zoom nothing to magnify but
+    /// blocks. Oversampling gives the zoom real pixels to reveal, at a cost paid on every frame
+    /// rather than only while zoomed.
+    ///
+    /// The alternative — cropping to the watch's reported viewport, so the same bytes carry only
+    /// the visible region — was built and did not feel right in the hand (f72f319, reverted).
+    /// This is the blunter trade taken knowingly: more bytes per frame, fewer frames per second on
+    /// a slow link, and the RTT ladder still steps down to protect the latter.
     private func adaptiveEncodingParams() -> (width: CGFloat, quality: CGFloat) {
         switch rttEMA {
-        case 0.35...: (width: 256, quality: 0.24)
-        case 0.20..<0.35: (width: 336, quality: 0.28)
-        default: (width: 416, quality: 0.32)
+        case 0.35...: (width: 512, quality: 0.40)
+        case 0.20..<0.35: (width: 672, quality: 0.45)
+        default: (width: 832, quality: 0.50)
         }
     }
 
@@ -209,11 +235,25 @@ final class WatchRelay: NSObject {
             return (try? WatchRelayEnvelope.encode(kind: .result, payload: fallback)) ?? Data()
         }
         let result: WatchCommandResult
-        if let command = try? WatchRelayEnvelope.decode(WatchRelayCommand.self, from: data),
-            command == .toggleRecord, let onToggleRecord
-        {
-            result = onToggleRecord()
-        } else {
+        let command = try? WatchRelayEnvelope.decode(WatchRelayCommand.self, from: data)
+        switch command {
+        case .toggleRecord:
+            result = onToggleRecord.map { $0() } ?? fallback
+        case .resume:
+            // Same recovery as a reachability change, but driven by the watch, which is the side
+            // that knows it just woke. Frames in flight when the display dimmed are never acked,
+            // so clear the permits before pumping or the pump stays blocked; dropping the
+            // last-sent state forces a full snapshot rather than a diff against what the watch
+            // may have missed (#187).
+            let wasRecording = lastSentState?.isRecording ?? false
+            lastSentState = nil
+            framesInFlight = 0
+            pendingFrame = nil
+            pumpFrames()
+            result = WatchCommandResult(accepted: true, isRecording: wasRecording, error: nil)
+        case .capture:
+            result = onCapture.map { $0() } ?? fallback
+        case .none:
             result = fallback
         }
         return (try? WatchRelayEnvelope.encode(kind: .result, payload: result)) ?? Data()
@@ -223,6 +263,35 @@ final class WatchRelay: NSObject {
     /// JPEG. Applying after the thumbnail is intentional: Metal's full-resolution bake stays on the
     /// GPU, while the Watch pays only for its adaptive 256/336/416-pixel frame. Internal so the
     /// actual LUT-to-JPEG path is regression-testable.
+    /// Encodes the preview frame, preferring HEIC.
+    ///
+    /// HEVC-based still coding carries roughly the same perceived quality as JPEG in about half
+    /// the bytes, which on this link buys back most of what the 2x frame size costs — the watch
+    /// feed's problem was always that a monitor image has to stay legible, and JPEG was spending
+    /// its budget on blocking. watchOS decodes HEIF natively, so the wrist needs no change: it
+    /// hands the bytes to `UIImage` either way.
+    ///
+    /// Falls back to JPEG whenever the destination cannot be made or finalised. The fallback is
+    /// not theoretical tidiness — an unencodable frame would otherwise drop silently, and a
+    /// dropped frame on a monitor reads as a frozen picture.
+    nonisolated static func encodedFrameData(_ image: UIImage, quality: CGFloat) -> Data? {
+        guard let cgImage = image.cgImage else {
+            return image.jpegData(compressionQuality: quality)
+        }
+        let buffer = NSMutableData()
+        guard
+            let destination = CGImageDestinationCreateWithData(
+                buffer, UTType.heic.identifier as CFString, 1, nil)
+        else { return image.jpegData(compressionQuality: quality) }
+        CGImageDestinationAddImage(
+            destination, cgImage,
+            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination), buffer.length > 0 else {
+            return image.jpegData(compressionQuality: quality)
+        }
+        return buffer as Data
+    }
+
     nonisolated static func thumbnailJPEG(
         from image: UIImage, applying effects: LiveImageEffects? = nil,
         renderer: LiveFrameRenderer? = nil, maxWidth: CGFloat, quality: CGFloat
@@ -249,7 +318,7 @@ final class WatchRelay: NSObject {
         } else {
             displayImage = thumb
         }
-        return displayImage.jpegData(compressionQuality: quality)
+        return encodedFrameData(displayImage, quality: quality)
     }
 }
 

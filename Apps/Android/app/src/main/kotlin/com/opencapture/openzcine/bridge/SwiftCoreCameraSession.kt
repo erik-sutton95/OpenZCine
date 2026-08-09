@@ -43,7 +43,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 
-private val legacyPtpIpInitiatorGuid: ByteArray = "OpenZCineAndroid".encodeToByteArray()
+private val defaultPtpIpInitiatorGuid: ByteArray
+    get() = PtpIpInitiatorIdentity.guid
 
 /**
  * The Nikon connection sequence selected by the Android startup flow.
@@ -144,7 +145,7 @@ internal interface SwiftCoreSessionBridge {
                 host = host,
                 connectionOwner = connectionOwner,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
-                initiatorGuid = legacyPtpIpInitiatorGuid,
+                initiatorGuid = defaultPtpIpInitiatorGuid,
                 listener = listener,
             )
         }
@@ -313,7 +314,7 @@ class SwiftCoreCameraSession internal constructor(
     private val cameraNameHint: String? = null,
     private val connectionStrategy: PtpIpConnectionStrategy =
         PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
-    initiatorGuid: ByteArray = legacyPtpIpInitiatorGuid,
+    initiatorGuid: ByteArray = defaultPtpIpInitiatorGuid,
 ) : CameraSession {
     private val initiatorGuid: ByteArray = initiatorGuid.copyOf()
 
@@ -500,6 +501,7 @@ class SwiftCoreCameraSession internal constructor(
                             _recordingState.value = CameraRecordingState.STANDBY
                             _cameraProperties.value = CameraPropertySnapshot()
                             _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
+                            (liveFrames as? SwiftCoreLiveFrameSource)?.noteSessionConnected()
                             updateRoundTripMeasurement()
                             startEventStream(attempt)
                             if (automaticallyRefreshProperties) {
@@ -963,7 +965,12 @@ class SwiftCoreCameraSession internal constructor(
      * remains responsible for recovery.
      */
     private fun reportEventChannelDegraded(attempt: Long, message: String) {
-        if (isCurrentAttempt(attempt)) phaseLogger("eventChannelEnded", message)
+        if (!isCurrentAttempt(attempt)) return
+        phaseLogger("eventChannelEnded", message)
+        // iOS parity (`recoverFromEndedEventChannel`): a dead event drain has no re-open path,
+        // and a session that stops answering the body's liveness probes gets CLOSED BY THE
+        // BODY 30-120 s later as an unexplained drop. One clean reconnect now beats that.
+        markLiveViewStreamExhausted()
     }
 
     /**

@@ -12,7 +12,7 @@ import Testing
         PTPIPSavedCameraRecord(
             host: " 192.168.1.42 ",
             displayName: "",
-            transport: "USB-C",
+            transport: "Wi-Fi",
             lastSeenAt: oldSeen
         )
     ]
@@ -31,7 +31,8 @@ import Testing
                 host: "192.168.1.42",
                 displayName: "Nikon ZR",
                 transport: "Wi-Fi",
-                lastSeenAt: newSeen
+                lastSeenAt: newSeen,
+                path: .infrastructure(networkName: nil)
             )
         ])
 }
@@ -80,7 +81,7 @@ import Testing
         PTPIPSavedCameraRecord(
             host: " 192.168.1.42 ",
             displayName: "Nikon ZR",
-            transport: "USB-C",
+            transport: "Wi-Fi",
             lastSeenAt: nil
         ),
     ]
@@ -241,7 +242,10 @@ import Testing
 
     let canonical = PTPIPSavedCameraRecords.canonicalized(records)
 
-    #expect(canonical == records)
+    // Both hosts survive; canonicalization also stamps each record's declared path, so compare
+    // the identity axes rather than the whole value.
+    #expect(canonical.map(\.host) == records.map(\.host))
+    #expect(canonical.map(\.displayName) == records.map(\.displayName))
 }
 
 @Test func savedCameraRecordsRemoveByCanonicalHost() {
@@ -387,4 +391,150 @@ import Testing
     )
 
     #expect(records.map(\.host) == ["10.99.0.57"])
+}
+
+/// A host cannot identify a setup, and this is the test that says so out loud.
+///
+/// Every camera-AP Nikon answers at 192.168.1.1, and a home router hands out that same address —
+/// so one body's AP and Router setups legitimately collide on `host`. The connect pipeline used to
+/// re-derive "which setup am I dialling" with `savedCameras.first { $0.host == host }`, which
+/// silently returned whichever was saved first: tapping Camera AP ran the Router's branch, so the
+/// join was never offered and the dial went out on the wrong network.
+@Test func oneHostCanNameTwoSetupsSoItCannotIdentifyOne() {
+    let shared = "192.168.1.1"
+    let records = PTPIPSavedCameraRecords.canonicalized([
+        PTPIPSavedCameraRecord(
+            host: shared,
+            displayName: "ZR_6002199",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            serialNumber: "6002199",
+            path: .infrastructure(networkName: "Home")
+        ),
+        PTPIPSavedCameraRecord(
+            host: shared,
+            displayName: "ZR_6002199",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            serialNumber: "6002199",
+            path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+        ),
+    ])
+
+    // Both survive: canonicalization keys on the declared path, not the address.
+    #expect(records.count == 2)
+    let ids = Set(records.map { $0.id })
+    #expect(ids.count == 2)
+    // And the lookup the connect pipeline must never make is ambiguous by construction.
+    #expect(records.filter { $0.host == shared }.count == 2)
+}
+
+/// A typed access-point setup keeps its learned host — we never invent a global AP IP.
+/// Stale hosts are healed by rediscovery after join, not by rewriting to a constant address.
+@Test func aTypedAccessPointSetupKeepsItsLearnedHost() {
+    let records = PTPIPSavedCameraRecords.canonicalized([
+        PTPIPSavedCameraRecord(
+            host: "192.168.1.246",
+            displayName: "ZR_6002199",
+            transport: "Wi-Fi",
+            lastSeenAt: nil,
+            serialNumber: "6002199",
+            path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+        )
+    ])
+    #expect(records.count == 1)
+    #expect(records.first?.path?.kind == .cameraAccessPoint)
+    #expect(records.first?.host == "192.168.1.246")
+    #expect(records.first?.path?.accessPointSSID == "NIKON_ZR_6002199")
+}
+
+/// A well-formed access-point setup is left exactly as it is — the repair must not fire on the
+/// records it exists to protect.
+@Test func aTypedAccessPointSetupAtItsOwnAddressIsUntouched() {
+    let record = PTPIPSavedCameraRecord(
+        host: "192.168.1.50",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    let records = PTPIPSavedCameraRecords.canonicalized([record])
+    #expect(records.count == 1)
+    #expect(records.first?.path?.kind == .cameraAccessPoint)
+    #expect(records.first?.host == "192.168.1.50")
+}
+
+/// With the camera on the house network, ONLY the router setup is reachable.
+///
+/// The name-match fallback exists for a host that moved under a record — a changed DHCP lease.
+/// An access-point setup's address cannot move, so matching it by name only ever meant "this body
+/// exists somewhere", and the same body seen on the router lit the Camera AP tab green. A green
+/// tab then dials the discovered router address THROUGH the access point setup on tap, instead of
+/// offering the join.
+@Test func aCameraOnTheHouseNetworkLightsOnlyItsRouterSetup() {
+    let accessPoint = PTPIPSavedCameraRecord(
+        host: "192.168.1.50",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    let router = PTPIPSavedCameraRecord(
+        host: "192.168.1.246",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .infrastructure(networkName: "Home")
+    )
+    let onRouter = DiscoveredCamera(
+        ip: "192.168.1.246", name: "ZR_6002199", source: .bonjour)
+
+    // Off the camera AP, the AP chip stays dark even if the body is visible on house Wi‑Fi.
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: accessPoint,
+            discoveredCameras: [onRouter],
+            connectedHost: nil,
+            onCameraAccessPoint: false
+        ) == .offline)
+    // On the camera AP, a name-matched discovery is the body (hosts vary — no universal AP IP).
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: accessPoint,
+            discoveredCameras: [onRouter],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(onRouter))
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: router,
+            discoveredCameras: [onRouter],
+            connectedHost: nil,
+            onCameraAccessPoint: false
+        ) == .available(onRouter))
+}
+
+/// …and the AP setup still lights when the body actually answers at the access point's address.
+@Test func anApSetupLightsWhenTheCameraAnswersAtTheAccessPointAddress() {
+    let accessPoint = PTPIPSavedCameraRecord(
+        host: "192.168.1.50",
+        displayName: "ZR_6002199",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        serialNumber: "6002199",
+        path: .cameraAccessPoint(ssid: "NIKON_ZR_6002199")
+    )
+    let onAP = DiscoveredCamera(
+        ip: "192.168.1.50", name: "ZR_6002199", source: .bonjour)
+
+    #expect(
+        SavedCameraAvailabilityPolicy.resolve(
+            camera: accessPoint,
+            discoveredCameras: [onAP],
+            connectedHost: nil,
+            onCameraAccessPoint: true
+        ) == .available(onAP))
 }

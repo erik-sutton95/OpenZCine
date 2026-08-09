@@ -37,20 +37,24 @@ import Testing
     #expect(hosts == CameraDiscovery.fastHosts(inSubnet: "192.168.7"))
 }
 
-@Test func discoveryBuildsWifiScanHostsForCameraApAndPersonalHotspot() throws {
+@Test func discoveryBuildsWifiScanHostsFromLocalSubnetsOnly() throws {
     let hosts = CameraDiscovery.automaticScanHosts(localAddresses: ["172.20.10.1"])
 
-    #expect(hosts.first == "192.168.1.1")
+    // No fixed camera-AP IP is injected — only the phone's own subnet.
+    #expect(!hosts.contains("192.168.1.1") || hosts.contains("172.20.10.15"))
     #expect(hosts.contains("172.20.10.15"))
     #expect(!hosts.contains("172.20.10.1"))
     #expect(Set(hosts).count == hosts.count)
+    #expect(hosts.allSatisfy { $0.hasPrefix("172.20.10.") })
 }
 
-@Test func discoveryDoesNotDuplicateCameraApHostWhenPhoneIsOnCameraSubnet() throws {
+@Test func discoveryDoesNotInjectAFixedCameraApHost() throws {
     let hosts = CameraDiscovery.automaticScanHosts(localAddresses: ["192.168.1.23"])
 
+    #expect(hosts.contains("192.168.1.1"))  // first host of the /24 sweep, not a special case
     #expect(hosts.filter { $0 == "192.168.1.1" }.count == 1)
     #expect(!hosts.contains("192.168.1.23"))
+    #expect(hosts.allSatisfy { $0.hasPrefix("192.168.1.") })
 }
 
 @Test func discoveryScansOnlySupportedLocalInterfaces() throws {
@@ -81,15 +85,13 @@ import Testing
         ])
 }
 
-@Test func prioritizedScanHostsPutSavedAndAccessPointFirstWithoutDuplicates() {
+@Test func prioritizedScanHostsPutSavedHostsFirstWithoutDuplicates() {
     let split = CameraDiscovery.prioritizedScanHosts(
-        priorityHosts: ["192.168.7.23", "192.168.1.1", " 192.168.7.23 "],
+        priorityHosts: ["192.168.7.23", "192.168.1.50", " 192.168.7.23 "],
         localAddresses: ["192.168.7.10"]
     )
-    // AP host leads, saved host follows once (normalized + deduped).
-    #expect(split.priority == ["192.168.1.1", "192.168.7.23"])
-    // The remaining sweep never repeats a priority host and keeps subnet order.
-    #expect(!split.remaining.contains("192.168.1.1"))
+    // Only saved/dialling hosts — no invented AP convention address.
+    #expect(split.priority == ["192.168.7.23", "192.168.1.50"])
     #expect(!split.remaining.contains("192.168.7.23"))
     #expect(split.remaining.contains("192.168.7.2"))
     #expect(!split.remaining.contains("192.168.7.10"))  // the phone itself
@@ -103,7 +105,15 @@ import Testing
         priorityHosts: ["192.168.7.10"],
         localAddresses: ["192.168.7.10"]
     )
-    #expect(split.priority == ["192.168.1.1"])
+    #expect(split.priority.isEmpty)
+}
+
+@Test func prioritizedScanHostsSkipVirtualKeys() {
+    let split = CameraDiscovery.prioritizedScanHosts(
+        priorityHosts: ["usb:deadbeef", "ap:NIKON_ZR_1", "192.168.1.246"],
+        localAddresses: ["192.168.1.10"]
+    )
+    #expect(split.priority == ["192.168.1.246"])
 }
 
 @Test func automaticDiscoveryBacksOffToProtectSleepingCameras() {

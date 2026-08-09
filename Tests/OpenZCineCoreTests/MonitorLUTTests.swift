@@ -248,6 +248,9 @@ func cubeIsFinite(look: MonitorLUT) {
     var preferences = OperatorPreferences.defaults
     preferences.splitComparisonEnabled = true
     preferences.liveViewVisibleAssistTools = [.lut]
+    // The stock pins include the LUT; this is about what an UNPINNED tool does in clean, so
+    // start from a bare set rather than from whatever DISP 2 happens to ship with.
+    preferences.cleanViewPinnedTools = []
 
     let live = MonitorChromePolicy.visibleTools(mode: .live, preferences: preferences)
     #expect(LUTResolution.splitComparison(visibleTools: live, preferences: preferences) != nil)
@@ -379,4 +382,35 @@ func cubeIsFinite(look: MonitorLUT) {
         OperatorPreferences.self, from: try JSONEncoder().encode(preferences))
     #expect(!reloaded.splitComparisonEnabled)
     #expect(reloaded.splitComparisonOrientation == .horizontal)
+}
+
+/// The movie and stills white balance are different camera settings that decode through the same
+/// table. They used to share one field, last writer winning — so a stills-WB event during the
+/// record burst repainted the movie readout as Auto while the camera's movie WB never moved.
+@Test func aStillsWhiteBalanceEventCannotRepaintTheMovieReadout() {
+    let snapshot = PTPCameraPropertySnapshot()
+        .applying(property: .movieWhiteBalance, data: Data(ByteCoding.uint16LE(0x8012)))
+        .applying(property: .movieWBColorTemp, data: Data(ByteCoding.uint16LE(5560)))
+        .applying(property: .whiteBalance, data: Data(ByteCoding.uint16LE(0x0002)))
+
+    #expect(snapshot.wbMode == "Color temp")
+    #expect(snapshot.stillWBMode == "Auto")
+    // Video keeps its own; stills keeps its own.
+    #expect(snapshot.activeWBMode(photography: false) == "Color temp")
+    #expect(snapshot.activeWBMode(photography: true) == "Auto")
+
+    let state = CameraDisplayState.blank.applyingCameraProperties(snapshot, photography: false)
+    #expect(state.values.first { $0.label == "WB" }?.value == "5560K")
+}
+
+/// A body that has only ever reported one side still reads out — the split must not blank the
+/// tile on a camera that pushes just one of the two properties.
+@Test func aWhiteBalanceFromEitherSideStillShowsWhenItIsTheOnlyOne() {
+    let stillsOnly = PTPCameraPropertySnapshot()
+        .applying(property: .whiteBalance, data: Data(ByteCoding.uint16LE(0x0004)))
+    #expect(stillsOnly.activeWBMode(photography: false) == "Sunny")
+
+    let movieOnly = PTPCameraPropertySnapshot()
+        .applying(property: .movieWhiteBalance, data: Data(ByteCoding.uint16LE(0x8011)))
+    #expect(movieOnly.activeWBMode(photography: true) == "Shade")
 }

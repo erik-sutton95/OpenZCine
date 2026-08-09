@@ -150,6 +150,10 @@ object SwiftCore {
      * @param portraitFeedAspectRatio fit-mode feed content ratio: photography
      *   passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders
      *   whole under the top bar; video passes 16:9. Ignored in fill.
+     * @param canDriveCamera `MonitorDataAvailability.canDriveCamera`. False for a
+     *   relay watcher without the control token, which owns the band the capture
+     *   strip would have taken: the core then centres the assist strip and drops
+     *   DISP into the trailing corner, exactly as on iOS.
      */
     external fun monitorZoneMap(
         viewportWidth: Float,
@@ -165,6 +169,7 @@ object SwiftCore {
         mirrored: Boolean,
         bottomBarHeight: Float,
         portraitFeedAspectRatio: Float,
+        canDriveCamera: Boolean,
     ): FloatArray
 
     /**
@@ -449,6 +454,8 @@ object SwiftCore {
         isRecoveringStream: Boolean,
         isUsbTransport: Boolean,
         resetSignalBars: Boolean,
+        throughputMegabitsPerSecond: Double,
+        hasThroughput: Boolean,
     ): String?
 
     /**
@@ -462,6 +469,21 @@ object SwiftCore {
 
     /** The shared automatic-attempt budget, for a truthful "attempt N of M". */
     external fun sessionMaxAutomaticAttempts(): Int
+
+    /**
+     * Records one session drop in the shared drop-storm ledger. `true` means
+     * automatic recovery must pause for the operator: reconnects that keep
+     * succeeding and dying young are churning the body's PTP stack toward its
+     * battery-pull wedge, and only a cross-run drop count can catch that.
+     */
+    external fun sessionNoteSessionDrop(): Boolean
+
+    /** Drops inside the storm window, for the operator-facing count. */
+    external fun sessionDropsInStormWindow(): Int
+
+    /** Operator action (retry, disconnect, fresh connect) starts a fresh ledger. */
+    external fun sessionResetDropStormGuard()
+
 
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 
@@ -888,6 +910,70 @@ object SwiftCore {
                 levelRollDegrees = levelRollDegrees,
                 levelPitchDegrees = levelPitchDegrees,
                 levelYawDegrees = levelYawDegrees,
+            )
+        }
+
+        /**
+         * Newest additive live-frame callback: full metadata plus the body
+         * rotation from the live-view header (0 landscape, 1 portrait grip
+         * up, 2 portrait grip down, 3 upside down — vertical mode). The
+         * facade falls back to [onFrameWithFullMetadata] and older
+         * descriptors when this one is absent.
+         */
+        fun onFrameWithRotation(
+            jpeg: ByteArray,
+            timestampNanos: Long,
+            isRecording: Boolean,
+            leftLevelDb: Double,
+            leftPeakDb: Double,
+            rightLevelDb: Double,
+            rightPeakDb: Double,
+            hasAudioLevels: Boolean,
+            hasFocus: Boolean,
+            focusCoordinateWidth: Int,
+            focusCoordinateHeight: Int,
+            focusResult: Int,
+            subjectDetectionActive: Boolean,
+            trackingAFActive: Boolean,
+            selectedBoxIndex: Int,
+            focusBoxes: IntArray,
+            hasLevel: Boolean,
+            levelRollDegrees: Double,
+            levelPitchDegrees: Double,
+            levelYawDegrees: Double,
+            timecodeOn: Boolean,
+            timecodeHour: Int,
+            timecodeMinute: Int,
+            timecodeSecond: Int,
+            timecodeFrame: Int,
+            rotation: Int,
+        ) {
+            onFrameWithFullMetadata(
+                jpeg = jpeg,
+                timestampNanos = timestampNanos,
+                isRecording = isRecording,
+                leftLevelDb = leftLevelDb,
+                leftPeakDb = leftPeakDb,
+                rightLevelDb = rightLevelDb,
+                rightPeakDb = rightPeakDb,
+                hasAudioLevels = hasAudioLevels,
+                hasFocus = hasFocus,
+                focusCoordinateWidth = focusCoordinateWidth,
+                focusCoordinateHeight = focusCoordinateHeight,
+                focusResult = focusResult,
+                subjectDetectionActive = subjectDetectionActive,
+                trackingAFActive = trackingAFActive,
+                selectedBoxIndex = selectedBoxIndex,
+                focusBoxes = focusBoxes,
+                hasLevel = hasLevel,
+                levelRollDegrees = levelRollDegrees,
+                levelPitchDegrees = levelPitchDegrees,
+                levelYawDegrees = levelYawDegrees,
+                timecodeOn = timecodeOn,
+                timecodeHour = timecodeHour,
+                timecodeMinute = timecodeMinute,
+                timecodeSecond = timecodeSecond,
+                timecodeFrame = timecodeFrame,
             )
         }
 

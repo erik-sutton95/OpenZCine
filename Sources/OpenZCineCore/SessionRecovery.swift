@@ -12,9 +12,48 @@ public enum SessionRecoveryState: Equatable, Sendable {
     case retrying(attempt: Int, maxAttempts: Int)
     /// The automatic budget is spent. The operator chooses: retry, or leave the monitor.
     case waitingForOperator(attemptsMade: Int)
+    /// Reconnects kept SUCCEEDING but the session kept dying young (see
+    /// ``SessionDropStormGuard``). Automatic recovery is paused to protect the camera; the
+    /// operator chooses.
+    case pausedAfterRepeatedDrops(drops: Int)
 
     /// Whether the operator should be shown the recovery affordance over the frozen frame.
     public var isRecovering: Bool { self != .idle }
+}
+
+/// Cross-run damping for sessions that reconnect cleanly but keep dying.
+///
+/// ``SessionRecoveryPolicy`` bounds one recovery run, but a run that *succeeds* resets the
+/// budget — so a periodic external killer (another device PTP-probing the camera, an unanswered
+/// body-side liveness probe) produced an unbounded storm of instant reconnects. Nikon bodies
+/// wedge under that churn: enough rapid session opens and the camera stops accepting
+/// connections until a battery pull. This guard counts DROPS rather than failures, across
+/// recovery runs; when they cluster, automatic recovery pauses and the operator decides.
+///
+/// Reset on operator action (retry, disconnect, fresh connect) — never on reconnect success,
+/// because success is exactly what a storm fakes well.
+public struct SessionDropStormGuard: Sendable, Equatable {
+    private var dropTimesSeconds: [Double] = []
+
+    public init() {}
+
+    /// Drops older than this no longer count toward the storm verdict.
+    public static let windowSeconds: Double = 120
+    /// This many drops inside the window pauses automatic recovery.
+    public static let pauseAfterDrops = 3
+
+    /// Records a session drop at `now` (any monotonic seconds timeline) and reports whether
+    /// automatic recovery must pause.
+    public mutating func noteDrop(now: Double) -> Bool {
+        dropTimesSeconds.append(now)
+        dropTimesSeconds.removeAll { now - $0 > Self.windowSeconds }
+        return dropTimesSeconds.count >= Self.pauseAfterDrops
+    }
+
+    /// Drops currently inside the window (drives the operator-facing count).
+    public var dropsInWindow: Int { dropTimesSeconds.count }
+
+    public mutating func reset() { dropTimesSeconds.removeAll() }
 }
 
 /// What the recovery loop should do after `n` consecutive failed reconnect attempts.
@@ -87,6 +126,7 @@ public enum SessionRecoveryCopy {
         case .idle: return ""
         case .retrying: return "Reconnecting…"
         case .waitingForOperator: return "Camera disconnected"
+        case .pausedAfterRepeatedDrops: return "Connection keeps dropping"
         }
     }
 
@@ -103,6 +143,9 @@ public enum SessionRecoveryCopy {
         case .waitingForOperator(let attemptsMade):
             let tries = attemptsMade == 1 ? "1 try" : "\(attemptsMade) tries"
             return "\(camera) didn't come back after \(tries). The frame below is held, not live."
+        case .pausedAfterRepeatedDrops(let drops):
+            return
+                "\(camera) reconnected but dropped \(drops) times in quick succession. Automatic retries are paused to protect the camera — another device may be scanning for cameras. The frame below is held, not live."
         }
     }
 

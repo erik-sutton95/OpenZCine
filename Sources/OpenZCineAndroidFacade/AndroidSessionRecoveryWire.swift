@@ -35,4 +35,39 @@ public enum AndroidSessionRecoveryWire {
     public static var maximumAutomaticAttempts: Int {
         SessionRecoveryPolicy.monitor.maxAutomaticAttempts
     }
+
+    /// Lock-protected process state for the one active Android camera link's
+    /// drop-storm ledger (see ``SessionDropStormGuard`` — reconnects that keep
+    /// succeeding and dying young must pause, or the churn wedges the body).
+    /// Mirrors the `AndroidLinkHealthWire` storage shape.
+    private final class StormGuardStorage: @unchecked Sendable {
+        let lock = NSLock()
+        var guardState = SessionDropStormGuard()
+    }
+
+    private static let stormStorage = StormGuardStorage()
+
+    /// Records one session drop and reports whether automatic recovery must
+    /// pause for the operator. The timestamp is drawn here (CLOCK_MONOTONIC)
+    /// so Kotlin never supplies a clock the shared policy has to trust.
+    public static func noteSessionDrop() -> Bool {
+        let now = Double(PTPIPClientSession.monotonicNanoseconds()) / 1_000_000_000
+        stormStorage.lock.lock()
+        defer { stormStorage.lock.unlock() }
+        return stormStorage.guardState.noteDrop(now: now)
+    }
+
+    /// Drops currently inside the storm window, for the operator-facing count.
+    public static var dropsInStormWindow: Int {
+        stormStorage.lock.lock()
+        defer { stormStorage.lock.unlock() }
+        return stormStorage.guardState.dropsInWindow
+    }
+
+    /// Operator action (retry, disconnect, fresh connect) starts a fresh ledger.
+    public static func resetDropStormGuard() {
+        stormStorage.lock.lock()
+        defer { stormStorage.lock.unlock() }
+        stormStorage.guardState.reset()
+    }
 }

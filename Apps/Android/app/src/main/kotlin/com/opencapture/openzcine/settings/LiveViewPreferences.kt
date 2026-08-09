@@ -17,8 +17,15 @@ public enum class LiveViewStreamPreset(
     QUALITY(2, "Quality"),
     ;
 
-    internal companion object {
-        fun fromStoredName(value: String?): LiveViewStreamPreset? =
+    public companion object {
+        /**
+         * What a setup with no chosen preset runs at. The smallest preset is ~320x240 - too
+         * little for the focus and exposure detectors to read anything but compression
+         * structure - so the shipped answer is the largest stream the body will send.
+         */
+        public val SHIPPED_DEFAULT: LiveViewStreamPreset = QUALITY
+
+        internal fun fromStoredName(value: String?): LiveViewStreamPreset? =
             entries.firstOrNull { it.name == value }
     }
 }
@@ -52,8 +59,11 @@ public enum class LiveViewQualityBias(
                 DETAIL -> R.string.settings_quality_bias_quality
             }
 
-    internal companion object {
-        fun fromStoredName(value: String?): LiveViewQualityBias? =
+    public companion object {
+        /** What a setup with no chosen bias runs at, unless its path says otherwise. */
+        public val SHIPPED_DEFAULT: LiveViewQualityBias = BALANCED
+
+        internal fun fromStoredName(value: String?): LiveViewQualityBias? =
             entries.firstOrNull { it.name == value }
     }
 }

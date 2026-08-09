@@ -48,10 +48,15 @@ internal class TransportCameraSession(
 
     override suspend fun connect() {
         mutableState.value = CameraSessionState.Connecting
+        // No fixed camera-AP IP — discover on the live link after join, or fail closed.
         val camera =
             withTimeoutOrNull(discoveryWindowMillis) {
                 discovery.cameras().first { it.isNotEmpty() }.first()
-            } ?: CameraDiscovery.accessPointCamera()
+            }
+        if (camera == null) {
+            mutableState.value = CameraSessionState.Disconnected
+            return
+        }
 
         val candidate = PtpIpSocketTransport(camera.host, camera.port)
         try {

@@ -42,8 +42,13 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
     /// (`RelayBitrateAdaptation`); mid-session `AverageBitRate` updates are the same mechanism
     /// production WebRTC uses on this encoder.
     private static let initialBitsPerSecond = RelayBitrateAdaptation.ladder[0]
-    /// An upper bound on how long a resuming or joining peer waits for a decodable frame.
-    private static let maxKeyframeInterval = 50
+    /// Latency-vs-quality stance; drives the encoder's own keyframe cadence. Forced keyframes
+    /// (joins, resumes) are profile-independent, so a joiner never waits longer either way.
+    private let profile: RelayEncoderProfile
+
+    init(profile: RelayEncoderProfile) {
+        self.profile = profile
+    }
     /// Minimum spacing between FORCED keyframes. A keyframe is 3–8× the bytes of a predicted
     /// frame; a permanently-slow viewer re-requesting one on every skip would turn the whole
     /// stream keyframe-heavy and degrade every other viewer with it. One second matches
@@ -146,6 +151,18 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         }
         CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        // The input's own tags, matching the session's output tags exactly: VideoToolbox
+        // colour-matches whenever they differ, and an untagged RGB buffer invites it to guess.
+        // Identical tags make the RGB→YCbCr matrixing the ONLY conversion in the pipeline.
+        CVBufferSetAttachment(
+            pixelBuffer, kCVImageBufferColorPrimariesKey,
+            kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(
+            pixelBuffer, kCVImageBufferTransferFunctionKey,
+            kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
+        CVBufferSetAttachment(
+            pixelBuffer, kCVImageBufferYCbCrMatrixKey,
+            kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
 
         // Honor a latched keyframe request only past the storm limit; the latch survives an
         // deferred honor, so a joiner is never dropped — only spaced.
@@ -199,9 +216,13 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         }
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        // Main10, with an 8-bit source: the two extra bits of internal precision are the
+        // cheapest smoothing there is for the flat gradients log footage is full of — banding
+        // and dark-area blocking come from transform quantization, not from the source depth.
+        // Hardware-native encode and decode on every device the app targets.
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_ProfileLevel,
-            value: kVTProfileLevel_HEVC_Main_AutoLevel)
+            value: kVTProfileLevel_HEVC_Main10_AutoLevel)
         // No B-frames: reordering buys compression at the cost of latency, and a monitor is the
         // one consumer that always takes latency as the loss.
         VTSessionSetProperty(
@@ -212,15 +233,19 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
             value: targetMaxFrameQP as CFNumber)
-        // Explicit BT.709 tags, written into the stream: without them every decoder guesses
-        // the matrix/transfer, and a 601-vs-709 guess is exactly the colour skew watchers see
-        // once a LUT amplifies it.
+        // Explicit colour tags, written into the stream — and chosen for an IDENTITY round
+        // trip, not for broadcast convention. The source pixels are sRGB (decoded JPEG drawn
+        // through CoreGraphics); tagging them BT.709-transfer made the decode side apply a
+        // 709→sRGB transfer conversion the content never had — a shadows/contrast shift every
+        // watcher LUT then amplified. Both ends of this wire are our own code, so the stream
+        // says what the pixels ARE: sRGB transfer, 709 primaries (identical to sRGB's), 709
+        // matrix. Decoder attachments then cancel exactly.
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_ColorPrimaries,
             value: kCMFormatDescriptionColorPrimaries_ITU_R_709_2)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_TransferFunction,
-            value: kCMFormatDescriptionTransferFunction_ITU_R_709_2)
+            value: kCMFormatDescriptionTransferFunction_sRGB)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_YCbCrMatrix,
             value: kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2)
@@ -232,7 +257,7 @@ final class MonitorRelayVideoEncoder: @unchecked Sendable {
             value: [Double(targetBitsPerSecond) / 8 * 2.0, 1.0] as CFArray)
         VTSessionSetProperty(
             created, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
-            value: Self.maxKeyframeInterval as CFNumber)
+            value: profile.maxKeyframeInterval as CFNumber)
         VTCompressionSessionPrepareToEncodeFrames(created)
         session = created
         sessionWidth = width

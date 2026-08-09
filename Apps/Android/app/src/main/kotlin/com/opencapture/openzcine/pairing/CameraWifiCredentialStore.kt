@@ -60,6 +60,11 @@ public class CameraWifiCredentialStore(context: Context) : PairingCredentials {
         preferences.edit().putString(entryName(ssid), value).apply()
     }
 
+    /** Forgets the key for [ssid]. */
+    override fun remove(ssid: String) {
+        preferences.edit().remove(entryName(ssid)).apply()
+    }
+
     private fun entryName(ssid: String): String = "ssid:" + ssid.trim()
 
     /** The non-exportable AES key, generated inside the Keystore on first use. */

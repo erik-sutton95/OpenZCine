@@ -6,6 +6,9 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.openzcine.core.MonitorDataAvailability
+import com.opencapture.openzcine.settings.ChromeSection
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -68,12 +71,19 @@ class MonitorReadoutsTest {
 
     @Test
     fun `battery labels distinguish percentage external power and unavailable`() {
-        assertEquals("0%", batteryReadoutLabel(0))
-        assertEquals("80%", batteryReadoutLabel(80, externalPower = true))
+        // #303: the camera gauge is five bars, not a percentage — BatteryLevel only ever carries
+        // 1/20/40/60/80/100, so "80%" claimed a precision the body never sent.
+        assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(0))
+        assertEquals("\u25AE\u25AE\u25AE\u25AE\u25AF", batteryReadoutLabel(80, externalPower = true))
+        assertEquals("\u25AE\u25AE\u25AE\u25AF\u25AF", batteryReadoutLabel(60))
+        assertEquals("\u25AE\u25AF\u25AF\u25AF\u25AF", batteryReadoutLabel(20))
+        // The blinking shutter-disabled step, and an off-step value rounding up to its step.
+        assertEquals("\u25AE\u25AF\u25AF\u25AF\u25AF", batteryReadoutLabel(1))
+        assertEquals("\u25AE\u25AE\u25AF\u25AF\u25AF", batteryReadoutLabel(39))
         assertEquals("EXT", batteryReadoutLabel(null, externalPower = true))
         assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(Int.MIN_VALUE))
         val poweredPercentage = monitorBatteryPresentation(80, externalPower = true)
-        assertEquals("80%", poweredPercentage.label)
+        assertEquals("\u25AE\u25AE\u25AE\u25AE\u25AF", poweredPercentage.label)
         assertEquals(80, poweredPercentage.percent)
         assertTrue(poweredPercentage.externalPower)
         val poweredOnly = monitorBatteryPresentation(null, externalPower = true)
@@ -162,6 +172,31 @@ class MonitorReadoutsTest {
     }
 
     @Test
+    fun `timecode readout hides on a body that strikes no timecode`() {
+        val owning = MonitorDataAvailability.OWNING
+
+        // The live-view header's own status bit gates the slot: bodies with no timecode hardware
+        // pin it to zero forever, and a frozen 00:00:00:00 on set is worse than no readout.
+        assertTrue(owning.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = true))
+        assertFalse(owning.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = false))
+
+        // Photography rents the same slot for the SHOTS counter, which has nothing to do with
+        // timecode — it follows the camera link instead.
+        assertTrue(
+            owning.hasSource(
+                ChromeSection.TIMECODE_READOUT,
+                cameraReportsTimecode = false,
+                isPhotographyMode = true,
+            ),
+        )
+
+        // A device receiving nothing has no timecode source however the body is set.
+        val unlinked =
+            MonitorDataAvailability(ownsCameraSession = false, receivesCameraMetadata = false)
+        assertFalse(unlinked.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = true))
+    }
+
+    @Test
     fun `resolution label classes width like iOS MonitorTextFormat`() {
         assertEquals("6K · 25p", monitorResolutionLabel("6048x3402", 25, fallback = "held"))
         assertEquals("4K · 24p", monitorResolutionLabel("4032x2268", 24, fallback = "held"))
@@ -199,5 +234,55 @@ class MonitorReadoutsTest {
         assertEquals(status.minutesRemaining, status.minutesRemaining.coerceIn(35, 45))
         assertEquals("${status.minutesRemaining} Min", status.durationLabel)
         assertNull(monitorMediaStatus(null, "R3D NE", "6048x3402", 25))
+    }
+
+    @Test
+    fun `fps chip says what the feed is doing instead of the rate it last had`() {
+        assertEquals("25.00", fpsChipLabel(rate = 25.0, state = null))
+        assertEquals("23.98", fpsChipLabel(rate = 23.976, state = null))
+        // The whole point: a measured rate is still sitting there when the feed stops.
+        assertEquals("NO LINK", fpsChipLabel(rate = 25.0, state = MonitorFeedState.NO_LINK))
+        assertEquals("RECOV", fpsChipLabel(rate = 25.0, state = MonitorFeedState.RECOV))
+        assertEquals("BUSY", fpsChipLabel(rate = 25.0, state = MonitorFeedState.BUSY))
+        assertEquals("FAIL", fpsChipLabel(rate = 25.0, state = MonitorFeedState.FAIL))
+        // Nothing measured yet is iOS's "READY", and a non-measurement never prints as a rate.
+        assertEquals("READY", fpsChipLabel(rate = null, state = null))
+        assertEquals("READY", fpsChipLabel(rate = 0.0, state = null))
+        assertEquals("READY", fpsChipLabel(rate = -1.0, state = null))
+        assertEquals("READY", fpsChipLabel(rate = Double.NaN, state = null))
+        assertEquals("READY", fpsChipLabel(rate = Double.POSITIVE_INFINITY, state = null))
+    }
+
+    @Test
+    fun `the chip carries a word from the first connect, never a blank`() {
+        // The screen round-trips the sampler's seed back through `formatted.toDoubleOrNull()`, so
+        // this exact path — a non-numeric seed and no feed state — runs on every connect before the
+        // first frame. It has to land on READY; anything falsy there blanks the chip.
+        val seeded = MonitorFrameRateSampler().formatted
+        assertEquals("READY", seeded)
+        assertEquals("READY", fpsChipLabel(rate = seeded.toDoubleOrNull(), state = null))
+    }
+
+    @Test
+    fun `feed-state words are spelled the same in code and in strings`() {
+        // The words live in Kotlin so the chip's rule stays a pure function the caller can test.
+        // That is only safe while the resource says the same thing, so pin the two together.
+        val strings =
+            Path.of(
+                requireNotNull(System.getProperty("openzcine.repositoryRoot")) {
+                    "Gradle must expose the OpenZCine repository root to readout tests"
+                },
+            ).resolve("Apps/Android/app/src/main/res/values/strings.xml").toFile().readText()
+        mapOf(
+            MonitorFeedState.NO_LINK to "monitor_fps_no_link",
+            MonitorFeedState.RECOV to "monitor_fps_recov",
+            MonitorFeedState.BUSY to "monitor_fps_busy",
+            MonitorFeedState.FAIL to "monitor_fps_fail",
+        ).forEach { (state, resource) ->
+            assertTrue(
+                """<string name="$resource">${state.word}</string>""" in strings,
+                "$resource must read ${state.word}, matching MonitorFeedState.$state",
+            )
+        }
     }
 }

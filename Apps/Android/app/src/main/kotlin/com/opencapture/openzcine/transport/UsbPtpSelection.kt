@@ -88,15 +88,35 @@ public object UsbPtpInterfaceSelector {
  * The USB serial never leaves the platform layer: the saved-camera host key
  * contains only a SHA-256 digest scoped by USB vendor/product IDs. The digest
  * is a local persistence/reconnect key, never an operator-facing label, log
- * value, or network address. A missing serial intentionally yields null rather
- * than persisting an unstable kernel device path as if it were a camera identity.
+ * value, or network address. An unstable kernel device path is never persisted
+ * as if it were a camera identity.
  */
 public object UsbCameraHostKey {
-    /** Creates a stable `usb:<digest>` key, or null when no serial is available. */
-    public fun derive(vendorId: Int, productId: Int, serialNumber: String?): String? {
-        val serial = serialNumber?.trim()?.takeIf(String::isNotEmpty) ?: return null
-        val material = "$vendorId:$productId:$serial".encodeToByteArray()
-        val digest = MessageDigest.getInstance("SHA-256").digest(material)
+    /**
+     * Creates a stable `usb:<digest>` key.
+     *
+     * A missing serial used to yield null, and null meant the camera was dropped from the
+     * pairing list the instant USB permission was granted — the wizard sat on "Waiting for
+     * camera on USB-C" for ever with the cable plugged in and permission allowed (field
+     * report: Redmi K90 Ultra, Android 16, 2026-08-08). Plenty of ROMs simply never surface
+     * the USB serial string descriptor, and that is not a camera we cannot identify, it is a
+     * descriptor the phone would not read.
+     *
+     * So a serial-less device falls back to its model. That is enough for what this key has
+     * to do — reopen the right attached device — and the body's REAL serial arrives from PTP
+     * `GetDeviceInfo` at establishment, which is what the saved record carries from then on.
+     * The namespaces are kept apart so one camera can never be one key while its serial reads
+     * and a different key while it does not.
+     *
+     * Two identical bodies would share a model key. They would also need a powered hub to be
+     * attached to one phone at once, and the PTP identity separates them the moment either
+     * connects.
+     */
+    public fun derive(vendorId: Int, productId: Int, serialNumber: String?): String {
+        val serial = serialNumber?.trim()?.takeIf(String::isNotEmpty)
+        val material =
+            if (serial != null) "$vendorId:$productId:$serial" else "model:$vendorId:$productId"
+        val digest = MessageDigest.getInstance("SHA-256").digest(material.encodeToByteArray())
         return "usb:" + digest.take(HOST_KEY_DIGEST_BYTES).joinToString("") { byte ->
             "%02x".format(byte.toInt() and 0xFF)
         }
@@ -162,6 +182,15 @@ public class UsbPtpAttachmentState {
             deniedTokens += token
         }
     }
+
+    /**
+     * Whether the operator's last answer for [token] was a refusal.
+     *
+     * Read only by diagnostics: a declined dialog and a grant the ROM does not make stick leave
+     * the same `NEEDS_PERMISSION` state, and the exported report could not tell them apart.
+     */
+    @Synchronized
+    public fun isDenied(token: String): Boolean = token in deniedTokens
 
     /** Clears a prior denial when the operator explicitly asks Android again. */
     @Synchronized

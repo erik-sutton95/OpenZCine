@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.bridge
 
+import com.opencapture.openzcine.core.LiveFeedRotation
 import com.opencapture.openzcine.core.LiveFrame
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
@@ -202,6 +203,58 @@ class SwiftCoreLiveFrameSourceTest {
         assertEquals(3, frame.timecode?.second)
         assertEquals(4, frame.timecode?.frame)
         assertNull(frame.measuredFramesPerSecond)
+        // Older callbacks never carry a body rotation; the frame stays landscape.
+        assertEquals(LiveFeedRotation.LANDSCAPE, frame.rotation)
+    }
+
+    @Test
+    fun `rotation callback carries the body rotation with its frame`() = runTest {
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener = it },
+                stop = {},
+                configurePreview = { true },
+                sharingScope = backgroundScope,
+            )
+
+        val result = async { source.frames.first() }
+        runCurrent()
+        listener.onFrameWithRotation(
+            jpeg = byteArrayOf(4, 5, 6),
+            timestampNanos = 1_000_000_000L,
+            isRecording = false,
+            leftLevelDb = -60.0,
+            leftPeakDb = -60.0,
+            rightLevelDb = -60.0,
+            rightPeakDb = -60.0,
+            hasAudioLevels = false,
+            hasFocus = false,
+            focusCoordinateWidth = 0,
+            focusCoordinateHeight = 0,
+            focusResult = 0,
+            subjectDetectionActive = false,
+            trackingAFActive = false,
+            selectedBoxIndex = -1,
+            focusBoxes = intArrayOf(),
+            hasLevel = false,
+            levelRollDegrees = 0.0,
+            levelPitchDegrees = 0.0,
+            levelYawDegrees = 0.0,
+            timecodeOn = true,
+            timecodeHour = 1,
+            timecodeMinute = 2,
+            timecodeSecond = 3,
+            timecodeFrame = 4,
+            rotation = 1,
+        )
+        runCurrent()
+
+        val frame = result.await()
+        assertEquals(LiveFeedRotation.PORTRAIT_GRIP_UP, frame.rotation)
+        // The richest callback still carries everything the older ones did.
+        assertEquals(true, frame.timecode?.on)
     }
 
     @Test

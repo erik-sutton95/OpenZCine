@@ -634,6 +634,65 @@ class CommandMonitorTest {
     }
 
     @Test
+    fun `only a codec proven non-RAW unlocks electronic VR`() {
+        // iOS gates its e-VR row on MonitorTextFormat.isRawCodec
+        // (ios/Runner/MonitorPanels.swift:1566-1568) — the ZR refuses e-VR on a RAW stream.
+        assertTrue(electronicVRAllowsCodec("H.265 10-bit"))
+        assertTrue(electronicVRAllowsCodec("ProRes 422 HQ"))
+        assertFalse(electronicVRAllowsCodec("N-RAW"))
+        assertFalse(electronicVRAllowsCodec("ProRes RAW HQ"))
+        // Both the body's verbatim string and the shortened label classify the same.
+        assertFalse(electronicVRAllowsCodec("R3D NE 10-bit R3D"))
+        assertFalse(electronicVRAllowsCodec("R3D NE"))
+        // A codec not read back yet is not proof of a non-RAW stream: fail closed, like the
+        // facade does with the enum itself (PTPIPClientSession.swift:439-442).
+        assertFalse(electronicVRAllowsCodec(null))
+        assertFalse(electronicVRAllowsCodec(" "))
+    }
+
+    @Test
+    fun `electronic VR tile carries the write the combined VR tile cannot`() {
+        fun evrTile(codec: String) =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        codec = codec,
+                        electronicVr = "OFF",
+                        vibrationReduction = "ON",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                vibrationReduction = listOf("OFF", "ON"),
+                                electronicVr = listOf("OFF", "ON"),
+                            ),
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+                .tiles
+                .first { it.kind == CommandTileKind.ELECTRONIC_VR }
+
+        val writable = evrTile("H.265")
+        assertEquals("OFF", writable.value)
+        val request = assertNotNull(writable.request)
+        assertEquals(CameraControl.ELECTRONIC_VR, request.control)
+        assertEquals(listOf("OFF", "ON"), request.options)
+        assertNull(writable.unavailableReason)
+
+        // RAW keeps the readout and drops the write, like iOS's greyed row.
+        val blocked = evrTile("N-RAW")
+        assertEquals("OFF", blocked.value)
+        assertNull(blocked.request)
+        assertEquals(
+            "Electronic VR is unavailable for this camera or active codec.",
+            blocked.unavailableReason,
+        )
+    }
+
+    @Test
     fun `side section rows match iOS CmdRow packing`() {
         val audio =
             CommandSideSectionPresentation(

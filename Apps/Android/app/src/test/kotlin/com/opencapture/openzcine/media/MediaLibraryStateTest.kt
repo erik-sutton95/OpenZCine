@@ -300,6 +300,44 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `a complete pass drops clips deleted in-camera and keeps the downloaded ones`() {
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val stillOnCard = clip(1, "A001.MOV")
+        val deletedInCamera = clip(2, "A002.MOV")
+        val deletedButDownloaded = clip(3, "A003.MOV")
+        index.rememberCameraListing(
+            "camera",
+            listOf(stillOnCard, deletedInCamera, deletedButDownloaded),
+        )
+
+        index.beginCameraListing("camera").apply {
+            applyPage(listOf(stillOnCard), emptyList())
+            commit(prunesUnlistedClips = true) { it.handle == deletedButDownloaded.handle }
+        }
+
+        assertEquals(
+            listOf(stillOnCard.handle, deletedButDownloaded.handle),
+            index.persistedClips("camera").map { it.handle }.sorted(),
+        )
+    }
+
+    @Test
+    fun `an interrupted pass never prunes the clips it has not reached`() {
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val first = clip(1, "A001.MOV")
+        val notYetListed = clip(2, "A002.MOV")
+        index.rememberCameraListing("camera", listOf(first, notYetListed))
+
+        // The paging failure path commits what it has; the rest of the card is simply unknown.
+        index.beginCameraListing("camera").apply {
+            applyPage(listOf(first), emptyList())
+            commit()
+        }
+
+        assertEquals(2, index.persistedClips("camera").size)
+    }
+
+    @Test
     fun `resolved size written while pages load survives the final checkpoint commit`() {
         val preferences = MemoryPreferences()
         val index = MediaLibraryIndex(preferences)

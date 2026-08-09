@@ -107,6 +107,12 @@ internal class FeedEffectsGlProgram(
         sourceHeight: Float,
         displayWidth: Float,
         displayHeight: Float,
+        /**
+         * Horizontal flip for a camera pointed back at the operator. Per-draw rather than a
+         * constructor flag like [flipInputVertically]: this one is an operator switch that has to
+         * take effect on the next frame, not a property of the pipeline.
+         */
+        mirrored: Boolean = false,
     ) {
         val mask = renderPeakingMask(inputTexture, sourceWidth, sourceHeight)
         program.use()
@@ -123,6 +129,7 @@ internal class FeedEffectsGlProgram(
             "uDisplaySize",
             floatArrayOf(displayWidth.coerceAtLeast(1f), displayHeight.coerceAtLeast(1f)),
         )
+        program.setFloatsUniform("uMirror", flag(mirrored))
         program.bindAttributesAndUniforms()
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GlUtil.checkGlError()

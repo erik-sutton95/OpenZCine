@@ -176,6 +176,30 @@ struct SessionRecoveryLifecycleTests {
         #expect(model.liveFPS == SessionRecoveryCopy.heldFrameBadge)
     }
 
+    /// The RECOV-forever wedge: the attempt-1 card grace must elapse in the MODEL even while the
+    /// first attempt is still in flight. The timer used to live in the overlay as a `.task` on a
+    /// view that renders nothing until the card shows — SwiftUI never ran it, so a stalled first
+    /// attempt (a killed hotspot) was a permanent RECOV chip with no card and no way out.
+    @Test("The attempt-1 card grace elapses while the first attempt is still in flight")
+    func recoveryCardGraceElapsesDuringAttemptOne() async {
+        let model = NativeAppModel()
+        model.cameraHost = "usb:recovery-tests-not-attached"
+        model.isMonitorPresented = true
+
+        model.debugSimulateTransportDetach()
+        #expect(model.sessionRecoveryCardGraceElapsed == false)
+
+        for _ in 0..<400 where !model.sessionRecoveryCardGraceElapsed {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(
+            model.sessionRecoveryCardGraceElapsed,
+            "grace never elapsed — the attempt-1 card is unreachable")
+
+        model.exitMonitorToOperatorMenu()
+        #expect(model.sessionRecoveryCardGraceElapsed == false)
+    }
+
     @Test("Back to operator menu stops retrying and leaves the monitor")
     func operatorMenuExitCancelsRetries() {
         let model = recoveringModel()

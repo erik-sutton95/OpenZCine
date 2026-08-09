@@ -122,6 +122,12 @@ public interface UsbPtpCameraSource : Closeable {
 public class AndroidUsbPtpCameraSource(
     context: Context,
     private val usbManager: UsbManager = context.getSystemService(UsbManager::class.java),
+    /**
+     * Closed diagnostic phases for the exported report — see `DiagnosticEventStore`. Only the
+     * phase token crosses this seam: never the device path, the vendor/product ids or the serial,
+     * only whether each was RESOLVABLE.
+     */
+    private val onDiagnosticPhase: (String) -> Unit = {},
 ) : UsbPtpCameraSource {
     private val appContext: Context = context.applicationContext
     private val mutableCameras = MutableStateFlow(emptyList<UsbPtpCamera>())
@@ -130,6 +136,11 @@ public class AndroidUsbPtpCameraSource(
     private val attachmentState = UsbPtpAttachmentState()
     /** Serializes attachment generations with post-claim transport registration. */
     private val lifecycleLock = Any()
+    /**
+     * The last phase recorded per device, so a 1.5 s enumeration poll writes one breadcrumb per
+     * CHANGE rather than forty a minute. A report that scrolls is a report nobody reads.
+     */
+    private val lastDiagnosticPhase = ConcurrentHashMap<String, String>()
     @Volatile private var closed: Boolean = false
 
     private val receiver =
@@ -216,9 +227,6 @@ public class AndroidUsbPtpCameraSource(
                 "This USB device does not expose the complete PTP camera interface OpenZCine needs.",
             )
         val hostKey = stableHostKey(device)
-            ?: return UsbPtpOpenResult.Rejected(
-                "This camera did not provide a stable USB identity. Reconnect it or use Wi‑Fi pairing.",
-            )
         val connection = usbManager.openDevice(device)
             ?: return UsbPtpOpenResult.Rejected(
                 "Android could not open this USB camera. Disconnect it, approve access again, and retry.",
@@ -336,13 +344,68 @@ public class AndroidUsbPtpCameraSource(
     private fun refresh(excludingToken: String? = null) {
         synchronized(lifecycleLock) {
             if (closed) return
+            val attached = usbManager.deviceList.values.filter { it.deviceName != excludingToken }
             mutableCameras.value =
-                usbManager.deviceList.values
-                    .filter { it.deviceName != excludingToken }
+                attached
                     .mapNotNull(::camera)
                     .sortedBy(UsbPtpCamera::displayName)
+            // Why the list is what it is, per attached device. An empty list and a device the
+            // selector rejected look identical on screen — both read "Waiting for camera on
+            // USB-C" — and a field report of the wizard waiting for ever with the cable in and
+            // permission granted could not be told apart from a cable that was never plugged in.
+            // One line per pass says which.
+            val states =
+                attached.map { device ->
+                    val ptp = descriptorSelection(device) != null
+                    val permitted = usbManager.hasPermission(device)
+                    val serial =
+                        if (permitted) {
+                            runCatching { device.serialNumber }.getOrNull().isNullOrBlank().not()
+                        } else {
+                            null
+                        }
+                    Triple(device, Triple(ptp, permitted, serial), diagnosticPhase(device.deviceName, ptp, permitted, serial))
+                }
+            android.util.Log.i(
+                USB_DIAG_TAG,
+                "usb refresh devices=${attached.size} cameras=${mutableCameras.value.size} " +
+                    states.joinToString(" ") { (device, facts, _) ->
+                        val (ptp, permitted, serial) = facts
+                        "[${device.deviceName} vid=${device.vendorId} pid=${device.productId} " +
+                            "ptp=$ptp permitted=$permitted serial=$serial]"
+                    },
+            )
+            // The exported report gets the same three facts as CLOSED codes. Logcat needs a
+            // device attached and a cable to a laptop; a field report is a file an operator can
+            // send, and until now it could not tell a declined dialog from a grant that did not
+            // stick from a serial the ROM would not surface.
+            for ((device, _, phase) in states) {
+                if (phase != null && lastDiagnosticPhase.put(device.deviceName, phase) != phase) {
+                    onDiagnosticPhase(phase)
+                }
+            }
+            lastDiagnosticPhase.keys.retainAll(attached.map(UsbDevice::getDeviceName).toSet())
         }
     }
+
+    /** The one closed code that describes this device right now, or null when nothing changed. */
+    private fun diagnosticPhase(
+        token: String,
+        ptp: Boolean,
+        permitted: Boolean,
+        serial: Boolean?,
+    ): String? =
+        when {
+            !ptp -> "usb.attached.noPtpInterface"
+            !permitted ->
+                if (attachmentState.isDenied(token)) {
+                    "usb.attached.permissionDenied"
+                } else {
+                    "usb.attached.needsPermission"
+                }
+            serial == false -> "usb.attached.noSerial"
+            else -> "usb.attached.ready"
+        }
 
     private fun camera(device: UsbDevice): UsbPtpCamera? {
         descriptorSelection(device) ?: return null
@@ -408,7 +471,7 @@ public class AndroidUsbPtpCameraSource(
             .map(usbInterface::getEndpoint)
             .first { it.address == address }
 
-    private fun stableHostKey(device: UsbDevice): String? =
+    private fun stableHostKey(device: UsbDevice): String =
         UsbCameraHostKey.derive(
             vendorId = device.vendorId,
             productId = device.productId,

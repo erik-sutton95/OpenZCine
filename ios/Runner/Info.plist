@@ -55,6 +55,9 @@
 		<string>_http._tcp</string>
 		<!-- Self-published beacon used only by the startup Local Network permission probe. -->
 		<string>_ozcprobe._tcp</string>
+		<!-- Debug-only developer log sink (ConnectionLogTap); browsing an undeclared type
+		     fails NoAuth and destabilizes the app's other local-network flows on device. -->
+		<string>_ozc-logtap._tcp</string>
 	</array>
 	<!-- AccessorySetupKit (iOS 18+): system picker for Nikon ZR Wi‑Fi hotspots (NIKON_ZR_*).
 	     Descriptor SSID prefix must match entries declared here — undeclared rules crash at picker time. -->

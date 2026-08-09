@@ -9,6 +9,7 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import java.util.Locale
+import kotlin.math.ceil
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
 internal const val UNAVAILABLE_TIMECODE = "—:—:—:—"
@@ -28,7 +29,33 @@ internal data class MonitorBatteryPresentation(
     val percent: Int?,
     val label: String,
     val externalPower: Boolean,
+    val urgency: CameraBatteryUrgency = CameraBatteryUrgency.NOMINAL,
+    /** The body's blinking exhaustion step. Only that step pulses. */
+    val pulses: Boolean = false,
 )
+
+/**
+ * How urgently the camera gauge should read, mirroring the shared core's
+ * `CameraBatteryGauge.Urgency`.
+ *
+ * The steps are the operator's, not the body's: three bars or more is "carry on", two is "find a
+ * spare", one is "swap now". Keeping the thresholds in one definition per platform is what stops
+ * iOS and Android warning at different charges for the same reading.
+ */
+internal enum class CameraBatteryUrgency {
+    NOMINAL,
+    LOW,
+    DEPLETED,
+}
+
+/** Mirrors `CameraBatteryGauge.urgency`. An absent reading must not cry wolf. */
+internal fun cameraBatteryUrgency(filledBars: Int?): CameraBatteryUrgency =
+    when (filledBars) {
+        null -> CameraBatteryUrgency.NOMINAL
+        1 -> CameraBatteryUrgency.DEPLETED
+        2 -> CameraBatteryUrgency.LOW
+        else -> CameraBatteryUrgency.NOMINAL
+    }
 
 /**
  * Live-view header timecode retention for one connected camera.
@@ -121,9 +148,49 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String {
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
 
 /** Camera battery label that preserves authoritative external-power-only readback. */
+/** Bars in the camera's gauge, mirroring iOS `CameraBatteryGauge.barCount`. */
+internal const val CAMERA_BATTERY_BAR_COUNT = 5
+
+/**
+ * Gauge markers carried in the readout label. The label is the shared contract between the
+ * readout builder and the chrome that draws it; the chrome recognises these and renders real
+ * segments rather than printing the characters, which never matched the iOS gauge's metrics.
+ */
+internal const val FILLED_BAR = '\u25AE'
+internal const val EMPTY_BAR = '\u25AF'
+
+/**
+ * Filled bars for a raw `BatteryLevel` (0x5001) value, mirroring iOS `CameraBatteryGauge`.
+ *
+ * The property is a five-bar gauge, not a percentage — it only ever carries 1/20/40/60/80/100,
+ * where 1 is the blinking shutter-disabled step. Off-step values round UP to the step they sit
+ * under so the gauge can read low but never high.
+ */
+internal fun cameraBatteryBars(percent: Int?): Int? {
+    val raw = percent ?: return null
+    if (raw <= 0) return null
+    if (raw == 1) return 1
+    val clamped = minOf(100, raw)
+    return maxOf(1, minOf(CAMERA_BATTERY_BAR_COUNT, ceil(clamped / 20.0).toInt()))
+}
+
+/**
+ * The camera battery readout: bars, not a percentage (#303).
+ *
+ * Printing the raw value as "60%" claimed a precision the body never sent — it reads 60 for
+ * anything from 40% to 59%, which is exactly the discrepancy reported from the field.
+ */
 internal fun batteryReadoutLabel(percent: Int?, externalPower: Boolean? = null): String =
-    validBatteryPercent(percent)?.let { "$it%" }
-        ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
+    cameraBatteryBars(validBatteryPercent(percent))?.let { filled ->
+        // Drawn as filled/empty blocks so the readout reads as a gauge rather than a number.
+        // iOS draws real segments; this is the string-based mirror, since the Android readout is
+        // a text label rather than its own view.
+        buildString {
+            repeat(CAMERA_BATTERY_BAR_COUNT) { index ->
+                append(if (index < filled) FILLED_BAR else EMPTY_BAR)
+            }
+        }
+    } ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
 
 /** Builds the battery label and visible power-marker state from authoritative readback. */
 internal fun monitorBatteryPresentation(
@@ -135,6 +202,9 @@ internal fun monitorBatteryPresentation(
         percent = validPercent,
         label = batteryReadoutLabel(validPercent, externalPower),
         externalPower = externalPower == true,
+        urgency = cameraBatteryUrgency(cameraBatteryBars(validPercent)),
+        // Raw 1 is the body's blinking shutter-disabled step, distinct from a steady last bar.
+        pulses = validPercent == 1,
     )
 }
 
@@ -267,6 +337,23 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
     var media: MonitorMediaStatus by mutableStateOf(PREVIEW_MEDIA)
         private set
 
+    /**
+     * A watcher's readouts arrive over the relay already formatted by the host — apply them
+     * verbatim (iOS `applyRelayState`). Blank fields keep the last value, like [update].
+     */
+    fun applyRelayed(state: com.opencapture.openzcine.relay.MonitorRelayWire.State) {
+        resolution = state.resolutionFrameRate.monitorValueOrNull() ?: resolution
+        codec = state.codec.monitorValueOrNull() ?: codec
+        media =
+            state.mediaStatus?.let {
+                MonitorMediaStatus(
+                    gigabytesFree = it.gigabytesFree.toLong(),
+                    percentFree = it.percentFree.toLong(),
+                    minutesRemaining = it.minutesRemaining,
+                )
+            } ?: media
+    }
+
     fun update(snapshot: CameraPropertySnapshot) {
         // Camera is the source of truth: prefer the control presentation
         // (`resolutionFrameRate`, including ZR `[FX]`/`[DX]` tags) over held
@@ -297,6 +384,50 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
 }
 
 /**
+ * What the frame-rate chip is carrying instead of a rate.
+ *
+ * iOS parks these same words in `liveFPS` and the chip prints whatever is there
+ * (`NativeAppRoot.swift:1627`, `:1651`, `:6556`, `:7628`; chip at `MonitorControls.swift:81-120`).
+ * The chip is the only visible link readout on the monitor — `connectionMessage` is behind it — so
+ * a route that never came up has to be distinguishable from a live feed, which a stale `25.00`
+ * makes impossible.
+ */
+internal enum class MonitorFeedState(val word: String) {
+    /** The session is gone and bounded recovery owns the screen (iOS `heldFrameBadge`). */
+    NO_LINK("NO LINK"),
+
+    /** The session is up but the stream is being restarted. */
+    RECOV("RECOV"),
+
+    /** The body is busy and has stopped feeding frames. */
+    BUSY("BUSY"),
+
+    /** The route failed outright and nothing is retrying it. */
+    FAIL("FAIL"),
+}
+
+/** Chip text before the first measurable interval (iOS `CameraDisplayState.preview.liveFPS`). */
+private const val READY_FRAME_RATE = "READY"
+
+/**
+ * The one rule for what the FPS chip says.
+ *
+ * A [state] always wins: while the feed is down the measured rate is the rate of a feed that
+ * stopped arriving, and printing it claims frames are still coming. A rate is only printed when it
+ * is a real, positive measurement.
+ *
+ * The words are Kotlin constants rather than `stringResource` lookups because the chip's caller
+ * needs this rule in a plain function it can also unit-test; `MonitorReadoutsTest` pins them to the
+ * `monitor_fps_*` strings so the two spellings cannot drift.
+ */
+internal fun fpsChipLabel(rate: Double?, state: MonitorFeedState?): String =
+    state?.word
+        ?: rate?.takeIf { it.isFinite() && it > 0.0 }?.let {
+            String.format(Locale.ROOT, "%.2f", it)
+        }
+        ?: READY_FRAME_RATE
+
+/**
  * iOS `FrameRateSampler`: live-measured delivery rate over a rolling 30-interval
  * window, published at most ~1 Hz, `"%.2f"`. Starts as iOS's `"READY"` until the
  * first measurable interval.
@@ -306,7 +437,8 @@ internal class MonitorFrameRateSampler {
     private var lastFrameNanos = 0L
     private var lastPublishNanos = 0L
 
-    var formatted: String by mutableStateOf(READY)
+    /** Formatted through [fpsChipLabel] so the chip has one definition of a printed rate. */
+    var formatted: String by mutableStateOf(fpsChipLabel(rate = null, state = null))
         private set
 
     fun accept(nowNanos: Long) {
@@ -320,13 +452,12 @@ internal class MonitorFrameRateSampler {
         lastFrameNanos = nowNanos
         if (intervals.isNotEmpty() && nowNanos - lastPublishNanos >= 1_000_000_000L) {
             lastPublishNanos = nowNanos
-            formatted = String.format(Locale.ROOT, "%.2f", intervals.size / intervals.sum())
+            formatted = fpsChipLabel(rate = intervals.size / intervals.sum(), state = null)
         }
     }
 
     private companion object {
         const val WINDOW = 30
-        const val READY = "READY"
     }
 }
 

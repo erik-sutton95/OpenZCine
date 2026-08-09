@@ -27,9 +27,13 @@ import Testing
 
 @Test func isoPickerPolicyDetectsMovieISOAutoControl() {
     // Movie ISO auto is MovISOAutoControl (0xD0AD), not exposure program P/A/S/M/Auto.
-    #expect(ISOPickerPolicy.isAutoISOActive(isoAuto: true))
-    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: false))
-    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: nil))
+    #expect(ISOPickerPolicy.isAutoISOActive(isoAuto: true, codec: "N-RAW"))
+    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: false, codec: "N-RAW"))
+    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: nil, codec: "N-RAW"))
+    // R3D NE cannot auto: the body's flag keeps its last non-R3D value while inert, so a
+    // raw `true` there is stale state — never an "A800" readout in a codec that can't auto.
+    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: true, codec: "R3D NE"))
+    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: true, codec: "R3D NE 10-bit R3D"))
     #expect(
         ISOPickerPolicy.autoISOModeIndex(codec: "N-RAW", isoAuto: true, exposureMode: "M") == 0)
     #expect(

@@ -25,6 +25,24 @@ import Testing
     #expect(parsed.payload == Data([1, 0, 0, 0]))
 }
 
+@Test func packetParsesLivenessProbeAndBuildsItsAnswer() throws {
+    // A header-only ProbeRequest must parse as itself, NOT `.unknown` — swallowed probes are
+    // what let the body conclude the initiator died and close the session.
+    let probe = try PTPIPPacket(serializedBytes: [
+        8, 0, 0, 0,
+        0x0D, 0, 0, 0,
+    ])
+    #expect(probe.type == .probeRequest)
+    #expect(probe.payload.isEmpty)
+
+    let answer = PTPIPPacket(type: .probeResponse, payload: probe.payload)
+    #expect(
+        answer.serializedBytes == [
+            8, 0, 0, 0,
+            0x0E, 0, 0, 0,
+        ])
+}
+
 @Test func packetRejectsShortHeader() {
     #expect(throws: PTPIPPacketError.shortHeader) {
         _ = try PTPIPPacket(serializedBytes: [1, 2, 3, 4])

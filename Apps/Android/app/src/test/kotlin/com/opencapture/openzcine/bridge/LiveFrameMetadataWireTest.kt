@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.bridge
 
+import com.opencapture.openzcine.core.LiveFeedRotation
 import com.opencapture.openzcine.core.LiveFocusResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -68,5 +69,16 @@ class LiveFrameMetadataWireTest {
         requireNotNull(level)
         assertEquals(-0.5, level.rollDegrees)
         assertEquals(1.25, level.pitchDegrees)
+    }
+
+    @Test
+    fun `body rotation decodes the documented enumeration and defaults unknowns to landscape`() {
+        assertEquals(LiveFeedRotation.LANDSCAPE, liveFeedRotationFromWire(0))
+        assertEquals(LiveFeedRotation.PORTRAIT_GRIP_UP, liveFeedRotationFromWire(1))
+        assertEquals(LiveFeedRotation.PORTRAIT_GRIP_DOWN, liveFeedRotationFromWire(2))
+        assertEquals(LiveFeedRotation.UPSIDE_DOWN, liveFeedRotationFromWire(3))
+        // A misreported byte can never turn the feed sideways.
+        assertEquals(LiveFeedRotation.LANDSCAPE, liveFeedRotationFromWire(7))
+        assertEquals(LiveFeedRotation.LANDSCAPE, liveFeedRotationFromWire(-1))
     }
 }

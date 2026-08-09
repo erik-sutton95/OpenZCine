@@ -26,8 +26,21 @@ class AndroidLinkQualityTest {
             parseLiveViewRequest("1\t3\t33000000"),
         )
         assertNull(parseLiveViewRequest("1\t3"))
-        assertNull(parseLiveViewRequest("1\t4\t33000000"))
+        assertNull(parseLiveViewRequest("1\t6\t33000000"))
         assertNull(parseLiveViewRequest("1\t3\t0"))
+    }
+
+    @Test
+    fun `every quality bias the swift policy emits survives the parse`() {
+        // The compression enum is 6-valued (0 latency … 5 detail). The old 1..3 bound silently
+        // discarded the WHOLE preview request for latency and detail bias — size, compression
+        // and cadence all dropped with no log, and this suite pinned the broken bound.
+        for (compression in 0..5) {
+            assertEquals(
+                SwiftLiveViewRequest(2, compression, 33_000_000L),
+                parseLiveViewRequest("2\t$compression\t33000000"),
+            )
+        }
     }
 
     @Test

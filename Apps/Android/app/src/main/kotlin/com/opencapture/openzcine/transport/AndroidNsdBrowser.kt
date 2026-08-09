@@ -78,9 +78,18 @@ class AndroidNsdBrowser(private val nsdManager: NsdManager) : NsdBrowser {
                 object : NsdManager.ResolveListener {
                     override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
                         val host = serviceInfo.host?.hostAddress
+                        val attributes =
+                            serviceInfo.attributes.orEmpty().mapNotNull { (key, value) ->
+                                value?.let { key to String(it, Charsets.UTF_8) }
+                            }
                         continuation.resume(
                             host?.let {
-                                NsdEvent.ServiceResolved(serviceInfo.serviceName, it, serviceInfo.port)
+                                NsdEvent.ServiceResolved(
+                                    serviceInfo.serviceName,
+                                    it,
+                                    serviceInfo.port,
+                                    attributes.toMap(),
+                                )
                             },
                             onCancellation = null,
                         )

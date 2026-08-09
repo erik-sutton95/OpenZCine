@@ -92,7 +92,9 @@ import Testing
         connectedHost: nil
     )
 
-    #expect(prompt == .enableIPhoneHotspot(camera))
+    var typed = camera
+    typed.path = .phoneHotspot
+    #expect(prompt == .enableIPhoneHotspot(typed))
 }
 
 @Test func startupPolicyDoesNotPromptForHotspotWhenSavedCameraIsAvailable() {
@@ -113,12 +115,13 @@ import Testing
     #expect(prompt == .none)
 }
 
-@Test func startupPolicyTreatsHotspotSubnetAsIPhoneHotspotTransport() {
+@Test func startupPolicyTreatsDeclaredHotspotPathAsIPhoneHotspot() {
     let camera = PTPIPSavedCameraRecord(
-        host: "172.20.10.11",
+        host: "10.0.0.11",
         displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil
+        transport: "iPhone Hotspot",
+        lastSeenAt: nil,
+        path: .phoneHotspot
     )
 
     let prompt = CameraStartupPolicy.recoveryPrompt(
@@ -132,10 +135,11 @@ import Testing
 
 @Test func startupPolicyWaitsForCameraWhenIPhoneHotspotBridgeIsActive() {
     let camera = PTPIPSavedCameraRecord(
-        host: "172.20.10.11",
+        host: "10.0.0.11",
         displayName: "ZR_6001234",
-        transport: "Wi-Fi",
-        lastSeenAt: nil
+        transport: "iPhone Hotspot",
+        lastSeenAt: nil,
+        path: .phoneHotspot
     )
 
     let prompt = CameraStartupPolicy.recoveryPrompt(

@@ -28,10 +28,22 @@ struct NativeCameraEstablishRetryTests {
 
     @Test("Init_Fail busy (stale session slot) is retryable, rejected initiator is not")
     func initFailReasonsSplit() {
+        // Busy is excluded from the generic 1 s in-place retry: the body TOLD us another
+        // initiator holds it, and hammering a session slot mid-handoff wedges the body
+        // (audit M5, the two-device brick). It gets its own single retry after a 5 s
+        // handoff settle in the connect flow instead.
         #expect(
-            NativeCameraSession.isRetryableEstablishFailure(
+            !NativeCameraSession.isRetryableEstablishFailure(
                 NativeCameraSessionError.initFailed(.busy), requestPairing: false
             )
+        )
+        #expect(
+            NativeCameraSession.isBusyEstablishFailure(
+                NativeCameraSessionError.initFailed(.busy))
+        )
+        #expect(
+            !NativeCameraSession.isBusyEstablishFailure(
+                NativeCameraSessionError.initFailed(.unspecified))
         )
         #expect(
             NativeCameraSession.isRetryableEstablishFailure(

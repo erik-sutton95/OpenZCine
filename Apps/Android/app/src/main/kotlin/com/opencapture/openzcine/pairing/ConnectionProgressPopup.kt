@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,10 +17,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -41,12 +47,24 @@ import com.opencapture.openzcine.R
  */
 public sealed interface ConnectionPopupPhase {
     /** Credentials staged; waiting for the operator to confirm the join. */
-    public data class ReadyToJoin(val key: String?, val keyFromScan: Boolean) :
-        ConnectionPopupPhase
+    public data class ReadyToJoin(
+        val key: String?,
+        val keyFromScan: Boolean,
+        /** The staged network's name, editable alongside the key when both came from one scan. */
+        val ssid: String? = null,
+    ) : ConnectionPopupPhase
 
     public data object JoiningWifi : ConnectionPopupPhase
 
-    public data object Searching : ConnectionPopupPhase
+    /**
+     * Waiting for the camera to appear on one path. [watchingFor] names it, because the thing
+     * the operator has to DO differs per kind — iOS switches the same detail on the same three
+     * kinds (`NativeAppRoot.presentSetupWatchProgress`'s `instruction`). Null keeps the network
+     * wording, which is what an unqualified search is.
+     */
+    public data class Searching(
+        val watchingFor: SavedCameraTransport? = null,
+    ) : ConnectionPopupPhase
 
     public data object Handshaking : ConnectionPopupPhase
 
@@ -85,6 +103,10 @@ public fun ConnectionProgressPopup(
     onConnect: () -> Unit,
     onDismiss: () -> Unit,
     onShareDiagnostics: (() -> Unit)? = null,
+    /** A corrected scanned key, so a misread character can be fixed before connecting. */
+    onKeyEdited: (String) -> Unit = {},
+    /** A corrected scanned network name, for the same reason. */
+    onSsidEdited: (String) -> Unit = {},
 ) {
     val failed = phase is ConnectionPopupPhase.Failed
     Box(
@@ -132,17 +154,35 @@ public fun ConnectionProgressPopup(
             when (phase) {
                 is ConnectionPopupPhase.ReadyToJoin -> {
                     if (phase.key != null && phase.keyFromScan) {
-                        Text(
-                            phase.key,
-                            color = PopupColors.title,
-                            fontSize = 17.sp,
-                            fontFamily = FontFamily.Monospace,
-                            textAlign = TextAlign.Center,
-                            modifier =
-                                Modifier.fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(PopupColors.field)
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                        // EDITABLE, and it used to be a read-only Text. OCR misreads a character
+                        // now and then (0/O, 1/l, 5/S, 8/B is the whole story), and the caption
+                        // asked the operator to check it matches while giving them no way to act
+                        // when it did not — a field report is someone who could SEE the wrong
+                        // character and could only cancel or connect with a key they knew was
+                        // wrong. iOS twin in `ConnectionProgressSheet.joinActions`.
+                        // BOTH fields, because one OCR pass produced both and either can
+                        // misread. A wrong key is refused by the network; a wrong name simply
+                        // never appears, which reads as "the camera isn't there" and is the
+                        // harder of the two to diagnose from the outside.
+                        phase.ssid?.let { staged ->
+                            var editedSsid by remember(staged) { mutableStateOf(staged) }
+                            ScannedField(
+                                label = stringResource(R.string.conn_scanned_network),
+                                value = editedSsid,
+                                onValueChange = {
+                                    editedSsid = it
+                                    onSsidEdited(it)
+                                },
+                            )
+                        }
+                        var edited by remember(phase.key) { mutableStateOf(phase.key) }
+                        ScannedField(
+                            label = stringResource(R.string.conn_scanned_key),
+                            value = edited,
+                            onValueChange = {
+                                edited = it
+                                onKeyEdited(it)
+                            },
                         )
                         Text(
                             stringResource(R.string.conn_scanned_caption),
@@ -195,7 +235,7 @@ private fun popupStatusTitle(phase: ConnectionPopupPhase): String =
         ConnectionPopupPhase.Handshaking,
         ConnectionPopupPhase.Reconnecting,
         -> stringResource(R.string.conn_connecting_title)
-        ConnectionPopupPhase.Searching -> stringResource(R.string.conn_searching_title)
+        is ConnectionPopupPhase.Searching -> stringResource(R.string.conn_searching_title)
         ConnectionPopupPhase.Pairing -> stringResource(R.string.conn_pairing_title)
         is ConnectionPopupPhase.ConfirmOnCamera -> stringResource(R.string.conn_confirm_title)
     }
@@ -206,8 +246,17 @@ private fun popupDetail(deviceName: String, phase: ConnectionPopupPhase): String
         is ConnectionPopupPhase.ReadyToJoin ->
             stringResource(R.string.conn_ready_detail, deviceName)
         ConnectionPopupPhase.JoiningWifi -> stringResource(R.string.conn_joining_detail)
-        ConnectionPopupPhase.Searching ->
-            stringResource(R.string.conn_searching_detail, deviceName)
+        is ConnectionPopupPhase.Searching ->
+            // A cable path has no network step at all, and a hotspot path needs one this phone
+            // owns — telling either operator we are "looking on your network" is advice for
+            // something their setup never touches (iOS says the same three things).
+            when (phase.watchingFor) {
+                SavedCameraTransport.USB_C ->
+                    stringResource(R.string.conn_watch_usb_detail, deviceName)
+                SavedCameraTransport.PHONE_HOTSPOT ->
+                    stringResource(R.string.conn_watch_hotspot_detail)
+                else -> stringResource(R.string.conn_searching_detail, deviceName)
+            }
         ConnectionPopupPhase.Handshaking ->
             stringResource(R.string.conn_handshaking_detail, deviceName)
         ConnectionPopupPhase.Pairing -> stringResource(R.string.conn_pairing_detail, deviceName)
@@ -272,5 +321,41 @@ internal fun PopupCancelButton(text: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(text, color = PopupColors.actionBlue, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/**
+ * One corrected-scan field: a label above the value, so two of them read as a pair rather than as
+ * two anonymous boxes. Twin of the iOS card's `scannedField`.
+ */
+@Composable
+private fun ScannedField(label: String, value: String, onValueChange: (String) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            label.uppercase(),
+            color = PopupColors.detail,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle =
+                LocalTextStyle.current.copy(
+                    color = PopupColors.title,
+                    fontSize = 17.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+            cursorBrush = SolidColor(PopupColors.title),
+            modifier =
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(PopupColors.field)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+        )
     }
 }

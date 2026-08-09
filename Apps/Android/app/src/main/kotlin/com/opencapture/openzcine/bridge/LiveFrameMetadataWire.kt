@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.LiveCameraLevel
+import com.opencapture.openzcine.core.LiveFeedRotation
 import com.opencapture.openzcine.core.LiveFocusBox
 import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFocusResult
@@ -60,6 +61,19 @@ internal fun liveCameraLevelFromWire(
         yawDegrees = yawDegrees,
     )
 }
+
+/**
+ * Converts the Swift callback's body-rotation byte (header 839 / property
+ * 0xD10E enumeration). Undocumented values collapse to [LiveFeedRotation.LANDSCAPE]
+ * so a misreported byte can never turn the feed sideways.
+ */
+internal fun liveFeedRotationFromWire(value: Int): LiveFeedRotation =
+    when (value) {
+        1 -> LiveFeedRotation.PORTRAIT_GRIP_UP
+        2 -> LiveFeedRotation.PORTRAIT_GRIP_DOWN
+        3 -> LiveFeedRotation.UPSIDE_DOWN
+        else -> LiveFeedRotation.LANDSCAPE
+    }
 
 private fun liveFocusResultFromWire(value: Int): LiveFocusResult =
     when (value) {

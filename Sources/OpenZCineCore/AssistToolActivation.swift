@@ -155,10 +155,14 @@ public enum MonitorChromePolicy {
             settings: chrome.railSettingsVisible || !settingsReachable)
     }
 
-    /// Whether a transient pop-up (camera-value picker, assist options drawer) may present.
-    /// Clean defers them — the operator asked for a bare image. Full-screen destinations the
-    /// operator navigates to deliberately (Settings, Media) are not pop-ups and are unaffected.
-    public static func allowsPopups(in mode: DispMode) -> Bool { mode != .clean }
+    /// Whether switching INTO `mode` dismisses an in-flight transient pop-up (camera-value
+    /// picker, assist options drawer). Entering clean sweeps them — a popup opened in DISP 1 must
+    /// not ride into the bare image. This never gates *presentation*: any control the mode's own
+    /// configuration mounts (an enabled readout, the REC options key) opens its pop-up normally,
+    /// because a visible control that swallows its tap reads as a broken monitor. Full-screen
+    /// destinations the operator navigates to deliberately (Settings, Media) are not pop-ups and
+    /// are unaffected.
+    public static func dismissesPopupsOnEntry(to mode: DispMode) -> Bool { mode == .clean }
 
     /// Whether `mode` shows no image but still shows live camera telemetry, so the live-view
     /// stream must stay up purely as a carrier for its frame header.

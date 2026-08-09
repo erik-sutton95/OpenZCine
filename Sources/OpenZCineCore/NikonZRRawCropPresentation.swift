@@ -69,6 +69,40 @@ public enum NikonZRRawCropPresentation {
         }
     }
 
+    /// Which advertised mode a picked picker label refers to, or nil when none does.
+    ///
+    /// Precedence across the WHOLE list, and that is the entire point. The match used to be one
+    /// `first(where:)` with three OR'd comparisons, so it returned the first mode matching ANY of
+    /// them — and the loosest comparison strips the `[FX]`/`[DX]` tag from both sides. Picking
+    /// `[DX] 4K · 25p` therefore landed on the FX mode listed above it: the tag that distinguishes
+    /// the two was discarded by the very clause that matched (field-reported).
+    ///
+    /// So: exact presentation label first, over every mode. Then the bare camera label. The
+    /// crop-insensitive fallback runs only when the picked label carries NO tag — if it does, that
+    /// tag is the operator's choice and dropping it is never a valid interpretation.
+    ///
+    /// - Parameters:
+    ///   - value: The label the operator tapped.
+    ///   - presentationLabels: Each mode's operator-facing label, in advertised order.
+    ///   - modeLabels: Each mode's bare camera label, same order and count.
+    public static func pickedModeIndex(
+        for value: String,
+        presentationLabels: [String],
+        modeLabels: [String]
+    ) -> Int? {
+        guard presentationLabels.count == modeLabels.count else { return nil }
+        if let exact = presentationLabels.firstIndex(of: value) { return exact }
+        if let camera = modeLabels.firstIndex(of: value) { return camera }
+        guard !carriesCropTag(value) else { return nil }
+        let bare = bareLabel(value)
+        return modeLabels.firstIndex { bareLabel($0) == bare }
+    }
+
+    /// Whether a label carries an explicit `[FX]`/`[DX]` crop tag.
+    public static func carriesCropTag(_ label: String) -> Bool {
+        label.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[")
+    }
+
     /// Strips a leading `[FX]` / `[DX]` crop prefix and normalizes middle-dot spacing.
     public static func bareLabel(_ label: String) -> String {
         var value = label.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -180,6 +180,30 @@ class MonitorCameraControlsTest {
     }
 
     @Test
+    fun `relayed values fill a watcher's strip by kind and never grant a picker`() {
+        // A watcher's dashboard is empty — the session has no properties — so the baseline is
+        // all dashes with no pickers, and the broadcaster's forwarded values fill the cells.
+        val watcher =
+            relayCaptureSettings(
+                monitorCaptureSettings(dashboard(CameraPropertySnapshot()), strings),
+                listOf(
+                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue("ISO", "800"),
+                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue(
+                        "SHUTTER", "180°"),
+                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue("WB", ""),
+                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue(
+                        "UNKNOWN", "x"),
+                ),
+            )
+        assertEquals("800", watcher.first { it.kind == MonitorPickerKind.ISO }.value)
+        assertEquals("180°", watcher.first { it.kind == MonitorPickerKind.SHUTTER }.value)
+        // Blank forwarded values keep the dash rather than blanking the cell.
+        assertEquals("—", watcher.first { it.kind == MonitorPickerKind.WHITE_BALANCE }.value)
+        // Display only: the relay never conjures a picker the local presentation lacked.
+        assertTrue(watcher.all { it.picker == null })
+    }
+
+    @Test
     fun `descriptor backed live controls expose exactly the camera advertised labels`() {
         val settings = monitorCaptureSettings(dashboard(cameraSnapshot()), strings)
 

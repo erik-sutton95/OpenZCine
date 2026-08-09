@@ -142,23 +142,33 @@ final class AccessorySetupWiFiCoordinator {
             descriptor: descriptor
         )
 
-        return try await withCheckedThrowingContinuation { continuation in
-            guard pickerWaiter == nil else {
-                continuation.resume(
-                    throwing: JoinError.pickerFailed("Accessory picker is already active."))
-                return
-            }
-            pickerWaiter = continuation
-            pendingPickedAccessory = nil
+        // Cancellation MUST resume the waiter: the phase watchdog and operator cancels end the
+        // connect attempt by cancelling its task, and an unresumed continuation latched
+        // `pickerWaiter` forever — every later Wi-Fi join then failed instantly with
+        // "Accessory picker is already active." until an app restart.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard pickerWaiter == nil else {
+                    continuation.resume(
+                        throwing: JoinError.pickerFailed("Accessory picker is already active."))
+                    return
+                }
+                pickerWaiter = continuation
+                pendingPickedAccessory = nil
 
-            session.showPicker(for: [item]) { error in
-                Task { @MainActor in
-                    if let error {
-                        self.failPicker(
-                            JoinError.pickerFailed(error.localizedDescription)
-                        )
+                session.showPicker(for: [item]) { error in
+                    Task { @MainActor in
+                        if let error {
+                            self.failPicker(
+                                JoinError.pickerFailed(error.localizedDescription)
+                            )
+                        }
                     }
                 }
+            }
+        } onCancel: {
+            Task { @MainActor in
+                self.failPicker(JoinError.pickerFailed("The connection attempt was cancelled."))
             }
         }
     }

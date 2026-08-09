@@ -64,7 +64,8 @@ struct ConnectionProgressSheet: View {
         return ConnectionProgressCopy.statusDetail(
             phase: .failed,
             deviceName: deviceName,
-            friendlyError: nil
+            friendlyError: nil,
+            path: model.connectionProgressPathKind
         )
     }
 
@@ -121,7 +122,8 @@ struct ConnectionProgressSheet: View {
         return ConnectionProgressCopy.statusDetail(
             phase: phase,
             deviceName: deviceName,
-            friendlyError: nil
+            friendlyError: nil,
+            path: model.connectionProgressPathKind
         )
     }
 
@@ -181,14 +183,57 @@ struct ConnectionProgressSheet: View {
                     .foregroundStyle(.secondary)
             }
             .font(.body)
+            // Industry escape hatch: after a typed empty infrastructure search, the operator
+            // can type the address shown on the camera's network screen.
+            if model.showsManualCameraHostEntry || model.isManualCameraHostEntryPresented {
+                manualHostEntry
+            }
             cancelButton
+        }
+    }
+
+    @ViewBuilder private var manualHostEntry: some View {
+        @Bindable var model = model
+        VStack(spacing: 10) {
+            if model.isManualCameraHostEntryPresented {
+                TextField("Camera IP (e.g. 192.168.1.246)", text: $model.manualCameraHostDraft)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.numbersAndPunctuation)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    model.connectToManualCameraHost(model.manualCameraHostDraft)
+                } label: {
+                    Text("Connect to this address")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(
+                    model.manualCameraHostDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty)
+            } else {
+                Button {
+                    model.isManualCameraHostEntryPresented = true
+                } label: {
+                    Text("Enter address from camera")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .accessibilityHint(
+                    "Opens a field for the IP shown on the camera network menu")
+            }
         }
     }
 
     /// First-time credential entry (scan or scanned-key confirm) plus the Connect action.
     @ViewBuilder
     private var joinActions: some View {
-        VStack(spacing: 12) {
+        @Bindable var model = model
+        return VStack(spacing: 12) {
             if model.cameraWiFiJoinNeedsPassword, !model.cameraWiFiJoinHasPasswordDraft {
                 // First-time connect: scan the camera screen, with manual entry available there.
                 Button {
@@ -208,18 +253,29 @@ struct ConnectionProgressSheet: View {
                     .multilineTextAlignment(.center)
             } else {
                 if model.cameraWiFiJoinKeyFromScan {
-                    // Scanned key: shown read-only so a stray tap can't clear or mangle it.
-                    Text(model.cameraWiFiJoinPasswordDraft)
-                        .font(.body.monospaced())
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(
-                            Color(.secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                    Text("Scanned from camera screen — check it matches.")
+                    // EDITABLE, and it used to be a read-only `Text` — "so a stray tap can't
+                    // clear or mangle it", which protected the wrong thing. OCR misreads a
+                    // character now and then (0/O, 1/l, 5/S, 8/B are the whole story), and the
+                    // caption asks the operator to check it matches while giving them no way to
+                    // act when it does not: a field report is someone who could SEE the wrong
+                    // character and could only cancel or connect with a key they knew was wrong.
+                    //
+                    // The original worry is answered by the field's own behaviour rather than by
+                    // refusing input — a `TextField` seeded with the scan keeps its text until
+                    // someone deliberately edits it, and nothing here clears on focus.
+                    // BOTH fields, because one OCR pass produced both and either can misread.
+                    // A wrong key is refused by the network; a wrong name simply never appears,
+                    // which reads as "the camera isn't there" and is the harder of the two to
+                    // diagnose from the outside.
+                    scannedField(
+                        title: "Network",
+                        text: $model.cameraWiFiJoinSSIDDraft,
+                        accessibilityLabel: "Camera Wi-Fi network name")
+                    scannedField(
+                        title: "Key",
+                        text: $model.cameraWiFiJoinPasswordDraft,
+                        accessibilityLabel: "Camera Wi-Fi key")
+                    Text("Scanned from the camera screen — tap to fix anything that misread.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if model.cameraWiFiJoinHasPasswordDraft {
@@ -231,6 +287,33 @@ struct ConnectionProgressSheet: View {
                 connectButton
             }
         }
+    }
+
+    /// One corrected-scan field: a label above the value, so two of them read as a pair rather
+    /// than as two anonymous boxes.
+    private func scannedField(
+        title: String, text: Binding<String>, accessibilityLabel: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField(title, text: text)
+                .font(.body.monospaced())
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityHint("Scanned from the camera screen. Edit it if it misread.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var connectButton: some View {

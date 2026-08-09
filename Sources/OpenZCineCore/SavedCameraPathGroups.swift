@@ -52,16 +52,60 @@ public enum SavedCameraPathGroups {
             ?? group.first
     }
 
-    /// The short label a path chip wears. The transport string alone collapses every wireless
-    /// path into "Wi-Fi"; the access-point evidence tells the router from the camera's own
-    /// network where it is known.
+    /// The short label a path chip wears — the declared path's own name. The inference chain
+    /// this replaced (USB label/host shape → hotspot subnet → evidence tri-state → "Wi-Fi")
+    /// survives only for a record built without a path, which store reads never produce.
     public static func pathLabel(for record: PTPIPSavedCameraRecord) -> String {
-        if record.isUSBTransport { return "USB-C" }
-        if CameraStartupPolicy.usesIPhoneHotspot(host: record.host, transport: record.transport) {
-            return "Hotspot"
+        record.path?.displayLabel ?? "Wi-Fi"
+    }
+
+    /// The chip label for one setup, distinguished when a camera has more than one of its kind.
+    ///
+    /// Only Wi-Fi setups can repeat — the access point is the camera's own network, the hotspot is
+    /// this phone, the cable is the cable — and two chips reading the same word tell an operator
+    /// nothing about which is the studio and which is the one in the bag.
+    ///
+    /// A NUMBER, not the network's address. The address is what the records are keyed on and it
+    /// reads as "Wi-Fi · 192.168.129.x", which is both a mouthful and a scroll: this row is a row
+    /// of chips on a phone, and four of those is a swipe to read a list the operator already knows
+    /// the shape of. The number is short, stable enough, and the operator can replace it with a
+    /// word that actually means something to them — see ``PTPIPSavedCameraRecord/setupName``.
+    ///
+    /// The ordering is by SUBNET rather than by the group's own order, because the group is sorted
+    /// by recency: numbering by position would renumber every chip the moment you connected to a
+    /// different one. Adding a setup on a lower subnet does shift the numbers below it, which is
+    /// the honest cost of not persisting an ordinal, and is exactly what naming a setup fixes.
+    public static func pathChipLabel(
+        for record: PTPIPSavedCameraRecord,
+        in group: [PTPIPSavedCameraRecord]
+    ) -> String {
+        if let name = record.setupName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !name.isEmpty
+        {
+            return name
         }
-        if record.pairedViaCameraAccessPoint == true { return "Camera AP" }
-        if record.pairedViaCameraAccessPoint == false { return "Router" }
-        return "Wi-Fi"
+        let base = pathLabel(for: record)
+        guard record.pathKind == .infrastructure else { return base }
+        let siblings = group.filter { $0.pathKind == .infrastructure }
+        guard siblings.count > 1 else { return base }
+        let ordered = siblings.sorted { lhs, rhs in
+            (CameraDiscovery.subnetBase(for: lhs.host) ?? lhs.host)
+                < (CameraDiscovery.subnetBase(for: rhs.host) ?? rhs.host)
+        }
+        guard let index = ordered.firstIndex(where: { $0.id == record.id }) else { return base }
+        return "\(base) (\(index + 1))"
+    }
+
+    /// What names this record's network to a person: its SSID, else its subnet as "192.168.1.x".
+    ///
+    /// Not the chip — that stays short — but the honest answer to "which network IS this", for a
+    /// row subtitle or the placeholder in a rename field.
+    public static func networkQualifier(for record: PTPIPSavedCameraRecord) -> String? {
+        if case .infrastructure(let network?) = record.path,
+            !network.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return network
+        }
+        return CameraDiscovery.subnetBase(for: record.host).map { "\($0).x" }
     }
 }

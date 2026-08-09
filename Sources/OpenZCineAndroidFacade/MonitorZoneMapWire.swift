@@ -40,6 +40,9 @@ public enum MonitorZoneMapWire {
     ///   - portraitFeedAspectRatio: the fit-mode feed's content ratio. Photography
     ///     passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders whole
     ///     directly under the top bar; video passes 16:9. Ignored in fill.
+    ///   - canDriveCamera: `MonitorDataAvailability.canDriveCamera`. A watcher without the
+    ///     control token owns the space the capture strip would have taken, so the band is
+    ///     re-laid the way the iOS shell does it (`assistStripCenteredIfWatching`).
     ///   - Remaining parameters mirror `MonitorZoneLayout.map` directly.
     public static func flattened(
         viewportWidth: Double,
@@ -54,7 +57,8 @@ public enum MonitorZoneMapWire {
         scopeCount: Int,
         mirrored: Bool,
         bottomBarHeight: Double,
-        portraitFeedAspectRatio: Double = 16.0 / 9.0
+        portraitFeedAspectRatio: Double = 16.0 / 9.0,
+        canDriveCamera: Bool = true
     ) -> [Float] {
         let dispMode: DispMode =
             switch mode {
@@ -62,7 +66,7 @@ public enum MonitorZoneMapWire {
             case 2: .command
             default: .live
             }
-        let map = MonitorZoneLayout.map(
+        let base = MonitorZoneLayout.map(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
             safeArea: MonitorEdgeInsets(
@@ -76,6 +80,13 @@ public enum MonitorZoneMapWire {
             bottomBarHeight: bottomBarHeight,
             portraitFeedAspectRatio: portraitFeedAspectRatio
         )
+        // Same gate, same order as the iOS shell's `assistStripCenteredIfWatching`: only a
+        // landscape watcher outside Command mode owns the freed band. Applied here rather than in
+        // Kotlin so both shells centre the strip and corner DISP off one definition.
+        let map =
+            (!isPortrait && dispMode != .command && !canDriveCamera)
+            ? MonitorZoneLayout.watcherBand(base, viewportWidth: viewportWidth)
+            : base
 
         var out: [Float] = []
         func append(

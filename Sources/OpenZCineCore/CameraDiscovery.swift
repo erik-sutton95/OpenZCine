@@ -6,6 +6,18 @@ public enum DiscoverySource: String, Codable, Equatable, Sendable {
     case subnetProbe
     case manual  // entered by the user
     case usb  // USB-C (ImageCaptureCore device enumeration)
+    /// A saved camera's host answered a kernel-level liveness dial (TCP RST on a port the
+    /// camera does not serve) — proof something lives at the saved address without one byte
+    /// reaching the PTP layer. The camera list runs on this instead of PTP probes: an Init
+    /// from an idle device is what drops another device's live session.
+    case liveness
+    /// Another OpenZCine device on this network says it is holding this camera, so this device
+    /// deliberately never probed it — an `Init` from a second initiator drops the first one's
+    /// session. The address is known and the holder is named; what is missing is permission.
+    ///
+    /// Shielded is not the same as absent, and conflating the two is what left the pairing list
+    /// empty and searching forever while the app knew exactly where the camera was.
+    case heldByAnotherDevice
 }
 
 /// A camera discovered on the network or attached over USB.
@@ -13,18 +25,43 @@ public struct DiscoveredCamera: Equatable, Identifiable, Sendable {
     /// Prefix of the stable host key used for USB-attached cameras (no IP address exists).
     public static let usbHostKeyPrefix = "usb:"
 
-    public init(ip: String, name: String? = nil, source: DiscoverySource) {
+    /// Whether a saved "host" is a USB device-id key rather than a network address. Nothing on the
+    /// network side should ever dial one.
+    public static func isUSBHostKey(_ host: String) -> Bool {
+        host.hasPrefix(usbHostKeyPrefix)
+    }
+
+    public init(
+        ip: String,
+        name: String? = nil,
+        source: DiscoverySource,
+        heldByDeviceName: String? = nil
+    ) {
         self.ip = ip
         self.name = name
         self.source = source
+        self.heldByDeviceName = heldByDeviceName
     }
 
     /// Camera IP address, or a `usb:<device-id>` host key for USB-attached cameras.
     public let ip: String
     public let name: String?
     public let source: DiscoverySource
+    /// The device holding this camera, when one said so. Only ``DiscoverySource/heldByAnotherDevice``
+    /// carries it, and it is the whole point of that row: "in use" without a name is a dead end.
+    public let heldByDeviceName: String?
 
     public var id: String { ip }
+
+    /// Whether another device is holding this camera, so connecting would take it from them.
+    public var isHeldByAnotherDevice: Bool { source == .heldByAnotherDevice }
+
+    /// What the row says under the name — the holder if there is one, else nothing.
+    public var heldByLabel: String? {
+        guard isHeldByAnotherDevice else { return nil }
+        guard let heldByDeviceName, !heldByDeviceName.isEmpty else { return "In use" }
+        return "In use by \(heldByDeviceName)"
+    }
 
     /// Whether this camera is attached over USB rather than reachable by IP.
     public var isUSB: Bool { source == .usb }
@@ -40,8 +77,34 @@ public struct DiscoveredCamera: Equatable, Identifiable, Sendable {
 
 /// Camera discovery and network scanning policies.
 public enum CameraDiscovery {
-    /// Default Nikon ZR access point IP address.
-    public static let nikonZRAccessPointHost = "192.168.1.1"
+    /// Prefix of a non-dialable host key for a camera-AP setup that has no learned address yet.
+    ///
+    /// Access-point IPs are **not** a universal constant across bodies, firmware, or regions.
+    /// After the operator joins the camera's SSID, connect rediscovers on the live link instead
+    /// of guessing an address. Keys of this form are never TCP-dialled.
+    public static let pendingAccessPointHostPrefix = "ap:"
+
+    /// Stable host key for an access-point setup that has not yet learned a real address.
+    public static func pendingAccessPointHostKey(ssid: String?) -> String {
+        if let ssid = ssid?.trimmingCharacters(in: .whitespacesAndNewlines), !ssid.isEmpty {
+            return pendingAccessPointHostPrefix + ssid
+        }
+        return pendingAccessPointHostPrefix + "pending"
+    }
+
+    /// Whether `host` is a virtual access-point key rather than a dialable address.
+    public static func isAccessPointHostKey(_ host: String) -> Bool {
+        host.hasPrefix(pendingAccessPointHostPrefix)
+    }
+
+    /// Whether a saved or candidate host should ever be opened as a TCP peer.
+    public static func isDialableHost(_ host: String) -> Bool {
+        guard let normalized = PTPIPPairedHosts.normalizedHost(host),
+            !DiscoveredCamera.isUSBHostKey(normalized),
+            !isAccessPointHostKey(normalized)
+        else { return false }
+        return ipv4Octets(normalized) != nil
+    }
 
     /// Delay before the next automatic discovery pass. The first retry is responsive, then the
     /// backoff protects a sleeping camera's Wi-Fi radio from repeated saved-host probes. Pull to
@@ -103,11 +166,10 @@ public enum CameraDiscovery {
 
     /// Splits the automatic scan list into a fast priority pass and the remaining sweep.
     ///
-    /// Priority hosts are the addresses most likely to answer — saved cameras' last-known hosts
-    /// plus the ZR access-point address — probed as their own first chunk so the common
-    /// reconnect case resolves in a single probe round instead of waiting on the subnet sweep.
-    /// Hosts are normalized, deduped, and never include the phone's own addresses; the remainder
-    /// preserves `automaticScanHosts` order minus the priority entries.
+    /// Priority hosts are only addresses a camera has actually answered on (saved / dialling) —
+    /// never a guessed AP convention IP. Bodies and regions do not share one access-point address.
+    /// Hosts are normalized, deduped, dialable, and never include the phone's own addresses; the
+    /// remainder preserves `automaticScanHosts` order minus the priority entries.
     public static func prioritizedScanHosts(
         priorityHosts: [String],
         localAddresses: [String]
@@ -115,8 +177,9 @@ public enum CameraDiscovery {
         let localAddressSet = Set(localAddresses.compactMap(PTPIPPairedHosts.normalizedHost))
         var seen: Set<String> = []
         var priority: [String] = []
-        for host in [nikonZRAccessPointHost] + priorityHosts {
+        for host in priorityHosts {
             guard let normalized = PTPIPPairedHosts.normalizedHost(host),
+                isDialableHost(normalized),
                 !localAddressSet.contains(normalized),
                 !seen.contains(normalized)
             else { continue }
@@ -128,7 +191,10 @@ public enum CameraDiscovery {
         return (priority, remaining)
     }
 
-    /// Builds a comprehensive scan list from local network interfaces.
+    /// Builds a comprehensive scan list from local network interfaces only.
+    ///
+    /// No fixed camera address is injected: the plan is exactly the /24s this device is standing
+    /// in (and whatever `SubnetScanPlan` widens to from there).
     public static func automaticScanHosts(localAddresses: [String]) -> [String] {
         let localAddressSet = Set(localAddresses.compactMap(PTPIPPairedHosts.normalizedHost))
         let subnets = Set<String>(
@@ -138,7 +204,7 @@ public enum CameraDiscovery {
             }
         )
 
-        var hosts = [nikonZRAccessPointHost]
+        var hosts: [String] = []
         for subnet in subnets.sorted() {
             hosts.append(contentsOf: automaticFallbackHosts(inSubnet: subnet))
         }

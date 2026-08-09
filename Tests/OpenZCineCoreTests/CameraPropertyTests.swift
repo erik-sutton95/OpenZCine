@@ -718,3 +718,34 @@ import Testing
             lastRefreshAt: now.addingTimeInterval(-60), now: now,
             interval: CameraMonitorPollPolicy.descriptorRefreshInterval))
 }
+
+@Test func whiteBalanceOptionsDropAutomaticModesUnderR3D() {
+    let advertised = [
+        "Auto", "Natural auto", "Sunny", "Cloudy", "Shade", "Incandescent",
+        "Fluorescent", "Preset",
+    ]
+    // The ZR's R3D NE codec offers no automatic WB — both auto presets leave the picker,
+    // on the raw firmware label and the shortened one alike.
+    #expect(
+        PTPCameraPropertyDecoders.whiteBalanceOptions(
+            advertised: advertised, codec: "R3D NE 10-bit R3D")
+            == ["Sunny", "Cloudy", "Shade", "Incandescent", "Fluorescent", "Preset"])
+    #expect(
+        PTPCameraPropertyDecoders.whiteBalanceOptions(advertised: advertised, codec: "R3D NE")
+            .allSatisfy { $0 != "Auto" && $0 != "Natural auto" })
+    // Kelvin entries mixed into the same drum list are never touched.
+    #expect(
+        PTPCameraPropertyDecoders.whiteBalanceOptions(
+            advertised: ["5560K", "Auto", "Sunny"], codec: "R3D NE")
+            == ["5560K", "Sunny"])
+    // Every other codec — and an unknown one — passes through untouched.
+    #expect(
+        PTPCameraPropertyDecoders.whiteBalanceOptions(advertised: advertised, codec: "H.265 10-bit")
+            == advertised)
+    #expect(
+        PTPCameraPropertyDecoders.whiteBalanceOptions(advertised: advertised, codec: "N-RAW")
+            == advertised)
+    #expect(
+        PTPCameraPropertyDecoders.whiteBalanceOptions(advertised: advertised, codec: nil)
+            == advertised)
+}

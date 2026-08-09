@@ -79,15 +79,15 @@ class LiveFeedGlSurfaceTest {
     fun `a replacement plan clears a fail closed legacy renderer for retry`() {
         val state = LegacyLiveFeedSurfaceState()
         val failedPlan = testRenderPlan()
-        state.update(failedPlan, aspectFill = false)
+        state.update(failedPlan, aspectFill = false, mirrored = false)
         assertTrue(state.recordRenderFailure(failedPlan))
         assertTrue(state.renderFailed)
 
-        state.update(failedPlan, aspectFill = true)
+        state.update(failedPlan, aspectFill = true, mirrored = false)
         assertTrue(state.renderFailed)
 
         val replacement = testRenderPlan()
-        state.update(replacement, aspectFill = true)
+        state.update(replacement, aspectFill = true, mirrored = false)
         assertFalse(state.renderFailed)
         assertFalse(state.recordRenderFailure(failedPlan))
         state.dispose()

@@ -86,6 +86,33 @@ public enum StillDriveMode: UInt16, Equatable, Sendable, CaseIterable {
     public static func mode(forLabel label: String) -> StillDriveMode? {
         allCases.first { $0.label == label }
     }
+
+    /// The DRIVE drum's options: what the body advertises, in the body's own RELEASE order, minus
+    /// the two positions this drum does not own.
+    ///
+    /// Advertised beats invented — a body is never offered a mode it does not have (#274) — but
+    /// advertised ORDER is not the body's menu order. The ZR enumerates by raw value, and the raw
+    /// values interleave: Single `0x0001`, Continuous H `0x0002`, Continuous L `0x8010`, Self-timer
+    /// `0x8011`, Continuous H+ `0x8019`. So the drum read Single · CH · CL · Self-timer · CH+,
+    /// which is neither the camera's wheel nor any Z body's. Declaration order here IS the release
+    /// order, so the advertised SET is kept and this ORDERING is applied over it.
+    ///
+    /// Self-timer and Quick are removed for the same reason the fallback ladder removes them: the
+    /// Built-in Timer tab owns the body's countdown and Quick is a dial-only position. Leaving
+    /// Self-timer in was a trap — selecting it engages the body timer, which disables this very
+    /// tab, so the operator scrolled onto a value that froze the drum they were scrolling and left
+    /// no way back to it.
+    ///
+    /// Anything advertised that this build does not know is kept, after the known modes, rather
+    /// than dropped: a newer body's position stays reachable even when its order is a guess.
+    public static func driveDrumOptions(advertised: [String]) -> [String] {
+        let excluded: Set<String> = [Self.selfTimer.label, Self.quickSetting.label]
+        let offered = advertised.filter { !excluded.contains($0) }
+        guard !offered.isEmpty else { return [] }
+        let known = allCases.map(\.label).filter(offered.contains)
+        let unknown = offered.filter { label in !allCases.contains { $0.label == label } }
+        return known + unknown
+    }
 }
 
 /// Destination for a still capture request.
@@ -173,6 +200,35 @@ public enum StillCapturePolicy: Sendable {
         selector == .photo
     }
 
+    /// Whether a tap that moved the AF area must also fire a one-shot autofocus (#272).
+    ///
+    /// Moving the area is not focusing. A continuous mode (AF-C/AF-F) hides that: the body's own
+    /// AF loop chases the box the moment it lands, so the tap looks like it focused. A single-servo
+    /// mode has no such loop — without an explicit drive the box moves and nothing else happens,
+    /// which is exactly the AF-S report ("switching to AF-F makes touch focus work").
+    ///
+    /// Photography drives in every AF mode: a stills live view does not run continuous AF until the
+    /// body is half-pressed, so even AF-C needs the trigger there. Manual focus never drives — there
+    /// is nothing to acquire and the body would only refuse it. An unknown mode keeps the old
+    /// photography-only behaviour rather than guessing.
+    public static func focusPointNeedsAutofocusDrive(
+        focusMode: String?, photography: Bool
+    ) -> Bool {
+        guard let focusMode, !focusMode.isEmpty else { return photography }
+        guard !isManualFocusMode(focusMode) else { return false }
+        return photography || !isContinuousFocusMode(focusMode)
+    }
+
+    /// True for a body focus mode that keeps refocusing on its own (AF-C / AF-F).
+    public static func isContinuousFocusMode(_ focusMode: String) -> Bool {
+        focusMode == "AF-C" || focusMode == "AF-F"
+    }
+
+    /// True for a manual-focus mode, where no autofocus acquisition exists to trigger.
+    public static func isManualFocusMode(_ focusMode: String) -> Bool {
+        focusMode == "MF"
+    }
+
     /// The object star-rating property's step table: index == stars
     /// (0/1/25/50/75/100 == Off…★★★★★). Off-step values round down.
     private static let ratingSteps: [UInt16] = [0, 1, 25, 50, 75, 100]
@@ -218,7 +274,10 @@ extension MonitorAssistTool {
     public var appliesToPhotography: Bool {
         switch self {
         case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
-            .desqueeze, .magnification:
+            .desqueeze, .mirror, .magnification:
+            // Mirror joins de-squeeze for the same reason: a body turned back at the subject is
+            // just as common on a stills shoot, and both are display transforms that never reach
+            // the camera original.
             true
         case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
             .guides, .crosshair:
@@ -402,21 +461,16 @@ extension PTPCameraPropertySnapshot {
         (imageArea ?? .fx).frameAspect
     }
 
-    /// Flash label compacted to strip width ("Red-eye slow" → "Red+S").
-    private var compactFlashLabel: String? {
-        switch flashMode {
-        case nil: nil
-        case "Red-eye": "Red"
-        case "Red-eye slow": "Red+S"
-        case let other: other
-        }
-    }
-
     /// WB tile readout: the Kelvin figure while in colour-temperature mode, else the preset
     /// name (presets render as icons in the strip, like the movie tile).
     private var stillWhiteBalanceValue: String {
-        if wbMode == "Color temp", let kelvin = wbKelvin { return "\(kelvin)K" }
-        return wbMode ?? "—"
+        // `WhiteBalance` (0x5005) and `MovWhiteBalance` are two different camera settings that
+        // happen to decode through one table (see ``activeWBMode(photography:)``). Reading `wbMode`
+        // here put the MOVIE white balance on the photography strip, so the tile reported a setting
+        // the still being shot does not use — and moved when only the movie side changed.
+        let mode = activeWBMode(photography: true)
+        if mode == "Color temp", let kelvin = wbKelvin { return "\(kelvin)K" }
+        return mode ?? "—"
     }
 
     /// Drive-mode label compacted to strip width ("Continuous H" → "CH").
@@ -467,3 +521,11 @@ public enum StillReleaseReadiness: Equatable, Sendable {
     /// The release failed (out of focus, storage full, …).
     case failed(PTPResponseCode)
 }
+
+/// The camera's battery gauge, as the body actually reports it.
+///
+/// `BatteryLevel` (0x5001) is a five-bar gauge, not a percentage: the documented property only ever
+/// carries 1, 20, 40, 60, 80 or 100, mapping to 1/5…5/5 bars with 1 meaning the blinking
+/// shutter-disabled state. Rendering the raw number as "60%" claims a precision the camera never
+/// sent — the operator reads 60% while the body is anywhere from 40% to 59%, which is exactly the
+/// gap reported in #303 (app 60%, body 58% falling to 39%).

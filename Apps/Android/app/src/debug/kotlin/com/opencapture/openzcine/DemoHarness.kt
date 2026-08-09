@@ -99,6 +99,20 @@ object DemoHarness {
     const val EXTRA_DEMO_VIDEO = "zc.demo.video"
 
     /**
+     * Debug-only direct relay watch (`--es zc.demo.relayWatch host:port`): joins a broadcast at
+     * a literal endpoint, bypassing NSD — for cross-platform wire verification through
+     * `adb reverse` where mDNS cannot cross network segments.
+     */
+    const val EXTRA_RELAY_WATCH = "zc.demo.relayWatch"
+
+    fun relayWatchEndpoint(intent: android.content.Intent): Pair<String, Int>? {
+        val raw = intent.getStringExtra(EXTRA_RELAY_WATCH) ?: return null
+        val host = raw.substringBeforeLast(':')
+        val port = raw.substringAfterLast(':').toIntOrNull() ?: return null
+        return host to port
+    }
+
+    /**
      * Debug-only virtual-horizon source selector. `none` omits synthetic
      * camera-level metadata so the monitor exercises its device-gravity
      * fallback; every other value keeps the explicitly labelled fixture.

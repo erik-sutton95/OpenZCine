@@ -84,4 +84,43 @@ struct MonitorZoneMapWireTests {
         #expect(record(11) == nil)  // scopes float in landscape
         #expect(record(12) == nil)  // controls grid is command/portrait-fit only
     }
+
+    /// A watcher without control gets the same band the iOS shell lays out — the strip centred and
+    /// DISP in the trailing corner — so both shells read one definition rather than two.
+    @Test func watcherBandCentresTheStripAndCornersDisp() throws {
+        let watching = MonitorZoneMapWire.flattened(
+            viewportWidth: 852, viewportHeight: 393,
+            safeTop: 0, safeLeading: 59, safeBottom: 21, safeTrailing: 59,
+            mode: 0, isPortrait: false, aspectFill: false,
+            scopeCount: 0, mirrored: false, bottomBarHeight: 58,
+            canDriveCamera: false
+        )
+        func watchingRecord(_ kind: Float) -> [Float]? {
+            for start in stride(from: 0, to: watching.count, by: MonitorZoneMapWire.stride)
+            where watching[start] == kind {
+                return Array(watching[(start + 1)..<(start + MonitorZoneMapWire.stride)])
+            }
+            return nil
+        }
+        let expected = MonitorZoneLayout.watcherBand(map, viewportWidth: 852)
+        let strip = try #require(watchingRecord(3))
+        let expectedStrip = try #require(expected.assistStrip)
+        #expect(strip[1] == Float(expectedStrip.frame.x))
+        #expect(strip[3] == Float(expectedStrip.frame.width))
+        // Not merely equal to the core — actually moved off the owning layout.
+        let owningStrip = try #require(map.assistStrip)
+        #expect(expectedStrip.frame.x != owningStrip.frame.x)
+
+        let disp = try #require(watchingRecord(6))
+        #expect(disp[1] == Float(expected.systemSlots.disp.x))
+        #expect(disp[2] == Float(expected.systemSlots.disp.y))
+    }
+
+    @Test func owningSessionKeepsTheStandardBand() throws {
+        let strip = try #require(record(3))
+        let expected = try #require(map.assistStrip)
+        #expect(strip[1] == Float(expected.frame.x))
+        let disp = try #require(record(6))
+        #expect(disp[1] == Float(map.systemSlots.disp.x))
+    }
 }

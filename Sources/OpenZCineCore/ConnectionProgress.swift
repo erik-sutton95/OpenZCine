@@ -67,11 +67,18 @@ public enum ConnectionProgressCopy {
     }
 
     /// Secondary detail line beneath the status title.
+    /// - Parameter path: how this attempt reaches the camera, where it is known. Two of these
+    ///   lines describe a NETWORK, and over a cable that is simply the wrong noun — "looking for
+    ///   it on your network" and "check your network and try again" both send an operator to go
+    ///   and inspect a thing this attempt never touches. `nil` keeps the network wording, which is
+    ///   right for every path that has one.
     public static func statusDetail(
         phase: CameraConnectionPhase,
         deviceName: String,
-        friendlyError: String?
+        friendlyError: String?,
+        path: CameraPath.Kind? = nil
     ) -> String {
+        let overCable = path == .usbC || path == .hdmiCapture
         switch phase {
         case .idle:
             return ""
@@ -80,7 +87,9 @@ public enum ConnectionProgressCopy {
         case .joiningWiFi:
             return "Tap Join when iOS asks to switch networks."
         case .discovering:
-            return "Looking for \(deviceName) on your network."
+            return overCable
+                ? "Looking for \(deviceName) on the cable."
+                : "Looking for \(deviceName) on your network."
         case .handshaking:
             return "Establishing a secure link with \(deviceName)."
         case .pairing:
@@ -96,7 +105,9 @@ public enum ConnectionProgressCopy {
             if let friendlyError, !friendlyError.isEmpty {
                 return friendlyError
             }
-            return "Check your network and try again."
+            return overCable
+                ? "Check the cable and try again."
+                : "Check your network and try again."
         }
     }
 

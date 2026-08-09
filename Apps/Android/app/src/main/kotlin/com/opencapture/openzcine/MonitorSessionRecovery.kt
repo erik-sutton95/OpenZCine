@@ -34,6 +34,13 @@ internal sealed interface MonitorRecoveryState {
 
     /** The automatic budget is spent; the operator decides what happens next. */
     data class WaitingForOperator(val attemptsMade: Int) : MonitorRecoveryState
+
+    /**
+     * Reconnects kept succeeding but the session kept dying young (the shared
+     * core's `SessionDropStormGuard`). Automatic recovery is paused to protect
+     * the camera; the operator decides.
+     */
+    data class PausedAfterRepeatedDrops(val drops: Int) : MonitorRecoveryState
 }
 
 /**
@@ -50,6 +57,20 @@ internal fun interface SessionRetryScheduleBridge {
 
     /** The shared automatic-attempt budget, for a truthful "attempt N of M". */
     fun maxAutomaticAttempts(): Int = DEFAULT_MAX_AUTOMATIC_ATTEMPTS
+
+    /**
+     * Records one drop of an established session in the shared drop-storm
+     * ledger; `true` = pause automatic recovery for the operator. Success is
+     * exactly what a storm fakes well, so the per-run failure budget cannot
+     * catch it — only this cross-run count can.
+     */
+    fun noteSessionDrop(): Boolean = false
+
+    /** Drops inside the storm window, for the operator-facing count. */
+    fun dropsInStormWindow(): Int = 0
+
+    /** Operator action (retry, disconnect, fresh connect) starts a fresh ledger. */
+    fun resetDropStormGuard() {}
 
     companion object {
         /**
@@ -81,6 +102,16 @@ internal object ProductionSessionRetryScheduleBridge : SessionRetryScheduleBridg
         } else {
             SessionRetryScheduleBridge.DEFAULT_MAX_AUTOMATIC_ATTEMPTS
         }
+
+    override fun noteSessionDrop(): Boolean =
+        SwiftCore.isAvailable && SwiftCore.sessionNoteSessionDrop()
+
+    override fun dropsInStormWindow(): Int =
+        if (SwiftCore.isAvailable) SwiftCore.sessionDropsInStormWindow() else 0
+
+    override fun resetDropStormGuard() {
+        if (SwiftCore.isAvailable) SwiftCore.sessionResetDropStormGuard()
+    }
 }
 
 /**
@@ -98,6 +129,13 @@ internal class MonitorSessionRecoveryCoordinator(
     private val jitterSample: () -> Double = { Random.nextDouble() },
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
+    init {
+        // A fresh monitor entry starts a fresh storm ledger (parity with iOS, which resets on
+        // operator connect and disconnect): the ledger is process-static in the facade and must
+        // not carry drops across a deliberate exit-and-return.
+        schedule.resetDropStormGuard()
+    }
+
     private val mutableRecoveryState =
         MutableStateFlow<MonitorRecoveryState>(MonitorRecoveryState.Idle)
 
@@ -116,6 +154,17 @@ internal class MonitorSessionRecoveryCoordinator(
                     consecutiveFailures = 0
                     mutableRecoveryState.value = MonitorRecoveryState.Idle
                     session.state.first { it !is CameraSessionState.Connected }
+                    // An established session just dropped. If drops keep clustering while every
+                    // reconnect succeeds (the storm signature — `consecutiveFailures` above
+                    // resets on success and can never catch it), pause instead of churning the
+                    // body's PTP stack toward its battery-pull wedge.
+                    if (schedule.noteSessionDrop()) {
+                        mutableRecoveryState.value =
+                            MonitorRecoveryState.PausedAfterRepeatedDrops(
+                                schedule.dropsInStormWindow()
+                            )
+                        return
+                    }
                 }
 
                 CameraSessionState.Connecting -> {

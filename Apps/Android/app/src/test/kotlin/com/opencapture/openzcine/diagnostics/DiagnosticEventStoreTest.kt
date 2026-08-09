@@ -210,4 +210,50 @@ class DiagnosticEventStoreTest {
 
     private fun temporaryEventFile(): File =
         Files.createTempDirectory("openzcine-diagnostics-test").resolve("events.log").toFile()
+
+    /**
+     * The three USB attachment failures must be distinguishable in an exported report.
+     *
+     * A declined dialog, a grant the ROM does not make stick, and a serial the ROM will not
+     * surface all left the same `error.connection.usb.permission` breadcrumb repeated, and the
+     * fix for one is not the fix for the others (field report, Android 16, build 127).
+     */
+    @Test
+    fun `usb attachment states map to distinct closed codes`() {
+        val codes =
+            listOf(
+                    "usb.attached.noPtpInterface",
+                    "usb.attached.needsPermission",
+                    "usb.attached.permissionDenied",
+                    "usb.attached.noSerial",
+                    "usb.attached.ready",
+                )
+                .map { AndroidDiagnosticEvent.fromPhase(it) }
+
+        assertEquals(codes.size, codes.toSet().size, "each state needs its own code")
+        assertTrue(codes.all { it != null })
+        assertEquals(
+            AndroidDiagnosticEvent.USB_ATTACHED_NO_SERIAL,
+            AndroidDiagnosticEvent.fromPhase("usb.attached.noSerial"),
+        )
+        // And none of them collapses into the old catch-all.
+        assertTrue(codes.none { it == AndroidDiagnosticEvent.CONNECTION_USB_PERMISSION })
+    }
+
+    /** The exported wording carries no device path, ids or serial — only the resolvable fact. */
+    @Test
+    fun `usb attachment codes name no identity`() {
+        val wording =
+            listOf(
+                    AndroidDiagnosticEvent.USB_ATTACHED_NO_PTP_INTERFACE,
+                    AndroidDiagnosticEvent.USB_ATTACHED_NEEDS_PERMISSION,
+                    AndroidDiagnosticEvent.USB_ATTACHED_PERMISSION_DENIED,
+                    AndroidDiagnosticEvent.USB_ATTACHED_NO_SERIAL,
+                    AndroidDiagnosticEvent.USB_ATTACHED_READY,
+                )
+                .map(AndroidDiagnosticEvent::wireValue)
+
+        assertTrue(wording.none { it.contains("/dev/") }, "a device path is not a diagnostic")
+        assertTrue(wording.all { it.startsWith("usb.attached.") })
+    }
 }
