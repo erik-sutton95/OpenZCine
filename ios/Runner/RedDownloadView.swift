@@ -39,6 +39,7 @@ struct RedDownloadView: View {
                 // RED's page loads behind an injected loading cover (see RedWebView.loadingJS) until
                 // the terms modal is up, so the operator can't wander RED's store during the wait.
                 RedWebView(
+                    currentAvailability: { availability },
                     onCommitted: {
                         pageCommitted = true
                         pageLoadWatchdog?.cancel()
@@ -413,9 +414,37 @@ private struct DownloadStatusView: View {
     }
 }
 
+/// Turns a failed page load into a sentence, WITHOUT inventing a cause for it.
+///
+/// This used to answer every one of six URL error codes — timed out, DNS lookup failed,
+/// connection lost, cannot connect, cannot find host — with "you appear to be connected to
+/// the camera's Wi‑Fi". Five of those six mean "this request failed", which on a working
+/// network usually says something about the far end or the moment, not about which network
+/// the phone is on. Field report: that sentence shown on home Wi‑Fi with working internet,
+/// telling the operator to go and change networks for no reason.
+///
+/// The app already knows the answer. `RedLUTDownloadAvailability` is fed by real
+/// reachability and real access-point evidence and separates "on the camera's Wi‑Fi" from
+/// "no route at all" — so the diagnosis is READ from it, and a failure it cannot explain
+/// says only what happened.
+func redDownloadFailureMessage(for error: NSError, availability: RedLUTDownloadAvailability)
+    -> String
+{
+    if let blocked = availability.blockedReason { return blocked }
+    // Only this one code is the OS saying there is no route. Everything else is a request
+    // that did not land, on a network that otherwise works.
+    if error.domain == NSURLErrorDomain, error.code == NSURLErrorNotConnectedToInternet {
+        return "No internet connection right now. Reconnect and try again."
+    }
+    return "RED's page couldn't load (\(error.localizedDescription)). "
+        + "Check your connection and try again."
+}
+
 /// The embedded RED page: loads RED's IPP2 presets URL, injects the phone-friendly T&C helper, and
 /// hands any download the user triggers back through `onDownloaded`.
 private struct RedWebView: UIViewRepresentable {
+    /// Read at failure time, not at open time — the phone can change networks while the page loads.
+    let currentAvailability: () -> RedLUTDownloadAvailability
     let onCommitted: () -> Void
     let onDownloadStarted: () -> Void
     let onProgress: (Double) -> Void
@@ -426,7 +455,8 @@ private struct RedWebView: UIViewRepresentable {
         Coordinator(
             onCommitted: onCommitted,
             onDownloadStarted: onDownloadStarted, onProgress: onProgress,
-            onDownloaded: onDownloaded, onFailed: onFailed)
+            onDownloaded: onDownloaded, onFailed: onFailed,
+            currentAvailability: currentAvailability)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -593,6 +623,9 @@ private struct RedWebView: UIViewRepresentable {
         /// cookies there can stall past the watchdog.
         private var cachedUserAgent: String?
         private var cachedCookies: [HTTPCookie] = []
+        /// The live availability verdict, asked for at failure time rather than captured at open
+        /// time — the phone can join or leave a network while RED's page is loading.
+        private let currentAvailability: () -> RedLUTDownloadAvailability
 
         /// First paint of RED's page — lifts the native loading cover so the injected in-page cover
         /// can take over without exposing a bare WKWebView frame.
@@ -646,29 +679,16 @@ private struct RedWebView: UIViewRepresentable {
             if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
             if nsError.domain == "WebKitErrorDomain", nsError.code == 102 { return }
             if fetching || completed { return }
-            fail(Self.failureMessage(for: nsError))
-        }
-
-        private static func failureMessage(for error: NSError) -> String {
-            let offlineCodes: Set<Int> = [
-                NSURLErrorNotConnectedToInternet, NSURLErrorCannotConnectToHost,
-                NSURLErrorTimedOut, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
-                NSURLErrorNetworkConnectionLost,
-            ]
-            if error.domain == NSURLErrorDomain, offlineCodes.contains(error.code) {
-                return "No internet connection. You appear to be connected to the camera's Wi‑Fi, "
-                    + "which has no internet access. RED's download page needs internet — switch to "
-                    + "a Wi‑Fi network or cellular with internet, then try again."
-            }
-            return "RED's page couldn't load (\(error.localizedDescription)). "
-                + "Check your connection and try again."
+            fail(redDownloadFailureMessage(for: nsError, availability: currentAvailability()))
         }
 
         init(
             onCommitted: @escaping () -> Void,
             onDownloadStarted: @escaping () -> Void, onProgress: @escaping (Double) -> Void,
-            onDownloaded: @escaping (URL) -> Void, onFailed: @escaping (String) -> Void
+            onDownloaded: @escaping (URL) -> Void, onFailed: @escaping (String) -> Void,
+            currentAvailability: @escaping () -> RedLUTDownloadAvailability
         ) {
+            self.currentAvailability = currentAvailability
             self.onCommitted = onCommitted
             self.onDownloadStarted = onDownloadStarted
             self.onProgress = onProgress

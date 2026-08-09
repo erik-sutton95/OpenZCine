@@ -2078,3 +2078,50 @@ extension RunnerTests {
         XCTAssertTrue(model.visibleRelayBroadcasts.isEmpty)
     }
 }
+
+// MARK: - RED download failure copy
+
+extension RunnerTests {
+    /// A failed page load must not invent a cause for itself.
+    ///
+    /// Six URL error codes all used to answer "you appear to be connected to the camera's Wi-Fi",
+    /// which is a claim about the phone's NETWORK made from a fact about one REQUEST. Field report:
+    /// that sentence on home Wi-Fi with working internet, sending the operator to change networks
+    /// for nothing.
+    @MainActor
+    func testRedDownloadFailureDoesNotInventACameraWiFiDiagnosis() {
+        let timedOut = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        let dns = NSError(domain: NSURLErrorDomain, code: NSURLErrorDNSLookupFailed)
+        let lost = NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)
+
+        for error in [timedOut, dns, lost] {
+            let copy = redDownloadFailureMessage(for: error, availability: .available)
+            XCTAssertFalse(
+                copy.contains("camera"),
+                "a request that failed on a working network says nothing about which network: \(copy)"
+            )
+        }
+
+        // The one code that IS the OS reporting no route still says so, without naming a cause.
+        let offline = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let offlineCopy = redDownloadFailureMessage(
+            for: offline, availability: .available)
+        XCTAssertTrue(offlineCopy.contains("No internet connection"))
+        XCTAssertFalse(offlineCopy.contains("camera"))
+    }
+
+    /// When the app genuinely knows the phone is on the camera's Wi-Fi, it says so — the diagnosis
+    /// is read from the availability policy, never guessed from an error code.
+    @MainActor
+    func testRedDownloadFailureUsesTheAvailabilityVerdictWhenThereIsOne() {
+        let timedOut = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+
+        let onAP = redDownloadFailureMessage(
+            for: timedOut, availability: .blockedOnCameraAccessPoint)
+        XCTAssertEqual(onAP, RedLUTDownloadAvailability.blockedOnCameraAccessPoint.blockedReason)
+
+        let noRoute = redDownloadFailureMessage(
+            for: timedOut, availability: .blockedNoInternet)
+        XCTAssertEqual(noRoute, RedLUTDownloadAvailability.blockedNoInternet.blockedReason)
+    }
+}
