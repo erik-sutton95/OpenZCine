@@ -137,6 +137,7 @@
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
 		TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */; };
 		TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000091 /* ConnectionLifecycleTests.swift */; };
+		TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000093 /* RelayRecordControlTests.swift */; };
 		USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBC00000000000000000001 /* PTPUSBContainer.swift */; };
 		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
 		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
@@ -345,6 +346,7 @@
 		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraEstablishRetryTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000091 /* ConnectionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLifecycleTests.swift; sourceTree = "<group>"; };
+		TEST00000000000000000093 /* RelayRecordControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRecordControlTests.swift; sourceTree = "<group>"; };
 		USBC00000000000000000001 /* PTPUSBContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPUSBContainer.swift; path = ../Sources/OpenZCineCore/PTPUSBContainer.swift; sourceTree = SOURCE_ROOT; };
 		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
 		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
@@ -402,6 +404,7 @@
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
 				TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */,
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
+				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -747,6 +750,7 @@
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
 				TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */,
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
+				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

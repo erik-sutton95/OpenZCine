@@ -305,32 +305,50 @@ class RelayBroadcastController(
         )
     }
 
-    /** Runs a watcher's command on this device's own session — same entry points as local UI. */
+    /**
+     * Runs a watcher's command on this device's own session — same entry points as local UI.
+     *
+     * Deliberately NOT the monitor's record control: the Record Confirmation preference belongs to
+     * whoever pressed the button, and the holder already answered it on their own screen. A prompt
+     * raised here would wait on an operator who is holding the other device, and the take would
+     * never start (iOS shipped exactly that).
+     */
     private fun execute(command: MonitorRelayWire.Command) {
         val session = session ?: return
         scope.launch {
-            when (command) {
-                is MonitorRelayWire.Command.ToggleRecording ->
-                    runCatching {
-                        session.setRecording(
-                            session.recordingState.value != CameraRecordingState.RECORDING
-                        )
+            runCatching {
+                    when (command) {
+                        is MonitorRelayWire.Command.ToggleRecording ->
+                            session.setRecording(
+                                session.recordingState.value != CameraRecordingState.RECORDING
+                            )
+                        is MonitorRelayWire.Command.FocusPoint ->
+                            session.changeAfArea(
+                                CameraFocusPoint(command.cameraX, command.cameraY)
+                            )
+                        is MonitorRelayWire.Command.PickerValue -> {
+                            // The holder's picker write, run on this device's own session through
+                            // the same typed entry point the local drums use — so it is subject to
+                            // every guard and queue a local write is. A word this side has no
+                            // control for is dropped rather than guessed at
+                            // (see [RelayPickerVocabulary]).
+                            val write =
+                                RelayPickerVocabulary.write(command.picker, command.value)
+                            if (write != null) {
+                                session.applyControl(write.control, write.label)
+                            }
+                        }
                     }
-                is MonitorRelayWire.Command.FocusPoint ->
-                    runCatching {
-                        session.changeAfArea(
-                            CameraFocusPoint(command.cameraX, command.cameraY)
-                        )
-                    }
-                is MonitorRelayWire.Command.PickerValue ->
-                    // The holder's picker write, run on this device's own session through the
-                    // same typed entry point the local drums use — so it is subject to every
-                    // guard and queue a local write is. A word this side has no control for is
-                    // dropped rather than guessed at (see [RelayPickerVocabulary]).
-                    RelayPickerVocabulary.write(command.picker, command.value)?.let { write ->
-                        runCatching { session.applyControl(write.control, write.label) }
-                    }
-            }
+                }
+                // A refusal here is invisible on BOTH devices otherwise — the holder sees its
+                // control do nothing and this screen says nothing at all. Closed command
+                // vocabulary only; the exception stays in local logcat, never in a report.
+                .onFailure {
+                    android.util.Log.w(
+                        "RelayHost",
+                        "watcher command refused: ${command.javaClass.simpleName}",
+                    )
+                }
         }
     }
 
