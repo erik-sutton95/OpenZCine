@@ -86,6 +86,33 @@ public enum StillDriveMode: UInt16, Equatable, Sendable, CaseIterable {
     public static func mode(forLabel label: String) -> StillDriveMode? {
         allCases.first { $0.label == label }
     }
+
+    /// The DRIVE drum's options: what the body advertises, in the body's own RELEASE order, minus
+    /// the two positions this drum does not own.
+    ///
+    /// Advertised beats invented — a body is never offered a mode it does not have (#274) — but
+    /// advertised ORDER is not the body's menu order. The ZR enumerates by raw value, and the raw
+    /// values interleave: Single `0x0001`, Continuous H `0x0002`, Continuous L `0x8010`, Self-timer
+    /// `0x8011`, Continuous H+ `0x8019`. So the drum read Single · CH · CL · Self-timer · CH+,
+    /// which is neither the camera's wheel nor any Z body's. Declaration order here IS the release
+    /// order, so the advertised SET is kept and this ORDERING is applied over it.
+    ///
+    /// Self-timer and Quick are removed for the same reason the fallback ladder removes them: the
+    /// Built-in Timer tab owns the body's countdown and Quick is a dial-only position. Leaving
+    /// Self-timer in was a trap — selecting it engages the body timer, which disables this very
+    /// tab, so the operator scrolled onto a value that froze the drum they were scrolling and left
+    /// no way back to it.
+    ///
+    /// Anything advertised that this build does not know is kept, after the known modes, rather
+    /// than dropped: a newer body's position stays reachable even when its order is a guess.
+    public static func driveDrumOptions(advertised: [String]) -> [String] {
+        let excluded: Set<String> = [Self.selfTimer.label, Self.quickSetting.label]
+        let offered = advertised.filter { !excluded.contains($0) }
+        guard !offered.isEmpty else { return [] }
+        let known = allCases.map(\.label).filter(offered.contains)
+        let unknown = offered.filter { label in !allCases.contains { $0.label == label } }
+        return known + unknown
+    }
 }
 
 /// Destination for a still capture request.

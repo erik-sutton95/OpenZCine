@@ -274,3 +274,43 @@ struct StillCaptureTests {
         #expect(CameraBatteryGauge.gauge(rawBatteryLevel: 0).filledBars == 0)
     }
 }
+
+// MARK: - DRIVE drum options
+
+/// The body's SET, this drum's ORDER — and never a value that disables the drum it sits in.
+@Test func theDriveDrumKeepsReleaseOrderAndDropsTheTimer() {
+    // What the ZR actually enumerates: ascending raw value, which interleaves the continuous
+    // modes and drops the self-timer into the middle.
+    let advertised = [
+        "Single", "Continuous H", "Continuous L", "Self-timer", "Continuous H+", "C15", "C30",
+    ]
+
+    let options = StillDriveMode.driveDrumOptions(advertised: advertised)
+
+    #expect(options == ["Single", "Continuous L", "Continuous H", "Continuous H+", "C15", "C30"])
+    // Selecting this engaged the body timer, which disables the DRIVE tab — so the drum offered a
+    // value that froze the drum. It is the Built-in Timer tab's, not this one's.
+    #expect(!options.contains("Self-timer"))
+}
+
+/// A body is never offered a mode it did not advertise — the reason advertised beats invented.
+@Test func theDriveDrumNeverInventsAModeTheBodyLacks() {
+    let options = StillDriveMode.driveDrumOptions(advertised: ["Single", "Continuous L"])
+
+    #expect(options == ["Single", "Continuous L"])
+    #expect(!options.contains("C120"))
+}
+
+/// A position this build has never heard of stays reachable, after the ones it can order.
+@Test func anUnknownAdvertisedDriveModeIsKeptRatherThanDropped() {
+    let options = StillDriveMode.driveDrumOptions(
+        advertised: ["Continuous H", "Single", "C240"])
+
+    #expect(options == ["Single", "Continuous H", "C240"])
+}
+
+/// A body advertising only the timer leaves nothing this drum owns — the tab greys out rather
+/// than showing a one-value wheel that cannot be written.
+@Test func aDriveEnumOfOnlyExcludedPositionsIsEmpty() {
+    #expect(StillDriveMode.driveDrumOptions(advertised: ["Self-timer", "Quick"]).isEmpty)
+}

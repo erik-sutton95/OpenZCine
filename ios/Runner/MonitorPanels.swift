@@ -1530,6 +1530,11 @@ struct PickerPanel: View {
                     return PTPCameraPropertyDecoders.whiteBalanceOptions(
                         advertised: cameraMode, codec: model.cameraState.codec)
                 }
+                // Same read-time shape as the WB filter above: the body's SET, this drum's order,
+                // and without the two positions the DRIVE tab does not own.
+                if picker == .stillDrive {
+                    return StillDriveMode.driveDrumOptions(advertised: cameraMode)
+                }
                 return cameraMode
             }
         }
