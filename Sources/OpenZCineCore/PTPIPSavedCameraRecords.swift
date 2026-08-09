@@ -394,24 +394,33 @@ public enum PTPIPSavedCameraRecords {
         // Within infrastructure the NETWORK is part of the key: one camera reached from a home
         // router and from a portable one is two setups, not one that keeps changing address.
         //
-        // Two things can name a network, and the good one is usually unavailable. The SSID is
-        // ideal and `NEHotspotNetwork.fetchCurrent` only returns a network THIS APP configured —
-        // so a camera's own access point is readable and somebody's router never is, which is
-        // precisely backwards for this. Keying on the name alone meant both of an operator's
-        // router setups arrived unnamed and merged: the field report this comment replaces.
+        // Two things can name a network, and they are consulted in that ORDER — the same order
+        // `id` above resolves them in, which is not a coincidence: a row key and the matcher that
+        // decides which rows exist have to be the same function, or rows kept apart collide in the
+        // card list. They were not, and this is where they disagreed.
         //
-        // The SUBNET is the discriminator that is always available and needs no permission, and
-        // it is the right shape besides. A different router is a different subnet in practice
-        // (192.168.1.x at home, 192.168.129.x on a portable), while a DHCP lease moving within
-        // one router stays inside its own subnet — so this separates the two setups without
-        // forking one every time its address changes, which is the whole balance to strike.
-        // Two routers that both hand out 192.168.1.x still merge; that is genuinely ambiguous,
-        // and merging is what happens today.
+        // The NAME first, when we have one for both. A named network is ONE network however many
+        // subnets its leases land on — a mesh with a VLAN per band, or a 6 GHz radio on its own
+        // segment, is still the operator's one Wi-Fi. Insisting on the subnet on top of the name
+        // forked a second Wi-Fi row for a camera they added once, and then a third.
+        //
+        // The SUBNET when either is unnamed, which is most of the time: the SSID is ideal and
+        // `NEHotspotNetwork.fetchCurrent` only returns a network THIS APP configured — so a
+        // camera's own access point is readable and somebody's router never is, precisely
+        // backwards for this. The subnet needs no permission and is the right shape besides. A
+        // different router is a different subnet in practice (192.168.1.x at home, 192.168.129.x
+        // on a portable), while a lease moving within one router stays inside its own.
+        //
+        // Both rules can be fooled, and both are wrong in the same direction on purpose: two
+        // routers sharing an SSID merge, and so do two that both hand out 192.168.1.x. That is
+        // genuinely ambiguous, and merging is the recoverable answer — a spare row the operator
+        // never made is the one they cannot explain.
         if case .infrastructure(let lhsNetwork) = lhs.path,
             case .infrastructure(let rhsNetwork) = rhs.path
         {
-            if let lhsNetwork, let rhsNetwork, lhsNetwork != rhsNetwork { return false }
-            if CameraDiscovery.subnetBase(for: lhs.host)
+            if let lhsNetwork, let rhsNetwork {
+                if lhsNetwork != rhsNetwork { return false }
+            } else if CameraDiscovery.subnetBase(for: lhs.host)
                 != CameraDiscovery.subnetBase(for: rhs.host)
             {
                 return false

@@ -171,3 +171,45 @@ private func router(
     #expect(twice.count == 2)
     #expect(Set(twice.map(\.host)) == Set(once.map(\.host)))
 }
+
+/// THE network-key table, in one place, because this rule lives in two languages: the Kotlin twin
+/// (`SavedCameraRecordsTest.the network key table`) is checked against exactly these rows, and a
+/// rule written down in neither drifts in both.
+///
+/// Read the columns as: what each record says its network is called, where each one sits, and
+/// whether they are one setup or two.
+@Test func theNetworkKeyTable() {
+    let table: [(lhs: String?, rhs: String?, lhsHost: String, rhsHost: String, oneSetup: Bool)] = [
+        // Named the same: one network, and a lease moving inside it changes nothing.
+        ("Home", "Home", "192.168.1.50", "192.168.1.77", true),
+        // Named the same across SUBNETS: still one network. A mesh with a VLAN per band, or a
+        // 6 GHz radio on its own segment, is one Wi-Fi with one name — this is the row that used
+        // to fork a second setup for a camera the operator added once.
+        ("Home", "Home", "192.168.1.50", "192.168.4.20", true),
+        // Named differently: two networks, whatever the addresses say. One router at each of two
+        // addresses in one range is exactly the studio-and-home case.
+        ("Home", "Studio", "192.168.1.50", "192.168.1.77", false),
+        ("Home", "Studio", "192.168.1.50", "10.0.0.9", false),
+        // One unnamed: no name to compare, so the subnet answers — which is the upgrade path from
+        // records written before the operator allowed the read.
+        ("Home", nil, "192.168.1.50", "192.168.1.77", true),
+        ("Home", nil, "192.168.1.50", "10.0.0.9", false),
+        // Neither named, which is most records: the subnet is all there is, and it is enough.
+        (nil, nil, "192.168.1.50", "192.168.1.77", true),
+        (nil, nil, "192.168.1.50", "192.168.129.66", false),
+    ]
+
+    for row in table {
+        let canonical = PTPIPSavedCameraRecords.canonicalized([
+            router(host: row.lhsHost, network: row.lhs, seen: 1),
+            router(host: row.rhsHost, network: row.rhs, seen: 2),
+        ])
+        let label =
+            "\(row.lhs ?? "unnamed")@\(row.lhsHost)"
+            + " vs \(row.rhs ?? "unnamed")@\(row.rhsHost)"
+        #expect(canonical.count == (row.oneSetup ? 1 : 2), "\(label)")
+        // And every row that survives owns its identity: `id` resolves the network the same way
+        // this does, so two setups can never answer to one id in the card list.
+        #expect(Set(canonical.map(\.id)).count == canonical.count, "\(label)")
+    }
+}

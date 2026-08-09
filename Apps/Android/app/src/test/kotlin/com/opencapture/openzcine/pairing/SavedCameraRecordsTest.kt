@@ -730,4 +730,69 @@ class SavedCameraRecordsTest {
         // Unscoped removal is unchanged: forgetting a camera still forgets every path of it.
         assertTrue(SavedCameraRecords.removing(host, "ZR_6002199", both).isEmpty())
     }
+
+    /**
+     * THE network-key table, the Kotlin half. Every row here is a row of the Swift core's
+     * `theNetworkKeyTable` (Tests/OpenZCineCoreTests/RouterSetupsPerNetworkTests.swift) — the rule
+     * lives in two languages, and the only thing keeping them one rule is that both are checked
+     * against the same table.
+     *
+     * Read the columns as: what each record says its network is called, where each one sits, and
+     * whether they are one setup or two.
+     */
+    @Test
+    fun `the network key table`() {
+        fun router(host: String, network: String?, seen: Long) =
+            SavedCameraRecord(
+                host = host,
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = seen,
+                wifiSsid = null,
+                networkName = network,
+            )
+
+        data class Row(
+            val lhs: String?,
+            val rhs: String?,
+            val lhsHost: String,
+            val rhsHost: String,
+            val oneSetup: Boolean,
+        )
+
+        val table =
+            listOf(
+                // Named the same: one network, and a lease moving inside it changes nothing.
+                Row("Home", "Home", "192.168.1.50", "192.168.1.77", true),
+                // Named the same across SUBNETS: still one network. A mesh with a VLAN per band,
+                // or a 6 GHz radio on its own segment, is one Wi-Fi with one name.
+                Row("Home", "Home", "192.168.1.50", "192.168.4.20", true),
+                // Named differently: two networks, whatever the addresses say.
+                Row("Home", "Studio", "192.168.1.50", "192.168.1.77", false),
+                Row("Home", "Studio", "192.168.1.50", "10.0.0.9", false),
+                // One unnamed: no name to compare, so the subnet answers — the upgrade path from
+                // records written before the operator allowed the read.
+                Row("Home", null, "192.168.1.50", "192.168.1.77", true),
+                Row("Home", null, "192.168.1.50", "10.0.0.9", false),
+                // Neither named, which is most records: the subnet is all there is, and it is
+                // enough.
+                Row(null, null, "192.168.1.50", "192.168.1.77", true),
+                Row(null, null, "192.168.1.50", "192.168.129.66", false),
+            )
+
+        for (row in table) {
+            val canonical =
+                SavedCameraRecords.canonicalized(
+                    listOf(
+                        router(row.lhsHost, row.lhs, seen = 1L),
+                        router(row.rhsHost, row.rhs, seen = 2L),
+                    )
+                )
+            val label =
+                "${row.lhs ?: "unnamed"}@${row.lhsHost} vs ${row.rhs ?: "unnamed"}@${row.rhsHost}"
+            assertEquals(if (row.oneSetup) 1 else 2, canonical.size, label)
+            // And every row that survives owns its identity: two setups can never answer to one id.
+            assertEquals(canonical.size, canonical.map { it.id }.toSet().size, label)
+        }
+    }
 }
