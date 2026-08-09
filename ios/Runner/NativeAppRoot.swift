@@ -1374,7 +1374,12 @@ final class NativeAppModel {
     ///
     /// Routed through the same entry points the local UI uses rather than a parallel path, so a
     /// relayed record or focus point is subject to every guard, queue and safe point a local one
-    /// is — including the confirmation setting and the interface lock.
+    /// is — including the interface lock.
+    ///
+    /// The one thing that does NOT apply is the operator's confirmation prompt: it belongs to
+    /// whoever pressed the button, the viewer already answered it on its own screen, and a second
+    /// prompt would sit unanswered on a device nobody is holding while the take never starts.
+    /// `applyingRelayCommand` is what tells the shared entry points which press this is.
     private func executeRelayCommand(_ command: MonitorRelayCommand) {
         applyingRelayCommand = true
         defer { applyingRelayCommand = false }
@@ -9623,17 +9628,22 @@ final class NativeAppModel {
 
     func toggleRecording() {
         guard !relayControlSurrendered else { return }
-        if preferences.recordConfirmationEnabled {
-            if !isDemoSession {
-                guard cameraSession != nil, isMonitorPresented else {
-                    connectionMessage = "Start live view before recording."
-                    return
-                }
-            }
+        // Who confirms, and whether the owned-session pre-flight applies at all, is one shared
+        // rule — see `MonitorDataAvailability.recordPress`. Both answers turn on facts this
+        // method used to ignore: that a watcher has no session of its own, and that a relayed
+        // command was already confirmed by the operator who pressed the button.
+        switch monitorAvailability.recordPress(
+            confirmationEnabled: preferences.recordConfirmationEnabled,
+            isRelayedCommand: applyingRelayCommand,
+            liveViewReady: isDemoSession || (cameraSession != nil && isMonitorPresented))
+        {
+        case .confirm:
             pendingRecordConfirmation = !isRecording
-            return
+        case .run:
+            executeRecordToggle()
+        case .needsLiveView:
+            showMonitorNotice("Start live view before recording.")
         }
-        executeRecordToggle()
     }
 
     // MARK: - Still capture (photography mode)
@@ -10917,7 +10927,10 @@ final class NativeAppModel {
             return
         }
         guard cameraSession != nil, isMonitorPresented else {
-            connectionMessage = "Start live view before recording."
+            // The refusal reaches the operator, not just the log — the monitor never renders
+            // `connectionMessage` (see `showMonitorNotice`), so the remote-shutter and watch
+            // presses that land here were refused in silence.
+            showMonitorNotice("Start live view before recording.")
             return
         }
         // Optimistically flip the button now (snappy), then queue the actual record op for the next
