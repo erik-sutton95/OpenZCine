@@ -217,6 +217,11 @@ class MainActivity : ComponentActivity() {
                 // profile. Link settings may then leave the monitor without
                 // guessing a topology or constructing a second session.
                 var activeSavedCamera by remember { mutableStateOf<SavedCameraRecord?>(null) }
+                // The row the running pairing CREATED, so walking away from it takes the row back
+                // out — the wizard saves before the body confirmation. Null once anything
+                // connected through it, or when the pairing refreshed a setup that already
+                // existed. Twin of iOS `pairingCreatedRecordHost`.
+                var pairingCreatedSetup by remember { mutableStateOf<SavedCameraRecord?>(null) }
                 var requestedReconnectID by rememberSaveable { mutableStateOf<String?>(null) }
                 var suppressedUsbAutoReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
                 val connectionScope = rememberCoroutineScope()
@@ -453,6 +458,7 @@ class MainActivity : ComponentActivity() {
                  * after the camera applies its body-side confirmation.
                  */
                 fun persistPairedCameraProfile(saved: SavedCameraRecord): SavedCameraRecord {
+                    val before = savedCameras
                     val updated =
                         SavedCameraRecords.upserting(
                             host = saved.host,
@@ -469,6 +475,11 @@ class MainActivity : ComponentActivity() {
                         )
                     savedCameras = updated
                     savedCameraStore.replace(updated)
+                    // The wizard saves here BEFORE the body confirmation, so remember a row this
+                    // pairing created — an abandoned pairing takes it back out again. A camera
+                    // that already had this setup refreshed a row instead, and that one is not
+                    // ours to remove: a failed re-pair must never cost a working setup.
+                    pairingCreatedSetup = SavedCameraRecords.createdSetup(before, updated)
                     return updated.firstOrNull { candidate ->
                             candidate.transport == saved.transport &&
                                 (
@@ -521,8 +532,27 @@ class MainActivity : ComponentActivity() {
 
                 fun acceptPairedCamera(paired: PairedCamera) {
                     activeSavedCamera = persistPairedCameraProfile(paired.savedCamera)
+                    // The pairing produced a working session, so its row has earned its place.
+                    pairingCreatedSetup = null
                     adoptSetupStreamSettings(activeSavedCamera)
                     monitorSession = paired.session
+                }
+
+                /** Takes back a row the wizard saved for a pairing that never connected. */
+                fun discardAbandonedPairingSetup() {
+                    val created = pairingCreatedSetup ?: return
+                    pairingCreatedSetup = null
+                    // A live session means the setup earned its place whatever the card is doing.
+                    if (monitorSession != null) return
+                    val updated =
+                        SavedCameraRecords.removing(
+                            host = created.host,
+                            cameraName = created.cameraName,
+                            records = savedCameras,
+                            transport = created.transport,
+                        )
+                    savedCameras = updated
+                    savedCameraStore.replace(updated)
                 }
                 // Startup and monitor are both immersive; re-assert whenever
                 // the surface changes so a transient swipe-reveal on one
@@ -813,6 +843,7 @@ class MainActivity : ComponentActivity() {
                                     script = pairingScript,
                                     onPaired = ::acceptPairedCamera,
                                     onPairingProfilePrepared = ::persistPairedCameraProfile,
+                                    onPairingAbandoned = ::discardAbandonedPairingSetup,
                                     onStartHdmiMonitor = {
                                         // Picture only: no PTP session, no saved
                                         // camera, and no stale profile steering

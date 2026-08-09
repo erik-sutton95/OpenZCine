@@ -269,6 +269,33 @@ public object SavedCameraRecords {
         return canonicalized(records + candidate)
     }
 
+    /**
+     * The setup an [upserting] ADDED, or null when it refreshed one that was already there.
+     *
+     * The wizard writes its record the moment Nikon accepts the pairing — before the body
+     * confirmation and the reconnect that make it a usable setup — so a pairing the operator walks
+     * away from has to take that row back out, or a setup nobody finished adding sits in their
+     * list looking like one they made. Only the row THIS pairing created: a re-pair of a camera
+     * they already have refreshes an existing row, and removing that would cost them a working
+     * setup for having retried. Twin of iOS `pairingCreatedRecordHost`.
+     *
+     * Compared by profile id, which is the one thing a refreshed row is guaranteed to keep:
+     * [preferred] pins it to the existing record's precisely so a new route cannot silently
+     * become a new owner. The ADDRESS cannot do this job — a DHCP move within one setup merges
+     * into the existing row and carries the new address with it, which by address alone reads as
+     * a row that was not there before. Counting rows cannot either: a merge and an add in one
+     * pass leaves the count unchanged.
+     */
+    public fun createdSetup(
+        before: List<SavedCameraRecord>,
+        after: List<SavedCameraRecord>,
+    ): SavedCameraRecord? {
+        // The transport rides along because two paths of one camera can share an id — both fall
+        // back to the host when nothing assigned one.
+        val existing = canonicalized(before).map { it.id to it.transport }.toSet()
+        return after.firstOrNull { (it.id to it.transport) !in existing }
+    }
+
     /** Updates the operator nickname for [host], preserving all camera metadata. */
     public fun updatingCustomName(
         host: String,
@@ -339,10 +366,18 @@ public object SavedCameraRecords {
         host: String,
         cameraName: String? = null,
         records: List<SavedCameraRecord>,
+        /**
+         * Narrows the removal to ONE path of this camera; null forgets every path of it, which is
+         * what the operator's Forget means. Taking back an abandoned pairing needs the narrow one:
+         * a body's hotspot and router setups can share an address, and forgetting by address alone
+         * would take a setup the pairing never created.
+         */
+        transport: SavedCameraTransport? = null,
     ): List<SavedCameraRecord> {
         val normalizedHost = normalizedHost(host) ?: return canonicalized(records)
         return canonicalized(records).filterNot {
             it.host == normalizedHost &&
+                (transport == null || it.transport == transport) &&
                 // Two bodies legitimately share an address (camera-AP): the name narrows the
                 // removal to the one the operator forgot — else forgetting one deletes both.
                 (cameraName.isNullOrBlank() || namesCompatible(it.cameraName, cameraName))

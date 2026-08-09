@@ -646,4 +646,88 @@ class SavedCameraRecordsTest {
             )
         )
     }
+
+    /**
+     * The wizard saves its record BEFORE the body confirmation, and an abandoned pairing has to
+     * take that row back out — but only the row it created. A re-pair of a camera the operator
+     * already has must report nothing, or walking away from a failed re-pair would cost them the
+     * working setup they started with.
+     */
+    @Test
+    fun `an upsert reports only the setup it created`() {
+        fun router(host: String, name: String) =
+            SavedCameraRecord(
+                host = host,
+                cameraName = name,
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = null,
+                wifiSsid = null,
+            )
+
+        val existing = listOf(router("192.168.1.50", "ZR_6002199"))
+
+        // A first pair of a second body: a row appeared, and it is the one to take back.
+        val added =
+            SavedCameraRecords.upserting(
+                host = "192.168.1.77",
+                cameraName = "ZR_7009111",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = 1L,
+                wifiSsid = null,
+                records = existing,
+            )
+        assertEquals("192.168.1.77", SavedCameraRecords.createdSetup(existing, added)?.host)
+
+        // A re-pair of the camera already saved: the upsert REFRESHED a row, it did not add one.
+        val refreshed =
+            SavedCameraRecords.upserting(
+                host = "192.168.1.50",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = 2L,
+                wifiSsid = null,
+                records = existing,
+            )
+        assertNull(SavedCameraRecords.createdSetup(existing, refreshed))
+
+        // A DHCP move within the setup: the row merges and carries the new address, so the
+        // address cannot be what says whether a row is new.
+        val moved =
+            SavedCameraRecords.upserting(
+                host = "192.168.1.51",
+                cameraName = "ZR_6002199",
+                transport = SavedCameraTransport.INFRASTRUCTURE,
+                lastSeenAtEpochMillis = 3L,
+                wifiSsid = null,
+                records = existing,
+            )
+        assertNull(SavedCameraRecords.createdSetup(existing, moved))
+    }
+
+    /** Taking a row back is keyed by (host, path), like everything else a setup is keyed by. */
+    @Test
+    fun `removing one setup leaves the other path at the same address`() {
+        val host = "192.168.1.50"
+        fun setup(transport: SavedCameraTransport) =
+            SavedCameraRecord(
+                host = host,
+                cameraName = "ZR_6002199",
+                transport = transport,
+                lastSeenAtEpochMillis = null,
+                wifiSsid = null,
+            )
+        val both = listOf(setup(SavedCameraTransport.INFRASTRUCTURE), setup(SavedCameraTransport.PHONE_HOTSPOT))
+
+        val remaining =
+            SavedCameraRecords.removing(
+                host = host,
+                cameraName = "ZR_6002199",
+                records = both,
+                transport = SavedCameraTransport.PHONE_HOTSPOT,
+            )
+
+        assertEquals(listOf(SavedCameraTransport.INFRASTRUCTURE), remaining.map { it.transport })
+        // Unscoped removal is unchanged: forgetting a camera still forgets every path of it.
+        assertTrue(SavedCameraRecords.removing(host, "ZR_6002199", both).isEmpty())
+    }
 }

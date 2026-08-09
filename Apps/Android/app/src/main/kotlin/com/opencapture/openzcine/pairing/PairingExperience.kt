@@ -655,6 +655,12 @@ public fun PairingExperience(
     onPaired: (PairedCamera) -> Unit,
     onPairingProfilePrepared: (SavedCameraRecord) -> Unit = {},
     /**
+     * The operator gave up on a pairing. Anything [onPairingProfilePrepared] saved for it and
+     * nothing ever connected through is theirs to take back. Twin of iOS
+     * `cancelConnectionAttempt`.
+     */
+    onPairingAbandoned: () -> Unit = {},
+    /**
      * Opens the monitor on the attached HDMI capture device — picture only,
      * no PTP session and no saved camera.
      */
@@ -1176,6 +1182,10 @@ public fun PairingExperience(
         if (flow.path == PairingPath.CAMERA_ACCESS_POINT) environment.releaseCameraAp()
         connectingName = null
         phase = PairingPhase.Idle
+        // A pairing the operator walked away from leaves no row behind — the profile is saved
+        // before the body confirmation, and this is the dismiss on both "Confirm on camera" and
+        // the failure card.
+        onPairingAbandoned()
     }
 
     fun retreat() {
