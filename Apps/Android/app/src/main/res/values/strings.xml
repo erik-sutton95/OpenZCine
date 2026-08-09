@@ -1145,4 +1145,31 @@
     <string name="frameio_switching_networks">Switching networks…</string>
     <string name="settings_hop_progress_message">Leaving the camera\'s Wi-Fi and waiting for an internet route. The camera reconnects when you close Operator Setup.</string>
     <string name="action_ok">OK</string>
+
+    <!-- Wave 2 parity: feed-state words the FPS chip shows instead of a stale number, the
+        armed add-setup watch pills, and the TalkBack labels the landscape chrome never had.
+        Added centrally so no two agents contend on this file. -->
+    <string name="monitor_fps_no_link">NO LINK</string>
+    <string name="monitor_fps_recov">RECOV</string>
+    <string name="monitor_fps_busy">BUSY</string>
+    <string name="monitor_fps_fail">FAIL</string>
+    <string name="monitor_waiting_live_view">WAITING FOR LIVE VIEW</string>
+    <string name="saved_pill_waiting_cable">Waiting for cable</string>
+    <string name="saved_pill_watching_network">Watching this network</string>
+    <string name="saved_pill_waiting_hotspot">Waiting for hotspot</string>
+    <string name="conn_watch_usb_detail">Connect %1$s with a USB-C cable.</string>
+    <string name="conn_watch_hotspot_detail">Turn on Personal Hotspot, then set the camera to join it.</string>
+    <string name="a11y_monitor_lock">Lock the interface</string>
+    <string name="a11y_monitor_lock_hint">Prevents accidental camera and View Assist changes</string>
+    <string name="a11y_monitor_settings">Open Operator Setup</string>
+    <string name="a11y_monitor_media">Open Media</string>
+    <string name="a11y_monitor_disp">Change display mode</string>
+    <string name="a11y_monitor_readout">%1$s, %2$s</string>
+    <!-- Nouns for the top-deck readout pills, so TalkBack reads "Codec, H.265" rather than a
+        bare value. Separate from `rec_option_*`, which are menu items and carry a middot. -->
+    <string name="a11y_readout_resolution">Resolution</string>
+    <string name="a11y_readout_codec">Codec</string>
+    <string name="a11y_readout_size">Image size</string>
+    <string name="a11y_readout_quality">Image quality</string>
+    <string name="a11y_readout_media">Storage</string>
 </resources>

@@ -84,6 +84,17 @@ internal enum class CommandTileKind {
     RESOLUTION_FRAMERATE,
     CODEC,
     STABILIZATION,
+
+    /**
+     * Electronic VR. iOS carries it as the second row of one stabilization panel
+     * (ios/Runner/MonitorPanels.swift:1552-1590), but the DISP 3 dialog writes exactly the one
+     * [CameraControl] the tile it opened carries, so e-VR needs a tile of its own to have any
+     * write path: the [STABILIZATION] tile reads out "VR / e-VR" yet can only write movie VR.
+     *
+     * ponytail: two tiles instead of iOS's one two-row panel — collapse this back into
+     * [STABILIZATION] once the DISP 3 dialog can host more than one control.
+     */
+    ELECTRONIC_VR,
     ;
 
     companion object {
@@ -672,6 +683,19 @@ internal fun commandDashboardPresentation(
                     title = strings.resolve(R.string.command_title_vr_combined),
                     value = stabilization ?: "—",
                 ),
+            // The combined tile above only writes movie VR, so e-VR was displayed and never
+            // settable. Same advertised-options machinery as every other tile; the extra gate is
+            // iOS's: RAW codecs refuse e-VR, and a codec still unread fails closed rather than
+            // offering a write the body will reject.
+            CommandTileKind.ELECTRONIC_VR to
+                advertisedEditable(
+                    kind = CommandTileKind.ELECTRONIC_VR,
+                    title = strings.resolve(R.string.command_title_evr),
+                    value = snapshot.electronicVr,
+                    control = CameraControl.ELECTRONIC_VR,
+                    blockedReason = strings.resolve(R.string.command_reason_evr),
+                    writable = electronicVRAllowsCodec(codec),
+                ),
         )
     val focusCells =
         listOf(
@@ -973,6 +997,22 @@ internal fun compactRecordingModeFromRawDisplay(display: String): String? {
             else -> width.toString()
         }
     return "$resolutionClass · ${fps}p"
+}
+
+/**
+ * Whether the active codec lets electronic VR be written. The ZR cannot apply e-VR to a RAW
+ * stream, so iOS disables the e-VR row on `MonitorTextFormat.isRawCodec`
+ * (ios/Runner/MonitorPanels.swift:1566-1568); the RAW / R3D substring test is transcribed from
+ * the shared core (Sources/OpenZCineCore/MonitorTextFormat.swift:45) so both shells classify the
+ * same string the same way, and it holds for the body's verbatim name and the shortened label.
+ *
+ * A codec that has not been read back yet fails closed: the Android facade already withholds the
+ * e-VR enum for an unrecognized codec (Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift:
+ * 439-442), and this gate must never be looser than the wire it guards.
+ */
+internal fun electronicVRAllowsCodec(codec: String?): Boolean {
+    val upper = codec?.takeIf { it.isNotBlank() }?.uppercase() ?: return false
+    return !upper.contains("RAW") && !upper.contains("R3D")
 }
 
 /** True only when a completed property refresh reflects the accepted control write. */

@@ -654,6 +654,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var latestRoundTripMillisecondsStorage: Double?
     /// Bytes-per-second across frame fetches, under the same lock as the round-trip average.
     private var throughputStorage = LinkThroughputSampler()
+    /// The live-view pump's watchdog state, republished every poll and cleared when the pump exits.
+    /// Shares `roundTripLock` with the other two link measurements the health score reads: same
+    /// reader (one score tick), same writer (the pump, which already takes this leaf lock per frame
+    /// in `recordFrameTransfer`).
+    private var liveViewStreamHealthStorage: AndroidLiveViewStreamHealth?
 
     /// Live-view pump state, guarded by `liveViewCondition` (never by
     /// `transactionLock` — the pump holds that per transaction, and stop/join
@@ -4169,6 +4174,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 break  // Transport error: the stream is over.
             }
             watchdog.check(at: Date())
+            // The signal bars' ONLY honest view of this loop. Neither value can be observed from
+            // Kotlin — the bad frame was swallowed by the catch above and never crossed JNI, and
+            // the shell can only time arrivals — so the score read a degrading body as healthy
+            // right up to the restart. Published per poll, and as a timestamp, so freshness keeps
+            // ageing while a dying fetch sits blocked in the socket read above.
+            publishLiveViewStreamHealth(
+                AndroidLiveViewStreamHealth(
+                    lastGoodFrameAt: watchdog.lastGoodFrameAt,
+                    consecutiveBadFrames: watchdog.consecutiveBadFrames))
             if watchdog.status == .stalled {
                 // A replaying body whose COMMAND channel still answers is busy on its own screen —
                 // a menu, playback, image review — not dead. Ending the stream restarts it, and
@@ -4211,6 +4225,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 pollIndex = elapsed / frameIntervalNanoseconds
             }
         }
+
+        // No pump, no pump-authored health: the shell's own observations take back over rather than
+        // a frozen streak outliving the stream that produced it (and a restarted pump publishing
+        // its predecessor's verdict on the first poll).
+        publishLiveViewStreamHealth(nil)
 
         // Release the camera's encoder before signalling the stream end —
         // never leave the body streaming to nobody (the heat-audit EndLiveView
@@ -4269,6 +4288,21 @@ public final class PTPIPClientSession: @unchecked Sendable {
         roundTripLock.lock()
         defer { roundTripLock.unlock() }
         return throughputStorage.megabitsPerSecond
+    }
+
+    /// Live-view stream health as the PUMP sees it, or `nil` when no pump is running — the
+    /// shell's own frame observations then stand. See ``AndroidLiveViewStreamHealth`` for why
+    /// Kotlin cannot produce either value itself.
+    public func latestLiveViewStreamHealth() -> AndroidLiveViewStreamHealth? {
+        roundTripLock.lock()
+        defer { roundTripLock.unlock() }
+        return liveViewStreamHealthStorage
+    }
+
+    private func publishLiveViewStreamHealth(_ health: AndroidLiveViewStreamHealth?) {
+        roundTripLock.lock()
+        liveViewStreamHealthStorage = health
+        roundTripLock.unlock()
     }
 
     private func recordFrameTransfer(bytes: Int, seconds: Double) {

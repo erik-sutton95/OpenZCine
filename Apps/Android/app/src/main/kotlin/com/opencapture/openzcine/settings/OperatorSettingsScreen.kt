@@ -983,6 +983,20 @@ private fun SharingRows(
                 onInteraction()
             }
         }
+        // A listener that cannot bind is silent otherwise: the switch springs straight back
+        // (the shell assigns `relaySharingEnabled = start(...)`) and the operator is left with
+        // a control that refuses to move. The sentence comes from the host itself
+        // (relay/MonitorRelayHost.kt "Couldn't start sharing: …"), which is what iOS shows on
+        // the monitor (MonitorRelayLink.swift:314 → NativeAppRoot.swift:1295). The controller
+        // clears it on the next start/stop, so it never outlives the attempt it explains.
+        ui?.failureReason?.let { reason ->
+            Text(
+                reason,
+                style = chromeStyle(10.5f, FontWeight.Normal),
+                color = LiveDesign.rec,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
         if (ui != null) {
             SettingsInlineRow(
                 title = stringResource(R.string.sharing_watching),

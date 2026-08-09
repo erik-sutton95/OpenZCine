@@ -8,6 +8,7 @@ import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.openzcine.settings.ChromeSection
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -233,5 +234,55 @@ class MonitorReadoutsTest {
         assertEquals(status.minutesRemaining, status.minutesRemaining.coerceIn(35, 45))
         assertEquals("${status.minutesRemaining} Min", status.durationLabel)
         assertNull(monitorMediaStatus(null, "R3D NE", "6048x3402", 25))
+    }
+
+    @Test
+    fun `fps chip says what the feed is doing instead of the rate it last had`() {
+        assertEquals("25.00", fpsChipLabel(rate = 25.0, state = null))
+        assertEquals("23.98", fpsChipLabel(rate = 23.976, state = null))
+        // The whole point: a measured rate is still sitting there when the feed stops.
+        assertEquals("NO LINK", fpsChipLabel(rate = 25.0, state = MonitorFeedState.NO_LINK))
+        assertEquals("RECOV", fpsChipLabel(rate = 25.0, state = MonitorFeedState.RECOV))
+        assertEquals("BUSY", fpsChipLabel(rate = 25.0, state = MonitorFeedState.BUSY))
+        assertEquals("FAIL", fpsChipLabel(rate = 25.0, state = MonitorFeedState.FAIL))
+        // Nothing measured yet is iOS's "READY", and a non-measurement never prints as a rate.
+        assertEquals("READY", fpsChipLabel(rate = null, state = null))
+        assertEquals("READY", fpsChipLabel(rate = 0.0, state = null))
+        assertEquals("READY", fpsChipLabel(rate = -1.0, state = null))
+        assertEquals("READY", fpsChipLabel(rate = Double.NaN, state = null))
+        assertEquals("READY", fpsChipLabel(rate = Double.POSITIVE_INFINITY, state = null))
+    }
+
+    @Test
+    fun `the chip carries a word from the first connect, never a blank`() {
+        // The screen round-trips the sampler's seed back through `formatted.toDoubleOrNull()`, so
+        // this exact path — a non-numeric seed and no feed state — runs on every connect before the
+        // first frame. It has to land on READY; anything falsy there blanks the chip.
+        val seeded = MonitorFrameRateSampler().formatted
+        assertEquals("READY", seeded)
+        assertEquals("READY", fpsChipLabel(rate = seeded.toDoubleOrNull(), state = null))
+    }
+
+    @Test
+    fun `feed-state words are spelled the same in code and in strings`() {
+        // The words live in Kotlin so the chip's rule stays a pure function the caller can test.
+        // That is only safe while the resource says the same thing, so pin the two together.
+        val strings =
+            Path.of(
+                requireNotNull(System.getProperty("openzcine.repositoryRoot")) {
+                    "Gradle must expose the OpenZCine repository root to readout tests"
+                },
+            ).resolve("Apps/Android/app/src/main/res/values/strings.xml").toFile().readText()
+        mapOf(
+            MonitorFeedState.NO_LINK to "monitor_fps_no_link",
+            MonitorFeedState.RECOV to "monitor_fps_recov",
+            MonitorFeedState.BUSY to "monitor_fps_busy",
+            MonitorFeedState.FAIL to "monitor_fps_fail",
+        ).forEach { (state, resource) ->
+            assertTrue(
+                """<string name="$resource">${state.word}</string>""" in strings,
+                "$resource must read ${state.word}, matching MonitorFeedState.$state",
+            )
+        }
     }
 }

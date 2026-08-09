@@ -101,8 +101,15 @@ private sealed interface SavedCameraPhase {
      * An armed "+ Add setup" watch, shown while it waits. The tap has to SAY something: arming
      * silently and dismissing is what made those buttons read as dead (iOS
      * `presentSetupWatchProgress`, which presents this same card). Cancel disarms.
+     *
+     * [transport] is the path being waited on. The card's detail is per-kind for the same reason
+     * iOS's is (NativeAppRoot.swift `instruction`): "Looking for … on your network" is wrong
+     * advice for a cable, and worse than useless for a hotspot the operator has not switched on.
      */
-    data class WatchingForSetup(val title: String) : SavedCameraPhase
+    data class WatchingForSetup(
+        val title: String,
+        val transport: SavedCameraTransport,
+    ) : SavedCameraPhase
 
     data class Joining(val title: String) : SavedCameraPhase
 
@@ -1029,6 +1036,7 @@ public fun SavedCamerasExperience(
                                 hotspotSubnetBases = hotspotSubnetBases,
                                 readyToJoinSetupIDs = readyToJoinSetupIDs,
                                 armedSetupAnchorID = armedSetupWatch?.first?.id,
+                                armedSetupTransport = armedSetupWatch?.second,
                                 phase = phase,
                                 onConnect = ::reconnect,
                                 onRename = { group ->
@@ -1075,6 +1083,7 @@ public fun SavedCamerasExperience(
                                     hotspotSubnetBases = hotspotSubnetBases,
                                     readyToJoinSetupIDs = readyToJoinSetupIDs,
                                     armedSetupAnchorID = armedSetupWatch?.first?.id,
+                                    armedSetupTransport = armedSetupWatch?.second,
                                     phase = phase,
                                     onConnect = ::reconnect,
                                     onRename = { group ->
@@ -1108,7 +1117,8 @@ public fun SavedCamerasExperience(
         val popupPhase =
             when (val active = phase) {
                 SavedCameraPhase.Idle -> null
-                is SavedCameraPhase.WatchingForSetup -> ConnectionPopupPhase.Searching
+                is SavedCameraPhase.WatchingForSetup ->
+                    ConnectionPopupPhase.Searching(active.transport)
                 is SavedCameraPhase.ReadyToJoin ->
                     // Prefer the camera AP SSID in the join prompt so the
                     // operator knows which network Android will request.
@@ -1334,7 +1344,7 @@ public fun SavedCamerasExperience(
                 // what made "Connect When Plugged In" / "Find On This Network" / "Wait For
                 // Camera" read as dead buttons. iOS presents the same card
                 // (`presentSetupWatchProgress`), and the row wears the watch as well.
-                phase = SavedCameraPhase.WatchingForSetup(anchor.displayTitle)
+                phase = SavedCameraPhase.WatchingForSetup(anchor.displayTitle, transport)
             },
         )
     }
@@ -1440,6 +1450,8 @@ private fun SavedCameraList(
     readyToJoinSetupIDs: Set<String>,
     /** The camera an armed "+ Add setup" watch belongs to, when one is armed. */
     armedSetupAnchorID: String?,
+    /** The path that watch is waiting on, so its row names it (iOS `armedSetupKind`). */
+    armedSetupTransport: SavedCameraTransport?,
     phase: SavedCameraPhase,
     onConnect: (SavedCameraRecord) -> Unit,
     onRename: (List<SavedCameraRecord>) -> Unit,
@@ -1546,7 +1558,10 @@ private fun SavedCameraList(
                         active = active,
                         isDiscovered = isDiscovered,
                         isReadyToJoin = { it.id in readyToJoinSetupIDs },
-                        isWatching = group.any { it.id == armedSetupAnchorID },
+                        watchingTransport =
+                            armedSetupTransport?.takeIf {
+                                group.any { record -> record.id == armedSetupAnchorID }
+                            },
                         enabled = !busy,
                         onConnect = onConnect,
                         onRename = { onRename(group) },
@@ -1640,8 +1655,8 @@ internal fun SavedCameraRow(
     isDiscovered: (SavedCameraRecord) -> Boolean,
     /** Camera-AP setups this phone holds credentials for — a tap offers the join. */
     isReadyToJoin: (SavedCameraRecord) -> Boolean = { false },
-    /** Whether an armed "+ Add setup" watch is waiting on this camera. */
-    isWatching: Boolean = false,
+    /** The path an armed "+ Add setup" watch is waiting on for this camera; null when none is. */
+    watchingTransport: SavedCameraTransport? = null,
     enabled: Boolean,
     onConnect: (SavedCameraRecord) -> Unit,
     onRename: () -> Unit,
@@ -1655,7 +1670,7 @@ internal fun SavedCameraRow(
     // and saying "Offline" over it is what made those buttons look like they had done nothing.
     val availabilityColor =
         when {
-            isWatching -> StartupColors.accent
+            watchingTransport != null -> StartupColors.accent
             activeDiscovered -> StartupColors.ready
             else -> StartupColors.dim
         }
@@ -1684,14 +1699,21 @@ internal fun SavedCameraRow(
             )
             Text(
                 stringResource(
-                    when {
-                        // ponytail: one "Looking" for all three kinds. iOS names the path it is
-                        // waiting on ("Waiting for cable" / "Watching this network" / "Waiting for
-                        // hotspot"); those three strings do not exist on Android yet, and the card
-                        // this watch also raises does say which path.
-                        isWatching -> R.string.pairing_status_looking
-                        activeDiscovered -> R.string.saved_pill_online
-                        else -> R.string.saved_pill_offline
+                    // The pill names the path it is waiting on, exactly like iOS
+                    // (StartupDesign.swift `statusText`): one generic "Looking" for all three
+                    // read as if the tap had done nothing in particular. Only these three kinds
+                    // are armable — "+ Add setup → Camera access point" joins instead of
+                    // watching — so the remaining branch is the network wording.
+                    when (watchingTransport) {
+                        SavedCameraTransport.USB_C -> R.string.saved_pill_waiting_cable
+                        SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_pill_waiting_hotspot
+                        null ->
+                            if (activeDiscovered) {
+                                R.string.saved_pill_online
+                            } else {
+                                R.string.saved_pill_offline
+                            }
+                        else -> R.string.saved_pill_watching_network
                     }
                 ),
                 color = availabilityColor,

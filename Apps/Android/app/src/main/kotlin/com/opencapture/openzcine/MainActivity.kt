@@ -270,20 +270,48 @@ class MainActivity : ComponentActivity() {
                         com.opencapture.openzcine.relay.RelayWatchController.seedJpegOnly()
                     }
                 }
+                // Watcher passcodes, one entry per broadcaster name — the durable half of the
+                // controller's process-wide memory (it is rebuilt on every join, so alone it
+                // forgets at launch). iOS keeps the same dictionary in UserDefaults
+                // (`storedRelayPasscode(forHost:)`). NOT install-scoped like the jpeg-only
+                // verdict above: a set's passcode does not change because this app was rebuilt.
+                val relayPasscodePrefs =
+                    remember {
+                        applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
+                    }
+                val persistWatcherPasscode: (String, String) -> Unit = remember {
+                    { broadcasterName, code ->
+                        relayPasscodePrefs.edit().putString(broadcasterName, code).apply()
+                    }
+                }
+                LaunchedEffect(Unit) {
+                    com.opencapture.openzcine.relay.RelayWatchController.seedPasscodes(
+                        relayPasscodePrefs.all
+                            .mapNotNull { (name, code) -> (code as? String)?.let { name to it } }
+                            .toMap()
+                    )
+                }
                 LaunchedEffect(Unit) {
                     // Debug-only direct watch (adb reverse cross-platform verification).
                     DemoHarness.relayWatchEndpoint(intent)?.let { (host, port) ->
+                        // Named once: the passcode is stored under this exact name and read back
+                        // by it, so a second literal is a silently-forgotten code waiting to
+                        // happen.
+                        val direct =
+                            com.opencapture.openzcine.relay.RelayBroadcast(
+                                name = "Direct",
+                                host = host,
+                                port = port,
+                                servedCameraHost = null,
+                            )
                         watchController =
                             com.opencapture.openzcine.relay.RelayWatchController(
                                     scope = connectionScope,
                                     deviceName = relayDeviceName,
-                                    broadcast =
-                                        com.opencapture.openzcine.relay.RelayBroadcast(
-                                            name = "Direct",
-                                            host = host,
-                                            port = port,
-                                            servedCameraHost = null,
-                                        ),
+                                    broadcast = direct,
+                                    onPasscodeRemembered = { code ->
+                                        persistWatcherPasscode(direct.name, code)
+                                    },
                                 )
                                 .also { it.start() }
                     }
@@ -591,6 +619,11 @@ class MainActivity : ComponentActivity() {
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
+                                // The Link tab's "Held By" reads the token off this state.
+                                // Without it the row falls back to "The broadcaster" forever —
+                                // including while THIS device holds control, which is the one
+                                // moment the row exists to report (iOS `linkRows`).
+                                relayWatchUi = watchUi,
                                 systemSettingsActions = systemSettingsActions,
                                 bugReportSubmitter = bugReportSubmitter,
                                 bugReportActivityLogProvider =
@@ -765,6 +798,11 @@ class MainActivity : ComponentActivity() {
                                                     deviceName = relayDeviceName,
                                                     broadcast = broadcast,
                                                     onJpegOnlyLatched = persistJpegOnly,
+                                                    onPasscodeRemembered = { code ->
+                                                        persistWatcherPasscode(
+                                                            broadcast.name, code
+                                                        )
+                                                    },
                                                 )
                                                 .also { it.start() }
                                     },
@@ -1065,7 +1103,17 @@ class MainActivity : ComponentActivity() {
                             relayBroadcastUi.controlHolderName?.let { holder ->
                                 Row(
                                     Modifier.align(Alignment.BottomCenter)
-                                        .padding(bottom = 64.dp)
+                                        // The watcher's key already clears the bottom chrome per
+                                        // orientation; this pill's own fixed 64dp was
+                                        // orientation-blind and landed on the portrait system
+                                        // band's DISP/record/media row. One lane, one definition
+                                        // (relay/RelayWatchScreen.kt) — iOS seats both keys
+                                        // against the same assist-strip zone.
+                                        .padding(
+                                            bottom =
+                                                com.opencapture.openzcine.relay
+                                                    .relayControlKeyBottomInset()
+                                        )
                                         .clip(RoundedCornerShape(22.dp))
                                         .background(
                                             androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f)

@@ -23,13 +23,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import com.opencapture.openzcine.bridge.ZoneFrame
 import androidx.compose.ui.geometry.Rect
@@ -62,8 +66,12 @@ import androidx.compose.ui.semantics.onClick as semanticsOnClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.offset
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameTimecode
 
@@ -79,7 +87,77 @@ val ChromeShape = RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)
 // The glass treatment itself (Modifier.glass / Modifier.chipGlass and the
 // tiered GPU backdrop pipeline behind it) lives in GlassChrome.kt.
 
-/** Click without the Material ripple (chrome buttons highlight by state, not ripple). */
+/**
+ * Apple's HIG minimum touch target, which iOS puts under every chrome button through
+ * `ZCTapTargetButtonStyle` → `minTapTarget` (ios/Runner/DesignShared.swift:30-42, 61-67).
+ * Material's own floor is 48dp; 44 is the parity number and still fits the 46dp top deck band.
+ */
+internal const val MIN_TAP_TARGET_DP = 44f
+
+/**
+ * Grows a control's touch area to [MIN_TAP_TARGET_DP] without moving anything drawn — the Compose
+ * transcription of the positive-then-negative padding iOS uses (`MinTapTargetModifier`,
+ * ios/Runner/DesignShared.swift:114-137). It lives inside [chromeClickable] / [chromePressable] so
+ * every chrome control inherits the floor from one place, the way iOS inherits it from one button
+ * style instead of from its 131 call sites.
+ *
+ * Deliberately NOT `Modifier.minimumInteractiveComponentSize()`: that one reports the floored size
+ * to the parent. The top deck's readout pills are ~27dp tall inside a 46dp band whose glass capsule
+ * is drawn by the deck Row itself (`InfoPill`), so a pill that measured 44dp would inflate that
+ * capsule past the band — moving drawn chrome is the one thing a tap-target fix must not do.
+ */
+@Composable
+private fun Modifier.tapTargetFloor(click: Modifier.() -> Modifier): Modifier {
+    val floorPx = with(LocalDensity.current) { MIN_TAP_TARGET_DP.dp.roundToPx() }
+    // The drawn size is only knowable by measuring it, so the pad lands on the pass after — the
+    // same one-frame settle as the iOS preference-key version.
+    var drawn by remember { mutableStateOf(IntSize.Zero) }
+    val padX = if (drawn.width <= 0) 0 else ((floorPx - drawn.width) / 2).coerceAtLeast(0)
+    val padY = if (drawn.height <= 0) 0 else ((floorPx - drawn.height) / 2).coerceAtLeast(0)
+    val expands = padX > 0 || padY > 0
+    return this.then(if (expands) Modifier.tapTargetInset(padX, padY) else Modifier)
+        .click()
+        .then(if (expands) Modifier.tapTargetExpand(padX, padY) else Modifier)
+        .onSizeChanged { size ->
+            // Only a control that could still be under the floor is worth recording. Every scrim,
+            // full-width row and media-grid cell clears it already, and publishing their size would
+            // cost each of them a recomposition to compute a pad of zero.
+            val next = if (size.width < floorPx || size.height < floorPx) size else IntSize.Zero
+            if (next != drawn) drawn = next
+        }
+}
+
+/** Pads the click node out around the drawn content — the half of the pair that is felt. */
+private fun Modifier.tapTargetExpand(padX: Int, padY: Int): Modifier =
+    layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints.offset(-2 * padX, -2 * padY))
+        layout(placeable.width + 2 * padX, placeable.height + 2 * padY) {
+            placeable.place(padX, padY)
+        }
+    }
+
+/**
+ * Hands the parent back the size it would have had — the half of the pair that is invisible.
+ *
+ * It inflates the constraints by exactly what [tapTargetExpand] subtracts again, so the drawn
+ * content still measures against the caller's own constraints: a fixed-size caller (every
+ * `Modifier.zone(...)` rail button) can't be squeezed by the pad and feed a smaller size back in.
+ */
+private fun Modifier.tapTargetInset(padX: Int, padY: Int): Modifier =
+    layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints.offset(2 * padX, 2 * padY))
+        layout(
+            (placeable.width - 2 * padX).coerceAtLeast(0),
+            (placeable.height - 2 * padY).coerceAtLeast(0),
+        ) {
+            placeable.place(-padX, -padY)
+        }
+    }
+
+/**
+ * Click without the Material ripple (chrome buttons highlight by state, not ripple), on a hit area
+ * floored at [MIN_TAP_TARGET_DP] — see [tapTargetFloor].
+ */
 @Composable
 fun Modifier.chromeClickable(onClick: () -> Unit): Modifier =
     chromeClickable(enabled = true, onClick = onClick)
@@ -88,21 +166,25 @@ fun Modifier.chromeClickable(onClick: () -> Unit): Modifier =
 @Composable
 fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier {
     val haptics = LocalOperatorHaptics.current
-    return clickable(
-        enabled = enabled,
-        interactionSource = remember { MutableInteractionSource() },
-        indication = null,
-        onClick = {
-            haptics.selection()
-            onClick()
-        },
-    )
+    val interaction = remember { MutableInteractionSource() }
+    return tapTargetFloor {
+        clickable(
+            enabled = enabled,
+            interactionSource = interaction,
+            indication = null,
+            onClick = {
+                haptics.selection()
+                onClick()
+            },
+        )
+    }
 }
 
 /**
  * iOS `.zcTapTarget` press feedback: while pressed the control drops to 60%
  * opacity and scales to 0.97 — chrome buttons read as buttons without a
- * Material ripple.
+ * Material ripple. Same [MIN_TAP_TARGET_DP] hit floor as [chromeClickable]; the press transform
+ * rides the expanded box, which is concentric with the drawn one, so the scale reads identically.
  */
 @Composable
 fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
@@ -121,20 +203,22 @@ fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
             androidx.compose.animation.core.tween(durationMillis = 120),
             label = "chrome press scale",
         )
-    return graphicsLayer {
-        this.alpha = alpha
-        scaleX = scale
-        scaleY = scale
+    return tapTargetFloor {
+        graphicsLayer {
+            this.alpha = alpha
+            scaleX = scale
+            scaleY = scale
+        }
+            .clickable(
+                enabled = true,
+                interactionSource = interaction,
+                indication = null,
+                onClick = {
+                    haptics.selection()
+                    onClick()
+                },
+            )
     }
-        .clickable(
-            enabled = true,
-            interactionSource = interaction,
-            indication = null,
-            onClick = {
-                haptics.selection()
-                onClick()
-            },
-        )
 }
 
 /** Text style matching iOS `.system(size:weight:design:)` closely enough. */
@@ -241,7 +325,13 @@ fun RecordChip(recording: Boolean) {
     }
 }
 
-/** Glyph + value in a glass capsule (iOS `inlineReadout`). */
+/**
+ * Glyph + value in a glass capsule (iOS `inlineReadout`).
+ *
+ * [label] is what the pill IS ("Resolution", "Codec", "Media"); the glyph carries that for a
+ * sighted operator and nothing carries it otherwise, so TalkBack gets it spoken ahead of the value
+ * the way iOS labels its readout buttons (`accessibilityLabel`, MonitorUnified.swift:60, :111).
+ */
 @Composable
 fun ReadoutPill(
     value: String,
@@ -249,9 +339,11 @@ fun ReadoutPill(
     onClick: (() -> Unit)? = null,
     /** Publishes this pill's root bounds in dp (iOS `topBarPickerFrames`). */
     onBoundsInRoot: ((ZoneFrame) -> Unit)? = null,
+    label: String? = null,
     icon: @Composable (Color) -> Unit,
 ) {
     val density = LocalDensity.current
+    val description = label?.let { stringResource(R.string.a11y_monitor_readout, it, value) }
     // Active = the iOS readout-button treatment: accent-dim capsule + an
     // accent-dim border (iOS strokes with accentDim, not full accent) with
     // glyph and value going gold while its picker is open.
@@ -288,6 +380,16 @@ fun ReadoutPill(
                     // iOS readout buttons always press like buttons; disabled
                     // handlers no-op silently rather than losing button feel.
                     if (onClick != null) Modifier.chromePressable(onClick) else Modifier
+                )
+                .then(
+                    if (description != null) {
+                        Modifier.semantics {
+                            contentDescription = description
+                            if (onClick != null) role = Role.Button
+                        }
+                    } else {
+                        Modifier
+                    },
                 )
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -423,6 +525,12 @@ fun FitScale(maxWidth: Dp, content: @Composable () -> Unit) {
 @Composable
 fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val tint = if (locked) LiveDesign.accent else LiveDesign.text.copy(alpha = 0.86f)
+    // iOS says the same two things about this button — a label and an accessibilityHint
+    // (MonitorUnified.swift:1092-1093). Compose has no hint slot, so both ride the description and
+    // TalkBack speaks the identical words; the engaged state rides `toggleableState`, which the
+    // system localises, rather than a pair of strings this app would have to keep in step.
+    val lockLabel = stringResource(R.string.a11y_monitor_lock)
+    val lockHint = stringResource(R.string.a11y_monitor_lock_hint)
     Box(
         modifier =
             modifier
@@ -438,7 +546,12 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
                         Modifier
                     },
                 )
-                .chromeClickable(onClick),
+                .chromeClickable(onClick)
+                .semantics {
+                    contentDescription = "$lockLabel. $lockHint"
+                    role = Role.Switch
+                    toggleableState = ToggleableState(locked)
+                },
         contentAlignment = Alignment.Center,
     ) {
         PadlockGlyph(tint = tint, filled = locked, modifier = Modifier.size(13.dp, 17.dp))
@@ -457,8 +570,18 @@ fun DispButton(
     // The operator can reorder modes, so live tint follows typed mode state
     // rather than assuming indicator position zero is always Live.
     val labelColor = if (isLiveActive) LiveDesign.info else LiveDesign.text
+    // "DISP" plus dashes says nothing out loud — iOS labels the same button "Change display mode"
+    // (MonitorUnified.swift:1170).
+    val dispLabel = stringResource(R.string.a11y_monitor_disp)
     Column(
-        modifier = modifier.glass(ChromeShape).chromeClickable(onClick),
+        modifier =
+            modifier
+                .glass(ChromeShape)
+                .chromeClickable(onClick)
+                .semantics {
+                    contentDescription = dispLabel
+                    role = Role.Button
+                },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -485,15 +608,37 @@ fun DispButton(
     }
 }
 
-/** Round glass auxiliary button (iOS `AssetCircleButton`). */
+/**
+ * Round glass auxiliary button (iOS `AssetCircleButton`).
+ *
+ * [contentDescription] is what the glyph means — iOS labels each of these at the call site
+ * ("Open Operator Setup" / "Open Media", MonitorUnified.swift:1109, :1138), because a gear and a
+ * film roll are silent to TalkBack.
+ */
 @Composable
 fun AuxCircleButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {},
+    contentDescription: String? = null,
     glyph: @Composable (Modifier, Color) -> Unit,
 ) {
+    // Held in a local the semantics block can't confuse with its own write-only property.
+    val description = contentDescription
     Box(
-        modifier = modifier.glass(CircleShape).chromeClickable(onClick),
+        modifier =
+            modifier
+                .glass(CircleShape)
+                .chromeClickable(onClick)
+                .then(
+                    if (description != null) {
+                        Modifier.semantics {
+                            this.contentDescription = description
+                            role = Role.Button
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
         contentAlignment = Alignment.Center,
     ) {
         // iOS sizes the asset glyph at 44% of the circle diameter.

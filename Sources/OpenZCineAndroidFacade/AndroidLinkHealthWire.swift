@@ -22,6 +22,38 @@ public enum AndroidCameraLinkPhaseWire: Int, Sendable {
     }
 }
 
+/// What the live-view pump's ``LiveViewWatchdog`` knows about the stream and the Kotlin shell
+/// cannot.
+///
+/// An unparsable frame is caught and dropped inside `PTPIPClientSession.runLiveViewPump` and never
+/// crosses JNI, so a shell-side streak is permanently zero and `CameraLinkHealthScorer`'s
+/// bad-frame penalty could never fire — the bars stayed high exactly as the body degraded.
+/// Freshness has the same flaw one step removed: Kotlin can only time frame ARRIVALS, the
+/// consumer's clock, while iOS times the decode (`NativeAppRoot.streamUntilStall` sets
+/// `lastGoodFrameAt` beside `watchdog.recordGoodFrame`).
+///
+/// Carried as the timestamp rather than an elapsed value because the pump publishes once per poll:
+/// a stream that dies inside a blocked socket read has to keep ageing while nothing is published,
+/// which a frozen delta would read as perfectly fresh at exactly the wrong moment.
+public struct AndroidLiveViewStreamHealth: Equatable, Sendable {
+    /// When the pump last decoded a frame.
+    public let lastGoodFrameAt: Date
+    /// The watchdog's current unparsable-frame streak.
+    public let consecutiveBadFrames: Int
+
+    /// Creates one pump-authored stream observation.
+    public init(lastGoodFrameAt: Date, consecutiveBadFrames: Int) {
+        self.lastGoodFrameAt = lastGoodFrameAt
+        self.consecutiveBadFrames = max(0, consecutiveBadFrames)
+    }
+
+    /// Seconds since the last decoded frame, measured at scoring time. Clamped at zero so a
+    /// wall-clock adjustment can never report a frame from the future as negative age.
+    public func secondsSinceLastGoodFrame(now: Date = Date()) -> Double {
+        max(0, now.timeIntervalSince(lastGoodFrameAt))
+    }
+}
+
 /// Swift-scored health record consumed by Android Compose.
 public struct AndroidLinkHealthSnapshot: Equatable, Sendable {
     /// Shared 0–100 link health score.
@@ -72,7 +104,12 @@ public enum AndroidLinkHealthWire {
         /// the score cannot say whether a healthy-latency link is simply too narrow to carry the
         /// operator's preset. `nil` before the first frame, and never shown for USB — a cable has
         /// no radio to be narrow.
-        throughputMegabitsPerSecond: Double? = nil
+        throughputMegabitsPerSecond: Double? = nil,
+        /// The live-view pump's own view of the stream, present whenever a pump is running. It
+        /// OUTRANKS both frame observations above, because the shell cannot produce either honestly
+        /// — see ``AndroidLiveViewStreamHealth``. `nil` (no pump) leaves the shell's values in
+        /// place.
+        liveViewStreamHealth: AndroidLiveViewStreamHealth? = nil
     ) -> AndroidLinkHealthSnapshot? {
         guard let phase = AndroidCameraLinkPhaseWire(rawValue: phaseRaw) else { return nil }
         let health = CameraLinkHealthScorer.score(
@@ -81,8 +118,10 @@ public enum AndroidLinkHealthWire {
                 ptpRoundTripMilliseconds: roundTripMilliseconds,
                 liveViewFPS: liveViewFPS,
                 targetLiveViewFPS: targetLiveViewFPS,
-                secondsSinceLastGoodFrame: secondsSinceLastGoodFrame,
-                consecutiveBadFrames: consecutiveBadFrames,
+                secondsSinceLastGoodFrame: liveViewStreamHealth?.secondsSinceLastGoodFrame()
+                    ?? secondsSinceLastGoodFrame,
+                consecutiveBadFrames: liveViewStreamHealth?.consecutiveBadFrames
+                    ?? consecutiveBadFrames,
                 recentCommandFailures: recentCommandFailures,
                 isRecoveringStream: isRecoveringStream))
         storage.lock.lock()

@@ -734,7 +734,15 @@
                 isUSBTransport: isUSBTransport != 0,
                 resetSignalBars: resetSignalBars != 0,
                 throughputMegabitsPerSecond:
-                    hasThroughput != 0 ? Double(throughputMegabitsPerSecond) : nil),
+                    hasThroughput != 0 ? Double(throughputMegabitsPerSecond) : nil,
+                // Read at the source instead of round-tripped through Kotlin, because these two
+                // never left the process to begin with: an unparsable frame is dropped inside the
+                // pump and never crosses JNI, so `consecutiveBadFrames` arrives here as a
+                // permanent 0 and the scorer's -50 penalty could never fire; and the shell's
+                // freshness is an ARRIVAL clock where iOS measures at decode. Same active-session
+                // slot the RTT reader uses; `nil` whenever no pump is running.
+                liveViewStreamHealth: ActiveSessionSlot.shared.current()?
+                    .latestLiveViewStreamHealth()),
             let encoded = AndroidLinkHealthWire.encode(snapshot)
         else { return nil }
         return javaString(env, encoded)

@@ -56,7 +56,15 @@ public sealed interface ConnectionPopupPhase {
 
     public data object JoiningWifi : ConnectionPopupPhase
 
-    public data object Searching : ConnectionPopupPhase
+    /**
+     * Waiting for the camera to appear on one path. [watchingFor] names it, because the thing
+     * the operator has to DO differs per kind — iOS switches the same detail on the same three
+     * kinds (`NativeAppRoot.presentSetupWatchProgress`'s `instruction`). Null keeps the network
+     * wording, which is what an unqualified search is.
+     */
+    public data class Searching(
+        val watchingFor: SavedCameraTransport? = null,
+    ) : ConnectionPopupPhase
 
     public data object Handshaking : ConnectionPopupPhase
 
@@ -227,7 +235,7 @@ private fun popupStatusTitle(phase: ConnectionPopupPhase): String =
         ConnectionPopupPhase.Handshaking,
         ConnectionPopupPhase.Reconnecting,
         -> stringResource(R.string.conn_connecting_title)
-        ConnectionPopupPhase.Searching -> stringResource(R.string.conn_searching_title)
+        is ConnectionPopupPhase.Searching -> stringResource(R.string.conn_searching_title)
         ConnectionPopupPhase.Pairing -> stringResource(R.string.conn_pairing_title)
         is ConnectionPopupPhase.ConfirmOnCamera -> stringResource(R.string.conn_confirm_title)
     }
@@ -238,8 +246,17 @@ private fun popupDetail(deviceName: String, phase: ConnectionPopupPhase): String
         is ConnectionPopupPhase.ReadyToJoin ->
             stringResource(R.string.conn_ready_detail, deviceName)
         ConnectionPopupPhase.JoiningWifi -> stringResource(R.string.conn_joining_detail)
-        ConnectionPopupPhase.Searching ->
-            stringResource(R.string.conn_searching_detail, deviceName)
+        is ConnectionPopupPhase.Searching ->
+            // A cable path has no network step at all, and a hotspot path needs one this phone
+            // owns — telling either operator we are "looking on your network" is advice for
+            // something their setup never touches (iOS says the same three things).
+            when (phase.watchingFor) {
+                SavedCameraTransport.USB_C ->
+                    stringResource(R.string.conn_watch_usb_detail, deviceName)
+                SavedCameraTransport.PHONE_HOTSPOT ->
+                    stringResource(R.string.conn_watch_hotspot_detail)
+                else -> stringResource(R.string.conn_searching_detail, deviceName)
+            }
         ConnectionPopupPhase.Handshaking ->
             stringResource(R.string.conn_handshaking_detail, deviceName)
         ConnectionPopupPhase.Pairing -> stringResource(R.string.conn_pairing_detail, deviceName)

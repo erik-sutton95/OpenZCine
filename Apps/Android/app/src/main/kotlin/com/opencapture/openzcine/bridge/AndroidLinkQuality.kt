@@ -30,7 +30,16 @@ public data class SwiftLiveViewRequest(
         }
     }
 
-    /** Target monitor frames per second implied by the approved preview cadence. */
+    /**
+     * How often the monitor ASKS the body for a frame (always 60 Hz — see
+     * [STANDARD_FRAME_INTERVAL_NANOS]).
+     *
+     * This is a request rate, not a production rate, so it is **not** the link-health target: the
+     * body produces frames at its recording rate, and scoring a healthy 25p feed against 60 read
+     * ~41 (two bars) where iOS reads 100 (four) beside an identical FPS number. The health target
+     * is [LinkHealthInput.targetLiveViewFramesPerSecond], which iOS defines as the body's
+     * recording rate (`NativeAppRoot.currentLinkHealthInputs`).
+     */
     val targetFramesPerSecond: Double
         get() = NANOS_PER_SECOND.toDouble() / frameIntervalNanoseconds.toDouble()
 
@@ -148,8 +157,23 @@ internal data class LinkHealthInput(
     val phase: Int,
     val roundTripMilliseconds: Double?,
     val liveViewFramesPerSecond: Double?,
+    /**
+     * What the stream SHOULD be delivering: the body's recording rate, exactly as iOS scores it
+     * (`NativeAppRoot.currentLinkHealthInputs` → `cameraPropertySnapshot.fps ?? 30`). Never the
+     * preview pull cadence — see [SwiftLiveViewRequest.targetFramesPerSecond].
+     */
     val targetLiveViewFramesPerSecond: Double,
+    /**
+     * Fallback freshness only, measured from frame ARRIVALS. Whenever a native live-view pump is
+     * running, the Swift JNI entry point replaces this with the pump watchdog's decode clock, for
+     * the same reason iOS measures at decode (`AndroidLiveViewStreamHealth`).
+     */
     val secondsSinceLastGoodFrame: Double?,
+    /**
+     * Always 0 from this shell: an unparsable frame is dropped inside the Swift live-view pump and
+     * never crosses JNI, so Kotlin has no bad frame to count. The real streak is read off the
+     * active session's watchdog at the JNI boundary.
+     */
     val consecutiveBadFrames: Int,
     val recentCommandFailures: Int,
     val isRecoveringStream: Boolean,
@@ -237,6 +261,7 @@ public class AndroidLinkHealthMonitor internal constructor(
     private var isDemoSession = false
     private var streamingRequested = false
     private var isUsbTransport = false
+    /** Body recording rate; iOS's same 30 fps fallback until the body reports one. */
     private var targetFramesPerSecond = 30.0
     private var recentCommandFailures = 0
     private var roundTripMilliseconds: Double? = null
@@ -244,7 +269,14 @@ public class AndroidLinkHealthMonitor internal constructor(
     /** Last JNI health score time — throttles score() off the per-frame hot path. */
     private var lastScoreNanos: Long = 0L
 
-    /** Replaces connection truth from the real session state flow. */
+    /**
+     * Replaces connection truth from the real session state flow.
+     *
+     * [targetFramesPerSecond] is the BODY's recording rate (`CameraPropertySnapshot.frameRate`),
+     * the same input iOS scores against. Passing the preview pull cadence instead scores a healthy
+     * feed against a rate the body never produces — see
+     * [SwiftLiveViewRequest.targetFramesPerSecond].
+     */
     internal fun updateSession(
         state: CameraSessionState,
         streamRequested: Boolean,
@@ -351,6 +383,13 @@ public class AndroidLinkHealthMonitor internal constructor(
                     liveViewFramesPerSecond = fps,
                     targetLiveViewFramesPerSecond = targetFramesPerSecond,
                     secondsSinceLastGoodFrame = secondsSinceGood,
+                    // Not an observation — the shell has none to make. A frame that fails to parse
+                    // is caught and dropped inside `PTPIPClientSession.runLiveViewPump`, so it
+                    // never reaches this class, and a hardcoded 0 here used to mean the shared
+                    // scorer's -50 bad-frame penalty could NEVER fire: the bars stayed high
+                    // exactly as the body degraded. `SwiftCoreJNI.swiftCoreLinkHealthSnapshot` now
+                    // substitutes the pump watchdog's real streak (and its decode-clock freshness)
+                    // whenever a pump is running; this literal is the no-pump fallback.
                     consecutiveBadFrames = 0,
                     recentCommandFailures = recentCommandFailures,
                     isRecoveringStream = phase == AndroidLinkPhase.RECOVERING,

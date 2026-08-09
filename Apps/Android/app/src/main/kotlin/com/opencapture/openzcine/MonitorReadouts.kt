@@ -384,6 +384,50 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
 }
 
 /**
+ * What the frame-rate chip is carrying instead of a rate.
+ *
+ * iOS parks these same words in `liveFPS` and the chip prints whatever is there
+ * (`NativeAppRoot.swift:1627`, `:1651`, `:6556`, `:7628`; chip at `MonitorControls.swift:81-120`).
+ * The chip is the only visible link readout on the monitor — `connectionMessage` is behind it — so
+ * a route that never came up has to be distinguishable from a live feed, which a stale `25.00`
+ * makes impossible.
+ */
+internal enum class MonitorFeedState(val word: String) {
+    /** The session is gone and bounded recovery owns the screen (iOS `heldFrameBadge`). */
+    NO_LINK("NO LINK"),
+
+    /** The session is up but the stream is being restarted. */
+    RECOV("RECOV"),
+
+    /** The body is busy and has stopped feeding frames. */
+    BUSY("BUSY"),
+
+    /** The route failed outright and nothing is retrying it. */
+    FAIL("FAIL"),
+}
+
+/** Chip text before the first measurable interval (iOS `CameraDisplayState.preview.liveFPS`). */
+private const val READY_FRAME_RATE = "READY"
+
+/**
+ * The one rule for what the FPS chip says.
+ *
+ * A [state] always wins: while the feed is down the measured rate is the rate of a feed that
+ * stopped arriving, and printing it claims frames are still coming. A rate is only printed when it
+ * is a real, positive measurement.
+ *
+ * The words are Kotlin constants rather than `stringResource` lookups because the chip's caller
+ * needs this rule in a plain function it can also unit-test; `MonitorReadoutsTest` pins them to the
+ * `monitor_fps_*` strings so the two spellings cannot drift.
+ */
+internal fun fpsChipLabel(rate: Double?, state: MonitorFeedState?): String =
+    state?.word
+        ?: rate?.takeIf { it.isFinite() && it > 0.0 }?.let {
+            String.format(Locale.ROOT, "%.2f", it)
+        }
+        ?: READY_FRAME_RATE
+
+/**
  * iOS `FrameRateSampler`: live-measured delivery rate over a rolling 30-interval
  * window, published at most ~1 Hz, `"%.2f"`. Starts as iOS's `"READY"` until the
  * first measurable interval.
@@ -393,7 +437,8 @@ internal class MonitorFrameRateSampler {
     private var lastFrameNanos = 0L
     private var lastPublishNanos = 0L
 
-    var formatted: String by mutableStateOf(READY)
+    /** Formatted through [fpsChipLabel] so the chip has one definition of a printed rate. */
+    var formatted: String by mutableStateOf(fpsChipLabel(rate = null, state = null))
         private set
 
     fun accept(nowNanos: Long) {
@@ -407,13 +452,12 @@ internal class MonitorFrameRateSampler {
         lastFrameNanos = nowNanos
         if (intervals.isNotEmpty() && nowNanos - lastPublishNanos >= 1_000_000_000L) {
             lastPublishNanos = nowNanos
-            formatted = String.format(Locale.ROOT, "%.2f", intervals.size / intervals.sum())
+            formatted = fpsChipLabel(rate = intervals.size / intervals.sum(), state = null)
         }
     }
 
     private companion object {
         const val WINDOW = 30
-        const val READY = "READY"
     }
 }
 

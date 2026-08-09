@@ -32,6 +32,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
@@ -60,17 +61,6 @@ fun RelayWatchOverlay(
         when (ui.phase) {
             RelayWatchUiState.Phase.WATCHING ->
                 if (ui.holdsControl || ui.allowsControlRequests) {
-                    // Above the bottom chrome's lane, like iOS (`laneTop - keyHeight - 8`).
-                    // Landscape: the bottom bars run 14dp inset + 58dp tall and DISP/settings
-                    // live on the right rail, so 84dp floats the pill 12dp above the bars.
-                    // Portrait: the system bar (lock/DISP/record/media/settings, 100dp, 14dp
-                    // lift) plus the 58dp assist toolbar own the bottom — 84dp sat the pill
-                    // ON the system keys. 192 = 100 + 14 + 58 + 12 gap + 8 lane gap.
-                    // ponytail: fixed lane clearances; anchoring to the live zone map needs
-                    // the monitor shell to export it.
-                    val portrait =
-                        LocalConfiguration.current.orientation ==
-                            Configuration.ORIENTATION_PORTRAIT
                     WatcherKey(
                         text =
                             stringResource(
@@ -84,7 +74,7 @@ fun RelayWatchOverlay(
                         onClick = if (ui.holdsControl) onGiveBackControl else onAskForControl,
                         modifier =
                             Modifier.align(Alignment.BottomCenter)
-                                .padding(bottom = if (portrait) 192.dp else 84.dp),
+                                .padding(bottom = relayControlKeyBottomInset()),
                     )
                 }
             RelayWatchUiState.Phase.CONNECTING ->
@@ -160,6 +150,29 @@ fun RelayWatchOverlay(
         }
     }
 }
+
+/**
+ * Bottom clearance for BOTH on-glass relay keys — this file's watcher ask/give-back and the
+ * broadcaster's REVOKE CONTROL pill over its own monitor (MainActivity). One definition because
+ * they sit in the same lane on the same chrome: iOS seats both against the assist-strip zone with
+ * identical math (`laneTop - keyHeight - 8`, MonitorUnified.swift), and the broadcaster's pill
+ * carrying its own fixed 64dp is exactly how it ended up ON the portrait system keys.
+ *
+ * Landscape: the bottom bars run 14dp inset + 58dp tall and DISP/settings live on the right rail,
+ * so 84dp floats the key 12dp above the bars. Portrait: the system bar (lock/DISP/record/media/
+ * settings, 100dp, 14dp lift) plus the 58dp assist toolbar own the bottom, so
+ * 192 = 100 + 14 + 58 + 12 gap + 8 lane gap.
+ *
+ * ponytail: fixed lane clearances; anchoring to the live zone map needs the monitor shell to
+ * export it.
+ */
+@Composable
+internal fun relayControlKeyBottomInset(): Dp =
+    if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT) {
+        192.dp
+    } else {
+        84.dp
+    }
 
 @Composable
 private fun WatcherKey(
