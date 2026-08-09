@@ -205,7 +205,14 @@ class CameraInUseBeacon(nsdManager: NsdManager, private val deviceName: String) 
                 name = "ozc-in-use-beacon"
                 start()
             }
-        advertiser.register(deviceName, server.localPort, servedCameraHost, watchable = false)
+        // A DISTINCT service name (iOS `CameraInUseBeacon`): unregistration is asynchronous, and
+        // a real broadcast starting under the same name races mDNS conflict resolution into a
+        // "Galaxy (2)" rename — which breaks the watchers' saved-passcode key and their
+        // rejoin-by-name match. The beacon is never rendered or joined, so its name only needs
+        // to not collide. The unicast presence line keeps the PLAIN name: that one IS matched by
+        // name (the shell's own-device filter and presence refutation).
+        advertiser.register(
+            "$deviceName in-use", server.localPort, servedCameraHost, watchable = false)
         presence.update(deviceName, watchable = false, servedCameraHost = servedCameraHost)
     }
 

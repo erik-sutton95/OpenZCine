@@ -361,6 +361,13 @@ object MonitorRelayWire {
         val codec: Int = FrameCodec.JPEG,
         val isKeyframe: Boolean = true,
         val parameterSets: List<ByteArray>? = null,
+        /**
+         * The body's own orientation for this frame (core `PTPLiveViewRotation` raw value:
+         * 0 landscape, 1 grip-up, 2 grip-down, 3 upside down), so a watcher rotates the picture
+         * upright exactly like the broadcaster. Optional on the wire — absent, as every host
+         * before the field sent, means landscape, which is the historical behavior.
+         */
+        val rotation: Int? = null,
     ) {
         fun toJson(): JSONObject =
             JSONObject().apply {
@@ -425,6 +432,7 @@ object MonitorRelayWire {
                         },
                     )
                 }
+                rotation?.let { put("rotation", it) }
             }
 
         companion object {
@@ -495,6 +503,7 @@ object MonitorRelayWire {
                                 }
                             }
                         },
+                    rotation = json.optIntOrNull("rotation"),
                 )
         }
     }
@@ -579,3 +588,6 @@ private fun JSONObject.optStringOrNull(key: String): String? =
 
 private fun JSONObject.optDoubleOrNull(key: String): Double? =
     if (has(key) && !isNull(key)) getDouble(key) else null
+
+private fun JSONObject.optIntOrNull(key: String): Int? =
+    if (has(key) && !isNull(key)) getInt(key) else null

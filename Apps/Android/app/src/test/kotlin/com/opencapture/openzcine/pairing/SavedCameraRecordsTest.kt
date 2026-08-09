@@ -1,10 +1,12 @@
 package com.opencapture.openzcine.pairing
 
 import com.opencapture.openzcine.transport.CameraDiscovery
+import com.opencapture.openzcine.transport.LocalIPv4Interface
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SavedCameraRecordsTest {
     /** Repeated Wi-Fi setups are numbered short, and an operator's own name beats the number. */
@@ -610,5 +612,38 @@ class SavedCameraRecordsTest {
                 wifiSsid = null,
             )
         assertEquals("192.168.1.246", SavedCameraRecords.canonicalized(listOf(router)).single().host)
+    }
+
+    /**
+     * The hotspot classifier is only as good as the bases it is given, and nothing was giving it
+     * any: a Hotspot chip never lit, a hotspot discovery lit the Wi-Fi chip instead, and an armed
+     * hotspot watch could never fulfil.
+     */
+    @Test
+    fun `hotspot bases come from the softap interface, never the station one`() {
+        val interfaces =
+            listOf(
+                LocalIPv4Interface("wlan0", "192.168.1.42"),
+                LocalIPv4Interface("swlan0", "192.168.43.1"),
+                // Down-level duplicates and non-IPv4 keys must not widen the answer.
+                LocalIPv4Interface("ap0", "192.168.43.1"),
+                LocalIPv4Interface("rndis0", "192.168.42.129"),
+            )
+        val bases = SavedCameraRecords.phoneHotspotSubnetBases(interfaces)
+        assertEquals(setOf("192.168.43"), bases)
+
+        // A body on that subnet is on THIS phone's hotspot; the network the phone is merely
+        // connected to (wlan0) is not.
+        assertTrue(SavedCameraRecords.isPhoneHotspotHost("192.168.43.55", bases))
+        assertFalse(SavedCameraRecords.isPhoneHotspotHost("192.168.1.77", bases))
+        // No hotspot up: nothing is a hotspot host, and nothing is guessed from a range.
+        assertFalse(
+            SavedCameraRecords.isPhoneHotspotHost(
+                "192.168.43.55",
+                SavedCameraRecords.phoneHotspotSubnetBases(
+                    listOf(LocalIPv4Interface("wlan0", "192.168.43.9"))
+                ),
+            )
+        )
     }
 }

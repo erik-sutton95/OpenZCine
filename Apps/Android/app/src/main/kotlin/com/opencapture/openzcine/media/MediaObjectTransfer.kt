@@ -2,7 +2,14 @@ package com.opencapture.openzcine.media
 
 import com.opencapture.openzcine.bridge.SwiftCore
 import java.io.IOException
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 
 /** Narrow Kotlin adapter for Swift-owned generic object-transfer operations. */
 internal interface MediaObjectTransferBridge {
@@ -19,6 +26,9 @@ internal interface MediaObjectTransferBridge {
         resumeOffset: Long,
         listener: SwiftCore.MediaTransferListener,
     )
+
+    /** Stops the in-flight transfer this bridge started; a synchronous fake has none. */
+    fun stopMediaTransfer() = Unit
 }
 
 /** Production bridge that leaves all camera protocol work in the Swift core. */
@@ -36,6 +46,10 @@ private object SwiftCoreMediaObjectTransferBridge : MediaObjectTransferBridge {
         listener: SwiftCore.MediaTransferListener,
     ) {
         SwiftCore.sessionStartMediaTransfer(handle, reportedSize, resumeOffset, listener)
+    }
+
+    override fun stopMediaTransfer() {
+        if (SwiftCore.isAvailable) SwiftCore.sessionStopMediaTransfer()
     }
 }
 
@@ -153,6 +167,134 @@ internal fun prepareMediaObjectTransfer(
         MediaTransferPreparation.Failed(error.message ?: "Camera $objectLabel could not be opened.")
     }
 }
+
+/** One operator-selected clip, before the run knows whether its bytes are already local. */
+internal data class MediaDeliverySelection(
+    val cameraID: String,
+    val clip: MediaClipRecord,
+)
+
+/** What the delivery cache pre-pass produced, plus the clips the camera never handed over. */
+internal data class MediaDeliveryCachePass(
+    val items: List<MediaDeliveryWorkItem>,
+    val uncachedCount: Int,
+)
+
+/**
+ * Pulls every selected clip that has no complete cache artifact off the camera before delivery
+ * starts (iOS `MediaDeliveryRunner`'s pre-pass, `MediaDeliveryOverlay.swift`). Without it the
+ * delivery paths filtered the selection down to whatever happened to be cached already, so
+ * selecting ten clips with two cached shared two and dropped eight without a word.
+ *
+ * Sequential by contract: the Swift core serializes one PTP data channel, so a parallel pass
+ * would only queue behind itself. A clip the camera still refuses is counted, never dropped
+ * silently, so the run can say how many did not come across.
+ */
+internal suspend fun cacheSelectionForDelivery(
+    selection: List<MediaDeliverySelection>,
+    cacheStore: MediaCacheStore,
+    cameraTransferAvailable: Boolean,
+    bridge: MediaObjectTransferBridge = SwiftCoreMediaObjectTransferBridge,
+    ioContext: CoroutineContext = Dispatchers.IO,
+    pollIntervalMillis: Long = CACHE_PASS_POLL_MILLIS,
+    /** `(1-based index among clips being cached, count being cached, clip, 0…1)`. */
+    onProgress: (Int, Int, MediaDeliverySelection, Double) -> Unit = { _, _, _, _ -> },
+): MediaDeliveryCachePass {
+    val resolved =
+        withContext(ioContext) {
+            selection.map { item -> completedDeliveryEntryOrNull(cacheStore, item) }
+        }.toMutableList()
+    val cachingCount = resolved.count { it == null }
+    var cachingIndex = 0
+    selection.forEachIndexed { index, item ->
+        if (resolved[index] != null) return@forEachIndexed
+        currentCoroutineContext().ensureActive()
+        cachingIndex += 1
+        if (!cameraTransferAvailable) return@forEachIndexed
+        onProgress(cachingIndex, cachingCount, item, 0.0)
+        val position = cachingIndex
+        resolved[index] =
+            cacheOneClipForDelivery(
+                cacheStore = cacheStore,
+                item = item,
+                bridge = bridge,
+                ioContext = ioContext,
+                pollIntervalMillis = pollIntervalMillis,
+                report = { fraction -> onProgress(position, cachingCount, item, fraction) },
+            )
+    }
+    val items =
+        selection.mapIndexedNotNull { index, item ->
+            resolved[index]?.let { entry -> MediaDeliveryWorkItem(item.cameraID, item.clip, entry) }
+        }
+    return MediaDeliveryCachePass(items, uncachedCount = selection.size - items.size)
+}
+
+/** Operator sentence for a pre-pass that could not bring every selected clip across. */
+internal fun uncachedClipsMessage(uncachedCount: Int): String =
+    "$uncachedCount clip${if (uncachedCount == 1) "" else "s"} couldn't be cached from the camera."
+
+private fun completedDeliveryEntryOrNull(
+    cacheStore: MediaCacheStore,
+    item: MediaDeliverySelection,
+): MediaCacheEntry? =
+    runCatching {
+        cacheStore.completedEntryOrNull(
+            item.cameraID,
+            MediaCacheObjectIdentity(item.clip),
+            item.clip.sizeBytes,
+        )
+    }.getOrNull()
+
+/**
+ * Streams one clip into the cache and waits for the validated final artifact. The entry itself
+ * is the answer — it carries the length Swift resolved immediately before transfer, which a
+ * fresh lookup keyed on the listing's 32-bit sentinel would reject.
+ */
+private suspend fun cacheOneClipForDelivery(
+    cacheStore: MediaCacheStore,
+    item: MediaDeliverySelection,
+    bridge: MediaObjectTransferBridge,
+    ioContext: CoroutineContext,
+    pollIntervalMillis: Long,
+    report: (Double) -> Unit,
+): MediaCacheEntry? {
+    val preparation =
+        withContext(ioContext) {
+            prepareMediaObjectTransfer(
+                cacheStore = cacheStore,
+                cameraID = item.cameraID,
+                clip = item.clip,
+                objectLabel = "clip",
+                bridge = bridge,
+            )
+        }
+    val entry = (preparation as? MediaTransferPreparation.Ready)?.entry ?: return null
+    var completed = false
+    try {
+        while (true) {
+            when (entry.state) {
+                MediaCacheState.COMPLETE -> {
+                    completed = true
+                    return entry
+                }
+                MediaCacheState.FAILED,
+                MediaCacheState.CANCELLED,
+                -> return null
+                MediaCacheState.ACTIVE -> {
+                    report(entry.progress)
+                    delay(pollIntervalMillis)
+                }
+            }
+        }
+    } finally {
+        // A cancelled or failed clip must not leave the camera pumping bytes nobody is waiting
+        // for; the resumable `.part` survives, exactly as when the player or viewer closes.
+        if (!completed) withContext(NonCancellable + ioContext) { bridge.stopMediaTransfer() }
+    }
+}
+
+private const val CACHE_PASS_POLL_MILLIS = 200L
 
 /** Persists one Swift-owned generic object transfer into a validated cache entry. */
 private fun MediaCacheEntry.mediaTransferListener(): SwiftCore.MediaTransferListener =

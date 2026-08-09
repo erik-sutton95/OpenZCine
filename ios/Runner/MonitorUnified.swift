@@ -1428,10 +1428,11 @@ struct MonitorShell: View {
         model.renderedFitScopes.count
     }
 
-    /// The zone map the Edit view's banner places against. Recomputed from the same inputs the
-    /// shells use — the banner is mounted above `allowsHitTesting(false)`, outside the branch that
-    /// already holds `map`, and only ever while the editor is open.
-    private var editorZoneMap: MonitorZoneMap {
+    /// The zone map the shell-level overlays (Edit banner, refusal notice) place against.
+    /// Recomputed from the same inputs the shells use — those overlays mount above
+    /// `allowsHitTesting(false)`, outside the branch that already holds `map`, and only while one
+    /// of them is actually on screen.
+    private var overlayZoneMap: MonitorZoneMap {
         assistStripCenteredIfWatching(
             MonitorZoneLayout.map(
                 viewportWidth: context.viewportWidth,
@@ -1470,6 +1471,36 @@ struct MonitorShell: View {
         return MonitorZoneLayout.watcherBand(map, viewportWidth: context.viewportWidth)
     }
 
+    /// Seats a transient element on the FEED frame's bottom edge (the Edit banner, the refusal
+    /// notice).
+    ///
+    /// Centred on the FEED, not the screen: the rails, the notch lane and the portrait tile grid
+    /// all sit outside the image, and a screen-centred element reads as belonging to none of it.
+    ///
+    /// The element's BOTTOM edge is anchored (not its centre) so its own height never matters:
+    /// just clear of the bottom bars, whose top corners carry badges that straddle the edge — a
+    /// bottom-centred banner sat on the tool bar's eye and swallowed the tap.
+    private func seatedOnFeed<Content: View>(
+        _ map: MonitorZoneMap, @ViewBuilder content: () -> Content
+    ) -> some View {
+        let feed = map.feed
+        let bottom =
+            context.isPortrait
+            ? feed.y + feed.height - 12
+                // Half a badge (13pt) plus a gap above the bars' top edge.
+            : (map.assistStrip?.frame.y ?? (feed.y + feed.height)) - 18
+        return ZStack(alignment: .bottom) {
+            Color.clear
+            content()
+        }
+        .frame(width: CGFloat(feed.width), height: CGFloat(max(0, bottom - feed.y)))
+        .position(
+            x: CGFloat(feed.x + feed.width / 2),
+            y: CGFloat((feed.y + bottom) / 2)
+        )
+        .ignoresSafeArea()
+    }
+
     var body: some View {
         GeometryReader { proxy in
             Group {
@@ -1498,37 +1529,28 @@ struct MonitorShell: View {
             }
         }
         // The Edit view's own banner, over everything so "Done" is never behind a dimmed element.
-        // Centred on the FEED frame, not the screen: the rails, the notch lane and the portrait
-        // tile grid all sit outside the image, and a screen-centred banner reads as belonging to
-        // none of it.
-        //
-        // Its BOTTOM edge is anchored (not its centre) so the banner's own height never matters:
-        // just clear of the bottom bars, whose top corners carry badges that straddle the edge —
-        // a bottom-centred banner sat on the tool bar's eye and swallowed the tap.
         .overlay {
             if let mode = model.chromeEditorMode {
-                let map = editorZoneMap
-                let feed = map.feed
-                let bannerBottom =
-                    context.isPortrait
-                    ? feed.y + feed.height - 12
-                        // Half a badge (13pt) plus a gap above the bars' top edge.
-                    : (map.assistStrip?.frame.y ?? (feed.y + feed.height)) - 18
-                ZStack(alignment: .bottom) {
-                    Color.clear
+                seatedOnFeed(overlayZoneMap) {
                     ChromeEditBanner(mode: mode)
                         .environment(model)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                .frame(
-                    width: CGFloat(feed.width),
-                    height: CGFloat(max(0, bannerBottom - feed.y))
-                )
-                .position(
-                    x: CGFloat(feed.x + feed.width / 2),
-                    y: CGFloat((feed.y + bannerBottom) / 2)
-                )
-                .ignoresSafeArea()
+            }
+        }
+        // A refused camera command answers here, on the picture the operator is looking at. Same
+        // seat as the Edit banner and for the same reasons; the two are never up together (the
+        // editor makes the monitor inert, so nothing can be refused while it is open).
+        .overlay {
+            if !model.monitorNotice.isEmpty {
+                seatedOnFeed(overlayZoneMap) {
+                    MonitorToast(
+                        text: model.monitorNotice, trigger: model.monitorNoticeTrigger)
+                }
+                // The seat's own `Color.clear` spacer hit-tests, and this stays mounted (dissolved)
+                // after the first notice — without this it would eat tap-to-focus over the feed
+                // for the rest of the session.
+                .allowsHitTesting(false)
             }
         }
         .animation(.easeOut(duration: 0.16), value: model.chromeEditorMode)

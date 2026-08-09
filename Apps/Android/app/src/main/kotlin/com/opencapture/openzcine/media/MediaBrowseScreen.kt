@@ -674,11 +674,25 @@ internal fun MediaBrowseScreen(
                                             )
                                     },
                                 )
-                            withContext(Dispatchers.IO) { listingCheckpoint.commit() }
+                            withContext(Dispatchers.IO) {
+                                // The camera answered for every object it holds, so rows it never
+                                // listed are gone from the card — prune them unless a complete
+                                // local copy keeps the clip browsable offline.
+                                listingCheckpoint.commit(prunesUnlistedClips = true) { clip ->
+                                    runCatching {
+                                        cacheStore.completedEntryOrNull(
+                                            cameraID,
+                                            MediaCacheObjectIdentity(clip),
+                                            clip.sizeBytes,
+                                        )
+                                    }.getOrNull() != null
+                                }
+                            }
                             BrowseState.Loaded(clips)
                         } catch (error: CancellationException) {
                             throw error
                         } catch (_: MediaBrowsePagingException) {
+                            // A partial pass proves nothing about the rows it never reached.
                             withContext(Dispatchers.IO) { listingCheckpoint.commit() }
                             val partial = (state as? BrowseState.Loaded)?.clips.orEmpty()
                             incompleteCameraBrowseState(partial)
@@ -1005,32 +1019,18 @@ internal fun MediaBrowseScreen(
         val selectionSnapshot = selectedSeriesClips
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
-            scope.launch {
-                val items =
-                    withContext(Dispatchers.IO) {
-                        selectionSnapshot.mapNotNull { clip ->
-                            val owner = ownerCameraID(clip)
-                            val entry =
-                                runCatching {
-                                    cacheStore.completedEntryOrNull(
-                                        owner,
-                                        MediaCacheObjectIdentity(clip),
-                                        clip.sizeBytes,
-                                    )
-                                }.getOrNull() ?: return@mapNotNull null
-                            MediaDeliveryWorkItem(owner, clip, entry)
-                        }
-                    }
-                if (items.isEmpty()) {
-                    shareMessage = "Only complete cached media can be shared."
-                    return@launch
-                }
-                coordinator.beginNativeShare(items, configuration) { published, metadata ->
-                    context.startActivity(
-                        AndroidMediaShareIntent.chooserIntent(context, published, metadata),
-                    )
-                    exitSelection()
-                }
+            // The whole selection goes to the coordinator: it caches whatever is still only on
+            // the camera before delivering. Filtering to already-cached entries here is what
+            // silently shipped 2 of 10 selected clips.
+            coordinator.beginNativeShare(
+                selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
+                configuration = configuration,
+                cameraTransferAvailable = effectiveCameraConnected,
+            ) { published, metadata ->
+                context.startActivity(
+                    AndroidMediaShareIntent.chooserIntent(context, published, metadata),
+                )
+                exitSelection()
             }
             return
         }
@@ -1163,29 +1163,14 @@ internal fun MediaBrowseScreen(
         }
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
-            scope.launch {
-                val items =
-                    withContext(Dispatchers.IO) {
-                        savableSelection.mapNotNull { clip ->
-                            val owner = ownerCameraID(clip)
-                            val entry =
-                                runCatching {
-                                    cacheStore.completedEntryOrNull(
-                                        owner,
-                                        MediaCacheObjectIdentity(clip),
-                                        clip.sizeBytes,
-                                    )
-                                }.getOrNull() ?: return@mapNotNull null
-                            MediaDeliveryWorkItem(owner, clip, entry)
-                        }
-                    }
-                if (items.isEmpty()) {
-                    shareMessage = "No complete cached media is ready."
-                    return@launch
-                }
-                coordinator.beginSaveToPhotos(items, configuration)
-                exitSelection()
-            }
+            // The full snapshot goes across: the coordinator caches the on-camera clips first and
+            // reports the non-savable ones itself, so nothing is dropped between here and Gallery.
+            coordinator.beginSaveToPhotos(
+                selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
+                configuration = configuration,
+                cameraTransferAvailable = effectiveCameraConnected,
+            )
+            exitSelection()
             return
         }
         shareInProgress = true
@@ -1292,10 +1277,24 @@ internal fun MediaBrowseScreen(
         shareJob =
             scope.launch {
                 val stageContext = coroutineContext
+                // The upload runs here, not in the coordinator, so hand it the job the overlay's
+                // Cancel must reach — otherwise Cancel stopped nothing mid-upload.
+                mediaDeliveryCoordinator?.trackExternalDelivery(stageContext[Job])
                 var skippedBeforeUpload: Int? = null
                 var completedWithoutFailures = false
                 var cancelled = false
                 try {
+                    // Pull the on-camera clips down first; staging only sees complete entries, so
+                    // without this pass an uncached selection uploaded nothing and said nothing.
+                    // Mid-hop the phone is off the camera's Wi-Fi — that selection was already
+                    // cached before the hop, and retrying here would only stall on dead sockets.
+                    mediaDeliveryCoordinator?.cacheFromCamera(
+                        destination = MediaDeliveryKind.FRAMEIO,
+                        selection =
+                            selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
+                        cameraTransferAvailable =
+                            effectiveCameraConnected && !frameioController.isInternetHopActive,
+                    )
                     val result =
                         withContext(Dispatchers.IO) {
                             stageSelectedMedia(
@@ -1360,6 +1359,7 @@ internal fun MediaBrowseScreen(
                             )
                         }
                     if (completedWithoutFailures && !cancelled) exitSelection()
+                    mediaDeliveryCoordinator?.trackExternalDelivery(null)
                     frameioPreparationInProgress = false
                     shareInProgress = false
                     shareJob = null
@@ -1608,6 +1608,14 @@ internal fun MediaBrowseScreen(
                         null
                     },
                 busy = shareInProgress || frameioPreparationInProgress,
+                onCacheBeforeHop = {
+                    mediaDeliveryCoordinator?.cacheFromCamera(
+                        destination = MediaDeliveryKind.FRAMEIO,
+                        selection =
+                            selectedSeriesClips.map { MediaDeliverySelection(ownerCameraID(it), it) },
+                        cameraTransferAvailable = effectiveCameraConnected,
+                    )
+                },
                 onDismiss = {
                     nativeDeliveryPresented = false
                     frameioDeliveryPresented = false

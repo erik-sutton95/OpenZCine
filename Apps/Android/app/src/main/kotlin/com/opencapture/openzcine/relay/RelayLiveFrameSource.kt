@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.media.MediaCodec
 import android.media.MediaFormat
+import com.opencapture.openzcine.bridge.liveFeedRotationFromWire
 import com.opencapture.openzcine.core.LiveCameraLevel
 import com.opencapture.openzcine.core.LiveFocusBox
 import com.opencapture.openzcine.core.LiveFocusInfo
@@ -67,10 +68,11 @@ class RelayLiveFrameSource : LiveFrameSource {
                 timestampNanos = now,
                 jpegData = jpeg,
                 isRecording = metadata.isRecording,
-                // Wire sound levels are the host's raw meter steps; the shared dBFS mapping
-                // lives host-side, so a watcher without it hides the meters — the iOS
-                // watcher's behavior when a header carries no sound indicator.
-                audioLevels = null,
+                // Wire sound levels are the body's raw meter segments; [RelayAudioMeter] is the
+                // core's own segment→dBFS mapping, so the watcher's meters move with the
+                // broadcaster's instead of mounting dead. Absent still means "no indicator in
+                // this header", which is the iOS watcher's behavior too.
+                audioLevels = metadata.sound?.let(RelayAudioMeter::levels),
                 focus =
                     metadata.focus?.let { focus ->
                         LiveFocusInfo(
@@ -106,6 +108,10 @@ class RelayLiveFrameSource : LiveFrameSource {
                         LiveFrameTimecode(it.on, it.hour, it.minute, it.second, it.frame)
                     },
                 measuredFramesPerSecond = measuredFPS,
+                // The broadcaster's body orientation rides every frame: a watcher of a vertical
+                // broadcast rotates the picture upright exactly like the broadcaster does
+                // (iOS `applyRelayFrameReadings`). Absent — an older host — means landscape.
+                rotation = liveFeedRotationFromWire(metadata.rotation ?: 0),
             )
         )
     }

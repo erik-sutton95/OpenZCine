@@ -1176,13 +1176,25 @@ final class NativeAppModel {
         // stale mDNS record (lost goodbye), not a live broadcast — hide its row. Recomputed
         // wholesale each sweep, so a broadcaster that comes back is un-refuted by the sweep
         // that confirms it.
+        //
+        // Only a WATCHABLE answer un-refutes. An in-use shield answers under the plain device
+        // name while it is not sharing anything, so counting it here would keep a stopped
+        // broadcast's stale row alive for as long as that device kept holding a camera — the
+        // ghost row this refutation exists to prune.
         presenceRefutedRelayNames = Set(discoveredRelayHosts.map(\.name))
-            .subtracting(hits.values.map(\.n))
+            .subtracting(hits.values.filter(\.isWatchable).map(\.n))
         let visibleNames = Set(discoveredRelayHosts.map(\.name))
         let selfName = UIDevice.current.name
         var anyProven = false
         for (host, presence) in relayPresences {
-            guard presence.n != selfName, !visibleNames.contains(presence.n) else {
+            // Only a BROADCAST can prove the network hides broadcasts. `CameraInUseBeacon`
+            // advertises under a distinct "<name> in-use" service name while its presence line
+            // carries the plain one, so an in-use shield can NEVER match its own browsed row —
+            // and counting it told every operator whose colleague merely held a camera that
+            // their network filters discovery. Twin of Android's `updatedPresenceHiddenSince`.
+            guard presence.isWatchable, presence.n != selfName,
+                !visibleNames.contains(presence.n)
+            else {
                 relayPresenceHiddenSince.removeValue(forKey: host)
                 continue
             }
@@ -4643,18 +4655,26 @@ final class NativeAppModel {
         }
         lastInfrastructureMiss = report.miss
         infrastructureSearchEmptyStreak += 1
-        guard let miss = report.miss else { return }
-        let cameraName: String? = {
-            if let title = pendingSetupIntent?.anchor.displayTitle, !title.isEmpty { return title }
-            return connectionProgressDeviceName.isEmpty ? nil : connectionProgressDeviceName
-        }()
-        let copy = InfrastructureDiscovery.operatorCopy(for: miss, cameraName: cameraName)
+        guard let copy = infrastructureMissCopy else { return }
         if isConnectionProgressPresented, !connectionProgressShowsFailure {
             connectionStageDetail = copy
             connectionMessage = copy
         } else if shouldShowFirstPairWizard {
             connectionMessage = copy
         }
+    }
+
+    /// The last empty Wi‑Fi search's typed diagnosis, in operator words — nil until a sweep has
+    /// concluded something. The wizard's discovery card reads this directly: `connectionMessage`
+    /// carries the same string but renders on the progress screens only, so on the wizard the
+    /// diagnosis was computed and then shown nowhere.
+    var infrastructureMissCopy: String? {
+        guard let miss = lastInfrastructureMiss else { return nil }
+        let cameraName: String? = {
+            if let title = pendingSetupIntent?.anchor.displayTitle, !title.isEmpty { return title }
+            return connectionProgressDeviceName.isEmpty ? nil : connectionProgressDeviceName
+        }()
+        return InfrastructureDiscovery.operatorCopy(for: miss, cameraName: cameraName)
     }
 
     /// Whether the manual host entry control should show (Wi‑Fi search stalled with a typed miss).
@@ -9087,6 +9107,19 @@ final class NativeAppModel {
         }
     }
 
+    /// Whether `toggleAssistToolbarVisibility` can act on `tool` — Display settings renders the eye
+    /// only where it can.
+    ///
+    /// The exposure and framing sets are the whole of what the preferences store. LUT is
+    /// deliberately permanent, and the photography tools (EV meter, instant review) belong to
+    /// neither set, so the toggle above falls through both branches while
+    /// `isAssistToolbarButtonVisible` still answers a flat `true`: the eye was drawn lit and did
+    /// nothing when tapped.
+    func canToggleAssistToolbarVisibility(_ tool: MonitorAssistTool) -> Bool {
+        MonitorAssistTool.exposureBarTools.contains(tool)
+            || MonitorAssistTool.framingBarTools.contains(tool)
+    }
+
     /// Toggles whether a tool keeps rendering in clean view (DISP 2) — off for all 17 by default
     /// so clean is a bare image out of the box (#256).
     func toggleCleanViewPin(_ tool: MonitorAssistTool) {
@@ -9338,12 +9371,19 @@ final class NativeAppModel {
         guard feedSize.width > 0, feedSize.height > 0 else { return }
         // Light tap confirming the AF point moved; after the guards so locked taps stay silent.
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // What the operator touched is the PRESENTED picture, which is not the whole frame: the
+        // raster carries the de-squeeze as a centred scale (`LiveFrameRaster.feedScale`), so an
+        // anamorphic setup paints into a narrower sub-rect with dead margins either side.
+        // Normalising against the frame put the camera coordinate off by the squeeze — the same
+        // error `liveFocusBoxRect` used to draw with. Off-picture taps clamp to the edge.
+        let presented = desqueezedRect(
+            CGRect(origin: .zero, size: feedSize), assistConfiguration.desqueeze)
         // A mirrored feed is a mirrored tap: what the operator touched on the left of the picture
         // is on the camera's right. Undo the flip here rather than anywhere downstream — the
         // camera's coordinate space never mirrors, only the monitor does.
-        let tappedX = liveFeedMirrored ? feedSize.width - point.x : point.x
-        let normalizedX = min(max(tappedX / feedSize.width, 0), 1)
-        let normalizedY = min(max(point.y / feedSize.height, 0), 1)
+        let tappedX = liveFeedMirrored ? presented.maxX - point.x : point.x - presented.minX
+        let normalizedX = min(max(tappedX / presented.width, 0), 1)
+        let normalizedY = min(max((point.y - presented.minY) / presented.height, 0), 1)
         // Coordinate space from the latest live-view header, then the last one the camera reported
         // (which outlives a switch to a source that carries no header), then a 16:9 default before
         // any frame has stated one.
@@ -10502,7 +10542,9 @@ final class NativeAppModel {
             return
         }
         guard cameraSession != nil, isMonitorPresented else {
-            connectionMessage = "Connect a camera before capturing."
+            // The release's own pre-flight refusal — same sink as every other one (see
+            // `finishStillRelease`), so a shutter press against a dropped session says so.
+            showMonitorNotice("Connect a camera before capturing.")
             return
         }
         if isStillCapturing {
@@ -10606,8 +10648,11 @@ final class NativeAppModel {
                     PTPCameraPropertyWrite(
                         property: .captureAreaCrop, data: Data([area.rawValue])))
             } catch {
-                connectionMessage =
+                // Same reason as `finishStillRelease`: this is a monitor-time refusal, and the
+                // connect screens are the only place `connectionMessage` is ever read.
+                showMonitorNotice(
                     "Image area change failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                )
             }
             return true
         }
@@ -10620,8 +10665,9 @@ final class NativeAppModel {
                 // Completion (frame delivery) still lands via the readiness poll below.
             } catch {
                 if !quiet {
-                    connectionMessage =
+                    showMonitorNotice(
                         "Ending the exposure failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                    )
                 }
             }
             return true
@@ -10735,7 +10781,10 @@ final class NativeAppModel {
         stillReleaseIsOpenShutter = false
         stillReleaseStartedAt = nil
         isStillCapturing = false
-        if let message { connectionMessage = message }
+        // Every failed release ends here — the refusal, the timeout, and both throw paths — so this
+        // is the one place the operator has to be told. It used to write `connectionMessage`, which
+        // the monitor never renders (see `showMonitorNotice`), leaving a refused shutter silent.
+        if let message { showMonitorNotice(message) }
     }
 
     /// A take is rolling, or a record command is waiting on the operator's confirmation. Clean
@@ -11106,7 +11155,6 @@ final class NativeAppModel {
         case .stillIris: cameraPropertySnapshot.fNumber ?? ""
         case .stillDrive: cameraPropertySnapshot.stillCaptureMode ?? ""
         case .stillFocus: cameraPropertySnapshot.focusMode ?? ""
-        case .stillFlash: cameraPropertySnapshot.flashMode ?? ""
         case .stillMeter: cameraPropertySnapshot.meteringMode ?? ""
         case .stillSize: stillSizeAreaDisplay ?? ""
         case .stillQuality: cameraPropertySnapshot.compression ?? ""
@@ -12024,6 +12072,25 @@ final class NativeAppModel {
     /// The copy the scope-cap toast shows; names the escape hatch (close one, or pinch to fill).
     let scopeCapNoticeText = "2 scopes max in fit view — close one or pinch to fill"
 
+    /// A camera refusal the operator has to be told about while the monitor is up, and a counter
+    /// the toast keys its show/dissolve cycle on (a repeat of the same text must still re-show).
+    ///
+    /// `connectionMessage` is the wrong sink for these: it renders on the connect screens only, so
+    /// a refused release written there was indistinguishable from a shutter that never registered.
+    /// Android toasts exactly these refusals.
+    private(set) var monitorNotice = ""
+    private(set) var monitorNoticeTrigger = 0
+
+    /// Shows `message` on the monitor for a couple of seconds. Dropped when the monitor is not up
+    /// (`isMonitorPresented` is its mount gate — see `NativeAppRoot.body`): the toast keys on the
+    /// counter, so a notice queued now would fire the moment the monitor next appeared, minutes
+    /// later and about something else.
+    func showMonitorNotice(_ message: String) {
+        guard isMonitorPresented else { return }
+        monitorNotice = message
+        monitorNoticeTrigger += 1
+    }
+
     /// Count of live-view-active scope tools (waveform/parade/histogram/traffic lights).
     var activeScopeCount: Int {
         MonitorAssistTool.scopeTools.filter {
@@ -12404,7 +12471,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     case stillIris
     case stillDrive
     case stillFocus
-    case stillFlash
     case stillMeter
     case stillSize
     case stillQuality
@@ -12416,7 +12482,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     var isStillPicker: Bool {
         switch self {
         case .stillMode, .stillISO, .stillShutter, .stillIris, .stillDrive, .stillFocus,
-            .stillFlash, .stillMeter, .stillSize, .stillQuality, .stillPicture:
+            .stillMeter, .stillSize, .stillQuality, .stillPicture:
             true
         default:
             false
@@ -12441,7 +12507,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillIris: "Iris"
         case .stillDrive: "Drive"
         case .stillFocus: "Focus"
-        case .stillFlash: "Flash"
         case .stillMeter: "Metering"
         case .stillSize: "Image Size"
         case .stillQuality: "Image Quality"
@@ -12467,7 +12532,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillIris: "Aperture"
         case .stillDrive: "Release mode"
         case .stillFocus: "AF mode"
-        case .stillFlash: "Flash mode"
         case .stillMeter: "Metering pattern"
         case .stillSize: "Area · size"
         case .stillQuality: "RAW · JPEG/HEIF"
@@ -12488,7 +12552,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .mode, .stillMode: "MODE"
         case .audio: "AUDIO"
         case .stillDrive: "DRIVE"
-        case .stillFlash: "FLASH"
         case .stillMeter: "METER"
         case .stillSize: "SIZE"
         case .stillQuality: "QUAL"
@@ -12567,8 +12630,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             .stillDrive
         case .stillFocus:
             .stillFocus
-        case .stillFlash:
-            .stillFlash
         case .stillMeter:
             .stillMeter
         case .stillSize:
@@ -12627,7 +12688,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillDrive:
             StillDriveMode.allCases.filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label)
         case .stillFocus: ["AF-S", "AF-C", "AF-A", "MF"]
-        case .stillFlash: ["Off", "Red-eye", "Fill", "Slow", "Rear", "Red-eye slow"]
         case .stillMeter: ["Matrix", "Center", "Spot", "Highlight"]
         // SIZE is modes-driven (Area | Size tabs).
         case .stillSize: []
@@ -12793,7 +12853,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(title: "U Mode", options: ["P", "S", "A", "M"], base: "P"),
             ]
         case .iris, .resolution, .codec, .stabilization, .mode,
-            .stillShutter, .stillIris, .stillFlash, .stillMeter,
+            .stillShutter, .stillIris, .stillMeter,
             .stillQuality, .stillPicture:
             []
         }
@@ -12857,8 +12917,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             case 2: return .afSubjectDetection
             default: return nil
             }
-        case .stillFlash:
-            return .flashMode
         case .stillMeter:
             return .exposureMeteringMode
         case .stillQuality:

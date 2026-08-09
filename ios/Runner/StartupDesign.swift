@@ -2915,7 +2915,12 @@ struct StartupDiscoveryView: View {
                     compact: true,
                     transport: model.discoveryTransportFilter,
                     pairingMethod: model.firstPairTransportMethod,
-                    usbAuthorizationDenied: model.isUSBControlAuthorizationDenied
+                    usbAuthorizationDenied: model.isUSBControlAuthorizationDenied,
+                    // A diagnosis the moment the search has one. "The camera appears once it's on
+                    // this network" is honest only while nothing is known; once a sweep has proved
+                    // the subnet silent — or busy with nothing serving PTP — the waiting line
+                    // withholds the one thing the operator could act on.
+                    detail: model.infrastructureMissCopy
                 )
                 // Indeterminate "something's happening" line in place of the status text.
                 StartupIndeterminateBar()
@@ -3061,6 +3066,9 @@ struct StartupEmptyDiscoveryCard: View {
     /// iOS denied USB camera control — the card leads with the Settings recovery instead of
     /// cable guidance (nothing can ever appear until it's re-allowed).
     var usbAuthorizationDenied = false
+    /// Replaces the waiting line when the search has concluded something the operator can act on
+    /// (`InfrastructureDiscovery.operatorCopy`). Nil keeps the per-path guidance below.
+    var detail: String? = nil
 
     private var isUSB: Bool { transport == .usbC }
     private var isLightning: Bool { DeviceUSBConnector.current == .lightning }
@@ -3143,11 +3151,14 @@ struct StartupEmptyDiscoveryCard: View {
             Text(isUSB ? usbTitle : wiFiTitle)
                 .font(.system(size: compact ? 13 : 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(StartupColors.ink)
-            Text(isUSB ? usbHint : wiFiHint)
+            Text(detail ?? (isUSB ? usbHint : wiFiHint))
                 .font(.system(size: compact ? 10 : 12, weight: .regular, design: .rounded))
                 .foregroundStyle(StartupColors.muted)
                 .multilineTextAlignment(.center)
-                .lineLimit(compact ? 2 : nil)
+                // A diagnosis runs longer than the waiting line it replaces (the 6 GHz / guest
+                // network one is two clauses) and is the whole reason it is on screen — it gets
+                // the extra rows rather than an ellipsis.
+                .lineLimit(compact ? (detail == nil ? 2 : 4) : nil)
                 .minimumScaleFactor(compact ? 0.85 : 1)
         }
         .frame(maxWidth: .infinity)

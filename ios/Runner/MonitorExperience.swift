@@ -821,7 +821,10 @@ private struct LiveFeedFocusOverlay: View {
             // Canvas redraw unless a box, lock, or progress changed.
             LiveFocusBoxOverlay(
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
-                mirrored: model.liveFeedMirrored
+                mirrored: model.liveFeedMirrored,
+                // The raster's own value, not the rendered-tool set: the box has to register with
+                // the picture as `LiveFrameRaster.feedScale` actually presents it.
+                desqueeze: model.assistConfiguration.desqueeze
             )
             .equatable()
             // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
@@ -846,20 +849,20 @@ private struct LiveFeedFocusOverlay: View {
     /// A zero-content proxy sized to the primary AF box, so the Edit view's outline and badge land
     /// on the box the operator sees. Mounted only while editing.
     @ViewBuilder private func focusBoxEditTarget(_ focus: PTPLiveViewFocusInfo) -> some View {
-        if model.chromeEditorMode != nil, focus.coordinateWidth > 0, focus.coordinateHeight > 0,
-            let box = focus.boxes.first
-        {
+        if model.chromeEditorMode != nil, let box = focus.boxes.first {
             GeometryReader { proxy in
-                let scaleX = proxy.size.width / CGFloat(focus.coordinateWidth)
-                let scaleY = proxy.size.height / CGFloat(focus.coordinateHeight)
-                let width = CGFloat(box.width) * scaleX
-                let height = CGFloat(box.height) * scaleY
-                Color.clear
-                    .frame(width: width, height: height)
-                    .chromeEditable(.focusBox, editing: model.chromeEditorMode)
-                    .position(
-                        x: CGFloat(box.centerX) * scaleX,
-                        y: CGFloat(box.centerY) * scaleY)
+                // Through the drawing mapping, so the badge lands on the box the operator sees
+                // rather than on where an unmirrored, un-de-squeezed one would have been.
+                if let rect = liveFocusBoxRect(
+                    box, focus: focus, in: proxy.size,
+                    desqueeze: model.assistConfiguration.desqueeze,
+                    mirrored: model.liveFeedMirrored)
+                {
+                    Color.clear
+                        .frame(width: rect.width, height: rect.height)
+                        .chromeEditable(.focusBox, editing: model.chromeEditorMode)
+                        .position(x: rect.midX, y: rect.midY)
+                }
             }
         }
     }
@@ -1257,6 +1260,41 @@ private struct LiveFrameView: UIViewRepresentable {
     }
 }
 
+/// One AF / subject box mapped from the live-view header's coordinate space onto the PRESENTED
+/// picture inside `size`.
+///
+/// Presented, not the whole frame: the raster carries the de-squeeze as a centred `scaleEffect`
+/// (`LiveFrameRaster.feedScale`), so an anamorphic setup paints the image into a narrower — or
+/// shorter — sub-rect of the same frame. Mapping into the frame left the box drifting sideways off
+/// the subject it is tracking, while the framing aids, which already map through `desqueezedRect`,
+/// stayed put. Android applies its presentation scales before the identical mapping
+/// (`liveOverlayFeedRect`).
+///
+/// Mirroring flips about the presented rect rather than the frame, so a mirrored AND de-squeezed
+/// picture still lands the box on its face.
+func liveFocusBoxRect(
+    _ box: PTPLiveViewAFBox,
+    focus: PTPLiveViewFocusInfo,
+    in size: CGSize,
+    desqueeze: AssistConfiguration.Desqueeze,
+    mirrored: Bool
+) -> CGRect? {
+    guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return nil }
+    let feed = desqueezedRect(CGRect(origin: .zero, size: size), desqueeze)
+    let scaleX = feed.width / CGFloat(focus.coordinateWidth)
+    let scaleY = feed.height / CGFloat(focus.coordinateHeight)
+    let width = CGFloat(box.width) * scaleX
+    let height = CGFloat(box.height) * scaleY
+    let inset = CGFloat(box.centerX) * scaleX
+    let centerX = mirrored ? feed.maxX - inset : feed.minX + inset
+    return CGRect(
+        x: centerX - width / 2,
+        y: feed.minY + CGFloat(box.centerY) * scaleY - height / 2,
+        width: width,
+        height: height
+    )
+}
+
 /// Draws the camera's AF / subject-detection boxes (from the live-view header) over the feed:
 /// rounded rectangles with a uniform stroke — the AF / focus box (box 0) styled by AF state
 /// (see `primaryBoxColor`), detected face/eye boxes (box 1+) in green.
@@ -1269,12 +1307,15 @@ struct LiveFocusBoxOverlay: View, Equatable {
     /// Whether the picture underneath is flipped left-to-right. The camera's box coordinates never
     /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
     var mirrored: Bool = false
+    /// The de-squeeze the raster below is presenting with — see ``liveFocusBoxRect``.
+    var desqueeze = AssistConfiguration.Desqueeze()
 
     nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
         // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
         // properties of `focus`, so its memberwise == already covers them.
         lhs.focus == rhs.focus && lhs.locked == rhs.locked
             && lhs.lockProgress == rhs.lockProgress && lhs.mirrored == rhs.mirrored
+            && lhs.desqueeze == rhs.desqueeze
     }
 
     /// Idle AF-box white opacity — slightly transparent so acquired/tracking green reads as a
@@ -1297,19 +1338,12 @@ struct LiveFocusBoxOverlay: View, Equatable {
         GeometryReader { proxy in
             ZStack {
                 Canvas { context, size in
-                    guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return }
-                    let scaleX = size.width / CGFloat(focus.coordinateWidth)
-                    let scaleY = size.height / CGFloat(focus.coordinateHeight)
                     for (index, box) in focus.boxes.enumerated() {
-                        let boxWidth = CGFloat(box.width) * scaleX
-                        let boxHeight = CGFloat(box.height) * scaleY
-                        let centerX = CGFloat(box.centerX) * scaleX
-                        let rect = CGRect(
-                            x: (mirrored ? size.width - centerX : centerX) - boxWidth / 2,
-                            y: CGFloat(box.centerY) * scaleY - boxHeight / 2,
-                            width: boxWidth,
-                            height: boxHeight
-                        )
+                        guard
+                            let rect = liveFocusBoxRect(
+                                box, focus: focus, in: size, desqueeze: desqueeze,
+                                mirrored: mirrored)
+                        else { continue }
                         let color: Color = index == 0 ? primaryBoxColor : .green
                         let radius = min(min(rect.width, rect.height) * 0.12, 7)
                         context.stroke(
@@ -1348,21 +1382,12 @@ struct LiveFocusBoxOverlay: View, Equatable {
         .allowsHitTesting(false)
     }
 
-    /// Box 0 (the AF / focus area) mapped from the live-view header coordinate space into the feed
-    /// rect — the same math the Canvas uses, so the draw-in registers exactly over its white outline.
+    /// Box 0 (the AF / focus area), through the same mapping the Canvas uses so the lock draw-in
+    /// registers exactly over its white outline.
     private func primaryBoxRect(in size: CGSize) -> CGRect? {
-        guard focus.coordinateWidth > 0, focus.coordinateHeight > 0, let box = focus.boxes.first
-        else { return nil }
-        let scaleX = size.width / CGFloat(focus.coordinateWidth)
-        let scaleY = size.height / CGFloat(focus.coordinateHeight)
-        let width = CGFloat(box.width) * scaleX
-        let height = CGFloat(box.height) * scaleY
-        return CGRect(
-            x: CGFloat(box.centerX) * scaleX - width / 2,
-            y: CGFloat(box.centerY) * scaleY - height / 2,
-            width: width,
-            height: height
-        )
+        guard let box = focus.boxes.first else { return nil }
+        return liveFocusBoxRect(
+            box, focus: focus, in: size, desqueeze: desqueeze, mirrored: mirrored)
     }
 }
 

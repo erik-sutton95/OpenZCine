@@ -14,7 +14,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /**
@@ -116,9 +118,44 @@ class RelayWatchControllerTest {
         }
     }
 
+    @Test
+    fun `a connected broadcast that stops sending frames fails over to the rejoin surface`() {
+        LoopbackRelayHost().use { host ->
+            // A wedged or suspended broadcaster keeps its socket open, so `Event.Closed` never
+            // fires — the watcher's own budget is the only thing that notices.
+            val controller = controller(host, stallMillis = 200L)
+            controller.start()
+            val (socket, _) = host.acceptHello()
+            host.send(
+                socket,
+                MonitorRelayWire.Kind.HELLO,
+                MonitorRelayWire.Hello(
+                        version = MonitorRelayWire.VERSION,
+                        hostName = "Host",
+                        cameraName = null,
+                    )
+                    .toJson()
+                    .toString()
+                    .toByteArray(Charsets.UTF_8),
+            )
+            // Then nothing at all. Liveness bound only — the 200 ms above is what is under test.
+            val failure = runBlocking {
+                withTimeoutOrNull(30_000) {
+                    controller.ui.first { it.phase == RelayWatchUiState.Phase.FAILED }
+                }
+            }
+            assertTrue(
+                failure?.failureReason?.contains("stalled") == true,
+                "a silent broadcast never tripped the stall watchdog (got $failure)",
+            )
+            runBlocking { controller.stop() }
+        }
+    }
+
     private fun controller(
         host: LoopbackRelayHost,
         deadlineMillis: Long = 6_000L,
+        stallMillis: Long = 8_000L,
         onLatched: (() -> Unit)? = null,
     ): RelayWatchController =
         RelayWatchController(
@@ -133,6 +170,7 @@ class RelayWatchControllerTest {
                 ),
             onJpegOnlyLatched = onLatched,
             hevcDecodeDeadlineMillis = deadlineMillis,
+            stallDeadlineMillis = stallMillis,
             log = {},
         )
 }

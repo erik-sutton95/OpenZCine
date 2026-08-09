@@ -434,21 +434,16 @@ extension PTPCameraPropertySnapshot {
         (imageArea ?? .fx).frameAspect
     }
 
-    /// Flash label compacted to strip width ("Red-eye slow" → "Red+S").
-    private var compactFlashLabel: String? {
-        switch flashMode {
-        case nil: nil
-        case "Red-eye": "Red"
-        case "Red-eye slow": "Red+S"
-        case let other: other
-        }
-    }
-
     /// WB tile readout: the Kelvin figure while in colour-temperature mode, else the preset
     /// name (presets render as icons in the strip, like the movie tile).
     private var stillWhiteBalanceValue: String {
-        if wbMode == "Color temp", let kelvin = wbKelvin { return "\(kelvin)K" }
-        return wbMode ?? "—"
+        // `WhiteBalance` (0x5005) and `MovWhiteBalance` are two different camera settings that
+        // happen to decode through one table (see ``activeWBMode(photography:)``). Reading `wbMode`
+        // here put the MOVIE white balance on the photography strip, so the tile reported a setting
+        // the still being shot does not use — and moved when only the movie side changed.
+        let mode = activeWBMode(photography: true)
+        if mode == "Color temp", let kelvin = wbKelvin { return "\(kelvin)K" }
+        return mode ?? "—"
     }
 
     /// Drive-mode label compacted to strip width ("Continuous H" → "CH").

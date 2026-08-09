@@ -201,6 +201,35 @@ class MonitorRelayWireTest {
         assertEquals(MonitorRelayWire.Timecode(true, 0, 0, 1, 12), metadata.timecode)
         assertNull(metadata.focus)
         assertNull(metadata.levelRoll)
+        // No rotation key: every host built before the field, and every landscape body since.
+        assertNull(metadata.rotation)
+    }
+
+    @Test
+    fun `frame rotation crosses the wire and stays optional`() {
+        // The core's `PTPLiveViewRotation` raw value (1 = portrait, grip up), so a watcher
+        // rotates a vertical broadcast upright exactly like the broadcaster does.
+        assertEquals(
+            1,
+            MonitorRelayWire.FrameMetadata.fromJson(
+                    JSONObject("""{"isRecording":false,"codec":0,"rotation":1}""")
+                )
+                .rotation,
+        )
+        val vertical =
+            MonitorRelayWire.FrameMetadata(
+                timecode = null,
+                isRecording = false,
+                focus = null,
+                levelRoll = null,
+                levelPitch = null,
+                sound = null,
+                rotation = 2,
+            )
+        assertEquals(2, MonitorRelayWire.FrameMetadata.fromJson(vertical.toJson()).rotation)
+        // Backward compatible in the OTHER direction too: a landscape host omits the key
+        // entirely, so an older watcher decoding this payload sees exactly what it always did.
+        assertEquals(false, vertical.copy(rotation = null).toJson().has("rotation"))
     }
 
     @Test

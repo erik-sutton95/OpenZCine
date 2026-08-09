@@ -1,4 +1,5 @@
 import CoreImage
+import Network
 import SwiftUI
 import UIKit
 import XCTest
@@ -1790,7 +1791,7 @@ extension RunnerTests {
         let sourced: [(CameraPicker, Int)] = [
             (.mode, 0), (.stillMode, 0), (.stillMode, 1), (.stillDrive, 0),
             (.stillFocus, 0), (.stillFocus, 1), (.stillFocus, 2),
-            (.stillFlash, 0), (.stillMeter, 0), (.stillQuality, 0), (.stillPicture, 0),
+            (.stillMeter, 0), (.stillQuality, 0), (.stillPicture, 0),
             (.focus, 0), (.focus, 1), (.focus, 2),
         ]
         for (picker, mode) in sourced {
@@ -1843,6 +1844,87 @@ extension RunnerTests {
         // Each chrome's own tracking position, spelled the way the body spells it.
         XCTAssertTrue(CameraPicker.focus.modes[1].options.contains("Subject tracking"))
         XCTAssertTrue(CameraPicker.stillFocus.modes[1].options.contains("3D tracking"))
+    }
+
+    // MARK: - Controls that must be able to act
+
+    /// The eye in Display ▸ assist-toolbar order may only render where the model can actually flip
+    /// something. Only the two bar sets are stored, so a tool outside both — LUT, and the
+    /// photography tools — would have shown a lit eye that did nothing when tapped.
+    @MainActor
+    func testAssistToolbarEyeOnlyOffersToolsTheToggleCanReach() {
+        let model = NativeAppModel()
+        // The model seeds `preferences` from the device's persisted set and writes back on every
+        // change, so pin it — and put it back, or the flip below leaves zebra hidden for good.
+        model.preferences = OperatorPreferences.defaults
+        defer { model.preferences = OperatorPreferences.defaults }
+        for tool in MonitorAssistTool.activeCases {
+            let inABarSet =
+                MonitorAssistTool.exposureBarTools.contains(tool)
+                || MonitorAssistTool.framingBarTools.contains(tool)
+            XCTAssertEqual(
+                model.canToggleAssistToolbarVisibility(tool), inABarSet,
+                "\(tool.rawValue)'s eye disagrees with what the toggle can reach")
+        }
+        // The three the audit found: an eye on any of these was inert.
+        for tool: MonitorAssistTool in [.lut, .evMeter, .instantReview] {
+            XCTAssertFalse(model.canToggleAssistToolbarVisibility(tool))
+        }
+        // And a flip actually flips for one that does offer the eye.
+        XCTAssertTrue(model.preferences.isAssistToolbarButtonVisible(.zebra))
+        model.toggleAssistToolbarVisibility(.zebra)
+        XCTAssertFalse(model.preferences.isAssistToolbarButtonVisible(.zebra))
+    }
+
+    /// The photography strip's WB tile reads the STILLS white balance. `WhiteBalance` (0x5005) and
+    /// `MovWhiteBalance` are different camera settings sharing one decode table, so reading the
+    /// movie one put a value the still never uses on the stills strip.
+    func testPhotographyWhiteBalanceTileReadsTheStillsSide() {
+        let split = PTPCameraPropertySnapshot(
+            wbMode: "Color temp", stillWBMode: "Cloudy", wbKelvin: 3_200)
+        let wbTile = { (snapshot: PTPCameraPropertySnapshot) -> String? in
+            snapshot.photographyCaptureValues.first { $0.label == "WB" }?.value
+        }
+        XCTAssertEqual(wbTile(split), "Cloudy")
+        // Kelvin still wins, but only when the STILLS side is the one in colour-temperature mode.
+        let stillsKelvin = PTPCameraPropertySnapshot(
+            wbMode: "Cloudy", stillWBMode: "Color temp", wbKelvin: 3_200)
+        XCTAssertEqual(wbTile(stillsKelvin), "3200K")
+        // A body that has only ever pushed the movie side still reads out rather than showing "—".
+        let movieOnly = PTPCameraPropertySnapshot(wbMode: "Sunny")
+        XCTAssertEqual(wbTile(movieOnly), "Sunny")
+    }
+
+    /// The AF box maps onto the PRESENTED picture, which de-squeeze narrows to a centred sub-rect —
+    /// mapping into the whole frame is what drifted the box off its subject.
+    func testFocusBoxFollowsTheDesqueezedPicture() throws {
+        let focus = PTPLiveViewFocusInfo(
+            coordinateWidth: 1_000, coordinateHeight: 1_000,
+            focusResult: .focused, subjectDetectionActive: false, selectedBoxIndex: 0,
+            boxes: [PTPLiveViewAFBox(centerX: 750, centerY: 500, width: 100, height: 100)])
+        let box = try XCTUnwrap(focus.boxes.first)
+        let size = CGSize(width: 800, height: 400)
+        let squeezed = AssistConfiguration.Desqueeze(enabled: true, ratio: .x2)
+
+        let plain = try XCTUnwrap(
+            liveFocusBoxRect(
+                box, focus: focus, in: size, desqueeze: AssistConfiguration.Desqueeze(),
+                mirrored: false))
+        XCTAssertEqual(plain.midX, 600, accuracy: 0.01)
+        // 2× horizontal: the picture is the middle 400pt, so 75% across it sits at 200 + 300.
+        let desqueezed = try XCTUnwrap(
+            liveFocusBoxRect(box, focus: focus, in: size, desqueeze: squeezed, mirrored: false))
+        XCTAssertEqual(desqueezed.midX, 500, accuracy: 0.01)
+        // The box narrows WITH the picture: 100 of 1000 coordinate units across a 400pt
+        // presented width is 40pt, not the 80pt it spans unsqueezed. A box that kept its
+        // unsqueezed width would straddle the subject it is meant to sit on.
+        XCTAssertEqual(desqueezed.width, 40, accuracy: 0.01)
+        // Vertical extent is untouched by a horizontal squeeze.
+        XCTAssertEqual(desqueezed.midY, plain.midY, accuracy: 0.01)
+        // Mirroring flips about the PRESENTED rect, not the frame: 75% across becomes 25%.
+        let mirrored = try XCTUnwrap(
+            liveFocusBoxRect(box, focus: focus, in: size, desqueeze: squeezed, mirrored: true))
+        XCTAssertEqual(mirrored.midX, 300, accuracy: 0.01)
     }
 }
 
@@ -1949,5 +2031,50 @@ extension RunnerTests {
             NativeAppModel.FirstPairWizardStep.sequence(
                 transport: .cameraAccessPoint, skipsPermissions: false
             ).contains(.discoverAndPair))
+    }
+}
+
+// MARK: - Relay presence ledger
+
+extension RunnerTests {
+    /// An in-use shield must never be evidence that the network hides broadcasts.
+    ///
+    /// `CameraInUseBeacon` advertises under a distinct "<name> in-use" service name while its
+    /// presence line carries the plain one, so it can never match its own browsed row by name.
+    /// Counting it told every operator whose colleague merely HELD a camera — without sharing
+    /// anything — that their network filters discovery.
+    @MainActor
+    func testAnInUseShieldNeverProvesTheNetworkFiltersDiscovery() {
+        let model = NativeAppModel()
+        let shield = RelayPresence(
+            name: "Erik's iPad", watchable: false, servedCameraHost: "192.168.1.246",
+            relayPort: nil)
+
+        model.applyRelayPresences(["192.168.1.9": shield])
+        model.applyRelayPresences(["192.168.1.9": shield])
+
+        XCTAssertFalse(model.networkFiltersDiscovery)
+    }
+
+    /// A stopped broadcast's stale mDNS row is pruned even while that device keeps holding a
+    /// camera — the in-use answer proves the DEVICE is there, never that it is still sharing.
+    @MainActor
+    func testAnInUseAnswerDoesNotKeepAStoppedBroadcastRowAlive() {
+        let model = NativeAppModel()
+        model.discoveredRelayHosts = [
+            MonitorRelayDiscovery(
+                id: "erik-ipad", name: "Erik's iPad",
+                endpoint: .hostPort(host: "192.168.1.9", port: 7000))
+        ]
+        XCTAssertEqual(model.visibleRelayBroadcasts.count, 1)
+
+        model.applyRelayPresences([
+            "192.168.1.9": RelayPresence(
+                name: "Erik's iPad", watchable: false, servedCameraHost: nil, relayPort: nil)
+        ])
+
+        // Asserted through the list the operator actually sees, not the private refutation set:
+        // an in-use answer proves the DEVICE is there, never that it is still sharing.
+        XCTAssertTrue(model.visibleRelayBroadcasts.isEmpty)
     }
 }

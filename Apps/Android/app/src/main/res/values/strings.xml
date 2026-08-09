@@ -739,9 +739,6 @@
     <string name="settings_quality_bias_fast">Fast</string>
     <string name="settings_quality_bias_balanced">Balanced</string>
     <string name="settings_quality_bias_quality">Quality</string>
-    <string name="settings_health_threshold">Health Threshold</string>
-    <string name="settings_reconnect_window">Reconnect Window</string>
-    <string name="settings_reconnect_window_value">4 sec</string>
     <string name="saved_setup_router_name_permission">To keep more than one router setup for this camera, OpenZCine needs to read the name of the network you are on — Android treats a network name as location information. Without it, every router shares one setup, exactly as before.</string>
     <string name="saved_setup_router_name_permission_action">Allow network names</string>
     <string name="settings_processing">Processing</string>
@@ -1115,4 +1112,37 @@
     <string name="system_protocol">Protocol Implementation</string>
     <string name="system_app_version">App Version</string>
     <string name="step_number">%1$d</string>
+
+    <!-- Operator Setup help copy: the "?" badge beside a row title (iOS SettingsInlineRow help:). -->
+    <string name="settings_help">Help</string>
+    <string name="settings_control_this_device">This device</string>
+    <string name="settings_control_broadcaster">The broadcaster</string>
+    <string name="help_link_transport">Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.</string>
+    <string name="help_link_held_by">Which device the camera is currently taking commands from.</string>
+    <string name="help_link_stream_preset">Combines Nikon live-view stream size and compression grade into three operator-facing choices.</string>
+    <string name="help_link_quality_bias">Steers the selected stream preset toward smaller frames or more image detail.</string>
+    <string name="help_link_feed_upscaler">How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this; Android runs the plain sample today and the hardware-assisted paths are not built yet.</string>
+    <string name="help_link_feed_noise_reduction">Averages the live view against the frames either side of it to reduce sensor noise. Not built on Android yet; the recording is never affected either way.</string>
+    <string name="help_sharing_watcher">This device is watching another device\'s broadcast. Sharing is done from the broadcasting device — re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.</string>
+    <string name="help_sharing_share_feed">Serves this device\'s picture and the camera\'s readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera\'s own Wi-Fi — its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.</string>
+    <string name="help_sharing_watching">Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control.</string>
+    <string name="help_sharing_priority">Low latency is the tightest glass-to-glass path — the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own.</string>
+    <string name="help_sharing_passcode">Watchers must enter this code once per device before they receive anything — no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.</string>
+    <string name="help_sharing_control_requests">Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.</string>
+    <string name="help_sharing_control_requested">A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one\'s commands on its behalf, so you can take control back instantly.</string>
+    <string name="help_sharing_camera_control">Take the camera back. This device holds the link, so it never has to ask.</string>
+    <string name="help_storage_frameio">Sign in once here and the share sheet\'s Frame.io option unlocks everywhere. On the camera\'s Wi-Fi, Sign in over internet hops to another Wi-Fi network or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.</string>
+    <string name="help_storage_cache">Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.</string>
+    <string name="help_storage_clear_cache">Removes completed cached clip files and thumbnails for every camera. Transfers still running are kept so they can resume, and favorites, upload history and camera indexes survive — clips re-cache from the camera on demand.</string>
+
+    <!-- Consented camera-AP internet hop from Operator Setup (iOS SettingsInternetDestination). -->
+    <string name="settings_report_hop_title">Leave camera Wi-Fi?</string>
+    <string name="settings_report_hop_message">To open Report a Problem, OpenZCine will disconnect from the camera\'s Wi-Fi and switch to cellular or another internet-connected Wi-Fi network. You can reconnect to the camera after you finish.</string>
+    <string name="settings_hop_failed_title">Couldn\'t reach the internet</string>
+    <string name="settings_hop_failed_message">OpenZCine couldn\'t reach the internet after leaving the camera\'s Wi-Fi. Check cellular or another Wi-Fi network and try again.</string>
+    <string name="frameio_hop_signin_title">Leave camera Wi-Fi to sign in?</string>
+    <string name="frameio_hop_signin_message">We\'ll hop to another Wi-Fi network or cellular so you can sign in to Frame.io, then reconnect to the camera automatically.</string>
+    <string name="frameio_switching_networks">Switching networks…</string>
+    <string name="settings_hop_progress_message">Leaving the camera\'s Wi-Fi and waiting for an internet route. The camera reconnects when you close Operator Setup.</string>
+    <string name="action_ok">OK</string>
 </resources>

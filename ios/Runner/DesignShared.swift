@@ -27,30 +27,6 @@ struct ZCBackground: View {
     }
 }
 
-struct PrimaryGlassButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
-            .padding(.vertical, 13)
-            .background(.blue.opacity(configuration.isPressed ? 0.52 : 0.72), in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.25), lineWidth: 1))
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-    }
-}
-
-struct SecondaryGlassButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15, weight: .semibold, design: .rounded))
-            .foregroundStyle(.primary)
-            .padding(.vertical, 13)
-            .background(.white.opacity(configuration.isPressed ? 0.10 : 0.07), in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-    }
-}
-
 /// Plain button style that pads the label's hit-test region to Apple's 44×44pt HIG minimum without
 /// growing controls that are already larger.
 struct ZCTapTargetButtonStyle: ButtonStyle {

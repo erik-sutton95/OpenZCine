@@ -19,6 +19,11 @@ final class WatchSessionController: NSObject {
     private(set) var isReachable = false
     /// True while a Record toggle command is awaiting its reply.
     private(set) var isSendingCommand = false
+    /// Why the phone refused the last command, until the next one is sent. `WatchCommandResult`
+    /// carries a real reason ("Start live view before recording.", "Switch the camera to photo mode
+    /// first.") and dropping it left a refused press indistinguishable from a dead button. Wear
+    /// keeps the same field and renders it the same way.
+    private(set) var commandMessage: String?
 
     @ObservationIgnored private let session: WCSession? =
         WCSession.isSupported() ? .default : nil
@@ -68,6 +73,7 @@ final class WatchSessionController: NSObject {
                 kind: .command, payload: WatchRelayCommand.capture)
         else { return }
         isSendingCommand = true
+        commandMessage = nil
         session.sendMessageData(
             data,
             replyHandler: { @Sendable reply in
@@ -86,6 +92,7 @@ final class WatchSessionController: NSObject {
                 kind: .command, payload: WatchRelayCommand.toggleRecord)
         else { return }
         isSendingCommand = true
+        commandMessage = nil
         // @Sendable is load-bearing: without it these closures infer @MainActor isolation from
         // the enclosing context, and WatchConnectivity invoking them on its own reply queue trips
         // the Swift 6 dynamic isolation check (EXC_BREAKPOINT on the command reply).
@@ -105,6 +112,7 @@ final class WatchSessionController: NSObject {
         guard
             let result = try? WatchRelayEnvelope.decode(WatchCommandResult.self, from: data)
         else { return }
+        commandMessage = result.error
         if var current = state {
             current = WatchRelayState(
                 recordState: result.isRecording ? .recording : .standby,

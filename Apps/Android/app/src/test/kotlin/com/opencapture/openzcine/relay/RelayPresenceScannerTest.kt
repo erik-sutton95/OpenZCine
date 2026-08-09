@@ -151,5 +151,18 @@ class RelayPresenceScannerTest {
             updatedPresenceHiddenSince(
                 emptyMap(), emptySet(), "self", mapOf("B-cam Galaxy" to 1_000L), 20_000),
         )
+        // An in-use shield is not evidence of anything: it advertises under a distinct
+        // "<name> in-use" service name, so it can never match an NSD row by name — counting it
+        // would flag every network where somebody holds a camera without sharing.
+        assertEquals(
+            emptyMap(),
+            updatedPresenceHiddenSince(
+                mapOf("192.168.1.50" to RelayPresence("B-cam Galaxy", false, "192.168.1.9", null)),
+                emptySet(),
+                "self",
+                emptyMap(),
+                0,
+            ),
+        )
     }
 }

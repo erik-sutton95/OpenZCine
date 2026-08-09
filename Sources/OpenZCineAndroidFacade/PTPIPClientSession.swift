@@ -3999,7 +3999,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// thread is running and neither callback has fired yet. `onFrame` and
     /// `onEnded` are then all delivered from that one pump thread; `onEnded`
     /// fires exactly once, after the final frame, whether the stream ends by
-    /// `stopLiveView`, `disconnect`, or a transport error.
+    /// `stopLiveView`, `disconnect`, a transport error, or a watchdog stall.
     ///
     /// Backpressure is latest-wins by construction: frames are *pulled* one at
     /// a time and delivered synchronously, so a slow consumer polls less often
@@ -4098,8 +4098,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         for event in events { sink(event) }
     }
 
-    /// Pump body: fetch → deliver → sleep-to-schedule, until stop or a
-    /// transport error, then best-effort `EndLiveView` and exactly one
+    /// Pump body: fetch → deliver → sleep-to-schedule, until stop, a stall, or
+    /// a transport error, then best-effort `EndLiveView` and exactly one
     /// `onEnded`.
     private func runLiveViewPump(
         frameIntervalNanoseconds: UInt64,
@@ -4109,6 +4109,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let startNanos = Self.monotonicNanoseconds()
         var pollIndex: UInt64 = 0
         var framesSinceDeviceEventPoll = 0
+        // Arrival is not liveness. A wedged body keeps answering `GetLiveViewImageEx` with the
+        // same cached JPEG, so every frame parses, every readout claims health, and a dead stream
+        // sits there indefinitely (#283). The shared ``LiveViewWatchdog`` is the ONE definition of
+        // that rule — same thresholds the iOS shell runs, so a stall is a stall on both platforms.
+        var watchdog = LiveViewWatchdog()
+        var bodyBusyHoldStart: Date?
         while !liveViewStopIsRequested() {
             do {
                 // The frame fetch is the only transfer big enough to measure the LINK by: a
@@ -4120,6 +4126,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     bytes: result.data.count,
                     seconds: Double(Self.monotonicNanoseconds() &- transferStartNanos) / 1e9)
                 let frame = try PTPLiveViewObject.frame(from: result.data)
+                // Signed with the payload, and BEFORE delivery, so the clock measures the camera's
+                // stream rather than the Kotlin consumer's — a replayed cached JPEG is then read
+                // as the stall it is instead of a healthy stream.
+                watchdog.recordGoodFrame(at: Date(), signature: LiveFrameSignature.of(frame.jpeg))
                 focusFrameCondition.lock()
                 latestLiveViewFocus = frame.focus
                 focusFrameGeneration &+= 1
@@ -4137,21 +4147,57 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     deliverPolledDeviceEvents()
                 }
             } catch is PTPLiveViewObjectError {
-                // A single unparsable frame is stream jitter, not a stream
-                // death — skip it, like the iOS watchdog's bad-frame budget.
+                // A single unparsable frame is stream jitter, not a stream death — skip it. The
+                // watchdog's consecutive-bad budget is what separates jitter from a body emitting
+                // garbage, and a good frame clears the streak.
+                watchdog.recordBadFrame()
             } catch let error as PTPIPClientSessionError {
                 // Nikon returns DeviceBusy around movie-rec start/stop and during
                 // body-side encoder handoff. Treating that as stream death called
                 // EndLiveView, and StartLiveView often fails for the rest of the
                 // take — operator-visible as a frozen feed until recording stops.
                 if case .operationRejected(_, .deviceBusy) = error {
-                    // Fall through to schedule sleep and retry the next poll.
+                    // Fall through to schedule sleep and retry the next poll — but only until the
+                    // watchdog's no-frame window, instead of forever. iOS restarts on the FIRST
+                    // busy answer; keeping the retry and bounding it leaves Android strictly more
+                    // patient than the baseline, while a busy spell that outlasts the whole stall
+                    // window still ends the stream — it is a frozen feed by any definition.
                 } else {
                     break  // Hard rejection / closed session: the stream is over.
                 }
             } catch {
                 break  // Transport error: the stream is over.
             }
+            watchdog.check(at: Date())
+            if watchdog.status == .stalled {
+                // A replaying body whose COMMAND channel still answers is busy on its own screen —
+                // a menu, playback, image review — not dead. Ending the stream restarts it, and
+                // `StartLiveView` forces the body back to its shooting screen: that is what kept
+                // slamming the operator's menu shut every few seconds (#297). Hold with slow pulls
+                // instead; a changed payload ends the hold by itself, and the bounded window keeps
+                // a genuinely wedged body (#283) self-healing, just on a patient clock.
+                //
+                // The probe costs a transaction, so it is only asked on the replay stall it can
+                // explain — a silent link would pay the whole socket timeout to learn nothing.
+                let commandChannelAnswers =
+                    watchdog.isRepeatingLastFrame && (try? pollStillReleaseReadiness()) != nil
+                if BodyBusyHoldPolicy.shouldHold(
+                    isRepeatingLastFrame: watchdog.isRepeatingLastFrame,
+                    commandChannelAnswers: commandChannelAnswers)
+                {
+                    let holdStart = bodyBusyHoldStart ?? Date()
+                    bodyBusyHoldStart = holdStart
+                    if Date().timeIntervalSince(holdStart) < BodyBusyHoldPolicy.maxHoldSeconds {
+                        Thread.sleep(forTimeInterval: BodyBusyHoldPolicy.holdPullIntervalSeconds)
+                        continue
+                    }
+                }
+                // Ending the pump IS the recovery signal: `onEnded` is what the Kotlin frame
+                // source restarts on, and it escalates to a session reconnect after a few rapid
+                // ends — the same restart-then-reconnect two-step the iOS loop runs.
+                break
+            }
+            bodyBusyHoldStart = nil
             // Absolute schedule: poll k is due at start + k × interval. When a
             // fetch overruns, re-anchor to now instead of accumulating debt —
             // an elapsed>=interval gate against a paced source only ever locks

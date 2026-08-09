@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.relay
 
+import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraRecordingState
@@ -53,8 +55,12 @@ class RelayWatchController(
     val broadcast: RelayBroadcast,
     /** Fired once when this device latches jpeg-only — the shell persists the verdict. */
     private val onJpegOnlyLatched: (() -> Unit)? = null,
+    /** Fired when a passcode is accepted for [broadcast] — the shell persists it per host. */
+    private val onPasscodeRemembered: ((String) -> Unit)? = null,
     /** Wall-clock budget for the first decoded HEVC frame; injectable for tests. */
     private val hevcDecodeDeadlineMillis: Long = HEVC_DECODE_DEADLINE_MILLIS,
+    /** Wall-clock budget for a connected-but-silent broadcast; injectable for tests. */
+    private val stallDeadlineMillis: Long = STALL_DEADLINE_MILLIS,
     /** Log seam so JVM unit tests can run the latch paths (android.util.Log is a stub there). */
     private val log: (String) -> Unit = { android.util.Log.i("RelayHEVC", it) },
 ) {
@@ -82,17 +88,24 @@ class RelayWatchController(
     private var eventsJob: Job? = null
     private var rejoinJob: Job? = null
     private var hevcDeadlineJob: Job? = null
+    private var stallJob: Job? = null
     private var passcode: String? = null
+    private var lastFrameAtMillis: Long = 0
     /** Latest frame's camera coordinate space, for focus commands. */
     internal var focusCoordinateSpace: Pair<Int, Int>? = null
 
     fun start(passcode: String? = null) {
-        this.passcode = passcode
+        // A remembered code joins without asking again — the controller is rebuilt per join, so
+        // holding it in the instance meant every rejoin re-prompted (iOS remembers per
+        // broadcaster in `storedRelayPasscode(forHost:)`).
+        this.passcode = passcode ?: rememberedPasscodes[broadcast.name]
         join()
     }
 
     private fun join() {
         eventsJob?.cancel()
+        stallJob?.cancel()
+        lastFrameAtMillis = System.currentTimeMillis()
         val client = MonitorRelayClient(scope)
         this.client = client
         mutableUi.value =
@@ -124,6 +137,7 @@ class RelayWatchController(
                             session.applyState(event.state)
                         }
                         is MonitorRelayClient.Event.FrameReceived -> {
+                            lastFrameAtMillis = System.currentTimeMillis()
                             event.metadata.focus?.let {
                                 focusCoordinateSpace = it.coordinateWidth to it.coordinateHeight
                             }
@@ -203,10 +217,14 @@ class RelayWatchController(
             passcode,
             codecs = if (jpegOnly) listOf("jpeg") else null,
         )
+        armStallWatchdog()
     }
 
     fun submitPasscode(code: String) {
-        passcode = code
+        val trimmed = code.trim()
+        passcode = trimmed
+        rememberedPasscodes[broadcast.name] = trimmed
+        onPasscodeRemembered?.invoke(trimmed)
         retry()
     }
 
@@ -248,6 +266,43 @@ class RelayWatchController(
             }
     }
 
+    /**
+     * The other dead shape of a viewer session: connected, but nothing arriving — what a
+     * suspended or wedged broadcaster looks like from here. `Event.Closed` never fires for it
+     * (the socket is fine), so without this the operator keeps a frozen frame and no message
+     * forever. iOS's viewer watchdog rejoins on the same budget.
+     *
+     * Armed on RECEIPT, not on a decoded frame: a stream this device cannot decode is already
+     * the jpeg-only latch's business ([armHevcDecodeDeadline]), and counting decodes here would
+     * make the two paths race to rejoin for different reasons.
+     *
+     * A stall lands on the SAME surface a dropped socket does — reason, Try again, Leave — and
+     * behind the same [armRejoin] ladder, because to the operator it is the same event.
+     */
+    private fun armStallWatchdog() {
+        stallJob =
+            scope.launch {
+                while (true) {
+                    // Never sleep past the budget being policed, so the verdict lands ON it
+                    // rather than a poll later.
+                    delay(minOf(STALL_POLL_MILLIS, stallDeadlineMillis))
+                    if (mutableUi.value.phase != RelayWatchUiState.Phase.WATCHING) continue
+                    if (System.currentTimeMillis() - lastFrameAtMillis < stallDeadlineMillis) {
+                        continue
+                    }
+                    mutableUi.value =
+                        mutableUi.value.copy(
+                            phase = RelayWatchUiState.Phase.FAILED,
+                            failureReason =
+                                "The stream stalled — reconnecting. Make sure OpenZCine is " +
+                                    "open on the broadcasting device.",
+                        )
+                    armRejoin()
+                    return@launch
+                }
+            }
+    }
+
     fun requestControl() = client?.requestControl() ?: Unit
 
     fun releaseControl() = client?.releaseControl() ?: Unit
@@ -275,6 +330,7 @@ class RelayWatchController(
     suspend fun stop() {
         rejoinJob?.cancel()
         hevcDeadlineJob?.cancel()
+        stallJob?.cancel()
         eventsJob?.cancel()
         client?.stop()
         frameSource.release()
@@ -283,6 +339,26 @@ class RelayWatchController(
 
     public companion object {
         private const val REJOIN_INTERVAL_MILLIS = 3_000L
+
+        /** iOS's viewer watchdog cadence and stall budget, to the second. */
+        private const val STALL_POLL_MILLIS = 3_000L
+        private const val STALL_DEADLINE_MILLIS = 8_000L
+
+        /**
+         * Watcher passcodes, remembered per broadcaster so a set's code is typed once per
+         * device (iOS `relayWatcherPasscodes`). Process-wide because the controller is rebuilt
+         * on every join — that is the whole bug.
+         *
+         * Persisting them across launches (what iOS does) is the shell's job, through the same
+         * pair of seams the jpeg-only latch uses: [seedPasscodes] on the way in,
+         * [onPasscodeRemembered] on the way out.
+         */
+        private val rememberedPasscodes = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+        /** Seeds remembered codes from whatever the shell persisted (empty = nothing stored). */
+        public fun seedPasscodes(stored: Map<String, String>) {
+            rememberedPasscodes.putAll(stored)
+        }
 
         /**
          * Comfortably above a healthy first decode (the first received frame is a keyframe and
@@ -349,6 +425,20 @@ class RelayCameraSession(private val controller: RelayWatchController) : CameraS
 
     override suspend fun setRecording(recording: Boolean) {
         controller.sendCommand(MonitorRelayWire.Command.ToggleRecording)
+    }
+
+    /**
+     * A control-holding watcher's picker write goes out as the command iOS already sends and
+     * executes (`applyPickerValue` on `videoSource == .relay`) rather than to a camera this
+     * device does not have. Without this the interface default refused EVERY control, so no
+     * watcher write ever left the device. A word the wire has no name for still refuses, which
+     * the monitor's write loop already reports.
+     */
+    override suspend fun applyControl(control: CameraControl, label: String) {
+        val command =
+            RelayPickerVocabulary.command(control, label)
+                ?: throw CameraControlException.UnsupportedSelection
+        controller.sendCommand(command)
     }
 
     override suspend fun changeAfArea(point: CameraFocusPoint): Boolean {

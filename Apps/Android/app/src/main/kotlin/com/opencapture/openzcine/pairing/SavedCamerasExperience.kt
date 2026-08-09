@@ -33,10 +33,12 @@ import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -67,8 +69,10 @@ import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpOpenResult
+import com.opencapture.openzcine.transport.localIPv4Interfaces
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -89,7 +93,16 @@ private sealed interface SavedCameraPhase {
         val record: SavedCameraRecord,
         val ssid: String,
         val key: String,
+        /** Whether [key] just came off an OCR scan, so the card offers it for correction. */
+        val keyFromScan: Boolean = false,
     ) : SavedCameraPhase
+
+    /**
+     * An armed "+ Add setup" watch, shown while it waits. The tap has to SAY something: arming
+     * silently and dismissing is what made those buttons read as dead (iOS
+     * `presentSetupWatchProgress`, which presents this same card). Cancel disarms.
+     */
+    data class WatchingForSetup(val title: String) : SavedCameraPhase
 
     data class Joining(val title: String) : SavedCameraPhase
 
@@ -151,6 +164,7 @@ internal fun mayAutoReconnectUsb(
  * [onOpenMediaLibrary] opens the offline Media browser for all cached clips
  * (iOS startup `Media Library` / `openCachedMediaLibrary`).
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 public fun SavedCamerasExperience(
     cameras: List<SavedCameraRecord>,
@@ -206,9 +220,37 @@ public fun SavedCamerasExperience(
     var armedSetupWatch by
         remember { mutableStateOf<Pair<SavedCameraRecord, SavedCameraTransport>?>(null) }
     var renameDraft by remember { mutableStateOf("") }
+    // A camera another device is holding, staged for the take-over confirm, with the setup the
+    // operator was connecting over.
+    var takeOverTarget by
+        remember { mutableStateOf<Pair<DiscoveredCamera, SavedCameraRecord>?>(null) }
+    // The camera this "+ Add setup -> Camera access point" scan belongs to. Without it the scan
+    // result has no body to attach to and saves itself as a SECOND camera (iOS anchors
+    // `pendingSetupIntent` before opening the scanner).
+    var scannerAnchor by remember { mutableStateOf<SavedCameraRecord?>(null) }
+    // This phone's own hotspot subnet(s). Every per-kind rule below leans on it, and passing
+    // nothing (the old default) made it answer "no" to everything: the Hotspot chip never lit, a
+    // hotspot discovery lit the Wi-Fi chip instead, and an armed hotspot watch could never fulfil.
+    // iOS feeds the same policy from `NativeNetworkInterfaceSnapshot.hotspotSubnetBases()`.
+    // Polled, not read per row per frame: enumerating interfaces is a syscall and turning a
+    // hotspot on is a several-second human action.
+    var hotspotSubnetBases by remember { mutableStateOf(emptySet<String>()) }
+    // The saved wireless hosts' liveness, from the kernel-level dial rather than PTP — see the
+    // list below. It lives up here so pull-to-refresh can re-run it on demand.
+    var aliveHosts by remember { mutableStateOf(emptySet<String>()) }
+    var rescanning by remember { mutableStateOf(false) }
 
     LaunchedEffect(environment) {
         environment.hotspotCameras.collect { discoveredCameras = it }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            hotspotSubnetBases =
+                withContext(Dispatchers.IO) {
+                    SavedCameraRecords.phoneHotspotSubnetBases(localIPv4Interfaces())
+                }
+            delay(5_000)
+        }
     }
     LaunchedEffect(environment) {
         val source = environment.usbCameraSource
@@ -216,6 +258,30 @@ public fun SavedCamerasExperience(
             usbCameras = emptyList()
         } else {
             source.cameras.collect { usbCameras = it }
+        }
+    }
+    // The list never speaks PTP: a saved wireless host's readiness comes from the kernel-level
+    // liveness dial (refused = occupied address), the same rule as the iOS list. NSD stays the
+    // richer signal when it works; this lights rows where multicast never delivers.
+    val wirelessSavedHosts =
+        cameras
+            .filter {
+                it.transport == SavedCameraTransport.INFRASTRUCTURE ||
+                    it.transport == SavedCameraTransport.PHONE_HOTSPOT
+            }
+            .map(SavedCameraRecord::host)
+            .filter(String::isNotBlank)
+            .toSet()
+    suspend fun probeSavedHosts(): Set<String> =
+        wirelessSavedHosts.filter { probeHostAlive(it) }.toSet()
+    LaunchedEffect(wirelessSavedHosts) {
+        if (wirelessSavedHosts.isEmpty()) {
+            aliveHosts = emptySet()
+            return@LaunchedEffect
+        }
+        while (true) {
+            aliveHosts = probeSavedHosts()
+            delay(10_000)
         }
     }
     val readyApSsid = (phase as? SavedCameraPhase.ReadyToJoin)?.ssid
@@ -233,14 +299,19 @@ public fun SavedCamerasExperience(
         }
     }
 
+    /** The live discovery this saved setup would be dialling, when there is one. */
+    fun discoveryFor(record: SavedCameraRecord): DiscoveredCamera? {
+        if (record.transport == SavedCameraTransport.USB_C) return null
+        return discoveredCameras.firstOrNull { camera ->
+            camera.host == record.host ||
+                SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
+        }
+    }
+
     fun resolvedHost(record: SavedCameraRecord): String {
         if (record.transport == SavedCameraTransport.USB_C) return record.host
         // Prefer a live discovery match; never invent a fixed camera-AP IP.
-        val discovered =
-            discoveredCameras.firstOrNull { camera ->
-                camera.host == record.host ||
-                    SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
-            }?.host
+        val discovered = discoveryFor(record)?.host
         if (discovered != null) return discovered
         return if (CameraDiscovery.isDialableHost(record.host)) record.host else record.host
     }
@@ -487,6 +558,11 @@ public fun SavedCamerasExperience(
                                 )
                             return@launch
                         }
+                        // The encrypted store is the only place a confirmed key lives (the
+                        // wizard's rule, at its own join). A key that arrived from the add-setup
+                        // scan has never been written anywhere else, so without this the new AP
+                        // setup would be unable to rejoin the network it just proved.
+                        environment.credentials.save(ssid, key)
                         // Wi‑Fi association can complete before the camera answers
                         // PTP-IP Init; racing that window surfaces rejectedInitiator
                         // and a generic "Couldn't connect" with no system Wi‑Fi sheet
@@ -643,8 +719,23 @@ public fun SavedCamerasExperience(
      * asks" without an in-app join step when the system UI never appeared.
      * Hotspot and USB go straight into the connect work.
      */
-    fun reconnect(record: SavedCameraRecord, explicit: Boolean = true) {
+    fun reconnect(
+        record: SavedCameraRecord,
+        explicit: Boolean = true,
+        takingOverConfirmed: Boolean = false,
+    ) {
         if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
+        // Connecting to a held camera drops the holder's session — PTP-IP serves one initiator.
+        // The gate sits HERE, at the funnel every row tap, chip tap, armed watch and USB
+        // auto-reconnect goes through, not on the one row that happens to show a holder: a second
+        // entry point to connecting must not be a second way to take someone's camera without
+        // asking (iOS gates the same way inside `connectToCamera`).
+        if (!takingOverConfirmed) {
+            discoveryFor(record)?.takeIf { it.isHeldByAnotherDevice }?.let { held ->
+                takeOverTarget = held to record
+                return
+            }
+        }
         if (explicit && record.transport == SavedCameraTransport.USB_C) {
             onUsbAutoReconnectSuppressionCleared(record.host)
         }
@@ -680,9 +771,11 @@ public fun SavedCamerasExperience(
     // Fulfill an armed add-setup watch: the first discovery on the asked-for path connects,
     // through the same synthesized-record reconnect the sheet's Connect Now uses. Strict
     // name matching — a mismatch just leaves the row waiting, never connects a wrong body.
-    LaunchedEffect(armedSetupWatch, discoveredCameras, usbCameras) {
+    LaunchedEffect(armedSetupWatch, discoveredCameras, usbCameras, hotspotSubnetBases) {
         val (anchor, transport) = armedSetupWatch ?: return@LaunchedEffect
-        if (phase.isBusy()) return@LaunchedEffect
+        // The watch card IS the armed state, so it is the one busy phase that must not block
+        // fulfilment.
+        if (phase.isBusy() && phase !is SavedCameraPhase.WatchingForSetup) return@LaunchedEffect
         val host =
             when (transport) {
                 SavedCameraTransport.USB_C -> {
@@ -700,7 +793,7 @@ public fun SavedCamerasExperience(
                     // hotspot (wrong path, wrong record), and vice versa.
                     val fitting =
                         discoveredCameras.filter {
-                            SavedCameraRecords.isPhoneHotspotHost(it.host) ==
+                            SavedCameraRecords.isPhoneHotspotHost(it.host, hotspotSubnetBases) ==
                                 (transport == SavedCameraTransport.PHONE_HOTSPOT)
                         }
                     // Generic record names (a bare "Nikon ZR") are blocklisted from name
@@ -716,6 +809,9 @@ public fun SavedCamerasExperience(
             }
         if (host != null) {
             armedSetupWatch = null
+            // The watch card hands straight over to the connect card: leaving the watching phase
+            // set would make `reconnect` bail on its own not-idle guard.
+            phase = SavedCameraPhase.Idle
             reconnect(
                 anchor.copy(
                     transport = transport,
@@ -731,8 +827,9 @@ public fun SavedCamerasExperience(
     /**
      * "+ Add setup -> Camera access point" on a camera saved another way. With a derivable SSID
      * and a stored key this stages the normal Ready-to-join confirm on a synthetic AP record --
-     * the setup persists itself when that connect succeeds, exactly like iOS. Without a stored
-     * key the pairing wizard owns first-time credentials (its scan flow), so route there.
+     * the setup persists itself when that connect succeeds, exactly like iOS. Without a stored key
+     * it opens the credential scanner ANCHORED to this camera, which is the whole difference: the
+     * pairing wizard would have read the same screen and saved the result as a second camera.
      */
     fun addCameraApSetup(record: SavedCameraRecord) {
         if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
@@ -740,12 +837,14 @@ public fun SavedCamerasExperience(
             wifiOffPromptVisible = true
             return
         }
-        val ssid =
-            record.wifiSsid?.takeIf(::looksLikeNikonAccessPointSsid)
-                ?: runCatching { SwiftCore.deriveAccessPointSSID(record.cameraName) }.getOrNull()
+        val ssid = accessPointSsidFor(record)
         val key = ssid?.let(environment.credentials::passphrase)
         if (ssid == null || key == null) {
-            onPairNewCamera()
+            // The scan reads the SSID and key off the camera's own network screen — the wizard's
+            // job, but NOT the wizard's flow: sending the operator there lost which body this
+            // setup was for, so the result saved itself as a second camera. The scanner runs here,
+            // anchored to this camera (iOS `beginAddCameraAPSetup`).
+            scannerAnchor = record
             return
         }
         handedOff.value = false
@@ -765,9 +864,13 @@ public fun SavedCamerasExperience(
         val staged = phase as? SavedCameraPhase.ReadyToJoin ?: return
         beginReconnectWork(
             record = staged.record,
-            cameraApSsid = correctedScanSsid?.takeIf(String::isNotBlank) ?: staged.ssid,
+            // A correction belongs to the scan it was typed over. Only that card has the editable
+            // fields, so a leftover correction must never be dialled with a key read from the
+            // store — the operator would be joining with characters they typed at another camera.
+            cameraApSsid =
+                correctedScanSsid?.takeIf { staged.keyFromScan && it.isNotBlank() } ?: staged.ssid,
             // The CORRECTED key when the operator fixed a misread character, otherwise the scan's.
-            cameraApKey = correctedScanKey ?: staged.key,
+            cameraApKey = correctedScanKey?.takeIf { staged.keyFromScan } ?: staged.key,
         )
     }
 
@@ -775,7 +878,27 @@ public fun SavedCamerasExperience(
         work.value?.cancel()
         work.value = null
         environment.releaseCameraAp()
+        // Cancel on the watch card disarms it, exactly like iOS's `cancelConnectionAttempt`:
+        // a card the operator dismissed must not keep connecting behind their back.
+        armedSetupWatch = null
         phase = SavedCameraPhase.Idle
+    }
+
+    /**
+     * Forgets ONE setup, and with it anything only that setup owned.
+     *
+     * A camera-AP setup owns its Wi-Fi key: keeping it is what let a re-added setup join silently,
+     * so the operator could not tell a remembered camera from a forgotten one, and could not clear
+     * it short of deleting the app (iOS `forgetPairing` → `clearCameraWiFiCredential`).
+     */
+    fun forgetSetup(
+        record: SavedCameraRecord,
+        from: List<SavedCameraRecord>,
+    ): List<SavedCameraRecord> {
+        record.wifiSsid
+            ?.takeIf { record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
+            ?.let(environment.credentials::remove)
+        return SavedCameraRecords.removing(record.host, record.cameraName, from)
     }
 
     // Match the iOS saved-camera behavior: reconnect one time for each real
@@ -821,10 +944,25 @@ public fun SavedCamerasExperience(
         requested?.let(::reconnect)
     }
 
+    // The camera-AP setups this phone could actually join right now: SSID on the record and its
+    // key in the store. Resolved once per list change rather than per chip per frame — reading a
+    // key is a Keystore round trip, not a field access.
+    val readyToJoinSetupIDs =
+        remember(cameras) {
+            cameras
+                .filter {
+                    it.transport == SavedCameraTransport.CAMERA_ACCESS_POINT &&
+                        it.wifiSsid?.let(environment.credentials::passphrase) != null
+                }
+                .map(SavedCameraRecord::id)
+                .toSet()
+        }
     val busy = phase.isBusy()
     val statusTitle =
         when (phase) {
             is SavedCameraPhase.ReadyToJoin -> stringResource(R.string.pairing_status_ready)
+            is SavedCameraPhase.WatchingForSetup ->
+                stringResource(R.string.pairing_status_looking)
             is SavedCameraPhase.Joining -> stringResource(R.string.pairing_status_joining)
             is SavedCameraPhase.Connecting -> stringResource(R.string.pairing_status_connecting)
             is SavedCameraPhase.Pairing -> stringResource(R.string.pairing_status_pairing)
@@ -851,68 +989,46 @@ public fun SavedCamerasExperience(
                 isBusy = busy,
             )
             Spacer(Modifier.height(12.dp))
-            BoxWithConstraints(Modifier.weight(1f)) {
-                val twoColumn = maxWidth >= 640.dp
-                val overviewWidth = maxOf(236.dp, maxWidth * 0.28f)
-                if (twoColumn) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        SavedCameraOverview(
-                            onPairNewCamera = onPairNewCamera,
-                            onOpenMediaLibrary = onOpenMediaLibrary,
-                            onOpenSettings = onOpenSettings,
-                            enabled = !busy,
-                            modifier = Modifier.width(overviewWidth).fillMaxSize(),
-                        )
-                        SavedCameraList(
-                            cameras = cameras,
-                            discoveredCameras = discoveredCameras,
-                            usbCameras = usbCameras,
-                            phase = phase,
-                            onConnect = ::reconnect,
-                            onRename = { group ->
-                                renameTarget = group
-                                renameDraft = group.first().customName.orEmpty()
-                            },
-                            onRemove = { removalTarget = it },
-                            onAddSetup = { addSetupTarget = it },
-                            onForgetSetup = { record ->
-                                onRecordsChanged(
-                                    SavedCameraRecords.removing(
-                                        record.host, record.cameraName, cameras
-                                    )
-                                )
-                            },
-                            onRenameSetup = { record ->
-                                renameSetupTarget = record
-                                renameSetupDraft = record.setupName.orEmpty()
-                            },
-                            nearbyBroadcasts = nearbyBroadcasts,
-                            onWatchBroadcast = gatedWatchBroadcast,
-                            networkFiltersDiscovery = networkFiltersDiscovery,
-                            fillAvailableHeight = true,
-                            scrollRows = true,
-                            modifier = Modifier.weight(1f).fillMaxSize(),
-                        )
+            // Pull down to rescan, over whichever of the two layouts is scrolling (iOS's
+            // `.refreshable` on the camera list).
+            PullToRefreshBox(
+                isRefreshing = rescanning,
+                onRefresh = {
+                    scope.launch {
+                        rescanning = true
+                        // ponytail: re-dials the addresses we already know, which is the signal
+                        // the rows draw from — it does not sweep for a camera that has moved to a
+                        // new address. Upgrade path is environment.searchInfrastructure, the
+                        // wizard's full pass.
+                        try {
+                            aliveHosts = probeSavedHosts()
+                        } finally {
+                            rescanning = false
+                        }
                     }
-                } else {
-                    LazyColumn(
-                        Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        item {
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val twoColumn = maxWidth >= 640.dp
+                    val overviewWidth = maxOf(236.dp, maxWidth * 0.28f)
+                    if (twoColumn) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             SavedCameraOverview(
                                 onPairNewCamera = onPairNewCamera,
                                 onOpenMediaLibrary = onOpenMediaLibrary,
                                 onOpenSettings = onOpenSettings,
                                 enabled = !busy,
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.width(overviewWidth).fillMaxSize(),
                             )
-                        }
-                        item {
                             SavedCameraList(
                                 cameras = cameras,
                                 discoveredCameras = discoveredCameras,
                                 usbCameras = usbCameras,
+                                aliveHosts = aliveHosts,
+                                hotspotSubnetBases = hotspotSubnetBases,
+                                readyToJoinSetupIDs = readyToJoinSetupIDs,
+                                armedSetupAnchorID = armedSetupWatch?.first?.id,
                                 phase = phase,
                                 onConnect = ::reconnect,
                                 onRename = { group ->
@@ -922,11 +1038,7 @@ public fun SavedCamerasExperience(
                                 onRemove = { removalTarget = it },
                                 onAddSetup = { addSetupTarget = it },
                                 onForgetSetup = { record ->
-                                    onRecordsChanged(
-                                        SavedCameraRecords.removing(
-                                            record.host, record.cameraName, cameras
-                                        )
-                                    )
+                                    onRecordsChanged(forgetSetup(record, cameras))
                                 },
                                 onRenameSetup = { record ->
                                     renameSetupTarget = record
@@ -935,10 +1047,57 @@ public fun SavedCamerasExperience(
                                 nearbyBroadcasts = nearbyBroadcasts,
                                 onWatchBroadcast = gatedWatchBroadcast,
                                 networkFiltersDiscovery = networkFiltersDiscovery,
-                                fillAvailableHeight = false,
-                                scrollRows = false,
-                                modifier = Modifier.fillMaxWidth(),
+                                fillAvailableHeight = true,
+                                scrollRows = true,
+                                modifier = Modifier.weight(1f).fillMaxSize(),
                             )
+                        }
+                    } else {
+                        LazyColumn(
+                            Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            item {
+                                SavedCameraOverview(
+                                    onPairNewCamera = onPairNewCamera,
+                                    onOpenMediaLibrary = onOpenMediaLibrary,
+                                    onOpenSettings = onOpenSettings,
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            item {
+                                SavedCameraList(
+                                    cameras = cameras,
+                                    discoveredCameras = discoveredCameras,
+                                    usbCameras = usbCameras,
+                                    aliveHosts = aliveHosts,
+                                    hotspotSubnetBases = hotspotSubnetBases,
+                                    readyToJoinSetupIDs = readyToJoinSetupIDs,
+                                    armedSetupAnchorID = armedSetupWatch?.first?.id,
+                                    phase = phase,
+                                    onConnect = ::reconnect,
+                                    onRename = { group ->
+                                        renameTarget = group
+                                        renameDraft = group.first().customName.orEmpty()
+                                    },
+                                    onRemove = { removalTarget = it },
+                                    onAddSetup = { addSetupTarget = it },
+                                    onForgetSetup = { record ->
+                                        onRecordsChanged(forgetSetup(record, cameras))
+                                    },
+                                    onRenameSetup = { record ->
+                                        renameSetupTarget = record
+                                        renameSetupDraft = record.setupName.orEmpty()
+                                    },
+                                    nearbyBroadcasts = nearbyBroadcasts,
+                                    onWatchBroadcast = gatedWatchBroadcast,
+                                    networkFiltersDiscovery = networkFiltersDiscovery,
+                                    fillAvailableHeight = false,
+                                    scrollRows = false,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
@@ -949,13 +1108,18 @@ public fun SavedCamerasExperience(
         val popupPhase =
             when (val active = phase) {
                 SavedCameraPhase.Idle -> null
+                is SavedCameraPhase.WatchingForSetup -> ConnectionPopupPhase.Searching
                 is SavedCameraPhase.ReadyToJoin ->
                     // Prefer the camera AP SSID in the join prompt so the
                     // operator knows which network Android will request.
                     ConnectionPopupPhase.ReadyToJoin(
-                        key = null,
-                        keyFromScan = false,
-                        ssid = (phase as? SavedCameraPhase.ReadyToJoin)?.ssid,
+                        // The key is shown ONLY when it just came off the OCR scan, where a
+                        // misread character is the likely failure and the operator is the one who
+                        // can fix it (the wizard's rule). A key read back from the store is a
+                        // secret with nothing to correct.
+                        key = active.key.takeIf { active.keyFromScan },
+                        keyFromScan = active.keyFromScan,
+                        ssid = active.ssid,
                     )
                 is SavedCameraPhase.Joining -> ConnectionPopupPhase.JoiningWifi
                 is SavedCameraPhase.Connecting -> ConnectionPopupPhase.Handshaking
@@ -971,6 +1135,7 @@ public fun SavedCamerasExperience(
                     connectionDisplayName(
                         when (val active = phase) {
                             is SavedCameraPhase.ReadyToJoin -> active.ssid
+                            is SavedCameraPhase.WatchingForSetup -> active.title
                             is SavedCameraPhase.Joining -> active.title
                             is SavedCameraPhase.Connecting -> active.title
                             is SavedCameraPhase.Pairing -> active.title
@@ -1000,14 +1165,12 @@ public fun SavedCamerasExperience(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        // Remove means the CAMERA -- every saved setup goes with it, matching
-                        // iOS. Per-setup removal lives on the chips (long-press).
+                        // Remove means the CAMERA -- every saved setup goes with it, and each one
+                        // takes its own stored key with it, matching iOS (`forgetPairing` per
+                        // path). Per-setup removal lives on the chips and the "⋯" menu.
                         var remaining = cameras
                         for (record in group) {
-                            remaining =
-                                SavedCameraRecords.removing(
-                                    record.host, record.cameraName, remaining
-                                )
+                            remaining = forgetSetup(record, remaining)
                         }
                         onRecordsChanged(remaining)
                         removalTarget = null
@@ -1138,6 +1301,12 @@ public fun SavedCamerasExperience(
                         SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName)
                     }
                     ?.host,
+            // Reading a stored key is a Keystore round trip, so it is resolved once per camera
+            // rather than on every recomposition of the open dialog.
+            apKeyStored =
+                remember(anchor.id) {
+                    accessPointSsidFor(anchor)?.let(environment.credentials::passphrase) != null
+                },
             onDismiss = { addSetupTarget = null },
             onJoinCameraAp = { record ->
                 addSetupTarget = null
@@ -1161,7 +1330,51 @@ public fun SavedCamerasExperience(
             onArmSetupWatch = { transport ->
                 addSetupTarget = null
                 armedSetupWatch = anchor to transport
+                // The tap has to SAY something: arming and dismissing onto an unchanged list is
+                // what made "Connect When Plugged In" / "Find On This Network" / "Wait For
+                // Camera" read as dead buttons. iOS presents the same card
+                // (`presentSetupWatchProgress`), and the row wears the watch as well.
+                phase = SavedCameraPhase.WatchingForSetup(anchor.displayTitle)
             },
+        )
+    }
+
+    takeOverTarget?.let { (held, record) ->
+        TakeOverConfirmationDialog(
+            camera = held,
+            onConfirm = {
+                takeOverTarget = null
+                reconnect(record, takingOverConfirmed = true)
+            },
+            onDismiss = { takeOverTarget = null },
+        )
+    }
+
+    scannerAnchor?.let { anchor ->
+        CameraWifiScannerOverlay(
+            onConfirmed = { candidate ->
+                scannerAnchor = null
+                handedOff.value = false
+                // Through the same pinning as the keyed path above, and anchored to the same
+                // body: a scan that produced a record of its own is precisely the bug this
+                // fixes — the setup belongs to THIS camera, not to a new one.
+                val apRecord =
+                    SavedCameraRecords.pinnedToAccessPoint(
+                        anchor.copy(
+                            transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                            wifiSsid = candidate.ssid,
+                        )
+                    )
+                phase =
+                    SavedCameraPhase.ReadyToJoin(
+                        record = apRecord,
+                        ssid = candidate.ssid,
+                        key = candidate.key,
+                        keyFromScan = true,
+                    )
+                environment.primeCameraApScan(candidate.ssid)
+            },
+            onDismiss = { scannerAnchor = null },
         )
     }
 }
@@ -1219,6 +1432,14 @@ private fun SavedCameraList(
     cameras: List<SavedCameraRecord>,
     discoveredCameras: List<DiscoveredCamera>,
     usbCameras: List<UsbPtpCamera>,
+    /** Saved wireless hosts proved occupied by the liveness dial (see the owning screen). */
+    aliveHosts: Set<String>,
+    /** This phone's own hotspot subnet(s); empty when it is not hosting one. */
+    hotspotSubnetBases: Set<String>,
+    /** Camera-AP setups whose SSID resolves and whose key is stored: tapping them offers a join. */
+    readyToJoinSetupIDs: Set<String>,
+    /** The camera an armed "+ Add setup" watch belongs to, when one is armed. */
+    armedSetupAnchorID: String?,
     phase: SavedCameraPhase,
     onConnect: (SavedCameraRecord) -> Unit,
     onRename: (List<SavedCameraRecord>) -> Unit,
@@ -1273,30 +1494,6 @@ private fun SavedCameraList(
                 // One ROW per body: records stay one-per-setup on disk; the assigned name
                 // groups them here (Android's identity axis -- see SavedCameraGroups).
                 val onCameraApNetwork = isOnCameraAccessPointNetwork(LocalContext.current)
-                // The list never speaks PTP: a saved wireless host's readiness comes from the
-                // kernel-level liveness dial (refused = occupied address), the same rule as
-                // the iOS list. NSD stays the richer signal when it works; this lights rows
-                // where multicast never delivers. Scoped here so leaving the list stops it.
-                var aliveHosts by remember { mutableStateOf(emptySet<String>()) }
-                val wirelessSavedHosts =
-                    cameras
-                        .filter {
-                            it.transport == SavedCameraTransport.INFRASTRUCTURE ||
-                                it.transport == SavedCameraTransport.PHONE_HOTSPOT
-                        }
-                        .map(SavedCameraRecord::host)
-                        .filter(String::isNotBlank)
-                        .toSet()
-                LaunchedEffect(wirelessSavedHosts) {
-                    if (wirelessSavedHosts.isEmpty()) {
-                        aliveHosts = emptySet()
-                        return@LaunchedEffect
-                    }
-                    while (true) {
-                        aliveHosts = wirelessSavedHosts.filter { probeHostAlive(it) }.toSet()
-                        delay(10_000)
-                    }
-                }
                 val isDiscovered = { record: SavedCameraRecord ->
                     if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT &&
                         !onCameraApNetwork
@@ -1329,7 +1526,10 @@ private fun SavedCameraList(
                             // the phone's hotspot is not evidence for the Router setup, and
                             // an AP setup lights on its own fixed host only.
                             val viaHotspot =
-                                SavedCameraRecords.isPhoneHotspotHost(camera.host)
+                                SavedCameraRecords.isPhoneHotspotHost(
+                                    camera.host,
+                                    hotspotSubnetBases,
+                                )
                             when (record.transport) {
                                 SavedCameraTransport.PHONE_HOTSPOT -> viaHotspot
                                 SavedCameraTransport.INFRASTRUCTURE -> !viaHotspot
@@ -1345,6 +1545,8 @@ private fun SavedCameraList(
                         group = group,
                         active = active,
                         isDiscovered = isDiscovered,
+                        isReadyToJoin = { it.id in readyToJoinSetupIDs },
+                        isWatching = group.any { it.id == armedSetupAnchorID },
                         enabled = !busy,
                         onConnect = onConnect,
                         onRename = { onRename(group) },
@@ -1436,6 +1638,10 @@ internal fun SavedCameraRow(
     group: List<SavedCameraRecord>,
     active: SavedCameraRecord,
     isDiscovered: (SavedCameraRecord) -> Boolean,
+    /** Camera-AP setups this phone holds credentials for — a tap offers the join. */
+    isReadyToJoin: (SavedCameraRecord) -> Boolean = { false },
+    /** Whether an armed "+ Add setup" watch is waiting on this camera. */
+    isWatching: Boolean = false,
     enabled: Boolean,
     onConnect: (SavedCameraRecord) -> Unit,
     onRename: () -> Unit,
@@ -1445,7 +1651,14 @@ internal fun SavedCameraRow(
     onRenameSetup: (SavedCameraRecord) -> Unit,
 ) {
     val activeDiscovered = isDiscovered(active)
-    val availabilityColor = if (activeDiscovered) StartupColors.ready else StartupColors.dim
+    // An armed watch outranks availability: the row is doing something the operator asked for,
+    // and saying "Offline" over it is what made those buttons look like they had done nothing.
+    val availabilityColor =
+        when {
+            isWatching -> StartupColors.accent
+            activeDiscovered -> StartupColors.ready
+            else -> StartupColors.dim
+        }
     val moreOptionsDescription = stringResource(R.string.saved_more_options)
     var optionsExpanded by remember { mutableStateOf(false) }
     Column(
@@ -1460,7 +1673,8 @@ internal fun SavedCameraRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                active.displayTitle,
+                // Both names: the body's own and the operator's. See `SavedCameraGroups.rowTitle`.
+                SavedCameraGroups.rowTitle(group),
                 color = StartupColors.ink,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -1470,10 +1684,14 @@ internal fun SavedCameraRow(
             )
             Text(
                 stringResource(
-                    if (activeDiscovered) {
-                        R.string.saved_pill_online
-                    } else {
-                        R.string.saved_pill_offline
+                    when {
+                        // ponytail: one "Looking" for all three kinds. iOS names the path it is
+                        // waiting on ("Waiting for cable" / "Watching this network" / "Waiting for
+                        // hotspot"); those three strings do not exist on Android yet, and the card
+                        // this watch also raises does say which path.
+                        isWatching -> R.string.pairing_status_looking
+                        activeDiscovered -> R.string.saved_pill_online
+                        else -> R.string.saved_pill_offline
                     }
                 ),
                 color = availabilityColor,
@@ -1524,6 +1742,43 @@ internal fun SavedCameraRow(
                             onRename()
                         },
                     )
+                    // Renaming and forgetting ONE setup were reachable only by long-pressing a
+                    // chip, which nothing advertises — iOS puts both in this visible menu.
+                    // Flat rather than iOS's two submenus: Compose's DropdownMenu has no nested
+                    // menu, and the chips beside these rows already show which setups exist.
+                    if (group.size > 1) {
+                        group.forEach { setup ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(R.string.saved_rename_setup_title) +
+                                            " · " +
+                                            setup.chipLabel(group)
+                                    )
+                                },
+                                onClick = {
+                                    optionsExpanded = false
+                                    onRenameSetup(setup)
+                                },
+                            )
+                        }
+                        group.forEach { setup ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(
+                                            R.string.saved_forget_setup,
+                                            setup.chipLabel(group),
+                                        )
+                                    )
+                                },
+                                onClick = {
+                                    optionsExpanded = false
+                                    onForgetSetup(setup)
+                                },
+                            )
+                        }
+                    }
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_remove)) },
                         onClick = {
@@ -1552,11 +1807,13 @@ internal fun SavedCameraRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             group.forEach { record ->
+                val discovered = isDiscovered(record)
                 SavedCameraSetupChip(
                     record = record,
                     group = group,
                     isActive = record.id == active.id,
-                    isDiscovered = isDiscovered(record),
+                    isDiscovered = discovered,
+                    isReadyToJoin = !discovered && isReadyToJoin(record),
                     enabled = enabled,
                     canForget = group.size > 1,
                     onConnect = { onConnect(record) },
@@ -1580,6 +1837,18 @@ internal fun SavedCameraRow(
         }
     }
 }
+
+/**
+ * The SSID a camera-AP setup for this camera would join: the one on the record, else the one
+ * derived from the body's name.
+ *
+ * Null when neither answers (a renamed or generic camera name) — which is exactly the case where
+ * the credential scanner has to read it off the camera's own network screen. Twin of iOS
+ * `CameraWiFiSSID.resolve(for:) ?? CameraWiFiSSID.deriveSSID(fromCameraName:)`.
+ */
+internal fun accessPointSsidFor(record: SavedCameraRecord): String? =
+    record.wifiSsid?.takeIf(::looksLikeNikonAccessPointSsid)
+        ?: runCatching { SwiftCore.deriveAccessPointSSID(record.cameraName) }.getOrNull()
 
 /** The kinds this camera could still be set up for -- mirror of the iOS list. */
 internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCameraTransport> {
@@ -1605,6 +1874,16 @@ private fun SavedCameraSetupChip(
     group: List<SavedCameraRecord>,
     isActive: Boolean,
     isDiscovered: Boolean,
+    /**
+     * A camera-AP setup this phone holds credentials for, while it is not on that network.
+     *
+     * Neither reachable nor dead, and Android cannot tell which from here — a scan for a network
+     * by name needs a location permission the operator may never grant, and a camera AP that is
+     * simply off looks the same as one out of range. What IS certain is that tapping it offers the
+     * join, because the SSID resolves and the key is stored. A filled dark dot claimed the
+     * opposite and read as a broken tab (iOS `isReadyToJoin`).
+     */
+    isReadyToJoin: Boolean,
     enabled: Boolean,
     canForget: Boolean,
     onConnect: () -> Unit,
@@ -1642,7 +1921,16 @@ private fun SavedCameraSetupChip(
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(6.dp).clip(CircleShape).background(dotColor))
+            // Hollow, not filled: a ring says "this can be done" where a filled dot says
+            // "this is so".
+            if (isReadyToJoin) {
+                Box(
+                    Modifier.size(7.dp)
+                        .border(1.6.dp, StartupColors.accent.copy(alpha = 0.9f), CircleShape)
+                )
+            } else {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(dotColor))
+            }
             Text(
                 record.chipLabel(group),
                 color = if (isActive) StartupColors.ink else StartupColors.muted,
@@ -1693,6 +1981,8 @@ private fun SavedCameraAddSetupDialog(
     group: List<SavedCameraRecord>,
     usbReadyHostKey: String?,
     routerDiscoveredHost: String?,
+    /** Whether this camera's access-point key is already stored, so the join needs no scan. */
+    apKeyStored: Boolean,
     onDismiss: () -> Unit,
     onJoinCameraAp: (SavedCameraRecord) -> Unit,
     onConnectSetup: (SavedCameraTransport, String) -> Unit,
@@ -1792,7 +2082,19 @@ private fun SavedCameraAddSetupDialog(
                         when (kind) {
                             SavedCameraTransport.CAMERA_ACCESS_POINT ->
                                 TextButton(onClick = { onJoinCameraAp(active) }) {
-                                    Text(stringResource(R.string.saved_setup_ap_action_join))
+                                    Text(
+                                        stringResource(
+                                            // Says which of the two this tap actually does: with
+                                            // the key already stored it joins, otherwise the
+                                            // scanner reads the SSID and key off the camera's own
+                                            // network screen first.
+                                            if (apKeyStored) {
+                                                R.string.saved_setup_ap_action_join
+                                            } else {
+                                                R.string.saved_setup_ap_action_scan
+                                            }
+                                        )
+                                    )
                                 }
                             SavedCameraTransport.USB_C ->
                                 TextButton(

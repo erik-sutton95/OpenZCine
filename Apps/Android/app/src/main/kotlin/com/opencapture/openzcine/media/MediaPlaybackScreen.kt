@@ -412,22 +412,17 @@ private fun PlaybackClipSession(
     }
 
     fun beginShare(configuration: MediaDeliveryConfiguration) {
-        val completedEntry = shareableEntry ?: return
-        if (deliveryInProgress || actionInProgress) return
+        // The button arms only once this clip's full file has landed; the coordinator's cache
+        // pre-pass then finds it and transfers nothing.
+        if (shareableEntry == null || deliveryInProgress || actionInProgress) return
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
             activePlayer?.pause()
             deliveryMessage = null
             coordinator.beginNativeShare(
-                items =
-                    listOf(
-                        MediaDeliveryWorkItem(
-                            cameraID = cameraID,
-                            clip = clip,
-                            entry = completedEntry,
-                        ),
-                    ),
+                selection = listOf(MediaDeliverySelection(cameraID, clip)),
                 configuration = configuration,
+                cameraTransferAvailable = cameraTransferAvailable,
             ) { published, metadata ->
                 context.startActivity(
                     AndroidMediaShareIntent.chooserIntent(context, published, metadata),
@@ -439,22 +434,15 @@ private fun PlaybackClipSession(
     }
 
     fun beginGallerySave(configuration: MediaDeliveryConfiguration) {
-        val completedEntry = shareableEntry ?: return
-        if (deliveryInProgress || actionInProgress) return
+        if (shareableEntry == null || deliveryInProgress || actionInProgress) return
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
             activePlayer?.pause()
             deliveryMessage = null
             coordinator.beginSaveToPhotos(
-                items =
-                    listOf(
-                        MediaDeliveryWorkItem(
-                            cameraID = cameraID,
-                            clip = clip,
-                            entry = completedEntry,
-                        ),
-                    ),
+                selection = listOf(MediaDeliverySelection(cameraID, clip)),
                 configuration = configuration,
+                cameraTransferAvailable = cameraTransferAvailable,
             )
             return
         }
@@ -497,6 +485,7 @@ private fun PlaybackClipSession(
                     deliveryMessage = error.message ?: "Couldn't deliver this clip to Frame.io."
                 } finally {
                     if (resumeAfter && pendingAction == null) activePlayer?.play()
+                    mediaDeliveryCoordinator?.trackExternalDelivery(null)
                     if (deliveryJob === runningJob) {
                         deliveryJob = null
                         deliveryInProgress = false
@@ -506,6 +495,8 @@ private fun PlaybackClipSession(
         deliveryJob = job
         deliveryMessage = null
         deliveryInProgress = true
+        // The overlay narrating this upload lives in the coordinator, and so must its Cancel.
+        mediaDeliveryCoordinator?.trackExternalDelivery(job)
         job.start()
     }
 

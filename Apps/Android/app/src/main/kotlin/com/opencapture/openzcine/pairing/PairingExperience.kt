@@ -112,6 +112,13 @@ public interface PairingCredentials {
 
     /** Remembers [passphrase] for [ssid]. */
     public fun save(ssid: String, passphrase: String)
+
+    /**
+     * Forgets the key for [ssid] — a forgotten camera-AP setup must not leave its credential on
+     * the phone (iOS `clearCameraWiFiCredential(forForgottenSSID:)`). Defaulted because the demo
+     * harnesses implementing this interface hold nothing durable to forget.
+     */
+    public fun remove(ssid: String) {}
 }
 
 /**
@@ -2332,6 +2339,44 @@ private fun DeviceInstructionCard(
     }
 }
 
+/**
+ * Asks before connecting to a camera another device is holding.
+ *
+ * Lives out here, not inside the wizard's list, because the wizard and the saved-camera home both
+ * reach the same connect — a second entry point to connecting must not be a second way to drop
+ * someone else's session without asking (iOS `TakeOverConfirmation`, mounted at the app root). The
+ * dialog names the device that loses its session: "are you sure" without that is not a decision
+ * anyone can make.
+ */
+@Composable
+internal fun TakeOverConfirmationDialog(
+    camera: DiscoveredCamera,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.pairing_take_over_title)) },
+        text = {
+            Text(
+                camera.heldByDeviceName?.takeIf(String::isNotBlank)?.let {
+                    stringResource(R.string.pairing_take_over_message_named, it)
+                } ?: stringResource(R.string.pairing_take_over_message),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.action_take_over))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
 @Composable
 private fun DiscoverBody(
     path: PairingPath,
@@ -2353,29 +2398,13 @@ private fun DiscoverBody(
     }
     var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
     takeOverTarget?.let { held ->
-        AlertDialog(
-            onDismissRequest = { takeOverTarget = null },
-            title = { Text(stringResource(R.string.pairing_take_over_title)) },
-            text = {
-                Text(
-                    held.heldByDeviceName?.takeIf(String::isNotBlank)?.let {
-                        stringResource(R.string.pairing_take_over_message_named, it)
-                    } ?: stringResource(R.string.pairing_take_over_message),
-                )
+        TakeOverConfirmationDialog(
+            camera = held,
+            onConfirm = {
+                takeOverTarget = null
+                onConnectCamera(held)
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        takeOverTarget = null
-                        onConnectCamera(held)
-                    },
-                ) { Text(stringResource(R.string.action_take_over)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { takeOverTarget = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { takeOverTarget = null },
         )
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

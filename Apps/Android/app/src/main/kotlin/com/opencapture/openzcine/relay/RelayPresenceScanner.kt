@@ -101,6 +101,12 @@ fun updatedPresenceHiddenSince(
 ): Map<String, Long> =
     presences.values
         .asSequence()
+        // Only a BROADCAST can prove the network hides broadcasts. An in-use shield advertises
+        // under a distinct "<name> in-use" service name (see [CameraInUseBeacon]) while its
+        // presence line carries the plain one, so it can never match an NSD row by name — and
+        // counting it here would flag every network where somebody holds a camera without
+        // sharing.
+        .filter(RelayPresence::watchable)
         .map(RelayPresence::name)
         .filter { it != selfName && it !in nsdNames }
         .associateWith { previous[it] ?: nowMillis }

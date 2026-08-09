@@ -18,9 +18,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -46,10 +44,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -132,8 +133,13 @@ import com.opencapture.openzcine.diagnostics.BugReportSubmitter
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
+import com.opencapture.openzcine.relay.RelayCameraSession
+import com.opencapture.openzcine.relay.RelayWatchUiState
 import com.opencapture.openzcine.rememberAndroidThermalTier
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -167,6 +173,18 @@ private enum class BugReportDestination {
     CHOOSER,
     ANONYMOUS,
 }
+
+/**
+ * Whether an internet-backed Operator Setup action has to leave the camera's access point first
+ * (iOS `requestInternetDestination`, MonitorPanels.swift:4755).
+ *
+ * The in-app bug report and the Adobe sign-in both transact from THIS process, and the process
+ * is bound to a Wi-Fi network that has no internet at all — so they cannot reach anything until
+ * the consented hop runs. External links are unaffected: the browser is a different process and
+ * never sees our binding.
+ */
+internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolean =
+    state == FrameioNetworkState.CAMERA_ACCESS_POINT
 
 /**
  * The full-screen Operator Settings surface — a 1:1 structural port of the
@@ -203,6 +221,8 @@ internal fun OperatorSettingsScreen(
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
     relaySharingEnabled: Boolean = false,
     onRelayShareToggle: ((Boolean) -> Unit)? = null,
+    /** Watch-session state, for the Link tab's "Held By" readout (iOS `linkRows`). */
+    relayWatchUi: RelayWatchUiState? = null,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -260,6 +280,35 @@ internal fun OperatorSettingsScreen(
     }
     var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
     var bugReportDestination by remember { mutableStateOf<BugReportDestination?>(null) }
+    val panelScope = rememberCoroutineScope()
+    // Whether this phone is still process-bound to the camera's no-internet AP. The Storage tab
+    // reads it too, but Report a Problem is on System, so refresh once for the whole surface.
+    LaunchedEffect(frameioController) { frameioController?.refresh() }
+    // The camera rejoin runs when Operator Setup is dismissed, not when the report or the Adobe
+    // browser round trip ends: both outlive the row that started the hop (iOS re-hosts the
+    // panel as a standalone cover for the same reason — MonitorPanels.swift:4919-4943).
+    DisposableEffect(frameioController) {
+        onDispose {
+            val controller = frameioController
+            if (controller != null && controller.isInternetHopActive) {
+                endInternetHopAfterDismiss(controller)
+            }
+        }
+    }
+    var pendingReportHop by remember { mutableStateOf(false) }
+    var reportHopBusy by remember { mutableStateOf(false) }
+    var hopFailureMessage by remember { mutableStateOf<String?>(null) }
+    val hopFailureFallback = stringResource(R.string.settings_hop_failed_message)
+    // iOS `requestInternetDestination(.reportProblem)`: consent, hop, then the report.
+    val requestReportProblem: () -> Unit = {
+        if (!reportHopBusy) {
+            if (settingsActionNeedsInternetHop(frameioController?.networkState)) {
+                pendingReportHop = true
+            } else {
+                bugReportDestination = BugReportDestination.CHOOSER
+            }
+        }
+    }
 
     when (bugReportDestination) {
         BugReportDestination.CHOOSER ->
@@ -298,13 +347,14 @@ internal fun OperatorSettingsScreen(
                 // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
                 SettingsHeader(session, linkHealth, compact, onDisconnect = onDisconnect)
                 if (compact) {
-                    SettingsTabStrip(selectedTab, showSharing = relaySharing != null, onSelect = { selectedTab = it })
+                    SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
                     SettingsContentPane(
                         selectedTab,
                         session,
                         relaySharing,
                         relaySharingEnabled,
                         onRelayShareToggle,
+                        relayWatchUi,
                         settings,
                         assistState,
                         mediaCacheStore,
@@ -324,7 +374,7 @@ internal fun OperatorSettingsScreen(
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
                         compact = true,
-                        onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
+                        onReportProblem = requestReportProblem,
                         onClose = onClose,
                         modifier = Modifier.weight(1f),
                     )
@@ -333,13 +383,14 @@ internal fun OperatorSettingsScreen(
                         Modifier.fillMaxWidth().weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        SettingsTabRail(selectedTab, showSharing = relaySharing != null, onSelect = { selectedTab = it })
+                        SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
                         SettingsContentPane(
                             selectedTab,
                             session,
                             relaySharing,
                             relaySharingEnabled,
                             onRelayShareToggle,
+                            relayWatchUi,
                             settings,
                             assistState,
                             mediaCacheStore,
@@ -359,7 +410,7 @@ internal fun OperatorSettingsScreen(
                             onAssistToggle = toggleAssist,
                             onInteraction = emitHaptic,
                             compact = false,
-                            onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
+                            onReportProblem = requestReportProblem,
                             onClose = onClose,
                             modifier = Modifier.weight(1f),
                         )
@@ -369,6 +420,90 @@ internal fun OperatorSettingsScreen(
             // Floats in the very top-left corner, outside the layout flow, at the
             // iOS metrics (leading 16, top 22).
             Box(Modifier.padding(start = 16.dp, top = 22.dp)) { PanelCloseButton(onClick = onClose) }
+        }
+    }
+
+    // iOS "Leave camera Wi-Fi?" (MonitorPanels.swift:3910-3925) — consent first, hop second,
+    // report third. Declining leaves the camera session exactly as it was.
+    if (pendingReportHop) {
+        val controller = frameioController
+        AlertDialog(
+            onDismissRequest = { pendingReportHop = false },
+            title = { Text(stringResource(R.string.settings_report_hop_title)) },
+            text = { Text(stringResource(R.string.settings_report_hop_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingReportHop = false
+                        if (controller == null) {
+                            hopFailureMessage = hopFailureFallback
+                        } else {
+                            reportHopBusy = true
+                            panelScope.launch {
+                                val online =
+                                    try {
+                                        controller.beginInternetHop()
+                                    } catch (_: Exception) {
+                                        false
+                                    }
+                                reportHopBusy = false
+                                if (online) {
+                                    bugReportDestination = BugReportDestination.CHOOSER
+                                } else {
+                                    hopFailureMessage =
+                                        controller.errorMessage ?: hopFailureFallback
+                                }
+                            }
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.action_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingReportHop = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+    // Leaving an AP and waiting for a validated route takes seconds, not milliseconds. Without
+    // this the Report pill looks dead and gets tapped again.
+    if (reportHopBusy) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(R.string.frameio_switching_networks)) },
+            text = { Text(stringResource(R.string.settings_hop_progress_message)) },
+            confirmButton = {},
+        )
+    }
+    hopFailureMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { hopFailureMessage = null },
+            title = { Text(stringResource(R.string.settings_hop_failed_title)) },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { hopFailureMessage = null }) {
+                    Text(stringResource(R.string.action_ok))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Rejoins the camera after a consented internet hop, from a scope that outlives this
+ * composition — the operator has already dismissed the surface that started it.
+ *
+ * ponytail: same three lines as lut/RedLutDownloadScreen.kt's `endInternetHopAfterDismiss`,
+ * which is private to that file. Hoist one copy if a third caller appears.
+ */
+private fun endInternetHopAfterDismiss(controller: FrameioDeliveryController) {
+    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
+        try {
+            withContext(NonCancellable) { controller.endInternetHop() }
+        } catch (_: Exception) {
+            // Best-effort rejoin; the operator has already left the settings surface.
         }
     }
 }
@@ -546,7 +681,6 @@ private fun SettingsLiveTile(
 @Composable
 private fun SettingsTabStrip(
     selected: OperatorSettingsTab,
-    showSharing: Boolean,
     onSelect: (OperatorSettingsTab) -> Unit,
 ) {
     Row(
@@ -556,9 +690,7 @@ private fun SettingsTabStrip(
             .padding(6.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        OperatorSettingsTab.entries
-            .filter { it != OperatorSettingsTab.SHARING || showSharing }
-            .forEach { tab ->
+        OperatorSettingsTab.entries.forEach { tab ->
             Box(Modifier.width(146.dp)) {
                 SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
             }
@@ -570,16 +702,17 @@ private fun SettingsTabStrip(
 @Composable
 private fun SettingsTabRail(
     selected: OperatorSettingsTab,
-    showSharing: Boolean,
     onSelect: (OperatorSettingsTab) -> Unit,
 ) {
     Column(
         Modifier.width(146.dp).fillMaxHeight().glass(ChromeShape).padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        OperatorSettingsTab.entries
-            .filter { it != OperatorSettingsTab.SHARING || showSharing }
-            .forEach { tab ->
+        // Every tab, always — iOS `OperatorSettingsTab.allCases`. Hiding Sharing when no
+        // broadcast controller is attached put the watcher passcode, broadcast priority and
+        // control policy out of reach in exactly the two places an operator sets them up:
+        // standalone setup before a shoot, and a watcher looking for why it cannot re-share.
+        OperatorSettingsTab.entries.forEach { tab ->
             SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
         }
     }
@@ -629,6 +762,7 @@ private fun SettingsContentPane(
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
     relaySharingEnabled: Boolean,
     onRelayShareToggle: ((Boolean) -> Unit)?,
+    relayWatchUi: RelayWatchUiState?,
     settings: OperatorSettings,
     assistState: AssistState,
     mediaCacheStore: MediaCacheStore,
@@ -722,6 +856,7 @@ private fun SettingsContentPane(
                         when (tab) {
                             OperatorSettingsTab.SHARING ->
                                 SharingRows(
+                                    session = session,
                                     sharing = relaySharing,
                                     settings = settings,
                                     enabled = relaySharingEnabled,
@@ -735,6 +870,7 @@ private fun SettingsContentPane(
                                     linkHealth = linkHealth,
                                     liveViewSource = liveViewSource,
                                     activeTransportLabel = activeTransportLabel,
+                                    relayWatchUi = relayWatchUi,
                                     onDisconnect = onDisconnect,
                                     onReconnect = onReconnect,
                                     onInteraction = onInteraction,
@@ -791,46 +927,77 @@ private fun SettingsContentPane(
 /**
  * Sharing tab — 1:1 with iOS `sharingRows`: enable, watcher count, 4-digit watcher passcode,
  * control-requests policy, and the live control rows (requested / held-by with Take Back).
- * Watchers never see this tab (no daisy-chaining) — the tab itself is filtered out when no
- * sharing surface exists.
+ *
+ * The tab is always present, exactly like iOS. A watcher gets the one row explaining that
+ * sharing happens on the broadcasting device (re-sharing would stack a second encode and a
+ * second hop on everyone downstream); standalone setup gets the same passcode / priority /
+ * control-policy rows, because those are preferences an operator sets up BEFORE a shoot, and
+ * the broadcast reads them the moment it starts.
  */
 @Composable
 private fun SharingRows(
+    session: CameraSession?,
     sharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
     settings: OperatorSettings,
     enabled: Boolean,
     onShareToggle: ((Boolean) -> Unit)?,
     onInteraction: () -> Unit,
 ) {
-    if (sharing == null) {
+    // Watching another device's broadcast: the only surface that owns a RelayCameraSession
+    // (relay/RelayWatchController.kt). iOS keys the same branch off `videoSource == .relay`.
+    if (session is RelayCameraSession) {
+        val state by session.state.collectAsState()
         SettingsRowCard {
             SettingsInlineRow(
-                title = stringResource(R.string.sharing_share_this_feed),
+                title = stringResource(R.string.sharing_watching),
+                help = stringResource(R.string.help_sharing_watcher),
                 showTopDivider = false,
             ) {
-                SettingsValueText(stringResource(R.string.sharing_share_unavailable))
+                SettingsValueText(
+                    (state as? CameraSessionState.Connected)?.identity?.name
+                        ?: stringResource(R.string.camera_none),
+                )
             }
         }
         return
     }
-    val ui by sharing.ui.collectAsState()
+    val ui = if (sharing == null) null else sharing.ui.collectAsState().value
     var passcodeDraft by remember { mutableStateOf(settings.relayWatcherPasscode.value) }
     SettingsRowCard {
-        SettingsSwitchRow(
-            stringResource(R.string.sharing_share_this_feed),
-            isOn = enabled,
-            showTopDivider = false,
-        ) {
-            onShareToggle?.invoke(!enabled)
-            onInteraction()
+        if (sharing == null) {
+            SettingsInlineRow(
+                title = stringResource(R.string.sharing_share_this_feed),
+                help = stringResource(R.string.help_sharing_share_feed),
+                showTopDivider = false,
+            ) {
+                SettingsValueText(stringResource(R.string.sharing_share_unavailable))
+            }
+        } else {
+            SettingsSwitchRow(
+                stringResource(R.string.sharing_share_this_feed),
+                isOn = enabled,
+                help = stringResource(R.string.help_sharing_share_feed),
+                showTopDivider = false,
+            ) {
+                onShareToggle?.invoke(!enabled)
+                onInteraction()
+            }
         }
-        SettingsInlineRow(title = stringResource(R.string.sharing_watching)) {
-            SettingsValueText(stringResource(R.string.sharing_watching_count, ui.watcherCount))
+        if (ui != null) {
+            SettingsInlineRow(
+                title = stringResource(R.string.sharing_watching),
+                help = stringResource(R.string.help_sharing_watching),
+            ) {
+                SettingsValueText(stringResource(R.string.sharing_watching_count, ui.watcherCount))
+            }
         }
         // Between Watching and the passcode, exactly where the iOS Sharing panel puts it. The
         // option words come from the shared core rather than a string resource, so the two shells
         // cannot end up offering differently-named stances.
-        SettingsInlineRow(title = stringResource(R.string.sharing_broadcast_priority)) {
+        SettingsInlineRow(
+            title = stringResource(R.string.sharing_broadcast_priority),
+            help = stringResource(R.string.help_sharing_priority),
+        ) {
             val profile =
                 com.opencapture.openzcine.core.RelayEncoderProfile.fromWireValue(
                     settings.relayEncoderProfile.value
@@ -845,11 +1012,14 @@ private fun SharingRows(
                         it.title == value
                     } ?: return@SettingsSegmented
                 settings.relayEncoderProfile.value = picked.wireValue
-                sharing.encoderProfile = picked
+                sharing?.encoderProfile = picked
                 onInteraction()
             }
         }
-        SettingsInlineRow(title = stringResource(R.string.sharing_watcher_passcode)) {
+        SettingsInlineRow(
+            title = stringResource(R.string.sharing_watcher_passcode),
+            help = stringResource(R.string.help_sharing_passcode),
+        ) {
             BasicTextField(
                 value = passcodeDraft,
                 onValueChange = { new ->
@@ -858,7 +1028,7 @@ private fun SharingRows(
                     // their access until they leave. A cleared field means open.
                     if (passcodeDraft.length == 4 || passcodeDraft.isEmpty()) {
                         settings.relayWatcherPasscode.value = passcodeDraft
-                        sharing.watcherPasscode = passcodeDraft
+                        sharing?.watcherPasscode = passcodeDraft
                     }
                 },
                 textStyle =
@@ -875,32 +1045,39 @@ private fun SharingRows(
         SettingsSwitchRow(
             stringResource(R.string.sharing_control_requests),
             isOn = settings.relayAllowsControlRequests.value,
+            help = stringResource(R.string.help_sharing_control_requests),
         ) {
             settings.relayAllowsControlRequests.toggle()
-            sharing.allowsControlRequests = settings.relayAllowsControlRequests.value
+            sharing?.allowsControlRequests = settings.relayAllowsControlRequests.value
             onInteraction()
         }
-        ui.pendingControlRequestName?.let {
-            SettingsInlineRow(title = stringResource(R.string.sharing_control_requested)) {
+        ui?.pendingControlRequestName?.let {
+            SettingsInlineRow(
+                title = stringResource(R.string.sharing_control_requested),
+                help = stringResource(R.string.help_sharing_control_requested),
+            ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     SettingsActionPill(stringResource(R.string.sharing_decline)) {
-                        sharing.declinePendingControl()
+                        sharing?.declinePendingControl()
                     }
                     SettingsActionPill(stringResource(R.string.sharing_grant)) {
-                        sharing.grantPendingControl()
+                        sharing?.grantPendingControl()
                     }
                 }
             }
         }
-        ui.controlHolderName?.let { holder ->
-            SettingsInlineRow(title = stringResource(R.string.sharing_control_held_by)) {
+        ui?.controlHolderName?.let { holder ->
+            SettingsInlineRow(
+                title = stringResource(R.string.sharing_control_held_by),
+                help = stringResource(R.string.help_sharing_camera_control),
+            ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     SettingsValueText(holder)
                     SettingsActionPill(stringResource(R.string.sharing_take_back)) {
-                        sharing.reclaimControl()
+                        sharing?.reclaimControl()
                     }
                 }
             }
@@ -910,8 +1087,7 @@ private fun SharingRows(
 
 /**
  * Link tab — 1:1 with iOS `linkRows`: dash-scale health meter, then one row card
- * with transport, stream preset, Size/Quality bias, connection action, and the
- * fixed threshold / reconnect readouts.
+ * with transport, the watcher's control readout, stream preset and Quality bias.
  */
 @Composable
 private fun LinkRows(
@@ -920,6 +1096,7 @@ private fun LinkRows(
     linkHealth: AndroidLinkHealthMonitor?,
     liveViewSource: SwiftCoreLiveFrameSource?,
     activeTransportLabel: String?,
+    relayWatchUi: RelayWatchUiState?,
     onDisconnect: (() -> Unit)?,
     onReconnect: (() -> Unit)?,
     onInteraction: () -> Unit,
@@ -965,11 +1142,34 @@ private fun LinkRows(
     SettingsRowCard {
         SettingsInlineRow(
             title = stringResource(R.string.settings_current_transport),
+            help = stringResource(R.string.help_link_transport),
             showTopDivider = false,
         ) {
             SettingsValueText(transportValue)
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_stream_preset)) {
+        // A watcher drives nothing until the broadcaster hands over the token, so the Link tab
+        // says who is holding it (iOS `linkRows`, videoSource == .relay). The ask/give-back
+        // itself stays on the live view, not in a settings sheet.
+        if (session is RelayCameraSession) {
+            SettingsInlineRow(
+                title = stringResource(R.string.sharing_control_held_by),
+                help = stringResource(R.string.help_link_held_by),
+            ) {
+                SettingsValueText(
+                    when {
+                        relayWatchUi == null -> stringResource(R.string.settings_control_broadcaster)
+                        relayWatchUi.holdsControl -> stringResource(R.string.settings_control_this_device)
+                        else ->
+                            relayWatchUi.controlHolderName
+                                ?: stringResource(R.string.settings_control_broadcaster)
+                    },
+                )
+            }
+        }
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_stream_preset),
+            help = stringResource(R.string.help_link_stream_preset),
+        ) {
             Row(
                 Modifier.selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -985,7 +1185,10 @@ private fun LinkRows(
                 }
             }
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_quality_bias)) {
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_quality_bias),
+            help = stringResource(R.string.help_link_quality_bias),
+        ) {
             Row(
                 Modifier.selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -1001,12 +1204,9 @@ private fun LinkRows(
                 }
             }
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_health_threshold)) {
-            SettingsValueText(stringResource(R.string.preview_preset_balanced))
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_reconnect_window)) {
-            SettingsValueText(stringResource(R.string.settings_reconnect_window_value))
-        }
+        // "Health Threshold" (which rendered the stream-preset word "Balanced" under a health
+        // label) and a hardcoded "Reconnect Window · 4 sec" used to sit here. iOS has neither,
+        // and neither read anything or set anything — a readout of a number nothing consults.
     }
 
     // What this device does to the picture after the camera has sent it — iOS `linkRows`' third
@@ -1017,11 +1217,15 @@ private fun LinkRows(
     SettingsRowCard(title = stringResource(R.string.settings_processing)) {
         SettingsInlineRow(
             title = stringResource(R.string.settings_feed_upscaler),
+            help = stringResource(R.string.help_link_feed_upscaler),
             showTopDivider = false,
         ) {
             SettingsValueText(stringResource(R.string.settings_coming_soon))
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_feed_noise_reduction)) {
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_feed_noise_reduction),
+            help = stringResource(R.string.help_link_feed_noise_reduction),
+        ) {
             SettingsValueText(stringResource(R.string.settings_coming_soon))
         }
     }
@@ -1194,48 +1398,6 @@ private fun zebraColorLabel(value: FeedZebraStripeColor): String =
             FeedZebraStripeColor.RED -> R.string.color_red
             FeedZebraStripeColor.CYAN -> R.string.color_cyan
             FeedZebraStripeColor.GREEN -> R.string.color_green
-        },
-    )
-
-@Composable
-private fun framingFamilyLabel(value: LocalFramingGuideFamily): String =
-    stringResource(
-        if (value == LocalFramingGuideFamily.FILM) R.string.framing_family_film
-        else R.string.framing_family_social,
-    )
-
-@Composable
-private fun framingRatioLabel(value: LocalFramingAspectRatio): String =
-    stringResource(
-        when (value) {
-            LocalFramingAspectRatio.RATIO_276 -> R.string.framing_ratio_276
-            LocalFramingAspectRatio.RATIO_239 -> R.string.framing_ratio_239
-            LocalFramingAspectRatio.RATIO_235 -> R.string.framing_ratio_235
-            LocalFramingAspectRatio.RATIO_200 -> R.string.framing_ratio_200
-            LocalFramingAspectRatio.RATIO_185 -> R.string.framing_ratio_185
-            LocalFramingAspectRatio.RATIO_16_9 -> R.string.framing_ratio_16_9
-            LocalFramingAspectRatio.RATIO_166 -> R.string.framing_ratio_166
-            LocalFramingAspectRatio.RATIO_143 -> R.string.framing_ratio_143
-            LocalFramingAspectRatio.RATIO_4_3 -> R.string.framing_ratio_4_3
-            LocalFramingAspectRatio.RATIO_9_16 -> R.string.framing_ratio_9_16
-            LocalFramingAspectRatio.RATIO_4_5 -> R.string.framing_ratio_4_5
-            LocalFramingAspectRatio.RATIO_1_1 -> R.string.framing_ratio_1_1
-            LocalFramingAspectRatio.RATIO_2_3 -> R.string.framing_ratio_2_3
-            LocalFramingAspectRatio.RATIO_191 -> R.string.framing_ratio_191
-        },
-    )
-
-@Composable
-private fun desqueezeRatioLabel(value: LocalDesqueezeRatio): String =
-    stringResource(
-        when (value) {
-            LocalDesqueezeRatio.X100 -> R.string.desqueeze_1
-            LocalDesqueezeRatio.X133 -> R.string.desqueeze_133
-            LocalDesqueezeRatio.X150 -> R.string.desqueeze_15
-            LocalDesqueezeRatio.X160 -> R.string.desqueeze_16
-            LocalDesqueezeRatio.X165 -> R.string.desqueeze_165
-            LocalDesqueezeRatio.X180 -> R.string.desqueeze_18
-            LocalDesqueezeRatio.X200 -> R.string.desqueeze_2
         },
     )
 
@@ -1650,251 +1812,6 @@ private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) 
     }
 }
 
-/** A 48dp local-framing switch with native checked semantics. */
-@Composable
-private fun FramingAssistSwitchRow(
-    title: String,
-    isOn: Boolean,
-    showTopDivider: Boolean = true,
-    onToggle: () -> Unit,
-) {
-    SettingsInlineRow(title = title, showTopDivider = showTopDivider) {
-        Box(
-            Modifier.size(48.dp).toggleable(
-                value = isOn,
-                role = Role.Switch,
-                onValueChange = { onToggle() },
-            ).semantics { contentDescription = title },
-            contentAlignment = Alignment.Center,
-        ) {
-            SettingsSwitchGraphic(isOn)
-        }
-    }
-}
-
-/** Radio choices for the active delivery-guide family tab. */
-@Composable
-private fun FramingGuideFamilyChoices(
-    selected: LocalFramingGuideFamily,
-    onSelect: (LocalFramingGuideFamily) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        LocalFramingGuideFamily.entries.forEach { family ->
-            FramingAssistChoice(
-                label = framingFamilyLabel(family),
-                selected = family == selected,
-                modifier = Modifier.weight(1f),
-            ) { onSelect(family) }
-        }
-    }
-}
-
-/** Multi-select ratio rows for the active iOS-equivalent delivery family. */
-@Composable
-private fun FramingGuideChoices(
-    family: LocalFramingGuideFamily,
-    selected: Set<LocalFramingAspectRatio>,
-    onToggle: (LocalFramingAspectRatio) -> Unit,
-) {
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        LocalFramingAspectRatio.forFamily(family).chunked(3).forEach { row ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                row.forEach { ratio ->
-                    FramingAssistToggleChoice(
-                        label = framingRatioLabel(ratio),
-                        checked = ratio in selected,
-                        modifier = Modifier.weight(1f),
-                    ) { onToggle(ratio) }
-                }
-                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-            }
-        }
-    }
-}
-
-/** Independent thirds, phi, and diagonal composition-grid choices. */
-@Composable
-private fun FramingGridChoices(
-    thirds: Boolean,
-    phi: Boolean,
-    diagonal: Boolean,
-    onToggleThirds: () -> Unit,
-    onTogglePhi: () -> Unit,
-    onToggleDiagonal: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        FramingAssistToggleChoice(
-            label = stringResource(R.string.framing_grid_thirds),
-            checked = thirds,
-            modifier = Modifier.weight(1f),
-            onClick = onToggleThirds,
-        )
-        FramingAssistToggleChoice(
-            label = stringResource(R.string.framing_grid_phi),
-            checked = phi,
-            modifier = Modifier.weight(1f),
-            onClick = onTogglePhi,
-        )
-        FramingAssistToggleChoice(
-            label = stringResource(R.string.framing_grid_diagonal),
-            checked = diagonal,
-            modifier = Modifier.weight(1f),
-            onClick = onToggleDiagonal,
-        )
-    }
-}
-
-/** Compact radio rows for every supported local de-squeeze factor. */
-@Composable
-private fun DesqueezeRatioChoices(
-    selected: LocalDesqueezeRatio,
-    onSelect: (LocalDesqueezeRatio) -> Unit,
-) {
-    Column(
-        Modifier.fillMaxWidth().selectableGroup(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        LocalDesqueezeRatio.entries.chunked(3).forEach { row ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                row.forEach { ratio ->
-                    FramingAssistChoice(
-                        label = desqueezeRatioLabel(ratio),
-                        selected = ratio == selected,
-                        modifier = Modifier.weight(1f),
-                    ) { onSelect(ratio) }
-                }
-            }
-        }
-    }
-}
-
-/** Two iOS-matching presentation choices for the local camera-level assist. */
-@Composable
-private fun LevelStyleChoices(
-    selected: LocalLevelStyle,
-    onSelect: (LocalLevelStyle) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        LocalLevelStyle.entries.forEach { style ->
-            FramingAssistChoice(
-                label =
-                    stringResource(
-                        if (style == LocalLevelStyle.HORIZON) R.string.level_horizon
-                        else R.string.level_gauge,
-                    ),
-                selected = style == selected,
-                modifier = Modifier.weight(1f),
-            ) { onSelect(style) }
-        }
-    }
-}
-
-/** Radio choice for the source axis compressed by the local anamorphic capture. */
-@Composable
-private fun DesqueezeOrientationChoices(
-    selected: LocalDesqueezeOrientation,
-    onSelect: (LocalDesqueezeOrientation) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        LocalDesqueezeOrientation.entries.forEach { orientation ->
-            FramingAssistChoice(
-                label =
-                    stringResource(
-                        if (orientation == LocalDesqueezeOrientation.HORIZONTAL) {
-                            R.string.orientation_horizontal
-                        } else {
-                            R.string.orientation_vertical
-                        },
-                    ),
-                selected = orientation == selected,
-                modifier = Modifier.weight(1f),
-            ) { onSelect(orientation) }
-        }
-    }
-}
-
-/** Accessible 48dp radio choice shared by the local-framing configuration. */
-@Composable
-private fun FramingAssistChoice(
-    label: String,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier
-            .height(48.dp)
-            .background(
-                if (selected) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
-                ChromeShape,
-            )
-            .border(1.dp, if (selected) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
-            color = if (selected) LiveDesign.accent else LiveDesign.muted,
-            maxLines = 1,
-        )
-    }
-}
-
-/** Accessible multi-select choice shared by guide-ratio and grid-pattern controls. */
-@Composable
-private fun FramingAssistToggleChoice(
-    label: String,
-    checked: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier
-            .height(48.dp)
-            .background(
-                if (checked) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
-                ChromeShape,
-            )
-            .border(1.dp, if (checked) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
-            .toggleable(
-                value = checked,
-                role = Role.Checkbox,
-                onValueChange = { onClick() },
-            )
-            .semantics { contentDescription = label },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
-            color = if (checked) LiveDesign.accent else LiveDesign.muted,
-            maxLines = 1,
-        )
-    }
-}
-
 /** Controls whose effects stay wholly within the Android shell. */
 @Composable
 private fun ControlsRows(
@@ -1902,7 +1819,8 @@ private fun ControlsRows(
     onToggle: (OperatorSettings.Toggle) -> Unit,
 ) {
     // iOS Controls is one switch card: Record Confirmation, Bluetooth Remote
-    // Shutter, Haptics, Keep Screen Awake — no extra captions under rows.
+    // Shutter, Haptics, Keep Screen Awake. The one caption below is Android-only, for an
+    // Android-only behaviour (see the comment on it).
     SettingsRowCard {
         SettingsSwitchRow(
             stringResource(R.string.settings_record_confirmation),
@@ -1913,6 +1831,17 @@ private fun ControlsRows(
             stringResource(R.string.settings_media_remote),
             isOn = settings.mediaRemoteShutterEnabled.value,
         ) { onToggle(settings.mediaRemoteShutterEnabled) }
+        // Visible, not behind a "?", and shown whether the switch is on or off: Android cannot
+        // tell a Bluetooth remote's key press from the phone's own, so arming this arms Volume
+        // Up/Down and Play/Pause as record toggles. That is a decision an operator has to be
+        // able to make BEFORE flipping the switch — otherwise they find out by stopping a take
+        // with the volume key. iOS has no such caveat, so it carries no such line.
+        Text(
+            stringResource(R.string.settings_media_remote_caption),
+            style = chromeStyle(10.5f, FontWeight.Normal),
+            color = LiveDesign.muted,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
         SettingsSwitchRow(stringResource(R.string.settings_haptics), isOn = settings.hapticsEnabled.value) {
             onToggle(settings.hapticsEnabled)
         }
@@ -2657,17 +2586,34 @@ private fun StorageRows(
     }
     SettingsRowCard {
         if (condensed) {
-            CondensedStorageRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
+            CondensedStorageRow(
+                title = stringResource(R.string.cache_cached_media),
+                help = stringResource(R.string.help_storage_cache),
+                showTopDivider = false,
+            ) {
                 SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
             }
-            CondensedStorageRow(title = stringResource(R.string.cache_clear)) {
+            CondensedStorageRow(
+                title = stringResource(R.string.cache_clear),
+                help = stringResource(R.string.help_storage_clear_cache),
+            ) {
                 StorageClearAction(clearing, ::clearNow)
             }
         } else {
-            SettingsInlineRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
+            SettingsInlineRow(
+                title = stringResource(R.string.cache_cached_media),
+                help = stringResource(R.string.help_storage_cache),
+                showTopDivider = false,
+            ) {
                 SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
             }
-            SettingsInlineRow(title = stringResource(R.string.cache_clear)) {
+            // Same label as iOS, deliberately different scope, so the help says so: this
+            // clears COMPLETED entries and leaves a transfer that is still running alone
+            // (MediaCacheStore.clearCompletedEntries). iOS clears the lot.
+            SettingsInlineRow(
+                title = stringResource(R.string.cache_clear),
+                help = stringResource(R.string.help_storage_clear_cache),
+            ) {
                 StorageClearAction(clearing, ::clearNow)
             }
         }
@@ -2692,6 +2638,9 @@ private fun StorageRows(
 @Composable
 private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed: Boolean) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var hopConfirmVisible by remember { mutableStateOf(false) }
+    var hopBusy by remember { mutableStateOf(false) }
     LaunchedEffect(controller) { controller.refresh() }
 
     fun beginSignIn() {
@@ -2700,6 +2649,38 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authorizationURL)))
         } catch (_: Exception) {
             controller.signInBrowserUnavailable()
+        }
+    }
+
+    /**
+     * iOS `signInFrameioOverInternet` (MonitorPanels.swift:4922): Adobe sign-in is an HTTPS
+     * round trip, and the camera AP has no internet — so leave it, wait for a validated route,
+     * and only then hand the authorization URL to a browser. Without this the button called
+     * `beginSignIn`, which failed `requireOnline` and wrote an error string, every time.
+     * The camera rejoin runs when Operator Setup is dismissed, because the browser round trip
+     * (and the redirect back into MainActivity) outlives this row.
+     */
+    fun signInOverInternet() {
+        scope.launch {
+            hopBusy = true
+            val online =
+                try {
+                    controller.beginInternetHop()
+                } catch (_: Exception) {
+                    false
+                }
+            hopBusy = false
+            // A failed hop already left its operator-facing reason in `errorMessage`, which
+            // this card renders under the row.
+            if (online) beginSignIn()
+        }
+    }
+
+    fun requestSignIn() {
+        if (settingsActionNeedsInternetHop(controller.networkState)) {
+            hopConfirmVisible = true
+        } else {
+            beginSignIn()
         }
     }
 
@@ -2716,25 +2697,30 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
 
     // iOS Storage: single "Frame.io" row with Log out / Sign in / status value.
     SettingsRowCard {
-        SettingsInlineRow(title = stringResource(R.string.frameio_delivery), showTopDivider = false) {
-            when (controller.connectionState) {
-                FrameioConnectionState.CONNECTED ->
+        SettingsInlineRow(
+            title = stringResource(R.string.frameio_delivery),
+            help = stringResource(R.string.help_storage_frameio),
+            showTopDivider = false,
+        ) {
+            when {
+                hopBusy -> SettingsValueText(stringResource(R.string.frameio_switching_networks))
+                controller.connectionState == FrameioConnectionState.CONNECTED ->
                     SettingsLinkAction(stringResource(R.string.action_log_out)) {
                         controller.disconnect()
                     }
-                FrameioConnectionState.UNCONFIGURED ->
+                controller.connectionState == FrameioConnectionState.UNCONFIGURED ->
                     SettingsValueText(stringResource(R.string.frameio_not_set_up))
-                FrameioConnectionState.SIGNED_OUT ->
-                    if (controller.networkState == FrameioNetworkState.CAMERA_ACCESS_POINT) {
+                controller.connectionState == FrameioConnectionState.SIGNED_OUT ->
+                    if (settingsActionNeedsInternetHop(controller.networkState)) {
                         SettingsLinkAction(stringResource(R.string.frameio_sign_in_over_internet)) {
-                            beginSignIn()
+                            requestSignIn()
                         }
                     } else {
                         SettingsLinkAction(stringResource(R.string.action_sign_in)) { beginSignIn() }
                     }
-                FrameioConnectionState.ERROR ->
-                    SettingsLinkAction(stringResource(R.string.action_try_again)) { beginSignIn() }
-                FrameioConnectionState.AUTHORIZING -> SettingsValueText(connectionLabel)
+                controller.connectionState == FrameioConnectionState.ERROR ->
+                    SettingsLinkAction(stringResource(R.string.action_try_again)) { requestSignIn() }
+                else -> SettingsValueText(connectionLabel)
             }
         }
         controller.errorMessage?.let { message ->
@@ -2745,12 +2731,38 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
             )
         }
     }
+
+    // iOS "Leave camera Wi-Fi to sign in?" (MonitorPanels.swift:4875-4882): the camera link
+    // drops for the duration, so the operator says yes to that before anything happens.
+    if (hopConfirmVisible) {
+        AlertDialog(
+            onDismissRequest = { hopConfirmVisible = false },
+            title = { Text(stringResource(R.string.frameio_hop_signin_title)) },
+            text = { Text(stringResource(R.string.frameio_hop_signin_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        hopConfirmVisible = false
+                        signInOverInternet()
+                    },
+                ) {
+                    Text(stringResource(R.string.action_sign_in))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { hopConfirmVisible = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
 /** Short landscape storage row that preserves a 48dp clear-cache target. */
 @Composable
 private fun CondensedStorageRow(
     title: String,
+    help: String? = null,
     showTopDivider: Boolean = true,
     trailing: @Composable () -> Unit,
 ) {
@@ -2769,6 +2781,7 @@ private fun CondensedStorageRow(
                 color = LiveDesign.text,
                 maxLines = 1,
             )
+            help?.let { SettingsHelpBadge(it) }
             Spacer(Modifier.weight(1f))
             trailing()
         }

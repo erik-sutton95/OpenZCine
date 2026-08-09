@@ -87,6 +87,30 @@ class SavedCameraGroupsTest {
         )
     }
 
+    /** The row keeps BOTH names: a nickname must not erase which body it is. */
+    @Test
+    fun `the row title carries the camera name and the operator's`() {
+        val hotspot = record("172.20.10.8", "ZR_6002199", SavedCameraTransport.PHONE_HOTSPOT, 10L)
+        val cable = record("usb:zr", "ZR_6002199", SavedCameraTransport.USB_C, 20L)
+        assertEquals("ZR_6002199", SavedCameraGroups.rowTitle(listOf(cable, hotspot)))
+        // Named on ONE setup, worn by the whole row — the cable setup is the active one here and
+        // the rename happened on the hotspot one.
+        assertEquals(
+            "ZR_6002199 · A-cam",
+            SavedCameraGroups.rowTitle(listOf(cable, hotspot.copy(customName = "A-cam"))),
+        )
+        // A blank nickname is not a nickname, and one equal to the camera's name is not worth
+        // saying twice.
+        assertEquals(
+            "ZR_6002199",
+            SavedCameraGroups.rowTitle(listOf(cable.copy(customName = "  "))),
+        )
+        assertEquals(
+            "ZR_6002199",
+            SavedCameraGroups.rowTitle(listOf(cable.copy(customName = "ZR_6002199"))),
+        )
+    }
+
     private fun record(
         host: String,
         name: String,

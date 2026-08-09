@@ -4,11 +4,13 @@ import android.net.nsd.NsdManager
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import com.opencapture.openzcine.UNAVAILABLE_MONITOR_VALUE
+import com.opencapture.openzcine.monitorMediaStatus
 import com.opencapture.openzcine.monitorResolutionLabel
 import com.opencapture.openzcine.monitorStorageLabel
 import com.opencapture.openzcine.monitorValueOrNull
 import com.opencapture.openzcine.validBatteryPercent
 import com.opencapture.openzcine.core.CameraFocusPoint
+import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.RelayEncoderProfile
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
@@ -28,6 +30,11 @@ data class RelayBroadcastUiState(
     val watcherCount: Int = 0,
     val pendingControlRequestName: String? = null,
     val controlHolderName: String? = null,
+    /**
+     * Why the last start attempt failed (iOS "Couldn't start sharing: …"). A listener that
+     * cannot bind is silent otherwise: the toggle just springs back with no explanation.
+     */
+    val failureReason: String? = null,
 )
 
 /**
@@ -110,6 +117,10 @@ class RelayBroadcastController(
                 )
         }
         host.onCommand = ::execute
+        // Assigned BEFORE start(), which reports a bind failure synchronously from inside it.
+        host.onFailure = { reason ->
+            mutableUi.value = mutableUi.value.copy(failureReason = reason)
+        }
         if (!host.start(preferredPort = loadPreferredPort())) return false
         savePreferredPort(host.boundPort)
         android.util.Log.i("RelayHost", "listening on ${host.boundPort}")
@@ -166,9 +177,15 @@ class RelayBroadcastController(
                                 },
                             levelRoll = frame.level?.rollDegrees,
                             levelPitch = frame.level?.pitchDegrees,
-                            sound = null,
+                            // Back to the body's own meter segments, which is what the wire
+                            // carries and what a watcher's meters are mapped from; sending null
+                            // mounted the meter and never moved it.
+                            sound = frame.audioLevels?.let(RelayAudioMeter::sound),
                             codec = MonitorRelayWire.FrameCodec.JPEG,
                             isKeyframe = true,
+                            // Vertical mode travels: a watcher rotates the picture upright the
+                            // same way this device does, instead of rendering it sideways.
+                            rotation = relayRotationWireValue(frame.rotation),
                         ),
                         frame.jpegData,
                     )
@@ -221,7 +238,16 @@ class RelayBroadcastController(
                 cameraBatteryPercent = validBatteryPercent(snapshot.batteryPercent) ?: 0,
                 cameraName = cameraName ?: identityName ?: "",
                 lens = snapshot.lens.monitorValueOrNull() ?: "",
-                temperature = "",
+                // The body's real warning state, in the same three words the core stamps
+                // (`CameraWarningStatus.tileLabel`) — never a fabricated temperature number.
+                // Empty until the body has been polled, which reads as "not known yet".
+                temperature =
+                    when (snapshot.temperatureStatus) {
+                        CameraTemperatureStatus.HOT -> "HOT"
+                        CameraTemperatureStatus.WARNING -> "CHECK"
+                        CameraTemperatureStatus.NORMAL -> "OK"
+                        null -> ""
+                    },
                 // The capture bar's five cells. Labels are a wire contract, not copy: the
                 // watcher's strip is built against exactly ISO / SHUTTER / IRIS / WB / FOCUS
                 // (core `CameraDisplayState`), so a different word here renders an empty cell.
@@ -257,7 +283,22 @@ class RelayBroadcastController(
                             snapshot.focusMode.monitorValueOrNull() ?: UNAVAILABLE_MONITOR_VALUE
                         ),
                     ),
-                mediaStatus = null,
+                // The MEDIA cell's capacity/duration flip-side, through the SAME estimator the
+                // local top bar uses — null left a watcher's cell stuck on its preview value.
+                mediaStatus =
+                    monitorMediaStatus(
+                            storage = snapshot.storage,
+                            codec = snapshot.codec,
+                            resolution = snapshot.resolution,
+                            frameRate = snapshot.frameRate,
+                        )
+                        ?.let {
+                            MonitorRelayWire.MediaStatus(
+                                gigabytesFree = it.gigabytesFree.toInt(),
+                                percentFree = it.percentFree.toInt(),
+                                minutesRemaining = it.minutesRemaining,
+                            )
+                        },
                 isRecording = recording,
                 allowsControlRequests = allowsControlRequests,
             )
@@ -282,9 +323,13 @@ class RelayBroadcastController(
                         )
                     }
                 is MonitorRelayWire.Command.PickerValue ->
-                    // Typed picker writes need the descriptor-checked seam; accepted on the
-                    // wire (iOS sends them) and deliberately not guessed into a write here.
-                    Unit
+                    // The holder's picker write, run on this device's own session through the
+                    // same typed entry point the local drums use — so it is subject to every
+                    // guard and queue a local write is. A word this side has no control for is
+                    // dropped rather than guessed at (see [RelayPickerVocabulary]).
+                    RelayPickerVocabulary.write(command.picker, command.value)?.let { write ->
+                        runCatching { session.applyControl(write.control, write.label) }
+                    }
             }
         }
     }

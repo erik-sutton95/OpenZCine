@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -54,8 +55,22 @@ struct GpuParams {
     float deLogCurve4;             // 112
     float deLogPad;                // 116
     float sourceSize[2];           // 120
-    float pad[4];                  // 128 — block size rounds to 144
+    // LIMITS: the two Swift-baked cubes' edge sizes and the on flag. They take three of the four
+    // floats that used to be `pad`, so no offset above moves and the block still rounds to 144 —
+    // an existing installed build reading the old layout would still find every other member.
+    float limitsPaintSize;         // 128
+    float limitsWeightSize;        // 132
+    float limitsOn;                // 136
+    float limitsPad;               // 140 — block size rounds to 144
 };
+
+// The offsets above are prose until something checks them. A member inserted or reordered without
+// the matching edit to feed.frag compiles and links fine and then renders garbage on a device we
+// may not have — these three fail the build instead. `sizeof` is the descriptor range, so it is
+// the one that must not drift; the two anchors bracket the block's tail.
+static_assert(offsetof(GpuParams, sourceSize) == 120, "GpuParams drifted from feed.frag's Params");
+static_assert(offsetof(GpuParams, limitsOn) == 136, "GpuParams drifted from feed.frag's Params");
+static_assert(sizeof(GpuParams) == 144, "GpuParams drifted from feed.frag's Params");
 
 }  // namespace
 
@@ -104,6 +119,16 @@ struct LiveFeedVkSession {
     VkDeviceMemory lutMem = VK_NULL_HANDLE;
     VkImageView lutView = VK_NULL_HANDLE;
     int lutSize = 0;
+
+    VkImage limitsPaintImage = VK_NULL_HANDLE;
+    VkDeviceMemory limitsPaintMem = VK_NULL_HANDLE;
+    VkImageView limitsPaintView = VK_NULL_HANDLE;
+    int limitsPaintSize = 0;
+
+    VkImage limitsWeightImage = VK_NULL_HANDLE;
+    VkDeviceMemory limitsWeightMem = VK_NULL_HANDLE;
+    VkImageView limitsWeightView = VK_NULL_HANDLE;
+    int limitsWeightSize = 0;
 
     VkBuffer paramsBuffer = VK_NULL_HANDLE;
     VkDeviceMemory paramsMem = VK_NULL_HANDLE;
@@ -495,7 +520,8 @@ bool initDevice(LiveFeedVkSession* s) {
     color.format = VK_FORMAT_B8G8R8A8_UNORM;
     if (vkCreateRenderPass(s->device, &rpci, nullptr, &s->renderPass) != VK_SUCCESS) return false;
 
-    VkDescriptorSetLayoutBinding binds[3]{};
+    // 0 feed, 1 lut, 2 params, 3 limits paint, 4 limits weight — the binding numbers in feed.frag.
+    VkDescriptorSetLayoutBinding binds[5]{};
     binds[0].binding = 0;
     binds[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     binds[0].descriptorCount = 1;
@@ -508,8 +534,12 @@ bool initDevice(LiveFeedVkSession* s) {
     binds[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     binds[2].descriptorCount = 1;
     binds[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binds[3] = binds[1];
+    binds[3].binding = 3;
+    binds[4] = binds[1];
+    binds[4].binding = 4;
     VkDescriptorSetLayoutCreateInfo dsl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    dsl.bindingCount = 3;
+    dsl.bindingCount = 5;
     dsl.pBindings = binds;
     vkCreateDescriptorSetLayout(s->device, &dsl, nullptr, &s->setLayout);
 
@@ -520,8 +550,10 @@ bool initDevice(LiveFeedVkSession* s) {
 
     if (!createPipeline(s)) return false;
 
+    // Four sampled images per set now (feed, lut, limits paint, limits weight), so the pool has to
+    // carry more than one set's worth or a second allocation would fail with the first still live.
     VkDescriptorPoolSize sizes[2]{
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
     };
     VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -573,6 +605,27 @@ bool initDevice(LiveFeedVkSession* s) {
         s->lutImage,
         s->lutMem);
     s->lutView = createView(s, s->lutImage, VK_FORMAT_R8G8B8A8_UNORM);
+    // The limits cubes get the same 1x1 placeholders. The descriptor set is rewritten every frame
+    // and the shader references both samplers whether or not LIMITS is on, so every binding must
+    // hold a real view from the very first draw — `limitsOn` is what gates the reads.
+    createImage2D(
+        s,
+        1,
+        1,
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        s->limitsPaintImage,
+        s->limitsPaintMem);
+    s->limitsPaintView = createView(s, s->limitsPaintImage, VK_FORMAT_R8G8B8A8_UNORM);
+    createImage2D(
+        s,
+        1,
+        1,
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        s->limitsWeightImage,
+        s->limitsWeightMem);
+    s->limitsWeightView = createView(s, s->limitsWeightImage, VK_FORMAT_R8G8B8A8_UNORM);
     return true;
 }
 
@@ -585,10 +638,14 @@ void updateDescriptors(LiveFeedVkSession* s) {
     lutInfo.sampler = s->sampler;
     lutInfo.imageView = s->lutView;
     lutInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo paintInfo = lutInfo;
+    paintInfo.imageView = s->limitsPaintView;
+    VkDescriptorImageInfo weightInfo = lutInfo;
+    weightInfo.imageView = s->limitsWeightView;
     VkDescriptorBufferInfo bufInfo{};
     bufInfo.buffer = s->paramsBuffer;
     bufInfo.range = sizeof(GpuParams);
-    VkWriteDescriptorSet writes[3]{};
+    VkWriteDescriptorSet writes[5]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = s->descSet;
     writes[0].dstBinding = 0;
@@ -604,7 +661,13 @@ void updateDescriptors(LiveFeedVkSession* s) {
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[2].descriptorCount = 1;
     writes[2].pBufferInfo = &bufInfo;
-    vkUpdateDescriptorSets(s->device, 3, writes, 0, nullptr);
+    writes[3] = writes[0];
+    writes[3].dstBinding = 3;
+    writes[3].pImageInfo = &paintInfo;
+    writes[4] = writes[0];
+    writes[4].dstBinding = 4;
+    writes[4].pImageInfo = &weightInfo;
+    vkUpdateDescriptorSets(s->device, 5, writes, 0, nullptr);
 }
 
 void transitionImage(
@@ -678,6 +741,65 @@ bool uploadRgba(
     vkQueueSubmit(s->queue, 1, &si, VK_NULL_HANDLE);
     vkQueueWaitIdle(s->queue);
     return true;
+}
+
+// Uploads one Swift-baked colour cube (LUT or either LIMITS cube) into its sampled image.
+//
+// The bytes arrive strip-packed — `width = n*n`, `height = n`, blue slices tiling along x — which
+// is exactly how the AGSL adapter uploads the same payload, so feed.frag's `cubeLookup` addresses
+// all three identically and no repacking happens on this side.
+//
+// Reuses the allocation when the edge size is unchanged, which is the normal case: a plan update
+// that only re-picks a LUT of the same size, or re-sends the same 64-edge limits pair, now costs
+// one copy instead of a free/allocate round trip. On an actual size change the replacement is
+// built BEFORE the old image is released, for two reasons: a failed allocation must still leave a
+// valid view bound (the descriptor set is rewritten every frame and a null view is invalid usage,
+// not a blank cube), and the outgoing image can still be referenced by the last submitted frame —
+// that command buffer is fenced but never waited on here, hence the drain.
+bool uploadCubeImage(
+    LiveFeedVkSession* s,
+    int size,
+    const uint8_t* rgba,
+    int bytes,
+    VkImage& image,
+    VkDeviceMemory& memory,
+    VkImageView& view,
+    int& currentSize) {
+    if (size < 2 || !rgba || bytes != size * size * size * 4) return false;
+    const uint32_t w = static_cast<uint32_t>(size) * static_cast<uint32_t>(size);
+    const uint32_t h = static_cast<uint32_t>(size);
+    if (currentSize != size) {
+        VkImage newImage = VK_NULL_HANDLE;
+        VkDeviceMemory newMemory = VK_NULL_HANDLE;
+        if (!createImage2D(
+                s,
+                w,
+                h,
+                VK_FORMAT_R8G8B8A8_UNORM,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                newImage,
+                newMemory)) {
+            if (newImage) vkDestroyImage(s->device, newImage, nullptr);
+            if (newMemory) vkFreeMemory(s->device, newMemory, nullptr);
+            return false;
+        }
+        VkImageView newView = createView(s, newImage, VK_FORMAT_R8G8B8A8_UNORM);
+        if (!newView) {
+            vkDestroyImage(s->device, newImage, nullptr);
+            vkFreeMemory(s->device, newMemory, nullptr);
+            return false;
+        }
+        vkDeviceWaitIdle(s->device);
+        if (view) vkDestroyImageView(s->device, view, nullptr);
+        if (image) vkDestroyImage(s->device, image, nullptr);
+        if (memory) vkFreeMemory(s->device, memory, nullptr);
+        image = newImage;
+        memory = newMemory;
+        view = newView;
+        currentSize = size;
+    }
+    return uploadRgba(
+        s, image, static_cast<int>(w), static_cast<int>(h), rgba, static_cast<size_t>(bytes));
 }
 
 bool drawFrame(LiveFeedVkSession* s) {
@@ -780,6 +902,12 @@ void destroyAll(LiveFeedVkSession* s) {
     if (s->lutView) vkDestroyImageView(s->device, s->lutView, nullptr);
     if (s->lutImage) vkDestroyImage(s->device, s->lutImage, nullptr);
     if (s->lutMem) vkFreeMemory(s->device, s->lutMem, nullptr);
+    if (s->limitsPaintView) vkDestroyImageView(s->device, s->limitsPaintView, nullptr);
+    if (s->limitsPaintImage) vkDestroyImage(s->device, s->limitsPaintImage, nullptr);
+    if (s->limitsPaintMem) vkFreeMemory(s->device, s->limitsPaintMem, nullptr);
+    if (s->limitsWeightView) vkDestroyImageView(s->device, s->limitsWeightView, nullptr);
+    if (s->limitsWeightImage) vkDestroyImage(s->device, s->limitsWeightImage, nullptr);
+    if (s->limitsWeightMem) vkFreeMemory(s->device, s->limitsWeightMem, nullptr);
     if (s->paramsBuffer) vkDestroyBuffer(s->device, s->paramsBuffer, nullptr);
     if (s->paramsMem) vkFreeMemory(s->device, s->paramsMem, nullptr);
     if (s->staging) vkDestroyBuffer(s->device, s->staging, nullptr);
@@ -900,6 +1028,9 @@ void LiveFeedVk_ClearPlan(LiveFeedVkSession* session) {
     std::lock_guard<std::mutex> guard(session->lock);
     session->hasPlan = false;
     session->params.lutSize = 0.f;
+    // The zone paint is a stage, not a colour — clearing the plan has to turn it off too, or a
+    // torn-down assist would keep painting crush/clip over the next plan's picture.
+    session->params.limitsOn = 0.f;
 }
 
 bool LiveFeedVk_SubmitBitmap(LiveFeedVkSession* session, JNIEnv* env, jobject bitmap) {
@@ -946,13 +1077,13 @@ bool LiveFeedVk_SetPlan(
     int lutSize,
     const uint8_t* lutRgba,
     int lutBytes,
-    int /*limitsPaintSize*/,
-    const uint8_t* /*limitsPaintRgba*/,
-    int /*limitsPaintBytes*/,
-    int /*limitsWeightSize*/,
-    const uint8_t* /*limitsWeightRgba*/,
-    int /*limitsWeightBytes*/,
-    bool /*limitsOn*/,
+    int limitsPaintSize,
+    const uint8_t* limitsPaintRgba,
+    int limitsPaintBytes,
+    int limitsWeightSize,
+    const uint8_t* limitsWeightRgba,
+    int limitsWeightBytes,
+    bool limitsOn,
     bool peakingOn,
     const float* peakingColor3,
     const float* deLogCurve5,
@@ -971,7 +1102,6 @@ bool LiveFeedVk_SetPlan(
     if (!session) return false;
     std::lock_guard<std::mutex> guard(session->lock);
     session->params = {};
-    session->params.lutSize = static_cast<float>(lutSize);
     session->params.peakingOn = peakingOn ? 1.f : 0.f;
     session->params.zebraHighlightOn = zebraHighlightOn ? 1.f : 0.f;
     session->params.zebraMidtoneOn = zebraMidtoneOn ? 1.f : 0.f;
@@ -1018,26 +1148,53 @@ bool LiveFeedVk_SetPlan(
         session->params.zebraMidtoneColor[2] = zebraMidtoneColor3[2];
         session->params.zebraMidtoneColor[3] = 1.f;
     }
-    if (lutSize >= 2 && lutRgba && lutBytes == lutSize * lutSize * lutSize * 4) {
-        // AGSL packing: width = n*n, height = n
-        const int tw = lutSize * lutSize;
-        const int th = lutSize;
-        if (session->lutView) vkDestroyImageView(session->device, session->lutView, nullptr);
-        if (session->lutImage) vkDestroyImage(session->device, session->lutImage, nullptr);
-        if (session->lutMem) vkFreeMemory(session->device, session->lutMem, nullptr);
-        createImage2D(
+    // Each stage's size uniform is set only once its cube is actually resident. Announcing a size
+    // the image does not hold is what makes a missing stage render as garbage instead of as off:
+    // the shader gates purely on these sizes.
+    if (uploadCubeImage(
             session,
-            tw,
-            th,
-            VK_FORMAT_R8G8B8A8_UNORM,
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            lutSize,
+            lutRgba,
+            lutBytes,
             session->lutImage,
-            session->lutMem);
-        session->lutView = createView(session, session->lutImage, VK_FORMAT_R8G8B8A8_UNORM);
-        session->lutSize = lutSize;
-        if (!uploadRgba(session, session->lutImage, tw, th, lutRgba, static_cast<size_t>(lutBytes))) {
-            return false;
-        }
+            session->lutMem,
+            session->lutView,
+            session->lutSize)) {
+        session->params.lutSize = static_cast<float>(lutSize);
+    } else if (lutSize >= 2) {
+        LOGE("LUT cube upload failed (size %d) — the base look stays off", lutSize);
+    }
+
+    // LIMITS is the only assist that needs two cubes, and it turns on only when BOTH are resident:
+    // the paint alone, with no weight mask, would flood the whole frame at full opacity. A failed
+    // paint upload short-circuits the weight one, so neither leaves a half-configured stage behind.
+    if (limitsOn &&
+        uploadCubeImage(
+            session,
+            limitsPaintSize,
+            limitsPaintRgba,
+            limitsPaintBytes,
+            session->limitsPaintImage,
+            session->limitsPaintMem,
+            session->limitsPaintView,
+            session->limitsPaintSize) &&
+        uploadCubeImage(
+            session,
+            limitsWeightSize,
+            limitsWeightRgba,
+            limitsWeightBytes,
+            session->limitsWeightImage,
+            session->limitsWeightMem,
+            session->limitsWeightView,
+            session->limitsWeightSize)) {
+        session->params.limitsPaintSize = static_cast<float>(limitsPaintSize);
+        session->params.limitsWeightSize = static_cast<float>(limitsWeightSize);
+        session->params.limitsOn = 1.f;
+    } else if (limitsOn) {
+        LOGE(
+            "LIMITS cube upload failed (paint %d, weight %d) — crush/clip zones stay off",
+            limitsPaintSize,
+            limitsWeightSize);
     }
     session->hasPlan = true;
     return true;

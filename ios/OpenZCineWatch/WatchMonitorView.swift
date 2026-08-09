@@ -41,6 +41,12 @@ struct WatchMonitorView: View {
         .onChange(of: isRecording) { _, nowRecording in
             WKInterfaceDevice.current().play(nowRecording ? .success : .failure)
         }
+        // A refused command changes nothing on screen — the record state is exactly where it was —
+        // so without this the wrist reports a dead button. The caption below says why; this is the
+        // half the operator gets without looking down. Wear pairs the same message with a REJECT.
+        .onChange(of: controller.commandMessage) { _, message in
+            if message != nil { WKInterfaceDevice.current().play(.failure) }
+        }
     }
 
     // MARK: Top bar
@@ -158,6 +164,23 @@ struct WatchMonitorView: View {
                 if isRecording {
                     Rectangle()
                         .strokeBorder(.red, lineWidth: 3)
+                }
+            }
+            // The phone's own reason for refusing the last command, seated inside the picture so it
+            // never costs the bars any of the wrist's scarce height. Amber, like Wear's.
+            .overlay(alignment: .bottom) {
+                if let message = controller.commandMessage {
+                    Text(message)
+                        .font(.system(size: 9, weight: .medium))
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Color(red: 0.90, green: 0.71, blue: 0.40))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
+                        .padding(.horizontal, 6)
+                        .padding(.bottom, 3)
                 }
             }
             // Last, so the image/border stay pinned to the 16:9 box and this only centers it.

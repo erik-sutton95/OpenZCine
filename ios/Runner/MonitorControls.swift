@@ -632,7 +632,7 @@ struct AssistToolbarOrderStrip: View {
             onMove: model.moveAssistToolbar
         ) { tool, index in
             let visible = model.preferences.isAssistToolbarButtonVisible(tool)
-            let canToggleVisibility = tool != .lut
+            let canToggleVisibility = model.canToggleAssistToolbarVisibility(tool)
             HStack(spacing: 10) {
                 Text("\(index + 1)")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))

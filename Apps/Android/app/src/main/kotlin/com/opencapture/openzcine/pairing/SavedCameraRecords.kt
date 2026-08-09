@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.opencapture.openzcine.settings.LiveViewQualityBias
 import com.opencapture.openzcine.transport.CameraDiscovery
+import com.opencapture.openzcine.transport.LocalIPv4Interface
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import java.util.Locale
 import org.json.JSONArray
@@ -365,6 +366,41 @@ public object SavedCameraRecords {
         return hotspotSubnetBases.contains(base)
     }
 
+    /**
+     * The /24 bases to pass [isPhoneHotspotHost] — this device's own Wi-Fi hotspot subnet(s).
+     *
+     * Keyed on the INTERFACE, not on an address range: Android's tether subnet is an OEM choice
+     * (AOSP hands out 192.168.43.x, others do not), so a hard-coded range would be wrong on the
+     * phones it is wrong on and unfixable from here. Twin of iOS's
+     * `NativeNetworkInterfaceSnapshot.hotspotSubnetBases()`, which picks its `bridge*` interfaces
+     * by the same rule. Empty while the hotspot is down, which is the honest answer.
+     *
+     * Wi-Fi only. USB and Bluetooth tethering are left out because a camera cannot join those —
+     * a hotspot setup means the body associated with this phone's SoftAP.
+     */
+    public fun phoneHotspotSubnetBases(interfaces: List<LocalIPv4Interface>): Set<String> =
+        interfaces
+            .filter { isHotspotInterfaceName(it.name) }
+            .mapNotNull { CameraDiscovery.subnetBase(it.address) }
+            .toSet()
+
+    /**
+     * Whether an interface name is this device's SoftAP rather than its station radio.
+     *
+     * The name is all there is: `WifiManager.isWifiApEnabled` and the tethered-interface list are
+     * both system-only APIs. `ap*` / `softap*` / `swlan*` are the SoftAP names shipped across the
+     * OEMs, and `wlan1` is the second radio — the SoftAP on every phone that has one. `wlan0` is
+     * always the station and is deliberately never matched, so the network the operator is simply
+     * connected to can never be read as this phone's own hotspot.
+     */
+    private fun isHotspotInterfaceName(name: String): Boolean {
+        val folded = name.trim().lowercase(Locale.ROOT)
+        return folded == "wlan1" ||
+            folded.startsWith("ap") ||
+            folded.startsWith("softap") ||
+            folded.startsWith("swlan")
+    }
+
     public fun cameraNamesMatch(lhs: String, rhs: String): Boolean {
         val normalizedLhs = normalizedAssignedCameraName(lhs) ?: return false
         val normalizedRhs = normalizedAssignedCameraName(rhs) ?: return false
@@ -513,6 +549,21 @@ public object SavedCameraGroups {
         return groups.map { group ->
             group.sortedByDescending { it.lastSeenAtEpochMillis ?: Long.MIN_VALUE }
         }
+    }
+
+    /**
+     * The row's title: the camera's own name, then the operator's — "Nikon ZR · A-cam".
+     *
+     * A nickname REPLACING the reported name throws away the one thing that says which body this
+     * is once two of them are named for their job ("A-cam", "B-cam"); iOS keeps both
+     * (`StartupCameraListRow.title`). Any setup's custom name titles the whole group, so a rename
+     * made on the hotspot setup does not vanish when the cable one is active.
+     */
+    public fun rowTitle(group: List<SavedCameraRecord>): String {
+        val base = group.first().cameraName
+        val custom =
+            group.firstNotNullOfOrNull { it.customName?.trim()?.takeIf(String::isNotEmpty) }
+        return if (custom == null || custom == base) base else "$base · $custom"
     }
 
     /**
