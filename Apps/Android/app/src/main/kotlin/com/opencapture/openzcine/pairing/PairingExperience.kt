@@ -207,12 +207,19 @@ public fun realPairingEnvironment(
     val joiner = CameraApJoiner(context)
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
-    val usbCameraSource = AndroidUsbPtpCameraSource(context)
     val initiatorGuid = PtpIpInitiatorIdentity.guid
     val combinedPhaseLogger: (String, String) -> Unit = { phase, detail ->
         logCameraSessionPhase(phase, detail)
         phaseLogger(phase, detail)
     }
+    // Enumeration facts reach the EXPORTED report, not just logcat: a field report is a file an
+    // operator can send, and logcat needs a cable to a laptop. The detail is deliberately empty —
+    // the phase token carries everything, and nothing identifying crosses this seam.
+    val usbCameraSource =
+        AndroidUsbPtpCameraSource(
+            context,
+            onDiagnosticPhase = { phase -> combinedPhaseLogger(phase, "") },
+        )
     return PairingEnvironment(
         // joinWithFallback owns pre-scan + fail-fast retries + NIKON_ZR_ prefix.
         joinCameraAp = { ssid, passphrase -> joiner.joinWithFallback(ssid, passphrase) },

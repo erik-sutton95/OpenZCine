@@ -35,6 +35,21 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     CONNECTION_PAIRING_FAILED("error.connection.pairing.failed"),
     CONNECTION_RECONNECT_FAILED("error.connection.reconnect.failed"),
     CONNECTION_EVENT_CHANNEL_ENDED("error.connection.event-channel-ended"),
+
+    // What a USB camera looked like on the last enumeration pass. Closed codes, never the
+    // device path, vendor/product ids or the serial itself — only whether each was RESOLVABLE.
+    //
+    // These exist because the report could not tell three very different failures apart. An
+    // operator declining the permission dialog, a grant the ROM does not make stick, and a
+    // permission that IS held over a serial the ROM will not surface all produced the same
+    // `error.connection.usb.permission` breadcrumb repeated (field report, Redmi Note 12 Pro,
+    // Android 16, build 127). The fix for one of those three is not the fix for the others.
+    USB_ATTACHED_NO_PTP_INTERFACE("usb.attached.no-ptp-interface"),
+    USB_ATTACHED_NEEDS_PERMISSION("usb.attached.needs-permission"),
+    USB_ATTACHED_PERMISSION_DENIED("usb.attached.permission-denied"),
+    /** Permission held, but the ROM would not surface a USB serial descriptor. */
+    USB_ATTACHED_NO_SERIAL("usb.attached.no-serial"),
+    USB_ATTACHED_READY("usb.attached.ready"),
     LIVE_VIEW_FAILED("error.live-view.failed"),
     LIVE_VIEW_STALLED("warning.live-view.stalled"),
     // Object star-rating writes. The vocabulary stays closed (no wire code leaks into the log);
@@ -95,6 +110,11 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "eventChannelEnded",
                 "eventChannelCleanupFailed",
                 -> CONNECTION_EVENT_CHANNEL_ENDED
+                "usb.attached.noPtpInterface" -> USB_ATTACHED_NO_PTP_INTERFACE
+                "usb.attached.needsPermission" -> USB_ATTACHED_NEEDS_PERMISSION
+                "usb.attached.permissionDenied" -> USB_ATTACHED_PERMISSION_DENIED
+                "usb.attached.noSerial" -> USB_ATTACHED_NO_SERIAL
+                "usb.attached.ready" -> USB_ATTACHED_READY
                 "failed.scannerRecognizer" -> SCANNER_RECOGNIZER_UNAVAILABLE
                 "failed.scannerRecognizerUnsupported" -> SCANNER_RECOGNIZER_UNSUPPORTED
                 "liveViewFailed" -> LIVE_VIEW_FAILED

@@ -183,6 +183,15 @@ public class UsbPtpAttachmentState {
         }
     }
 
+    /**
+     * Whether the operator's last answer for [token] was a refusal.
+     *
+     * Read only by diagnostics: a declined dialog and a grant the ROM does not make stick leave
+     * the same `NEEDS_PERMISSION` state, and the exported report could not tell them apart.
+     */
+    @Synchronized
+    public fun isDenied(token: String): Boolean = token in deniedTokens
+
     /** Clears a prior denial when the operator explicitly asks Android again. */
     @Synchronized
     public fun requestPermissionAgain(token: String) {
