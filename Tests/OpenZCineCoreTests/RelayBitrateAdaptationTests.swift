@@ -110,3 +110,64 @@ import Testing
     #expect(RelayEncoderProfile.lowLatency.maxInFlightFramesPerPeer == 2)
     #expect(RelayEncoderProfile.quality.maxInFlightFramesPerPeer == 4)
 }
+
+// MARK: The encode lane
+
+/// The field report: an operator starts a screen recording on the broadcasting phone (ReplayKit
+/// takes its share of the same hardware encoder), the watcher's picture falls seconds behind, and
+/// it snaps back to live the instant the recording stops. That snap-back is a queue draining —
+/// frames were being handed to a stage that had not finished the previous one, and every one of
+/// them was kept. The lane is the rule that drops them instead.
+@Test func encodeLanePassesTheNewestFrameNotTheOldest() {
+    var lane = RelayEncodeLane(depth: 1)
+    var encoded: [Int] = []
+    // Frames 1–5 arrive while frame 1 is still inside the encoder.
+    for frame in 1...5 where lane.admit() { encoded.append(frame) }
+    #expect(encoded == [1])
+    lane.release()
+    // The stage drained. The next frame encoded must be the one arriving NOW — not frame 2,
+    // which is what a queue would have kept and what made the watcher run late.
+    for frame in 6...8 where lane.admit() { encoded.append(frame) }
+    #expect(encoded == [1, 6])
+}
+
+/// A source that permanently outruns the drain must not accumulate: the work admitted stays
+/// pinned to the drain's own rate, however long the run is.
+@Test func encodeLaneStaysBoundedWhenTheSourceOutrunsTheDrain() {
+    var lane = RelayEncodeLane(depth: 2)
+    var admitted = 0
+    var peakInFlight = 0
+    for frame in 0..<1_000 {
+        if lane.admit() { admitted += 1 }
+        peakInFlight = max(peakInFlight, lane.framesInFlight)
+        // The drain finishes one frame for every four the source offers.
+        if frame % 4 == 3 { lane.release() }
+    }
+    #expect(peakInFlight == 2)
+    // One admission per completion of the drain (250 of them) plus the depth the lane opened
+    // with, less the final release no frame follows — bounded by the drain, never by the 1000
+    // frames the source offered.
+    #expect(admitted == 251)
+}
+
+@Test func encodeLaneDepthIsTheOnlyThingBetweenFullAndReady() {
+    var lane = RelayEncodeLane(depth: 2)
+    // `#expect` cannot hold a mutating call, so each admission is bound first.
+    let first = lane.admit()
+    let second = lane.admit()
+    let third = lane.admit()
+    #expect(first)
+    #expect(second)
+    #expect(!third)
+    lane.release()
+    let afterDrain = lane.admit()
+    #expect(afterDrain)
+    // Releases with nothing in flight cannot lend the lane extra depth — a stray completion
+    // (a stopped broadcast, a swapped encoder) must not reopen the unbounded door.
+    lane.release()
+    lane.release()
+    lane.release()
+    #expect(lane.framesInFlight == 0)
+    let refilled = (lane.admit(), lane.admit(), lane.admit())
+    #expect(refilled == (true, true, false))
+}

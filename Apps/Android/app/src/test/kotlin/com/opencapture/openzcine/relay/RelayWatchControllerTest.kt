@@ -26,6 +26,10 @@ import org.json.JSONObject
  * the bounded deadline instead of the decoder-exhaustion path's tens of seconds. Off-device
  * `MediaCodec` construction throws, which the frame source swallows into "fed, decoded
  * nothing" — exactly the black-feed shape the deadline exists to bound.
+ *
+ * ...and the control-holder's record press, which reaches the host as a command over that same
+ * socket. Nothing on this path may ask for a camera session or an operator's confirmation: a
+ * watcher has neither, and the answer it does give was already given on its own screen.
  */
 class RelayWatchControllerTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -152,6 +156,57 @@ class RelayWatchControllerTest {
         }
     }
 
+    /**
+     * The watcher half of "the confirmation belongs to whoever pressed the button": a
+     * control-holding watcher's record press leaves the device as a plain command. Nothing on this
+     * path may consult a camera session or the Record Confirmation preference — a watcher has no
+     * session by design, and the prompt was already answered on this screen. iOS shipped exactly
+     * that mistake (field report: granted control, live record button, nothing recorded), so this
+     * is the parity guard, not a spare test.
+     */
+    @Test
+    fun `a control-holding watcher's record press reaches the host as a command`() {
+        LoopbackRelayHost().use { host ->
+            val controller = controller(host)
+            controller.start()
+            val (socket, _) = host.acceptHello()
+            host.send(
+                socket,
+                MonitorRelayWire.Kind.HELLO,
+                MonitorRelayWire.Hello(
+                        version = MonitorRelayWire.VERSION,
+                        hostName = "Host",
+                        cameraName = null,
+                    )
+                    .toJson()
+                    .toString()
+                    .toByteArray(Charsets.UTF_8),
+            )
+            host.send(
+                socket,
+                MonitorRelayWire.Kind.CONTROL_TOKEN,
+                MonitorRelayWire.ControlToken(
+                        holderName = "Test watcher",
+                        holderIsRecipient = true,
+                    )
+                    .toJson()
+                    .toString()
+                    .toByteArray(Charsets.UTF_8),
+            )
+            // Liveness bound only — the grant arrives over a loopback socket, and the controller's
+            // collector runs on a dispatcher shared with the rest of the suite.
+            val holding = runBlocking {
+                withTimeoutOrNull(30_000) { controller.ui.first { it.holdsControl } }
+            }
+            assertTrue(holding != null, "the control token never reached the watcher")
+
+            runBlocking { controller.session.setRecording(true) }
+
+            assertEquals(MonitorRelayWire.Command.ToggleRecording, host.readCommand(socket))
+            runBlocking { controller.stop() }
+        }
+    }
+
     private fun controller(
         host: LoopbackRelayHost,
         deadlineMillis: Long = 6_000L,
@@ -194,6 +249,14 @@ private class LoopbackRelayHost : AutoCloseable {
         return socket to
             MonitorRelayWire.Hello.fromJson(JSONObject(String(payload, Charsets.UTF_8)))
     }
+
+    /** Reads the next message the watcher sends, which must be a command. */
+    fun readCommand(socket: Socket): MonitorRelayWire.Command? =
+        MonitorRelayWire.Command.fromJson(
+            JSONObject(
+                String(readMessage(socket, MonitorRelayWire.Kind.COMMAND), Charsets.UTF_8)
+            )
+        )
 
     fun send(socket: Socket, kind: Int, payload: ByteArray) {
         socket.getOutputStream().apply {

@@ -187,6 +187,63 @@ struct VideoSourceTests {
         #expect(watcher.cameraTimecode)
     }
 
+    /// The Record Confirmation preference belongs to whoever pressed the button, and it is answered
+    /// exactly once. The field report it comes from: a watcher was granted control, its record
+    /// button was live, and pressing it never started a take — the press was refused for a session
+    /// a watcher is never meant to have, and on the other side the host raised a second prompt on
+    /// a device nobody was holding.
+    @Test("The record confirmation follows the presser, and is asked once")
+    func recordConfirmationFollowsThePresser() {
+        let holder = MonitorDataAvailability(
+            source: .relay, ownsCameraSession: false, receivesCameraMetadata: true,
+            holdsRelayControl: true)
+        // A watcher has no live view of its own by design — it drives the camera by asking the
+        // host to — so the owned-session pre-flight must not stand between its tap and the send.
+        #expect(
+            holder.recordPress(
+                confirmationEnabled: true, isRelayedCommand: false, liveViewReady: false)
+                == .confirm)
+        #expect(
+            holder.recordPress(
+                confirmationEnabled: false, isRelayedCommand: false, liveViewReady: false)
+                == .run)
+
+        // The host running that watcher's command must not ask again: the operator who would
+        // answer is holding the other device, so the prompt sits unseen and the take never starts.
+        let host = MonitorDataAvailability(
+            source: .cameraLiveView, ownsCameraSession: true, receivesCameraMetadata: true)
+        #expect(
+            host.recordPress(
+                confirmationEnabled: true, isRelayedCommand: true, liveViewReady: true) == .run)
+    }
+
+    /// ...and the local path keeps every gate it had. A press that would drive this device's own
+    /// camera with no live view behind it is still refused, confirmation on or off.
+    @Test("A local record press still needs this device's own live view")
+    func localRecordPressStillNeedsLiveView() {
+        let local = MonitorDataAvailability(
+            source: .cameraLiveView, ownsCameraSession: false, receivesCameraMetadata: false)
+        #expect(
+            local.recordPress(
+                confirmationEnabled: true, isRelayedCommand: false, liveViewReady: false)
+                == .needsLiveView)
+        #expect(
+            local.recordPress(
+                confirmationEnabled: false, isRelayedCommand: false, liveViewReady: false)
+                == .needsLiveView)
+
+        let live = MonitorDataAvailability(
+            source: .cameraLiveView, ownsCameraSession: true, receivesCameraMetadata: true)
+        #expect(
+            live.recordPress(
+                confirmationEnabled: true, isRelayedCommand: false, liveViewReady: true)
+                == .confirm)
+        #expect(
+            live.recordPress(
+                confirmationEnabled: false, isRelayedCommand: false, liveViewReady: true)
+                == .run)
+    }
+
     @Test("The blank display state states nothing it cannot know")
     func blankDisplayState() {
         let blank = CameraDisplayState.blank

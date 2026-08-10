@@ -53,6 +53,16 @@ public enum VideoSourceKind: String, CaseIterable, Codable, Equatable, Identifia
     public var carriesCameraFrameHeader: Bool { self == .cameraLiveView }
 }
 
+/// What a record press should do on the device that received it.
+public enum RecordPressOutcome: Equatable, Sendable {
+    /// Ask this device's operator first; their answer resumes the press.
+    case confirm
+    /// Run it now.
+    case run
+    /// Refuse — this press would drive this device's own camera, and there is no live view.
+    case needsLiveView
+}
+
 /// What the monitor can truthfully display, given where the picture comes from and whether a
 /// camera control session exists.
 ///
@@ -128,6 +138,30 @@ public struct MonitorDataAvailability: Equatable, Sendable {
     /// round-robin are serviced. Reading a source as "just where the picture comes from" is what
     /// made that easy to miss.
     public var runsCameraFrameLoop: Bool { source == .cameraLiveView && ownsCameraSession }
+
+    /// Resolves a record press: confirm here, run it, or refuse for want of a live view.
+    ///
+    /// The Record Confirmation preference belongs to whoever pressed the button, and is answered
+    /// exactly once. A watcher answers on its own screen and sends an already-answered command, so
+    /// the host must never raise a second prompt — the operator who would answer it is holding the
+    /// other device, and the prompt sits there unseen while the take never starts.
+    ///
+    /// The live-view pre-flight is the owned path's gate alone. A watcher has no session by design
+    /// — it drives the camera by asking the host to — so refusing its press for a session it was
+    /// never meant to have is the same bug from the other end. Whether it may drive the camera at
+    /// all is the control token's question, and the send checks that for itself.
+    ///
+    /// - Parameters:
+    ///   - isRelayedCommand: Whether this press arrived from a watcher rather than from this
+    ///     device's own screen.
+    ///   - liveViewReady: Whether this device could run the record itself right now.
+    public func recordPress(
+        confirmationEnabled: Bool, isRelayedCommand: Bool, liveViewReady: Bool
+    ) -> RecordPressOutcome {
+        if isRelayedCommand { return .run }
+        if source != .relay, !liveViewReady { return .needsLiveView }
+        return confirmationEnabled ? .confirm : .run
+    }
 
     /// Whether a standalone control pump has to run.
     ///
