@@ -8,9 +8,17 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.onEach
 
 /**
- * Frame-pacing counters for the live feed: presented fps, decode time, and
- * frames dropped by latest-wins conflation. Emits one summary line through
- * [log] roughly every [reportIntervalNanos] of presented frames.
+ * Frame-pacing counters for the live feed: presented fps, decode time, frames
+ * dropped by latest-wins conflation, and how OLD a frame is when it reaches the
+ * renderer. Emits one summary line through [log] roughly every
+ * [reportIntervalNanos] of presented frames.
+ *
+ * AGE is the number the field reports are about and the only one here that was
+ * missing. Every other counter measures THROUGHPUT, and throughput does not
+ * answer "how far behind the room is this picture" — a feed can hold a steady
+ * 30 fps while running a third of a second late, because a stage that keeps up
+ * on average can still be holding a frame that is waiting its turn. Tuning fps
+ * without watching age is how a pipeline gets fast and late at the same time.
  *
  * Pure Kotlin (no Android imports) so the accounting is JVM-unit-testable.
  * [frameReceived] may be called from a different thread than
@@ -26,6 +34,9 @@ class FramePacingStats(
     private var presented = 0L
     private var decodeTotalNanos = 0L
     private var decodeMaxNanos = 0L
+    private var ageTotalNanos = 0L
+    private var ageMaxNanos = 0L
+    private var agedFrames = 0L
     private var windowStartNanos = 0L
     private var hasWindow = false
 
@@ -39,8 +50,13 @@ class FramePacingStats(
      *
      * @param decodeNanos Time spent decoding this frame.
      * @param nowNanos Monotonic time of presentation ([System.nanoTime]).
+     * @param ageNanos How long this frame waited between the transport having it
+     *   and the renderer getting it — decode, plus any time it spent held. The
+     *   transport stamps on the same `CLOCK_MONOTONIC` Kotlin reads, so the two
+     *   are directly comparable. Negative or absent values are ignored rather
+     *   than trusted: a source with no usable stamp must not invent a latency.
      */
-    fun framePresented(decodeNanos: Long, nowNanos: Long) {
+    fun framePresented(decodeNanos: Long, nowNanos: Long, ageNanos: Long = -1L) {
         if (!hasWindow) {
             // The first present only establishes the window baseline — counting
             // it would overstate fps by one fencepost frame per window.
@@ -52,6 +68,11 @@ class FramePacingStats(
         presented++
         decodeTotalNanos += decodeNanos
         decodeMaxNanos = max(decodeMaxNanos, decodeNanos)
+        if (ageNanos >= 0) {
+            ageTotalNanos += ageNanos
+            ageMaxNanos = max(ageMaxNanos, ageNanos)
+            agedFrames++
+        }
 
         val elapsed = nowNanos - windowStartNanos
         if (elapsed < reportIntervalNanos || presented == 0L) return
@@ -60,13 +81,26 @@ class FramePacingStats(
         val fps = presented * 1e9 / elapsed
         val avgMs = decodeTotalNanos / presented / 1e6
         val maxMs = decodeMaxNanos / 1e6
+        // Reported only when it was actually measured. A source with no usable stamp printing
+        // "age avg 0.0 ms" would be claiming the one thing we cannot see, and this counter exists
+        // precisely because the invisible number was the one that mattered.
+        val age =
+            if (agedFrames > 0) {
+                "age avg %.1f ms max %.1f ms | "
+                    .format(ageTotalNanos / agedFrames / 1e6, ageMaxNanos / 1e6)
+            } else {
+                ""
+            }
         log(
-            "feed pacing: %.1f fps | decode avg %.1f ms max %.1f ms | dropped %d/%d"
-                .format(fps, avgMs, maxMs, receivedInWindow - presented, receivedInWindow)
+            "feed pacing: %.1f fps | decode avg %.1f ms max %.1f ms | %sdropped %d/%d"
+                .format(fps, avgMs, maxMs, age, receivedInWindow - presented, receivedInWindow)
         )
         presented = 0
         decodeTotalNanos = 0
         decodeMaxNanos = 0
+        ageTotalNanos = 0
+        ageMaxNanos = 0
+        agedFrames = 0
         windowStartNanos = nowNanos
         receivedAtWindowStart = received.get()
     }
@@ -117,6 +151,15 @@ suspend fun <T : Any> pumpFramesWithSourceFrame(
             val start = System.nanoTime()
             val decoded = decode(frame) ?: return@collect
             present(frame, decoded)
-            stats.framePresented(decodeNanos = System.nanoTime() - start, nowNanos = System.nanoTime())
+            val done = System.nanoTime()
+            stats.framePresented(
+                decodeNanos = done - start,
+                nowNanos = done,
+                // The transport stamps `timestampNanos` off CLOCK_MONOTONIC, which is the clock
+                // `System.nanoTime()` reads — see `PTPIPClientSession.monotonicNanoseconds`. A
+                // source that leaves it at zero (or ahead of us) reports no age rather than a
+                // fictional one.
+                ageNanos = if (frame.timestampNanos > 0) done - frame.timestampNanos else -1L,
+            )
         }
 }

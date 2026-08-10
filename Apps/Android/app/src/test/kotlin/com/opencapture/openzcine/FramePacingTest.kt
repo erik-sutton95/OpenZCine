@@ -138,4 +138,42 @@ class PumpFramesTest {
         )
         assertEquals(listOf<Byte>(1, 10), presented)
     }
+
+    /**
+     * Age is the number the field reports are about: a feed can hold a steady frame rate while
+     * running a third of a second behind the room, because a stage that keeps up on average can
+     * still be holding a frame waiting its turn. Throughput cannot see that; this can.
+     */
+    @Test
+    fun `reports how far behind the presented frame is`() {
+        val lines = mutableListOf<String>()
+        val stats = FramePacingStats(reportIntervalNanos = 1_000_000_000L) { lines += it }
+
+        stats.framePresented(decodeNanos = 0L, nowNanos = 0L, ageNanos = 0L) // baseline
+        repeat(25) { index ->
+            stats.framePresented(
+                decodeNanos = 5_000_000L,
+                nowNanos = (index + 1) * 40_000_000L,
+                ageNanos = 120_000_000L,
+            )
+        }
+
+        assertTrue(lines.isNotEmpty())
+        assertTrue(lines.first().contains("age avg 120.0 ms max 120.0 ms"), lines.first())
+    }
+
+    /** A source with no usable stamp reports NO age rather than a fictional zero. */
+    @Test
+    fun `an unstamped source claims no latency at all`() {
+        val lines = mutableListOf<String>()
+        val stats = FramePacingStats(reportIntervalNanos = 1_000_000_000L) { lines += it }
+
+        stats.framePresented(decodeNanos = 0L, nowNanos = 0L)
+        repeat(25) { index ->
+            stats.framePresented(decodeNanos = 5_000_000L, nowNanos = (index + 1) * 40_000_000L)
+        }
+
+        assertTrue(lines.isNotEmpty())
+        assertTrue(!lines.first().contains("age"), lines.first())
+    }
 }
