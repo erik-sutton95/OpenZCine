@@ -53,6 +53,11 @@ class RelayWatchController(
     private val scope: CoroutineScope,
     private val deviceName: String,
     val broadcast: RelayBroadcast,
+    /**
+     * This install's stable relay identity, so a host recognises this DEVICE across a reconnect
+     * and the control it was holding survives a blink. Null keeps the pre-lease behaviour.
+     */
+    private val watcherId: String? = null,
     /** Fired once when this device latches jpeg-only — the shell persists the verdict. */
     private val onJpegOnlyLatched: (() -> Unit)? = null,
     /** Fired when a passcode is accepted for [broadcast] — the shell persists it per host. */
@@ -216,6 +221,7 @@ class RelayWatchController(
             deviceName,
             passcode,
             codecs = if (jpegOnly) listOf("jpeg") else null,
+            watcherId = watcherId,
         )
         armStallWatchdog()
     }

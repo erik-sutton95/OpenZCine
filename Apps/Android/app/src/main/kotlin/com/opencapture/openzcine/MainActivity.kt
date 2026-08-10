@@ -314,6 +314,9 @@ class MainActivity : ComponentActivity() {
                                     scope = connectionScope,
                                     deviceName = relayDeviceName,
                                     broadcast = direct,
+                                    watcherId =
+                                        com.opencapture.openzcine.relay.RelayWatcherIdentity
+                                            .current(applicationContext),
                                     onPasscodeRemembered = { code ->
                                         persistWatcherPasscode(direct.name, code)
                                     },
@@ -827,6 +830,10 @@ class MainActivity : ComponentActivity() {
                                                     scope = connectionScope,
                                                     deviceName = relayDeviceName,
                                                     broadcast = broadcast,
+                                                    watcherId =
+                                                        com.opencapture.openzcine.relay
+                                                            .RelayWatcherIdentity
+                                                            .current(applicationContext),
                                                     onJpegOnlyLatched = persistJpegOnly,
                                                     onPasscodeRemembered = { code ->
                                                         persistWatcherPasscode(

@@ -135,13 +135,14 @@ public struct RelayPresence: Codable, Equatable, Sendable {
 public struct MonitorRelayHello: Codable, Equatable, Sendable {
     public init(
         version: Int, hostName: String, cameraName: String?, passcode: String? = nil,
-        codecs: [String]? = nil
+        codecs: [String]? = nil, watcherID: String? = nil
     ) {
         self.version = version
         self.hostName = hostName
         self.cameraName = cameraName
         self.passcode = passcode
         self.codecs = codecs
+        self.watcherID = watcherID
     }
 
     public let version: Int
@@ -158,6 +159,11 @@ public struct MonitorRelayHello: Codable, Equatable, Sendable {
     /// without Main10, software decoders that error on it) rejoins declaring `["jpeg"]` and
     /// the host serves it JPEG instead: codec negotiation, not per-chipset whack-a-mole.
     public let codecs: [String]?
+    /// Viewer → host only: a stable per-install identity, so a watcher that drops and comes back
+    /// is recognised as the same DEVICE and can resume the control it held (`RelayControlLease`).
+    /// Absent — including every payload from before the field — means the watcher cannot be
+    /// recognised on return, and its control is released the moment the socket dies, as before.
+    public let watcherID: String?
 
     /// Whether this viewer accepts HEVC frames (absent codec list = yes, legacy behavior).
     public var acceptsHEVC: Bool { codecs?.contains("hevc") ?? true }
@@ -455,4 +461,81 @@ public enum MonitorRelayFramePayload {
         return Decoded(
             metadata: metadata, image: Data(payload[(base + 4 + jsonLength)...]))
     }
+}
+
+/// Keeps a watcher's camera control alive across a brief disconnection.
+///
+/// A held control token used to die with the socket. On a congested set that is wrong: a watcher
+/// whose link blinks loses the camera mid-take and has to ask for it back, and the operator has to
+/// notice and grant it again — for an outage neither of them saw. The token belongs to a PERSON
+/// holding a device, not to a TCP connection.
+///
+/// The window has to outlast the watcher's own idea of "I have dropped", or it can never be used:
+/// a stalled viewer session is not declared dead for 8 s, and only then does a 3 s rejoin tick
+/// fire and have to re-find the broadcast. A window under about ten seconds would expire before
+/// the watcher had even started coming back.
+///
+/// It cannot be keyed on the connection, for the same reason it exists: the returning watcher
+/// arrives on a new socket. `MonitorRelayHello.watcherID` is a stable per-install identity, so the
+/// lease recognises the DEVICE. Anything weaker — a device name, an address — could hand camera
+/// control to the wrong person, and this is a token that presses record.
+public struct RelayControlLease: Equatable, Sendable {
+    /// How long a dropped holder keeps its claim.
+    ///
+    /// Twenty seconds: the watcher's own 8 s stall deadline, plus two 3 s rejoin ticks, plus the
+    /// Bonjour re-sighting and connect those ticks wait on. Long enough that the common blink is
+    /// invisible, short enough that a watcher who has genuinely walked away is not still holding
+    /// the camera a minute later. The operator never has to wait it out regardless — reclaiming
+    /// is always available and always immediate.
+    public static let defaultWindowSeconds: TimeInterval = 20
+
+    public init(windowSeconds: TimeInterval = RelayControlLease.defaultWindowSeconds) {
+        self.windowSeconds = windowSeconds
+    }
+
+    public let windowSeconds: TimeInterval
+
+    /// A tuple would not synthesize `Equatable`, and the lease is compared in tests.
+    private struct Parked: Equatable, Sendable {
+        let watcherID: String
+        let until: Date
+    }
+
+    private var parked: Parked?
+
+    /// Whether a dropped holder is still owed its claim as of [now].
+    public func isParked(at now: Date) -> Bool {
+        guard let parked else { return false }
+        return now < parked.until
+    }
+
+    /// The watcher a resumed claim would belong to, while one is owed.
+    public func parkedWatcherID(at now: Date) -> String? {
+        isParked(at: now) ? parked?.watcherID : nil
+    }
+
+    /// The holder dropped. A claim is only parked for a watcher we can RECOGNISE on return —
+    /// an anonymous watcher (one from before the field existed) releases immediately, exactly as
+    /// it always did, rather than freezing the camera for a device that can never be matched.
+    public mutating func park(watcherID: String?, now: Date) -> Bool {
+        guard let watcherID, !watcherID.isEmpty else {
+            parked = nil
+            return false
+        }
+        parked = Parked(watcherID: watcherID, until: now.addingTimeInterval(windowSeconds))
+        return true
+    }
+
+    /// Whether this hello is the parked watcher coming back, in which case the claim resumes.
+    public mutating func claim(watcherID: String?, now: Date) -> Bool {
+        guard let watcherID, !watcherID.isEmpty, isParked(at: now),
+            parked?.watcherID == watcherID
+        else { return false }
+        parked = nil
+        return true
+    }
+
+    /// Drops the claim outright — the operator reclaiming, the watcher releasing deliberately, or
+    /// the window running out. Deliberate release is not a disconnection and gets no grace.
+    public mutating func clear() { parked = nil }
 }

@@ -53,6 +53,12 @@ class MonitorRelayClient(private val scope: CoroutineScope) {
         deviceName: String,
         passcode: String?,
         codecs: List<String>? = null,
+        /**
+         * This install's stable relay identity. Lets the host recognise this DEVICE across a
+         * reconnect and hand back the control it was holding (`RelayControlLease`). Null keeps the
+         * old behaviour: control is released the moment the socket dies.
+         */
+        watcherId: String? = null,
     ) {
         readerJob =
             scope.launch(Dispatchers.IO) {
@@ -80,6 +86,7 @@ class MonitorRelayClient(private val scope: CoroutineScope) {
                                 cameraName = null,
                                 passcode = passcode,
                                 codecs = codecs,
+                                watcherId = watcherId,
                             )
                             .toJson()
                             .toString()
