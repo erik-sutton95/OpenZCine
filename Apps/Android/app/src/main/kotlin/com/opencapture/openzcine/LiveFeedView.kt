@@ -3,6 +3,9 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Process
+import java.util.concurrent.Executors
+import kotlinx.coroutines.asCoroutineDispatcher
 import android.media.MediaCodecList
 import android.os.Build
 import android.util.Log
@@ -384,6 +387,32 @@ class JpegFrameDecoder(
     }
 }
 
+/**
+ * The one thread that decodes and presents the live picture.
+ *
+ * It was running on `Dispatchers.Default`, which is wrong twice over. That pool is shared — the
+ * scope pump and the LUT/plan baking run on it too — so the picture queued behind work that could
+ * have waited. And its threads sit at default priority while the UI and render threads run at -10,
+ * which on a big.LITTLE scheduler is an invitation to park a bursty display-deadline workload on
+ * an efficiency core. That placement decision is a vendor one, which makes it a much better
+ * explanation for "late on one chipset, fine on another" than any per-byte cost — the bytes are
+ * the same on both.
+ *
+ * One thread on purpose: there is one live feed, decoding is single-image work, and a second
+ * decode in flight would reorder frames rather than deliver any sooner.
+ */
+private val feedDecodeDispatcher =
+    Executors.newSingleThreadExecutor { runnable ->
+            Thread(
+                {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+                    runnable.run()
+                },
+                "zc-feed-decode",
+            )
+        }
+        .asCoroutineDispatcher()
+
 /** Power-of-two [BitmapFactory.Options.inSampleSize] so long side ≤ [maxLongSide]. */
 internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int): Int {
     if (maxLongSide <= 0 || width <= 0 || height <= 0) return 1
@@ -632,7 +661,7 @@ fun LiveFeedView(
         // a 1080p source halved every frame on every device.
         val decoder = JpegFrameDecoder(maxLongSide = JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE)
         val stats = FramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
-        withContext(Dispatchers.Default) {
+        withContext(feedDecodeDispatcher) {
             pumpFramesWithSourceFrame(
                 frames = source.frames,
                 stats = stats,

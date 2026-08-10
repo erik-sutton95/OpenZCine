@@ -4046,6 +4046,21 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
 
         Thread.detachNewThread { [self] in
+            // The pump feeds the picture, so tell the scheduler that.
+            //
+            // It was inheriting whatever nice value the caller's pool thread had — zero — while
+            // the UI and render threads run at -10. A bursty copy-heavy thread at default
+            // priority is exactly the workload a big.LITTLE governor parks on an efficiency core
+            // and ramps slowly, which is a far better explanation for "noticeably late on one
+            // vendor's silicon and not another's" than any per-byte cost, because the byte costs
+            // are the same on both. `THREAD_PRIORITY_DISPLAY` is -4, the value the platform uses
+            // for work that has to make a frame deadline.
+            //
+            // On Linux `setpriority(PRIO_PROCESS, 0, …)` applies to the CALLING THREAD, which is
+            // what Android's own `Process.setThreadPriority` does underneath. Advisory: if the
+            // process rlimit refuses it the call fails and the pump runs exactly as it did
+            // before, so there is nothing to fall back to.
+            setpriority(PRIO_PROCESS, 0, -4)
             runLiveViewPump(
                 frameIntervalNanoseconds: effectiveFrameIntervalNanoseconds,
                 onFrame: onFrame, onEnded: onEnded)
