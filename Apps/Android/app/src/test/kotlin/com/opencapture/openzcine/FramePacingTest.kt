@@ -27,7 +27,7 @@ class FramePacingStatsTest {
         // Baseline frame + 25 frames over exactly one second.
         presentSteadily(26)
         assertEquals(1, reports.size)
-        assertEquals("feed pacing: 25.0 fps | decode avg 10.0 ms max 10.0 ms | dropped 0/25", reports[0])
+        assertEquals("feed pacing: 25.0 fps | decode avg 10.0 ms max 10.0 ms | present avg 0.0 ms max 0.0 ms | dropped 0/25", reports[0])
     }
 
     @Test

@@ -34,6 +34,8 @@ class FramePacingStats(
     private var presented = 0L
     private var decodeTotalNanos = 0L
     private var decodeMaxNanos = 0L
+    private var presentTotalNanos = 0L
+    private var presentMaxNanos = 0L
     private var ageTotalNanos = 0L
     private var ageMaxNanos = 0L
     private var agedFrames = 0L
@@ -48,7 +50,12 @@ class FramePacingStats(
     /**
      * Records one frame decoded and handed to the renderer.
      *
-     * @param decodeNanos Time spent decoding this frame.
+     * @param decodeNanos Time spent turning the frame's bytes into a bitmap — decode ALONE.
+     * @param presentNanos Time spent handing that bitmap to the screen. Separate from the decode
+     *   on purpose: these two used to share one timer under the label "decode", so a present that
+     *   blocks — and on the Vulkan path it blocks on a full GPU queue drain and a vsync-paced
+     *   image acquire — was hiding inside a number every reader took for decoder cost. A pipeline
+     *   is only diagnosable if each stage is timed as itself.
      * @param nowNanos Monotonic time of presentation ([System.nanoTime]).
      * @param ageNanos How long this frame waited between the transport having it
      *   and the renderer getting it — decode, plus any time it spent held. The
@@ -56,7 +63,12 @@ class FramePacingStats(
      *   are directly comparable. Negative or absent values are ignored rather
      *   than trusted: a source with no usable stamp must not invent a latency.
      */
-    fun framePresented(decodeNanos: Long, nowNanos: Long, ageNanos: Long = -1L) {
+    fun framePresented(
+        decodeNanos: Long,
+        nowNanos: Long,
+        ageNanos: Long = -1L,
+        presentNanos: Long = 0L,
+    ) {
         if (!hasWindow) {
             // The first present only establishes the window baseline — counting
             // it would overstate fps by one fencepost frame per window.
@@ -68,6 +80,8 @@ class FramePacingStats(
         presented++
         decodeTotalNanos += decodeNanos
         decodeMaxNanos = max(decodeMaxNanos, decodeNanos)
+        presentTotalNanos += presentNanos
+        presentMaxNanos = max(presentMaxNanos, presentNanos)
         if (ageNanos >= 0) {
             ageTotalNanos += ageNanos
             ageMaxNanos = max(ageMaxNanos, ageNanos)
@@ -92,12 +106,24 @@ class FramePacingStats(
                 ""
             }
         log(
-            "feed pacing: %.1f fps | decode avg %.1f ms max %.1f ms | %sdropped %d/%d"
-                .format(fps, avgMs, maxMs, age, receivedInWindow - presented, receivedInWindow)
+            ("feed pacing: %.1f fps | decode avg %.1f ms max %.1f ms | " +
+                    "present avg %.1f ms max %.1f ms | %sdropped %d/%d")
+                .format(
+                    fps,
+                    avgMs,
+                    maxMs,
+                    presentTotalNanos / presented / 1e6,
+                    presentMaxNanos / 1e6,
+                    age,
+                    receivedInWindow - presented,
+                    receivedInWindow,
+                )
         )
         presented = 0
         decodeTotalNanos = 0
         decodeMaxNanos = 0
+        presentTotalNanos = 0
+        presentMaxNanos = 0
         ageTotalNanos = 0
         ageMaxNanos = 0
         agedFrames = 0
@@ -150,10 +176,12 @@ suspend fun <T : Any> pumpFramesWithSourceFrame(
         .collect { frame ->
             val start = System.nanoTime()
             val decoded = decode(frame) ?: return@collect
+            val decoded_at = System.nanoTime()
             present(frame, decoded)
             val done = System.nanoTime()
             stats.framePresented(
-                decodeNanos = done - start,
+                decodeNanos = decoded_at - start,
+                presentNanos = done - decoded_at,
                 nowNanos = done,
                 // The transport stamps `timestampNanos` off CLOCK_MONOTONIC, which is the clock
                 // `System.nanoTime()` reads — see `PTPIPClientSession.monotonicNanoseconds`. A
