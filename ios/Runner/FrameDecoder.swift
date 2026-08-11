@@ -483,7 +483,17 @@ final class LiveFeedNoiseFilter {
     private var processorBox: AnyObject?
     private var destinationPool: CVPixelBufferPool?
     private var key: (width: Int, height: Int, format: OSType)?
-    private var previous: CVPixelBuffer?
+    /// Frames already denoised, kept as the filter's view of the PAST.
+    ///
+    /// A window, not a slot. This was one buffer and the processor was handed
+    /// `previous.map { [$0] } ?? []` — at most one reference — while the configuration's
+    /// `previousFrameCount` was never read at all. Hand a temporal filter fewer references than
+    /// it was configured for and it builds its internal frame list with a hole in it, and a hole
+    /// there is `-[__NSArrayM insertObject:atIndex:] object cannot be nil`: an ObjC exception
+    /// from inside VideoToolbox, which Swift cannot catch, so the app is gone.
+    private var past: [CVPixelBuffer] = []
+    /// How many past frames the processor says it needs (`previousFrameCount`).
+    private var previousFrameCount = 0
     private var frameCount: Int64 = 0
     private var unavailable = false
     private lazy var commandQueue = MTLCreateSystemDefaultDevice()?.makeCommandQueue()
@@ -539,10 +549,34 @@ final class LiveFeedNoiseFilter {
     /// Forgets a latched refusal and the frame history behind it.
     func reset() {
         unavailable = false
-        previous = nil
+        past.removeAll()
         pending.removeAll()
         key = nil
         report = "idle"
+    }
+
+    /// Whether the processor may be given this pair of reference windows.
+    ///
+    /// Pure so the invariant that killed a shipped build can be tested without a media engine:
+    /// a temporal processor configured for N past and M future frames must be handed exactly N
+    /// and exactly M. Given fewer it does not denoise less, it inserts nil into its own frame
+    /// list and throws from Objective-C, where Swift cannot catch it.
+    static func canRun(
+        past: Int, previousWanted: Int, futures: Int, futureWanted: Int
+    ) -> Bool {
+        past == previousWanted && futures == futureWanted
+    }
+
+    /// Keeps the past window at exactly the length the processor was configured for.
+    private func rememberPast(_ frame: CVPixelBuffer) {
+        guard previousFrameCount > 0 else {
+            past.removeAll()
+            return
+        }
+        past.append(frame)
+        if past.count > previousFrameCount {
+            past.removeFirst(past.count - previousFrameCount)
+        }
     }
 
     /// Denoises `frame`, or returns nil to leave the caller with what it already had.
@@ -591,10 +625,22 @@ final class LiveFeedNoiseFilter {
             // The oldest queued frame is the one being denoised; everything after it is future.
             let current = pending.removeFirst()
             let futures = Array(pending.prefix(futureWanted))
-            let pastFrames = previous.map { [$0] } ?? []
-            guard !pastFrames.isEmpty || !futures.isEmpty else {
-                previous = current
-                report = "seeding"
+            let pastFrames = past
+            // BOTH windows exactly as configured, or the filter does not run.
+            //
+            // It used to run on whatever it had, needing only one reference of either kind. That
+            // is not a weaker denoise, it is a contract violation: the processor was configured
+            // for `previousFrameCount` past frames and given fewer, and it fills the gap in its
+            // own frame list with nil. The first frame after any reconfigure or restart had an
+            // empty past window and went straight through this — which is why a session could run
+            // for a quarter of an hour and then die at the moment something restarted it.
+            guard
+                Self.canRun(
+                    past: pastFrames.count, previousWanted: previousFrameCount,
+                    futures: futures.count, futureWanted: futureWanted)
+            else {
+                rememberPast(current)
+                report = "seeding (\(pastFrames.count)/\(previousFrameCount) past)"
                 return nil
             }
 
@@ -654,7 +700,7 @@ final class LiveFeedNoiseFilter {
                 _ = disable("the model failed (\((error as NSError).code))")
                 return nil
             }
-            previous = current
+            rememberPast(current)
             report = "ran \(fourCCName(size.format)) ±\(pastFrames.count)/\(futures.count)"
             return destination
         #endif
@@ -723,6 +769,12 @@ final class LiveFeedNoiseFilter {
             // focus monitor, and the operator agreed to spend it, not to spend an unbounded
             // amount of it if a future OS raises the number.
             nextFrameCount = min(configuration.nextFrameCount ?? 0, 2)
+            // Read, not assumed. Future frames are clamped because each one is latency the
+            // operator agreed to spend; past frames cost only memory, so this takes the number
+            // the processor asks for. Different silicon asks for different numbers — which is how
+            // this arrived as a crash on one iPad model and nowhere else.
+            previousFrameCount = max(0, configuration.previousFrameCount ?? 0)
+            past.removeAll()
             pending.removeAll()
             guard
                 let pool = LiveFeedSuperResolution.pool(
@@ -752,7 +804,7 @@ final class LiveFeedNoiseFilter {
             destinationPool = pool
             // A new session owns a new history: references from the old one describe a stream
             // this processor never saw.
-            previous = nil
+            past.removeAll()
             pending.removeAll()
             key = size
             log.info(
