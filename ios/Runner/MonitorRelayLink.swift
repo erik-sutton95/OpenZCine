@@ -229,6 +229,9 @@ final class MonitorRelayHost {
         /// From the hello's codec declaration (absent = true, legacy). A jpeg-only peer —
         /// hardware whose decoders reject the HEVC stream — gets the JPEG twin of each frame.
         var acceptsHEVC = true
+        /// The stable install identity from this peer's hello, when it sent one. What lets a
+        /// dropped holder be recognised on a NEW socket and resume its control.
+        var watcherID: String?
     }
 
     /// Fired when some peer is waiting on a keyframe the current stream position cannot give it.
@@ -239,6 +242,10 @@ final class MonitorRelayHost {
     /// The viewer currently allowed to drive the camera; nil means the host itself does.
     private(set) var controlHolder: ObjectIdentifier?
     private(set) var controlHolderName: String?
+    /// A dropped holder's claim, alive for a short window so a blink on a congested set does not
+    /// cost the operator the camera mid-take. See `RelayControlLease`.
+    private var controlLease = RelayControlLease()
+    private var leaseExpiryTask: Task<Void, Never>?
     /// A viewer that has asked and not yet been answered.
     private(set) var pendingRequestName: String?
     private var pendingRequest: ObjectIdentifier?
@@ -422,10 +429,28 @@ final class MonitorRelayHost {
         relayLogger.info("relay host: viewer left (\(max(0, self.peers.count - 1)) remain)")
         connection.cancel()
         let key = ObjectIdentifier(connection)
+        // Read before the removal: parking this claim needs the identity the peer introduced
+        // itself with, and the peer is about to stop existing.
+        let departingWatcherID = peers[key]?.watcherID
         peers.removeValue(forKey: key)
-        // A viewer that disappears cannot keep the camera hostage: control returns to the host,
-        // which is the device that actually holds the session and can always act.
-        if controlHolder == key { reclaimControl() }
+        // A viewer that disappears cannot keep the camera hostage — but a link that BLINKS is
+        // not a viewer that disappeared, and on a congested set the two look identical for a few
+        // seconds. The claim is parked for a short window (`RelayControlLease`) so the same
+        // device can resume it on its way back in; if it does not, control returns to the host,
+        // which holds the session and can always act. Reclaiming never waits for this.
+        if controlHolder == key {
+            let holderName = controlHolderName
+            if controlLease.park(watcherID: departingWatcherID, now: Date()) {
+                controlHolder = nil
+                controlHolderName = holderName
+                relayLogger.info("relay host: holder dropped — claim parked")
+                startLeaseExpiry()
+                publishControlToken()
+                onControlChanged?()
+            } else {
+                reclaimControl()
+            }
+        }
         if pendingRequest == key {
             pendingRequest = nil
             pendingRequestName = nil
@@ -486,7 +511,19 @@ final class MonitorRelayHost {
             else { return }
             peers[key]?.name = hello.hostName
             peers[key]?.acceptsHEVC = hello.acceptsHEVC
+            peers[key]?.watcherID = hello.watcherID
             if controlHolder == key { controlHolderName = hello.hostName }
+            // The holder that dropped, coming back. Its claim resumes on this new socket without
+            // the operator having to notice the outage or grant control a second time.
+            if controlHolder == nil, controlLease.claim(watcherID: hello.watcherID, now: Date()) {
+                leaseExpiryTask?.cancel()
+                leaseExpiryTask = nil
+                controlHolder = key
+                controlHolderName = hello.hostName
+                relayLogger.info("relay host: dropped holder resumed control")
+                publishControlToken()
+                onControlChanged?()
+            }
             if peers[key]?.authorized == false {
                 if hello.passcode == watcherPasscode {
                     peers[key]?.authorized = true
@@ -551,7 +588,27 @@ final class MonitorRelayHost {
 
     /// Takes the camera back. Always available: the host owns the session, so this can never fail
     /// or need the viewer's cooperation — which is what makes handing control out safe.
+    /// Ends a parked claim when its window runs out, so the operator gets the camera back without
+    /// having to do anything. Cancelled by a resume, by reclaiming, and by the host stopping.
+    private func startLeaseExpiry() {
+        leaseExpiryTask?.cancel()
+        leaseExpiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(RelayControlLease.defaultWindowSeconds))
+            guard !Task.isCancelled, let self, self.controlLease.isParked(at: Date()) == false
+            else {
+                // Slept short, or the claim was resumed while we slept. Either way the timer has
+                // no verdict to deliver.
+                return
+            }
+            relayLogger.info("relay host: parked claim expired — control returned")
+            self.reclaimControl()
+        }
+    }
+
     func reclaimControl() {
+        leaseExpiryTask?.cancel()
+        leaseExpiryTask = nil
+        controlLease.clear()
         controlHolder = nil
         controlHolderName = nil
         publishControlToken()
@@ -965,6 +1022,20 @@ final class MonitorRelayClient {
         if state != .idle { update(.idle) }
     }
 
+    /// This install's stable relay identity, so a host can recognise this DEVICE across a
+    /// reconnect and hand back the control it was holding (`RelayControlLease`). Persisted, not
+    /// derived: a device name is not unique and an address is not stable, and this decides who
+    /// may press record.
+    static var watcherID: String {
+        let key = "relay.watcherID"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+        let minted = UUID().uuidString
+        UserDefaults.standard.set(minted, forKey: key)
+        return minted
+    }
+
     /// Introduces this device so a control request can name who is asking — and carries the
     /// watcher passcode when the broadcast requires one.
     func introduce(deviceName: String, passcode: String? = nil) {
@@ -972,7 +1043,7 @@ final class MonitorRelayClient {
             let payload = try? JSONEncoder().encode(
                 MonitorRelayHello(
                     version: MonitorRelayProtocol.version, hostName: deviceName, cameraName: nil,
-                    passcode: passcode))
+                    passcode: passcode, watcherID: Self.watcherID))
         else { return }
         send(kind: .hello, payload: payload)
     }

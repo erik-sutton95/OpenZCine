@@ -4046,6 +4046,21 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
 
         Thread.detachNewThread { [self] in
+            // The pump feeds the picture, so tell the scheduler that.
+            //
+            // It was inheriting whatever nice value the caller's pool thread had — zero — while
+            // the UI and render threads run at -10. A bursty copy-heavy thread at default
+            // priority is exactly the workload a big.LITTLE governor parks on an efficiency core
+            // and ramps slowly, which is a far better explanation for "noticeably late on one
+            // vendor's silicon and not another's" than any per-byte cost, because the byte costs
+            // are the same on both. `THREAD_PRIORITY_DISPLAY` is -4, the value the platform uses
+            // for work that has to make a frame deadline.
+            //
+            // On Linux `setpriority(PRIO_PROCESS, 0, …)` applies to the CALLING THREAD, which is
+            // what Android's own `Process.setThreadPriority` does underneath. Advisory: if the
+            // process rlimit refuses it the call fails and the pump runs exactly as it did
+            // before, so there is nothing to fall back to.
+            setpriority(PRIO_PROCESS, 0, -4)
             runLiveViewPump(
                 frameIntervalNanoseconds: effectiveFrameIntervalNanoseconds,
                 onFrame: onFrame, onEnded: onEnded)
@@ -4676,8 +4691,22 @@ final class PosixTCPSocket: @unchecked Sendable {
         }
         let payloadLength = Int(length) - 8
         let payload = payloadLength > 0 ? try readExact(byteCount: payloadLength) : Data()
-        return try PTPIPPacket(serializedBytes: headerBytes + Array(payload))
+        // Built from the header we ALREADY parsed plus the payload, not by gluing the two back
+        // together and asking the packet to parse them again. The round trip cost three extra
+        // copies of a JPEG-sized payload on every frame — concatenate, re-parse, re-slice — to
+        // recover a type code sitting two lines above. iOS deleted exactly this
+        // (`ios/Runner/PTPIPTransport.swift`); the Android twin kept it.
+        guard let type = PTPIPPacketType(rawValue: ByteCoding.readUInt32LE(headerBytes, at: 4))
+        else {
+            throw PTPIPClientSessionError.invalidPacketLength(length)
+        }
+        return PTPIPPacket(type: type, payload: payload)
     }
+
+    /// One receive buffer for the life of the socket. See `readExact`.
+    private static let receiveScratchCapacity = 256 * 1024
+    private lazy var receiveScratch = [UInt8](
+        repeating: 0, count: Self.receiveScratchCapacity)
 
     private func readExact(byteCount: Int) throws -> Data {
         while readBuffer.availableCount < byteCount {
@@ -4687,13 +4716,20 @@ final class PosixTCPSocket: @unchecked Sendable {
             let descriptor = try currentDescriptor()
             try waitForDescriptor(descriptor, events: Int16(POLLIN), label: "\(label) receive")
             let remaining = byteCount - readBuffer.availableCount
-            let maximumLength = min(max(remaining, 4096), 256 * 1024)
-            var bytes = [UInt8](repeating: 0, count: maximumLength)
-            let received = bytes.withUnsafeMutableBytes { rawBuffer in
+            let maximumLength = min(max(remaining, 4096), Self.receiveScratchCapacity)
+            // Reused, not reallocated. A fresh `[UInt8](repeating: 0, …)` per recv meant the
+            // kernel was asked for bytes into a quarter-megabyte buffer that Swift had just
+            // ZEROED — several times per frame, so tens of megabytes a second of pure memset in
+            // the fetch path, plus the first-touch page faults that come with brand-new pages.
+            // iOS keeps one scratch for the life of the socket; this is that.
+            let received = receiveScratch.withUnsafeMutableBytes { rawBuffer in
                 recv(descriptor, rawBuffer.baseAddress, maximumLength, 0)
             }
             if received > 0 {
-                readBuffer.append(Data(bytes.prefix(received)))
+                receiveScratch.withUnsafeBytes { rawBuffer in
+                    readBuffer.append(
+                        Data(bytes: rawBuffer.baseAddress!, count: received))
+                }
                 continue
             }
             if received == 0 {

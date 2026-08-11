@@ -347,5 +347,24 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
     private let defaultTimeoutMilliseconds = 10_000
     /// Keep idle interrupt reads short so disconnect waits at most one cycle.
     private let eventTimeoutMilliseconds = 1_000
-    private let readChunkSize = 16 * 1024
+    /// One bulk read per frame instead of a dozen.
+    ///
+    /// At 16 KiB a ~150 KB preview frame took 7-13 sequential transfers, and the cost was never
+    /// the wire — USB is not the slow part here. It was what happened BETWEEN transfers: each one
+    /// allocates a Java array of exactly this size plus a trimmed copy, and at 16 KiB both clear
+    /// ART's 12 KB large-object threshold, so every chunk put two allocations into the Large
+    /// Object Space and the bus sat idle through the allocate/copy/JNI window before the next URB
+    /// was issued. A frame cost roughly two dozen large-object allocations to move bytes that were
+    /// already there.
+    ///
+    /// 256 KiB covers a whole preview frame in one transfer, which is the point: the allocations,
+    /// the copies and the idle gaps go with the chunking that caused them. The Kotlin host already
+    /// accepts up to 1 MiB (`AndroidUsbPtpHost.MAX_READ_BYTES`), and `minSdk` is 29 so the old
+    /// API-18 16 KiB `bulkTransfer` ceiling does not apply. A short read still terminates the
+    /// container correctly because `PTPUSBReadBuffer.nextContainer` is length-driven, not
+    /// chunk-driven.
+    ///
+    /// [verify-on-HW] Confirm on a real body that the platform does not re-chunk internally on the
+    /// target release, and that a frame smaller than the chunk still completes in one pass.
+    private let readChunkSize = 256 * 1024
 }

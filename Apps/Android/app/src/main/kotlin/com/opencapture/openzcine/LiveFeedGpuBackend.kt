@@ -129,7 +129,22 @@ internal class GlesLiveFeedBackend : LiveFeedGpuBackend {
         state.detach(surface)
     }
 
+    private var uploadedPlan: FeedEffectsRenderPlan? = null
+    private var uploadedAspectFill = false
+    private var uploadedMirrored = false
+
     override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) {
+        // Same per-recomposition storm as the Vulkan path — see the note on its own `uploadedPlan`.
+        // Cheaper per call here, but a texture re-upload per frame is still a texture re-upload per
+        // frame, and the two backends must not drift on when they consider a plan new.
+        if (plan === uploadedPlan && aspectFill == uploadedAspectFill &&
+            mirrored == uploadedMirrored
+        ) {
+            return
+        }
+        uploadedPlan = plan
+        uploadedAspectFill = aspectFill
+        uploadedMirrored = mirrored
         if (plan != null) state.update(plan, aspectFill, mirrored) else state.clear()
     }
 
@@ -209,14 +224,56 @@ internal class VulkanLiveFeedBackend(
 
     override fun attach(view: View) {
         // Surface callbacks own attach; keep for interface symmetry.
+        forgetUploadedPlan()
     }
 
     override fun detach(view: View) {
+        forgetUploadedPlan()
         if (!disposed) VulkanLiveFeedNative.detachSurface(session)
     }
 
+    /**
+     * Drops the upload memo.
+     *
+     * The memo is only sound while the GPU still HOLDS what it was last told, so every transition
+     * that can take those textures away has to forget it — a surface torn down and rebuilt, a
+     * resume after the app was backgrounded. Getting this wrong is not a slow feed, it is an
+     * ungraded one: the plan would be skipped as "already uploaded" against a device that no
+     * longer has it.
+     */
+    private fun forgetUploadedPlan() {
+        uploadedPlan = null
+    }
+
+    /**
+     * The plan last handed to the GPU, so an unchanged one is not uploaded again.
+     *
+     * `updatePlan` is called from a Compose `SideEffect` and from `AndroidView(update =)`, both of
+     * which run after EVERY recomposition — and the monitor recomposes at feed rate, because the
+     * AF boxes, the audio levels and the timecode all publish per frame. So this ran 25-30 times a
+     * second while saying the same thing every time, and on the Vulkan path saying it costs three
+     * full `vkQueueWaitIdle` queue drains (a 33³ LUT and two 64³ LIMITS cubes) taken under the
+     * same lock the frame present needs. The picture was waiting on re-uploads of bytes that had
+     * not changed since the operator last touched a control.
+     *
+     * Identity, not value: the plan is built once into a `remember`ed state and only reassigned
+     * when it genuinely changes, so the reference IS the change signal — and comparing megabytes
+     * of cube on every recomposition would just be a cheaper version of the same waste.
+     */
+    private var uploadedPlan: FeedEffectsRenderPlan? = null
+    private var uploadedAspectFill = false
+    private var uploadedMirrored = false
+
     override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) {
         if (disposed) return
+        if (plan === uploadedPlan && aspectFill == uploadedAspectFill &&
+            mirrored == uploadedMirrored
+        ) {
+            return
+        }
+        uploadedPlan = plan
+        uploadedAspectFill = aspectFill
+        uploadedMirrored = mirrored
         if (plan == null) {
             VulkanLiveFeedNative.clearPlan(session)
             return

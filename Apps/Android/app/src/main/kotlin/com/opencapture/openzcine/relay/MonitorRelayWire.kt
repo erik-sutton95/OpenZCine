@@ -158,6 +158,13 @@ object MonitorRelayWire {
          * per-chipset whack-a-mole.
          */
         val codecs: List<String>? = null,
+        /**
+         * Viewer → host: a stable per-install identity, so a watcher that drops and comes back is
+         * recognised as the same DEVICE and can resume the control it held (`RelayControlLease`).
+         * Null — including every payload from before the field — means the watcher cannot be
+         * recognised on return, and its control is released the moment the socket dies, as before.
+         */
+        val watcherId: String? = null,
     ) {
         fun toJson(): JSONObject =
             JSONObject().apply {
@@ -166,6 +173,7 @@ object MonitorRelayWire {
                 cameraName?.let { put("cameraName", it) }
                 passcode?.let { put("passcode", it) }
                 codecs?.let { put("codecs", org.json.JSONArray(it)) }
+                watcherId?.let { put("watcherId", it) }
             }
 
         companion object {
@@ -179,6 +187,7 @@ object MonitorRelayWire {
                         json.optJSONArray("codecs")?.let { array ->
                             (0 until array.length()).map(array::getString)
                         },
+                    watcherId = json.optStringOrNull("watcherId"),
                 )
         }
     }

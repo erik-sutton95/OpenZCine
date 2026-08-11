@@ -97,6 +97,7 @@ import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SavedCamerasExperience
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
+import com.opencapture.openzcine.transport.WifiLowLatencyLock
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
 import com.opencapture.openzcine.relay.RelayPresence
@@ -314,6 +315,9 @@ class MainActivity : ComponentActivity() {
                                     scope = connectionScope,
                                     deviceName = relayDeviceName,
                                     broadcast = direct,
+                                    watcherId =
+                                        com.opencapture.openzcine.relay.RelayWatcherIdentity
+                                            .current(applicationContext),
                                     onPasscodeRemembered = { code ->
                                         persistWatcherPasscode(direct.name, code)
                                     },
@@ -559,6 +563,20 @@ class MainActivity : ComponentActivity() {
                 // surface never leaks bars onto the next.
                 val immersive = monitorSession != null || offlineMediaBuckets != null
                 LaunchedEffect(immersive) { applyImmersiveSystemBars() }
+                // Wi-Fi power save costs a wake on every frame of a request/response pull loop,
+                // and how aggressively it dozes is vendor firmware. Held only while a WIRELESS
+                // session is actually on the monitor — a cable session has no radio to keep awake,
+                // and the platform ignores the mode outside the foreground anyway.
+                val wifiLowLatencyLock = remember { WifiLowLatencyLock(applicationContext) }
+                val wirelessSessionLive =
+                    monitorSession != null &&
+                        activeSavedCamera?.transport.let {
+                            it != null && it != SavedCameraTransport.USB_C
+                        }
+                DisposableEffect(wirelessSessionLive) {
+                    if (wirelessSessionLive) wifiLowLatencyLock.acquire()
+                    onDispose { wifiLowLatencyLock.release() }
+                }
                 LaunchedEffect(immersive, operatorSettings.keepScreenAwake.value) {
                     if (operatorSettings.shouldKeepScreenAwake(immersive)) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -827,6 +845,10 @@ class MainActivity : ComponentActivity() {
                                                     scope = connectionScope,
                                                     deviceName = relayDeviceName,
                                                     broadcast = broadcast,
+                                                    watcherId =
+                                                        com.opencapture.openzcine.relay
+                                                            .RelayWatcherIdentity
+                                                            .current(applicationContext),
                                                     onJpegOnlyLatched = persistJpegOnly,
                                                     onPasscodeRemembered = { code ->
                                                         persistWatcherPasscode(

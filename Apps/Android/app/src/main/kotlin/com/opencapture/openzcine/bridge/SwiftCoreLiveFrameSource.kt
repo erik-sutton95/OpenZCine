@@ -12,19 +12,26 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private class LiveViewEndedException(val generation: Long) :
@@ -546,12 +553,47 @@ class SwiftCoreLiveFrameSource(
                 true
             }
 
-    private val sharedFrames =
-        upstream.shareIn(
-            scope = sharingScope,
-            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 0),
-            replay = 1,
-        )
+    /**
+     * The live picture, fanned out to every consumer — newest wins, and NOBODY waits.
+     *
+     * This was `shareIn(replay = 1)`, which looks conflated and is not. `shareIn` has no overflow
+     * parameter, so it takes its default: `extraBufferCapacity = 63`, overflow SUSPEND. The
+     * `buffer(Channel.CONFLATED)` above cannot save it either — `retryWhen` returns a plain flow
+     * and erases the ChannelFlow identity that buffer had fused into, so the conflation stops at
+     * the retry and never reaches the sharing.
+     *
+     * Suspend-on-overflow means the PRODUCER is paced by the SLOWEST consumer. Six things collect
+     * this — the display, link health, timecode, audio meters, the scopes and the relay broadcast
+     * — and three of them run on the main thread. So a main thread busy doing anything else did
+     * not merely make those readouts late, it reached back through the shared buffer and throttled
+     * the camera pump itself, while up to sixty-four JPEGs sat in that buffer holding megabytes of
+     * large-object space. A monitor must never let a readout pace the picture.
+     *
+     * Hand-rolled because `shareIn` cannot express this. `replay = 1` keeps the last frame for a
+     * consumer that subscribes late (which is what the visual consumers rely on across a restart),
+     * `extraBufferCapacity = 0` plus DROP_OLDEST means `tryEmit` always succeeds and always keeps
+     * the newest — the same rule the display pump and every other stage already follow.
+     */
+    private val sharedFrames: SharedFlow<StreamFrame> =
+        MutableSharedFlow<StreamFrame>(
+                replay = 1,
+                extraBufferCapacity = 0,
+                onBufferOverflow = BufferOverflow.DROP_OLDEST,
+            )
+            .also { sink ->
+                sharingScope.launch {
+                    // The upstream is only collected while something downstream wants it, which is
+                    // what `WhileSubscribed` bought before. `subscriptionCount` reproduces it
+                    // exactly, and keeps the native pump from running for nobody.
+                    sink.subscriptionCount
+                        .map { it > 0 }
+                        .distinctUntilChanged()
+                        .collectLatest { active ->
+                            if (active) upstream.collect { frame -> sink.tryEmit(frame) }
+                        }
+                }
+            }
+            .asSharedFlow()
 
     /**
      * Visual consumers retain the last JPEG across a temporary source restart.

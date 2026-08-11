@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.relay
 
+import com.opencapture.openzcine.core.RelayControlLease
 import com.opencapture.openzcine.core.RelayEncoderProfile
 import java.net.ServerSocket
 import java.net.Socket
@@ -53,6 +54,11 @@ class MonitorRelayHost(
     var onFailure: ((String) -> Unit)? = null
 
     private class Peer(val id: Long, val socket: Socket, laneDepth: Int) {
+        /**
+         * The stable install identity from this peer's hello, when it sent one. What lets a
+         * dropped holder be recognised on a NEW socket and resume its control.
+         */
+        var watcherId: String? = null
         var name: String = "A device"
         var authorized: Boolean = false
         val control = Channel<ByteArray>(Channel.UNLIMITED)
@@ -71,6 +77,13 @@ class MonitorRelayHost(
     private var acceptJob: Job? = null
     private var latestStateJson: String? = null
     private var controlHolderID: Long? = null
+    /**
+     * A dropped holder's claim, alive for a short window so a blink on a congested set does not
+     * cost the operator the camera mid-take. Guarded by [mutex], like the holder it stands in for.
+     */
+    private val controlLease = RelayControlLease()
+    private var controlHolderNameWhileParked: String? = null
+    private var leaseExpiryJob: Job? = null
     private var pendingRequestID: Long? = null
 
     /** The bound listener port, available after [start] returns successfully. */
@@ -199,6 +212,26 @@ class MonitorRelayHost(
                         JSONObject(String(decoded.payload, Charsets.UTF_8))
                     )
                 peer.name = hello.hostName
+                peer.watcherId = hello.watcherId
+                // The holder that dropped, coming back. Its claim resumes on this new socket
+                // without the operator having to notice the outage or grant control again.
+                val resumed = mutex.withLock {
+                    if (controlHolderID == null &&
+                        controlLease.claim(hello.watcherId, System.currentTimeMillis())
+                    ) {
+                        controlHolderID = peer.id
+                        controlHolderNameWhileParked = null
+                        leaseExpiryJob?.cancel()
+                        leaseExpiryJob = null
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (resumed) {
+                    broadcastControlToken()
+                    notifyControl()
+                }
                 val required = watcherPasscode
                 if (required.isEmpty() || hello.passcode == required) {
                     peer.authorized = true
@@ -239,6 +272,8 @@ class MonitorRelayHost(
                 val released = mutex.withLock {
                     if (controlHolderID == peer.id) {
                         controlHolderID = null
+                        controlLease.clear()
+                        controlHolderNameWhileParked = null
                         true
                     } else {
                         false
@@ -262,12 +297,22 @@ class MonitorRelayHost(
     }
 
     private suspend fun drop(peer: Peer) {
+        // A viewer that disappears cannot keep the camera hostage — but a link that BLINKS is not
+        // a viewer that disappeared, and on a congested set the two look identical for a few
+        // seconds. The claim is parked for a short window (`RelayControlLease`) so the same device
+        // can resume it on its way back in. Reclaiming never waits for this.
         val wasHolder = mutex.withLock {
             peers.remove(peer.id)
             peer.control.close()
             peer.frames.close()
             val held = controlHolderID == peer.id
-            if (held) controlHolderID = null
+            if (held) {
+                controlHolderID = null
+                if (controlLease.park(peer.watcherId, System.currentTimeMillis())) {
+                    controlHolderNameWhileParked = peer.name
+                    armLeaseExpiry()
+                }
+            }
             if (pendingRequestID == peer.id) pendingRequestID = null
             held
         }
@@ -318,9 +363,41 @@ class MonitorRelayHost(
         notifyControl()
     }
 
+    /**
+     * Ends a parked claim when its window runs out, so the operator gets the camera back without
+     * having to do anything. Must be called while holding [mutex].
+     */
+    private fun armLeaseExpiry() {
+        leaseExpiryJob?.cancel()
+        leaseExpiryJob =
+            scope.launch {
+                delay(RelayControlLease.DEFAULT_WINDOW_MILLIS)
+                val expired =
+                    mutex.withLock {
+                        if (controlLease.isParked(System.currentTimeMillis())) {
+                            false
+                        } else {
+                            controlLease.clear()
+                            controlHolderNameWhileParked = null
+                            true
+                        }
+                    }
+                if (expired) {
+                    broadcastControlToken()
+                    notifyControl()
+                }
+            }
+    }
+
     /** Takes the camera back — always available, this device owns the session. */
     suspend fun reclaimControl() {
-        mutex.withLock { controlHolderID = null }
+        mutex.withLock {
+            controlHolderID = null
+            controlLease.clear()
+            controlHolderNameWhileParked = null
+            leaseExpiryJob?.cancel()
+            leaseExpiryJob = null
+        }
         broadcastControlToken()
         notifyControl()
     }
