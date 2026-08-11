@@ -1,5 +1,5 @@
+- Fixed: a watcher granted camera control keeps it through a brief drop-out.
+- Improved: lower live-view delay over both Wi-Fi and USB-C, and less of it on some phones.
 - Fixed: a watcher granted camera control can now start and stop recording.
-- Fixed: sharing your feed no longer falls behind while the screen is being recorded.
 - New: one camera keeps a setup per way of connecting, each nameable with its own picture settings.
 - New: vertical camera mode, and the mirror assist for a camera facing you.
-- Fixed: the camera is found on networks it could not be found on before.
