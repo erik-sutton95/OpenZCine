@@ -14,7 +14,7 @@ Fixes
 - A Wi-Fi connection no longer asks you to join the camera's own network, and saved setups no longer read as offline while you are on that network.
 - A weak or busy link degrades the picture instead of dropping the session, and screen recording while you share your feed no longer walks the watcher's picture behind the action.
 - A watcher granted camera control can now start and stop the take. The record confirmation is asked once, on the device you pressed the button on.
-- The occasional single bright frame in live view should be gone. Please report it if you still see one.
+- Fixed a crash that could end a live session on some iPads while Feed Noise Reduction was on. Thank you to whoever sent that report — the log had exactly what was needed.
 - Changes made on the camera reach the app quickly again - the aperture ring, ISO or shutter used to take twenty seconds, or in video never.
 - Unplugging the cable or power-cycling the camera used to wedge the app. Both recover on their own, or offer Retry connection.
 
