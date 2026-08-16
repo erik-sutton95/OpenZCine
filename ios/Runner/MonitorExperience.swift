@@ -72,10 +72,16 @@ struct MonitorExperience: View {
 
 private struct LiveViewShell: View {
     @Environment(NativeAppModel.self) private var model
+    /// OBSERVED state, not a body-time read. The two landscapes are invisible to layout —
+    /// same size, symmetric safe areas — so flipping between them changes nothing SwiftUI
+    /// already watches, and a body-time read of the orientation stayed stale until some other
+    /// invalidation (a DISP tap was the field repro) happened to rebuild the shell. Portrait
+    /// transitions only ever worked because the SIZE change re-ran the body.
+    @State private var orientationObserver = InterfaceOrientationObserver()
+    private var deviceOrientation: MonitorDeviceOrientation { orientationObserver.orientation }
 
     var body: some View {
         GeometryReader { proxy in
-            let deviceOrientation = MonitorDeviceOrientationReader.current()
             let screenWidth = MonitorDeviceOrientationReader.currentViewportWidth()
             let context = LiveViewLayoutContext(
                 proxy: proxy,
@@ -90,6 +96,9 @@ private struct LiveViewShell: View {
             MonitorShell(context: context)
                 .environment(model)
                 .animation(.easeInOut(duration: 0.3), value: context.isPortrait)
+                // The landscape-to-landscape flip animates for the same reason the portrait one
+                // does — the modules glide to their mirrored frames under stable identity.
+                .animation(.easeInOut(duration: 0.3), value: context.horizontalDirection)
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .ignoresSafeArea(.container, edges: .all)
                 // Tally + full-screen panel overlay the already-extended (physical-screen) layer
@@ -129,7 +138,59 @@ private struct LiveViewShell: View {
         // Snappy panel insert/remove so dismissing a popup feels near-instant.
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
+        .onAppear { orientationObserver.start() }
     }
+}
+
+/// Publishes the interface orientation as observable state.
+///
+/// The first cut of this listened for NOTIFICATIONS — the device one, and the deprecated
+/// status-bar one for interface-only rotations. Hardware refuted it: neither arrived on a
+/// physical phone, and because the orientation had just become captured state rather than a
+/// body-time read, the staleness this exists to fix came back WORSE — nothing, not even the
+/// DISP tap that used to jog it, could refresh a value no notification ever updated.
+///
+/// `UIWindowScene.effectiveGeometry` is the structural signal: documented KVO-compliant, it
+/// covers every way the interface can turn — a hand rotating the phone, a geometry request
+/// (the demo harness's headless rotation), a windowing change — and it fires when the new
+/// geometry has COMMITTED, so there is no next-runloop race to lose. The device-rotation
+/// notification stays as a belt-and-braces second source; where it works it is merely
+/// redundant.
+@MainActor
+@Observable
+final class InterfaceOrientationObserver {
+    private(set) var orientation = MonitorDeviceOrientationReader.current()
+    @ObservationIgnored private var geometryObservation: NSKeyValueObservation?
+    @ObservationIgnored private var deviceObserver: (any NSObjectProtocol)?
+
+    func start() {
+        refresh()
+        guard geometryObservation == nil else { return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene =
+            scenes.first { $0.activationState == .foregroundActive }
+            ?? scenes.first
+        geometryObservation = scene?.observe(\.effectiveGeometry, options: [.new]) {
+            [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        deviceObserver = NotificationCenter.default.addObserver(
+            forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+    }
+
+    private func refresh() {
+        let current = MonitorDeviceOrientationReader.current()
+        guard current != orientation else { return }
+        orientation = current
+    }
+
+    // No deinit removal: block-based observers die with their token on modern runtimes, and the
+    // observer lives exactly as long as the shell that owns the monitor anyway. Reaching the
+    // MainActor-isolated token from a nonisolated deinit is what Swift 6 rightly refuses.
 }
 
 struct LiveViewLayoutContext {

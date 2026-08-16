@@ -394,16 +394,13 @@ import Testing
     #expect(layout.rightRailLaneCenterLine.height == 390)
 }
 
-@Test func liveViewModuleFramesMirrorChromeButNotFeedForLandscapeRight() {
+@Test func liveViewModuleFramesMirrorFeedAndChromeTogetherForLandscapeRight() {
+    // This test used to pin the OPPOSITE: "mirror chrome but not feed". That pinned rule is the
+    // one the first hardware pass of the second landscape refuted — the chrome flipped around a
+    // picture that stayed put, so the capture cluster sat ON the feed and a dead lane sat
+    // inboard of the island. The layout mirrors as one piece or not at all.
     let chromeInsets = MonitorChromeLayout.insets(
         feedSafeArea: MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)
-    )
-    let landscapeLeft = MonitorLiveViewModuleLayout.fit(
-        viewportWidth: 844,
-        viewportHeight: 390,
-        feedSafeArea: MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44),
-        chromeInsets: chromeInsets,
-        bottomBarHeight: 54
     )
     let landscapeRight = MonitorLiveViewModuleLayout.fit(
         viewportWidth: 844,
@@ -422,9 +419,20 @@ import Testing
         horizontalDirection: .standard
     )
 
-    #expect(landscapeRight.feed.x == 0)
-    #expect(landscapeRight.feed.width == landscapeLeft.feed.width)
-    #expect(landscapeRight.batteryRail.x == 790)
+    // Every frame is the mirror of its standard twin — feed included, and the deck WITH it.
+    #expect(
+        landscapeRight.feed
+            == unmirroredLandscapeRight.feed.mirroredHorizontally(in: 844)
+    )
+    #expect(
+        abs(
+            landscapeRight.topInfoDeck.x
+                - unmirroredLandscapeRight.topInfoDeck.mirroredHorizontally(in: 844).x) < 0.5
+    )
+    #expect(
+        landscapeRight.batteryRail
+            == unmirroredLandscapeRight.batteryRail.mirroredHorizontally(in: 844)
+    )
     #expect(
         landscapeRight.rightRailControls
             == unmirroredLandscapeRight.rightRailControls.mirroredHorizontally(in: 844)
@@ -433,8 +441,14 @@ import Testing
         landscapeRight.rightRailLaneCenterLine
             == unmirroredLandscapeRight.rightRailLaneCenterLine.mirroredHorizontally(in: 844)
     )
-    #expect(landscapeRight.bottomAssistTools.x == 429)
-    #expect(landscapeRight.bottomCaptureSettings.x == 18)
+    #expect(
+        landscapeRight.bottomAssistTools
+            == unmirroredLandscapeRight.bottomAssistTools.mirroredHorizontally(in: 844)
+    )
+    #expect(
+        landscapeRight.bottomCaptureSettings
+            == unmirroredLandscapeRight.bottomCaptureSettings.mirroredHorizontally(in: 844)
+    )
 }
 
 @Test func liveViewTopInfoDeckDoesNotDependOnBottomBars() {
@@ -1156,4 +1170,64 @@ import Testing
     #expect(abs(frame.width - 500 * 9 / 16) < 0.5)
     #expect(abs(frame.x - (390 - 500 * 9.0 / 16) / 2) < 0.5)
     #expect(frame.y == 0)
+}
+
+/// The mirrored feed is the MIRROR of the standard feed — on every phone, not only the classic
+/// notch. The island phone's arm ignored the direction, so the picture stayed put while the
+/// chrome flipped around it: the capture rail overlaid the feed's left edge and a dead black
+/// lane sat inboard of the island (field report, first hardware pass of the second landscape).
+@Test func feedLayoutMirrorsOnIslandPhones() {
+    // iPhone 16 Pro-class landscape: symmetric 59pt island lanes.
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 59)
+    let standard = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        safeArea: safeArea
+    )
+    let mirrored = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        safeArea: safeArea,
+        horizontalDirection: .mirrored
+    )
+
+    // Standard clears the leading island; mirrored clears the trailing one.
+    #expect(standard.x == 59)
+    #expect(mirrored.x == 874 - standard.x - standard.width)
+    #expect(mirrored.width == standard.width)
+    // The island lane is free on the side that has an island.
+    #expect(mirrored.x + mirrored.width <= 874 - 59)
+}
+
+/// The whole map mirrors as one piece: the feed, the deck over it, and the rails around it.
+/// Mirroring the chrome around an unmirrored feed is what put the record cluster ON the
+/// picture and the recording rail in a 59pt island lane it does not fit in.
+@Test func zoneMapMirrorsFeedDeckAndRailsTogether() {
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 59)
+    let standard = MonitorLiveViewModuleLayout.fit(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        feedSafeArea: safeArea,
+        chromeInsets: MonitorEdgeInsets.chrome(for: .zero),
+        bottomBarHeight: 56
+    )
+    let mirrored = MonitorLiveViewModuleLayout.fit(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        feedSafeArea: safeArea,
+        chromeInsets: MonitorEdgeInsets.chrome(for: .zero),
+        bottomBarHeight: 56,
+        horizontalDirection: .mirrored
+    )
+
+    // The feed mirrors with its chrome, not independently of it.
+    #expect(mirrored.feed.x == 874 - standard.feed.x - standard.feed.width)
+    // The deck rides the feed.
+    #expect(
+        abs(mirrored.topInfoDeck.x - (874 - standard.topInfoDeck.x - standard.topInfoDeck.width))
+            < 0.5)
+    // The rail keeps its full lane on the other side — it must never be squeezed into the
+    // island lane. Same width both directions is the whole claim.
+    #expect(abs(mirrored.rightRailControls.width - standard.rightRailControls.width) < 0.5)
+    #expect(mirrored.rightRailControls.x < mirrored.feed.x)
 }
