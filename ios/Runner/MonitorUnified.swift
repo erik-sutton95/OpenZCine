@@ -1867,19 +1867,43 @@ struct MonitorShell: View {
                 // bottom-left lane; fall back to the assist bar's leading edge plus the same
                 // clearance the rail layout produced (indicator width 38 + 24). Photography's
                 // lock-side assist rail owns that lane instead, so clear past it there.
-                let photographyRailTrailing =
-                    max(
+                // The module frames in `map` arrive already MIRRORED for the layout direction —
+                // that is how the battery rail lands on the correct side without this code
+                // knowing. But this lane is DERIVED: "sit just past the rail, toward the feed".
+                // Which way "toward the feed" points flips with the direction, and extending a
+                // right-edge rail rightwards parked the button under the Dynamic Island, a
+                // sliver on screen. (iPad has shipped the same lane off-screen in its second
+                // landscape since the mirrored layout landed — no island there, just a bezel —
+                // which is how it went unseen: this button only mounts with an AF point active.)
+                let mirroredLane = context.horizontalDirection == .mirrored
+                let photographyRailEdge =
+                    mirroredLane
+                    ? min(
+                        map.systemSlots.lock.x,
+                        Double(context.viewportWidth)
+                            - MonitorBatteryRailLayout.batteryPillTrailing(
+                                safeArea: context.feedSafeArea)
+                    ) - 12 - Double(MonitorAssistStrip.expandedWidth)
+                    : max(
                         map.systemSlots.lock.x + map.systemSlots.lock.width,
                         MonitorBatteryRailLayout.batteryPillTrailing(
                             safeArea: context.feedSafeArea)
                     ) + 12 + Double(MonitorAssistStrip.expandedWidth)
-                let assistLeadingX = map.assistStrip.map { CGFloat($0.frame.x) } ?? 96
+                let assistInlineX =
+                    map.assistStrip.map {
+                        mirroredLane
+                            ? CGFloat($0.frame.x + $0.frame.width) - 62
+                            : CGFloat($0.frame.x) + 62
+                    } ?? (mirroredLane ? CGFloat(context.viewportWidth) - 96 : 96)
                 let x =
                     isPhotographyBand && chrome.assistToolbarVisible
-                    ? CGFloat(photographyRailTrailing) + 24 + size / 2
+                    ? CGFloat(photographyRailEdge)
+                        + (mirroredLane ? -(24 + size / 2) : 24 + size / 2)
                     : battery.style == .batteryInline
-                        ? assistLeadingX + 62
-                        : CGFloat(rail.x + rail.width) + 24
+                        ? assistInlineX
+                        : mirroredLane
+                            ? CGFloat(rail.x) - 24
+                            : CGFloat(rail.x + rail.width) + 24
                 let baseY =
                     map.assistStrip.map { CGFloat($0.frame.y) - 30 }
                     ?? CGFloat(context.viewportHeight) - 40
@@ -1922,7 +1946,12 @@ struct MonitorShell: View {
                     .environment(model)
                     .frame(height: min(280, CGFloat(context.viewportHeight) * 0.55))
                     .position(
-                        x: CGFloat(map.systemSlots.record.x) - 34,
+                        // "Beside the record button, toward the feed" — the record slot mirrors
+                        // to the LEFT rail in the mirrored layout, so the scrub steps right of it
+                        // there rather than off the screen edge.
+                        x: context.horizontalDirection == .mirrored
+                            ? CGFloat(map.systemSlots.record.x + map.systemSlots.record.width) + 34
+                            : CGFloat(map.systemSlots.record.x) - 34,
                         y: CGFloat(context.viewportHeight) / 2
                     )
                     .transition(.opacity)

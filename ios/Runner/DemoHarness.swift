@@ -765,9 +765,14 @@ enum DemoHarness {
                 let scenes = UIApplication.shared.connectedScenes
                     .compactMap { $0 as? UIWindowScene }
                 let mask: UIInterfaceOrientationMask =
-                    // The app supports interface LandscapeRight only (see Info.plist) — requesting
-                    // the unsupported side would silently no-op.
-                    raw == "landscape" ? .landscapeRight : .portrait
+                    switch raw {
+                    // "landscape" keeps its historical meaning (interface LandscapeRight, notch
+                    // left) so existing capture scripts stay valid; the explicit names reach each
+                    // side now that Info.plist allows both.
+                    case "landscape", "landscapeRight": .landscapeRight
+                    case "landscapeLeft": .landscapeLeft
+                    default: .portrait
+                    }
                 scenes.first?.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
             }
             if let raw = env["ZC_DEMO_FEED_ASPECT"], env["ZC_DEMO_AUTOSTART"] != "1",
