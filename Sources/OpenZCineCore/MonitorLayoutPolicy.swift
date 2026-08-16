@@ -80,6 +80,17 @@ public struct MonitorFeedFrame: Equatable, Sendable {
         self.width = width
         self.height = height
     }
+
+    /// Mirrors the frame around the viewport's vertical center line — the same operation the
+    /// module frames carry, so the feed can follow the one-mirror-at-the-exit rule they follow.
+    public func mirroredHorizontally(in viewportWidth: Double) -> MonitorFeedFrame {
+        MonitorFeedFrame(
+            x: max(0, viewportWidth) - x - width,
+            y: y,
+            width: width,
+            height: height
+        )
+    }
 }
 
 /// Named anchors for placing a fixed-size module inside a layout region.
@@ -283,22 +294,29 @@ public enum MonitorFeedLayout {
             x = min(max(remainingWidth / 2, leadingInset), maxX)
         } else if MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) {
             // Classic iPhones report equal horizontal safe areas even though only one side has
-            // the notch. Use physical orientation to clear that side, then bias the feed slightly
-            // toward the opposite control rail to close its oversized black gap.
+            // the notch: clear the leading side, biased slightly toward the opposite control
+            // rail to close its oversized black gap. STANDARD space only — the exit mirror
+            // below owns the other side, for this arm and every other one. (This arm used to
+            // mirror in place, which for its equal insets happened to equal the exit mirror —
+            // and the island arm below did not mirror at all, so the chrome flipped around a
+            // picture that stayed put: the capture rail overlaid the feed's left edge and a
+            // dead lane sat inboard of the island.)
             let availableShift = max(
                 0,
                 remainingWidth - max(0, safeArea.leading) - max(0, safeArea.trailing)
             )
             let railwardShift = min(classicNotchRailwardShift, availableShift)
-            x =
-                horizontalDirection == .mirrored
-                ? max(0, remainingWidth - safeArea.trailing - railwardShift)
-                : min(remainingWidth, safeArea.leading + railwardShift)
+            x = min(remainingWidth, safeArea.leading + railwardShift)
         } else {
             x = min(remainingWidth, leadingInset)
         }
 
-        return MonitorFeedFrame(x: x, y: 0, width: width, height: viewportHeight)
+        let standard = MonitorFeedFrame(x: x, y: 0, width: width, height: viewportHeight)
+        // ONE mirror, at the exit, for every arm above — the same rule the module frames follow.
+        // A direction-aware arm here and a direction-blind one there is exactly how the two
+        // halves of the screen ended up disagreeing about which side the island was on.
+        guard horizontalDirection == .mirrored else { return standard }
+        return standard.mirroredHorizontally(in: viewportWidth)
     }
 
     /// Fits the feed to the visible viewport without expanding the source frame.
@@ -478,10 +496,11 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
     public func mirroredChromeHorizontally(in viewportWidth: Double) -> MonitorLiveViewModuleLayout
     {
         MonitorLiveViewModuleLayout(
-            feed: feed,
+            feed: feed.mirroredHorizontally(in: viewportWidth),
             batteryRail: batteryRail.mirroredHorizontally(in: viewportWidth),
-            // Top deck floats over the feed, which is not mirrored, so it stays put too.
-            topInfoDeck: topInfoDeck,
+            // The deck rides the feed, so it mirrors WITH the feed. Leaving both put while the
+            // chrome flipped is what parked the capture cluster on the picture.
+            topInfoDeck: topInfoDeck.mirroredHorizontally(in: viewportWidth),
             bottomAssistTools: bottomAssistTools.mirroredHorizontally(in: viewportWidth),
             bottomCaptureSettings: bottomCaptureSettings.mirroredHorizontally(in: viewportWidth),
             rightRailControls: rightRailControls.mirroredHorizontally(in: viewportWidth),
@@ -533,11 +552,15 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             height: bottomRegion.height
         )
         let rightRailWidth = Self.rightRailWidth(for: chrome.width)
+        // STANDARD space, deliberately: every frame in this function is built for the standard
+        // direction and the single exit mirror flips the finished layout — feed and deck
+        // included. Threading the direction into some frames here and mirroring others at the
+        // exit is how the rails ended up computed in the island lane they do not fit in.
         let feed = MonitorFeedLayout.fullBleedFrame(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
             safeArea: feedSafeArea,
-            horizontalDirection: horizontalDirection
+            horizontalDirection: .standard
         )
         let usesClassicSideNotch = MonitorBatteryRailLayout.usesClassicSideNotch(
             safeArea: feedSafeArea
@@ -554,8 +577,7 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             ? min(MonitorFeedLayout.classicNotchRailwardShift, availableClassicShift)
             : 0
         let railReferenceFeed = MonitorFeedFrame(
-            x: feed.x
-                + (horizontalDirection == .mirrored ? classicShift : -classicShift),
+            x: feed.x - classicShift,
             y: feed.y,
             width: feed.width,
             height: feed.height
@@ -625,18 +647,22 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
         let layout = MonitorLiveViewModuleLayout(
             feed: feed,
             batteryRail: batteryRail,
-            topInfoDeck: Self.deckFrameClearingRail(
-                deck: MonitorModuleFrame(
+            topInfoDeck: constrained
+                ? MonitorModuleFrame(
                     x: deckLeft,
                     y: chrome.y,
                     width: max(0, deckRight - deckLeft),
                     height: topInfoDeckHeight
+                )
+                : Self.deckFrameClearingRail(
+                    deck: MonitorModuleFrame(
+                        x: deckLeft,
+                        y: chrome.y,
+                        width: max(0, deckRight - deckLeft),
+                        height: topInfoDeckHeight
+                    ),
+                    rail: rightRailControls
                 ),
-                rail: rightRailControls,
-                constrained: constrained,
-                horizontalDirection: horizontalDirection,
-                viewportWidth: viewportWidth
-            ),
             bottomAssistTools: Self.bottomAssistFrame(
                 in: bottomRegion,
                 width: bottomModuleWidth,
@@ -705,30 +731,17 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
     /// unclipped span.
     private static func deckFrameClearingRail(
         deck: MonitorModuleFrame,
-        rail: MonitorModuleFrame,
-        constrained: Bool,
-        horizontalDirection: MonitorHorizontalLayoutDirection,
-        viewportWidth: Double
+        rail: MonitorModuleFrame
     ) -> MonitorModuleFrame {
-        guard !constrained else { return deck }
-
-        // The deck is already in final coordinates (it hangs off the feed, which the caller built
-        // for the requested direction); the rail is mirrored later, so mirror it here to compare.
-        let mirrored = horizontalDirection == .mirrored
-        let rail = mirrored ? rail.mirroredHorizontally(in: viewportWidth) : rail
-        let left =
-            mirrored
-            ? max(deck.x, rail.x + rail.width + topInfoDeckControlGap)
-            : deck.x
-        let right =
-            mirrored
-            ? deck.x + deck.width
-            : min(deck.x + deck.width, rail.x - topInfoDeckControlGap)
-
+        // Standard space, like everything else in `fit` — the deck's trailing end clears the
+        // rail, and the exit mirror carries both to the other side together. The half-mirrored
+        // comparison this used to do was only ever needed because the feed skipped the exit
+        // mirror the modules took.
+        let right = min(deck.x + deck.width, rail.x - topInfoDeckControlGap)
         return MonitorModuleFrame(
-            x: left,
+            x: deck.x,
             y: deck.y,
-            width: max(0, right - left),
+            width: max(0, right - deck.x),
             height: deck.height
         )
     }

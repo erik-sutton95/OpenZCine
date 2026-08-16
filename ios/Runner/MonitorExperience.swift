@@ -72,10 +72,15 @@ struct MonitorExperience: View {
 
 private struct LiveViewShell: View {
     @Environment(NativeAppModel.self) private var model
+    /// OBSERVED state, not a body-time read. The two landscapes are invisible to layout —
+    /// same size, symmetric safe areas — so flipping between them changes nothing SwiftUI
+    /// already watches, and a body-time read of the orientation stayed stale until some other
+    /// invalidation (a DISP tap was the field repro) happened to rebuild the shell. Portrait
+    /// transitions only ever worked because the SIZE change re-ran the body.
+    @State private var deviceOrientation = MonitorDeviceOrientationReader.current()
 
     var body: some View {
         GeometryReader { proxy in
-            let deviceOrientation = MonitorDeviceOrientationReader.current()
             let screenWidth = MonitorDeviceOrientationReader.currentViewportWidth()
             let context = LiveViewLayoutContext(
                 proxy: proxy,
@@ -90,6 +95,9 @@ private struct LiveViewShell: View {
             MonitorShell(context: context)
                 .environment(model)
                 .animation(.easeInOut(duration: 0.3), value: context.isPortrait)
+                // The landscape-to-landscape flip animates for the same reason the portrait one
+                // does — the modules glide to their mirrored frames under stable identity.
+                .animation(.easeInOut(duration: 0.3), value: context.horizontalDirection)
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .ignoresSafeArea(.container, edges: .all)
                 // Tally + full-screen panel overlay the already-extended (physical-screen) layer
@@ -129,6 +137,38 @@ private struct LiveViewShell: View {
         // Snappy panel insert/remove so dismissing a popup feels near-instant.
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
+        .onAppear {
+            // Rotation notifications only flow while something has asked for them; without this
+            // the subscription below never fires on devices nothing else has enabled it on.
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            deviceOrientation = MonitorDeviceOrientationReader.current()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIDevice.orientationDidChangeNotification)
+        ) { _ in
+            // Read on the NEXT runloop turn: the notification reports the DEVICE moving, and the
+            // scene's interface orientation — the thing the layout keys on — commits a beat
+            // later. Reading synchronously here races it and can latch the outgoing orientation,
+            // which would be this bug again with an extra step.
+            DispatchQueue.main.async {
+                deviceOrientation = MonitorDeviceOrientationReader.current()
+            }
+        }
+        .onReceive(
+            // The INTERFACE can rotate without the device moving — `requestGeometryUpdate`
+            // (the demo harness's headless rotation) and windowing moves land that way, and the
+            // device notification above stays silent for all of them. This is the notification
+            // UIKit posts when the interface orientation itself commits. Referenced by its wire
+            // name: the symbolic constant is deprecated (the STATUS BAR framing is what Apple
+            // retired, not the event), and the name string is documented API surface.
+            NotificationCenter.default.publisher(
+                for: Notification.Name("UIApplicationDidChangeStatusBarOrientationNotification"))
+        ) { _ in
+            DispatchQueue.main.async {
+                deviceOrientation = MonitorDeviceOrientationReader.current()
+            }
+        }
     }
 }
 
