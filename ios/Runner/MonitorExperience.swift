@@ -77,7 +77,8 @@ private struct LiveViewShell: View {
     /// already watches, and a body-time read of the orientation stayed stale until some other
     /// invalidation (a DISP tap was the field repro) happened to rebuild the shell. Portrait
     /// transitions only ever worked because the SIZE change re-ran the body.
-    @State private var deviceOrientation = MonitorDeviceOrientationReader.current()
+    @State private var orientationObserver = InterfaceOrientationObserver()
+    private var deviceOrientation: MonitorDeviceOrientation { orientationObserver.orientation }
 
     var body: some View {
         GeometryReader { proxy in
@@ -137,39 +138,59 @@ private struct LiveViewShell: View {
         // Snappy panel insert/remove so dismissing a popup feels near-instant.
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
-        .onAppear {
-            // Rotation notifications only flow while something has asked for them; without this
-            // the subscription below never fires on devices nothing else has enabled it on.
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            deviceOrientation = MonitorDeviceOrientationReader.current()
+        .onAppear { orientationObserver.start() }
+    }
+}
+
+/// Publishes the interface orientation as observable state.
+///
+/// The first cut of this listened for NOTIFICATIONS — the device one, and the deprecated
+/// status-bar one for interface-only rotations. Hardware refuted it: neither arrived on a
+/// physical phone, and because the orientation had just become captured state rather than a
+/// body-time read, the staleness this exists to fix came back WORSE — nothing, not even the
+/// DISP tap that used to jog it, could refresh a value no notification ever updated.
+///
+/// `UIWindowScene.effectiveGeometry` is the structural signal: documented KVO-compliant, it
+/// covers every way the interface can turn — a hand rotating the phone, a geometry request
+/// (the demo harness's headless rotation), a windowing change — and it fires when the new
+/// geometry has COMMITTED, so there is no next-runloop race to lose. The device-rotation
+/// notification stays as a belt-and-braces second source; where it works it is merely
+/// redundant.
+@MainActor
+@Observable
+final class InterfaceOrientationObserver {
+    private(set) var orientation = MonitorDeviceOrientationReader.current()
+    @ObservationIgnored private var geometryObservation: NSKeyValueObservation?
+    @ObservationIgnored private var deviceObserver: (any NSObjectProtocol)?
+
+    func start() {
+        refresh()
+        guard geometryObservation == nil else { return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene =
+            scenes.first { $0.activationState == .foregroundActive }
+            ?? scenes.first
+        geometryObservation = scene?.observe(\.effectiveGeometry, options: [.new]) {
+            [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.refresh() }
         }
-        .onReceive(
-            NotificationCenter.default.publisher(
-                for: UIDevice.orientationDidChangeNotification)
-        ) { _ in
-            // Read on the NEXT runloop turn: the notification reports the DEVICE moving, and the
-            // scene's interface orientation — the thing the layout keys on — commits a beat
-            // later. Reading synchronously here races it and can latch the outgoing orientation,
-            // which would be this bug again with an extra step.
-            DispatchQueue.main.async {
-                deviceOrientation = MonitorDeviceOrientationReader.current()
-            }
-        }
-        .onReceive(
-            // The INTERFACE can rotate without the device moving — `requestGeometryUpdate`
-            // (the demo harness's headless rotation) and windowing moves land that way, and the
-            // device notification above stays silent for all of them. This is the notification
-            // UIKit posts when the interface orientation itself commits. Referenced by its wire
-            // name: the symbolic constant is deprecated (the STATUS BAR framing is what Apple
-            // retired, not the event), and the name string is documented API surface.
-            NotificationCenter.default.publisher(
-                for: Notification.Name("UIApplicationDidChangeStatusBarOrientationNotification"))
-        ) { _ in
-            DispatchQueue.main.async {
-                deviceOrientation = MonitorDeviceOrientationReader.current()
-            }
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        deviceObserver = NotificationCenter.default.addObserver(
+            forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refresh() }
         }
     }
+
+    private func refresh() {
+        let current = MonitorDeviceOrientationReader.current()
+        guard current != orientation else { return }
+        orientation = current
+    }
+
+    // No deinit removal: block-based observers die with their token on modern runtimes, and the
+    // observer lives exactly as long as the shell that owns the monitor anyway. Reaching the
+    // MainActor-isolated token from a nonisolated deinit is what Swift 6 rightly refuses.
 }
 
 struct LiveViewLayoutContext {
