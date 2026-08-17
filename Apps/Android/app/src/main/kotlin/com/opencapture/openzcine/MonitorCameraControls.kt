@@ -1452,8 +1452,11 @@ internal fun MonitorControlPickerPanel(
     /** Flips the focus-scrub preference; null omits the FOCUS popup's toggle row. */
     onToggleMfScrub: (() -> Unit)? = null,
 ) {
-    val dismissAllowed = pendingControl == null
-    BackHandler(enabled = dismissAllowed, onBack = onDismiss)
+    // Dismissal is NEVER gated on an in-flight write (#328): a focus-mode write can hold
+    // the command mutex for seconds — or wedge on a flaky link — and gating Back/scrim
+    // here trapped the operator in the popup. iOS `dismissActivePanel` has no such gate;
+    // the drain loop finishes the write with the panel closed.
+    BackHandler(onBack = onDismiss)
 
     // Slide container is NOT keyed on kind — switchPicker must not re-slide.
     // iOS leaves panelRevealed true and only cross-fades body content.
@@ -1482,7 +1485,7 @@ internal fun MonitorControlPickerPanel(
             // Transparent full-screen hit target — iOS PanelHost clear backdrop.
             Box(
                 Modifier.fillMaxSize()
-                    .chromeClickable(enabled = dismissAllowed, onClick = onDismiss),
+                    .chromeClickable(onClick = onDismiss),
             )
         }
         // Outer box parks the glass card; content swaps via AnimatedContent.

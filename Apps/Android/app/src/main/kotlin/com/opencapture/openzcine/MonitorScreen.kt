@@ -2563,12 +2563,12 @@ internal fun MonitorScreen(
                     onDisp = cycleDisplayMode,
                     onOpenMedia = {
                         activeAssistOptions = null
-                        if (pendingCommandControl == null) activeMonitorPickerKind = null
+                        activeMonitorPickerKind = null
                         onOpenMedia()
                     },
                     onOpenSettings = {
                         activeAssistOptions = null
-                        if (pendingCommandControl == null) activeMonitorPickerKind = null
+                        activeMonitorPickerKind = null
                         onOpenSettings()
                     },
                     resolutionPickerAvailable = MonitorPickerKind.RESOLUTION in topPillPickers,
@@ -3027,7 +3027,7 @@ internal fun MonitorScreen(
                             recordChromeEditBounds,
                         ),
                         onClick = {
-                            if (pendingCommandControl == null) activeMonitorPickerKind = null
+                            activeMonitorPickerKind = null
                             onOpenSettings()
                         },
                         contentDescription = stringResource(R.string.a11y_monitor_settings),
@@ -3044,7 +3044,7 @@ internal fun MonitorScreen(
                             recordChromeEditBounds,
                         ),
                         onClick = {
-                            if (pendingCommandControl == null) activeMonitorPickerKind = null
+                            activeMonitorPickerKind = null
                             onOpenMedia()
                         },
                         contentDescription = stringResource(R.string.a11y_monitor_media),
@@ -3390,11 +3390,12 @@ internal fun MonitorScreen(
                             } else {
                                 applyCameraControl
                             },
+                        // Unconditional (#328): never hold the popup hostage to an in-flight
+                        // write — the drain loop completes it with the panel closed (iOS
+                        // `dismissActivePanel` has no pending gate either).
                         onDismiss = {
-                            if (pendingCommandControl == null) {
-                                activeMonitorPickerKind = null
-                                commandControlFeedback = null
-                            }
+                            activeMonitorPickerKind = null
+                            commandControlFeedback = null
                         },
                         slideFromTop = isTopDropDown,
                         // The stills SHUTTER picker has no movie TV-lock hold.
