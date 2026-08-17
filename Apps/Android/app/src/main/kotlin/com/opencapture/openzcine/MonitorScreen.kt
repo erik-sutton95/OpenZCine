@@ -2940,7 +2940,9 @@ internal fun MonitorScreen(
                     // no dial at all (the lens ring owns focus in MF); AF-F mounts it INERT below,
                     // because a dial that vanishes on a mode change reads as a bug while a greyed
                     // one says "wrong mode for this".
-                    mfDriveEligibility(cameraProperties.focusMode) != MfDriveEligibility.UNAVAILABLE &&
+                    mfDriveEligibility(
+                        cameraProperties.activeFocusMode(photography = isPhotographyMode),
+                    ) != MfDriveEligibility.UNAVAILABLE &&
                     // The strip absorbs taps (it drives on drag, swallows plain taps
                     // so they can't move the AF point under it). Mounting it over an
                     // open picker/popup would eat the popup's dismiss taps — picking
@@ -2961,8 +2963,9 @@ internal fun MonitorScreen(
                     MFDriveStrip(
                         atEnd = mfDriveAtEnd,
                         enabled =
-                            mfDriveEligibility(cameraProperties.focusMode) ==
-                                MfDriveEligibility.DRIVABLE,
+                            mfDriveEligibility(
+                                cameraProperties.activeFocusMode(photography = isPhotographyMode),
+                            ) == MfDriveEligibility.DRIVABLE,
                         onDrive = { pulses -> mfDrive.drive(recordScope, pulses) },
                         modifier =
                             Modifier.zone(
