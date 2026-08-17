@@ -38,6 +38,23 @@ class ConnectionFailureMessagesTest {
         )
     }
 
+    /**
+     * The transport's non-numeric-host refusal is an implementation detail, never operator
+     * copy: it reaches this mapper only if some path hands the dialer a non-dialable key
+     * (#327), and the operator's remedy is the rejoin/rediscover flow, not address formatting.
+     */
+    @Test
+    fun `numeric IPv4 transport refusal maps to rejoin guidance`() {
+        val message =
+            friendlyCameraConnectionFailure(
+                "Enter a numeric IPv4 camera address. Host names are not supported yet.",
+            )
+        assertEquals(
+            "Couldn't find the camera's address on its network. Rejoin the camera's Wi‑Fi and try again.",
+            message,
+        )
+    }
+
     @Test
     fun `plain operator text is preserved`() {
         assertEquals(
