@@ -8,6 +8,34 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Share This Feed** (iOS + Android): broadcast the monitor to other devices on set and watch
+  another device's, with per-watcher scopes and LUTs, an optional passcode, and camera-control
+  handoff — one holder at a time, requested on the broadcaster's own screen, and control now
+  survives a brief network blink instead of dying with the socket. Hardware HEVC with automatic
+  JPEG fallback for devices whose decoders refuse the stream.
+- **One camera, many setups** (iOS + Android): each way of reaching a body — its own access
+  point, a router (several, told apart by network), a phone hotspot, the cable — is a saved
+  setup of its own, shown as tabs on the camera's row and individually renameable. Stream
+  preset and quality bias are remembered per setup.
+- **Both landscape orientations on iPhone**: the picture and controls swap sides on rotation so
+  nothing hides behind the Dynamic Island, and the flip lands mid-session without any
+  interaction. (iPad already had both; its second-landscape focus-recall button placement is
+  fixed as part of the same work.)
+- **Vertical camera mode** (iOS + Android): turn the body on its side and the picture follows,
+  in video and photo, with a portrait layout built for it.
+- **Pinch-to-zoom on the live view** (iOS + Android), replacing the fixed 2×/3×/4× magnifier;
+  tap-to-focus follows the zoom.
+- **Feed processing** (iOS): a Feed Upscaler (Off / Fast / Quality / AI) and temporal Feed Noise
+  Reduction, plus a hardware JPEG decode for the live picture.
+- **HDMI capture as a picture source** — iPadOS via USB capture devices, Android via CameraX —
+  while camera control continues over the normal link.
+- **Camera clock sync** (iOS + Android): a body whose clock has drifted more than five seconds
+  is set to the phone's time on connect — automatically, never while recording, and never on an
+  unreadable value.
+- **Apple Watch photo mode**: shutter, image-area preview and shots-remaining on the wrist; the
+  crown magnifies the preview and a drag pans it.
+- **Clean view (DISP 2) tool set** (iOS + Android): the tools that make a clean picture —
+  peaking, zebra, guides — ship enabled on the clean display mode.
 - **Slow-motion conform preview** for high-frame-rate clips: pick the rate the edit will conform
   to and watch the clip at that speed, stated in full (`60 → 24 fps · 40%`). Real time stays the
   default, audio is muted while a conform runs, and the clip itself is never touched. Where the
@@ -60,6 +88,19 @@ All notable changes to this project are documented here. The format is based on
   configuration.
 
 ### Fixed
+
+- A stills-side focus-mode event no longer repaints the movie FOCUS readout or makes feed taps
+  fire a one-shot AF drive on a body running continuous AF — the two modes were decoding into
+  one field, last writer wins (both platforms).
+- Android settings popups can always be closed — the X, tap-outside and Back no longer go dead
+  while a slow camera write is in flight.
+- An Android camera-access-point reconnect discovers the camera's address after joining instead
+  of dialling the saved placeholder — which surfaced as "IPv4 address must be numeric" on
+  bodies whose address was never learned.
+- A watcher granted camera control can actually start and stop recording, and screen-recording
+  on the broadcaster no longer walks the watcher's picture progressively behind live.
+- Fixed a crash that could end a live session mid-take when the temporal noise filter handed
+  the video pipeline fewer reference frames than it was configured for (M4 iPads).
 
 - **Media filters match the tab you are on.** The filter popup offered the same chips everywhere,
   so the Photos tab advertised MOV, MP4, and HD/4K/5.4K/6K — none of which a still can ever be, and
@@ -197,6 +238,12 @@ All notable changes to this project are documented here. The format is based on
   the AF point moves while the preview loads.
 
 ### Changed
+
+- A weak or congested wireless link now degrades the picture instead of dropping the session,
+  on both platforms; the Android live path also sheds several per-frame costs (GPU re-uploads,
+  redundant copies, background-priority decode) and holds Wi-Fi in low-latency mode during a
+  wireless session.
+- New installs start on the Fast feed upscaler rather than the heaviest available.
 
 - The **star rating in playback** moved from a permanent band above the transport to a shade at the
   top of the picture: tap the star handle to reveal the stars, tap it again to put them away. They

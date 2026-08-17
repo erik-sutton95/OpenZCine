@@ -1,5 +1,4 @@
-- Fixed: a watcher granted camera control keeps it through a brief drop-out.
-- Improved: lower live-view delay over both Wi-Fi and USB-C, and less of it on some phones.
-- Fixed: a watcher granted camera control can now start and stop recording.
-- New: one camera keeps a setup per way of connecting, each nameable with its own picture settings.
-- New: vertical camera mode, and the mirror assist for a camera facing you.
+- Fixed: settings popups always close - the X and tapping outside work even during a slow camera write.
+- Fixed: connecting through the camera's own Wi-Fi finds the camera after joining instead of failing with an address error.
+- Fixed: stills focus settings no longer change how video focus taps behave.
+- New: your camera's clock syncs to the phone on connect - never while recording.

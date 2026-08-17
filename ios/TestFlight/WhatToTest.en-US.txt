@@ -9,8 +9,8 @@ New and changed
 
 Fixes
 
-- The camera is found on networks it could not be found on before, including one whose address sits on a different subnet from your phone's.
-- Scanned Wi-Fi details can be corrected. If OCR misreads a character in the network name or the key, tap either and fix it instead of starting over.
+- A camera whose clock has drifted is set to your phone's time on connect - automatically, never while recording.
+- Changing stills focus settings no longer flips the video FOCUS readout or makes taps refocus single-shot on a camera set to full-time AF.
 - A Wi-Fi connection no longer asks you to join the camera's own network, and saved setups no longer read as offline while you are on that network.
 - A weak or busy link degrades the picture instead of dropping the session, and screen recording while you share your feed no longer walks the watcher's picture behind the action.
 - A watcher granted camera control can now start and stop the take, and keeps that control through a brief drop-out instead of losing it the moment the link stutters.
@@ -24,4 +24,4 @@ What to test
 - Turn the camera on its side, in video and in photo. Then flip the iPhone to the opposite landscape mid-session: the picture and controls should swap sides on their own, with nothing under the island.
 - Turn on Share This Feed, ask for control from the second device, and start a take from it. Then screen-record on the sharing device and check the watcher stays with the action.
 - Watch a dim high-ISO shot with Feed Noise Reduction on and off, then step the Feed Upscaler through Fast, Quality and AI on the same framing.
-- Pair a camera by scanning its screen, and deliberately correct a character in the key before connecting.
+- With the body in full-time AF for video, change stills focus settings and tap around the feed: the FOCUS readout should hold, and focus should stay continuous. Set the camera clock a minute off, connect, and check it corrects.
