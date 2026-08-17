@@ -131,6 +131,11 @@ final class FakeZRServer: @unchecked Sendable {
         /// Response sent for either standard or extended property writes.
         /// Tests use a real PTP rejection code to verify command propagation.
         var propertyWriteResponseCode: UInt16 = 0x2001
+        /// Dribbles the property-write RESPONSE one byte at a time with this many milliseconds
+        /// between bytes. The trickle that defeats a per-poll timeout: every poll sees a byte, so
+        /// the socket never looks silent, and without a whole-transaction deadline the write
+        /// holds the transaction gate for the dribble's full duration.
+        var propertyWriteResponseDribbleMillisecondsPerByte: UInt64 = 0
         /// Accepted writes that the fake deliberately refuses to apply to authoritative readback.
         var ignoredPropertyWrites: Set<UInt32> = []
         /// Advertised UINT16 range for the active white-balance tune descriptor.
@@ -946,7 +951,17 @@ final class FakeZRServer: @unchecked Sendable {
                 applyCameraPropertyWriteLocked(property: property, data: dataOut)
             }
             lock.unlock()
-            sendResponse(connection, code: responseCode, transactionID: transactionID)
+            if options.propertyWriteResponseDribbleMillisecondsPerByte > 0 {
+                var payload = ByteCoding.uint16LE(responseCode)
+                payload += ByteCoding.uint32LE(transactionID)
+                let packet = PTPIPPacket(type: .operationResponse, payload: Data(payload))
+                sendDribbled(
+                    connection,
+                    Data(packet.serializedBytes),
+                    millisecondsPerByte: options.propertyWriteResponseDribbleMillisecondsPerByte)
+            } else {
+                sendResponse(connection, code: responseCode, transactionID: transactionID)
+            }
         default:
             sendResponse(connection, code: 0x2005, transactionID: transactionID)
         }
@@ -1579,6 +1594,34 @@ final class FakeZRServer: @unchecked Sendable {
         sendResponse(
             connection, code: code, transactionID: transactionID,
             parameters: responseParameters)
+    }
+
+    /// One byte per interval — a link that is alive but barely, which no per-poll timeout can
+    /// tell apart from a healthy one.
+    ///
+    /// The deadline this exists to prove CLOSES the peer socket mid-dribble, so this must both
+    /// suppress SIGPIPE (a raw Darwin send into a closed socket kills the whole test process —
+    /// which is exactly how this helper's first version took the suite down with signal 13,
+    /// after every test had passed) and stop on the first failed byte.
+    private func sendDribbled(_ connection: Int32, _ data: Data, millisecondsPerByte: UInt64) {
+        #if canImport(Darwin)
+            var noSigpipe: Int32 = 1
+            _ = setsockopt(
+                connection, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe,
+                socklen_t(MemoryLayout<Int32>.size))
+            let flags: Int32 = 0
+        #else
+            let flags = Int32(MSG_NOSIGNAL)
+        #endif
+        for byte in data {
+            var value = byte
+            let sent = withUnsafeBytes(of: &value) { raw -> Int in
+                guard let base = raw.baseAddress else { return 0 }
+                return platformSend(connection, base, 1, flags)
+            }
+            guard sent > 0 else { return }
+            usleep(useconds_t(millisecondsPerByte * 1_000))
+        }
     }
 
     private func send(_ connection: Int32, _ packet: PTPIPPacket) {

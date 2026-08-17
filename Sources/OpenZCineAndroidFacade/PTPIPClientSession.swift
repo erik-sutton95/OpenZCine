@@ -625,6 +625,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Accumulated Android monitor state. Access only while
     /// `commandLifecycleLock` is held so a refresh cannot race control writes,
     /// media ownership, or teardown.
+    /// See the arming site in `executeTransaction`. Internal so the dribbling-camera test can
+    /// shrink it; nothing else writes it.
+    var commandTransactionDeadlineNanoseconds: UInt64 = 15_000_000_000
+
     private var androidPropertySnapshot = PTPCameraPropertySnapshot()
     /// A drifted body clock found at bootstrap, waiting for the first poll tick that carries the
     /// shell's authoritative record state. See `CameraClockSync` for the policy and the reason
@@ -4489,6 +4493,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard let command else {
             throw PTPIPClientSessionError.connectionClosed
         }
+        // Whole-transaction backstop, the iOS transport's fifteen seconds ported: a healthy
+        // command completes in well under a second, a focus-motor handoff in single-digit
+        // seconds, and a 1 MB media chunk in a few — so anything that outlives this is a wedged
+        // or byte-dribbling camera holding the gate, and with it record-stop, AF, and every
+        // queued write.
+        command.beginTransactionDeadline(nanoseconds: commandTransactionDeadlineNanoseconds)
+        defer { command.clearTransactionDeadline() }
         let roundTripStart = Self.monotonicNanoseconds()
 
         let transactionID = explicitTransactionID ?? nextTransactionID
@@ -4568,6 +4579,20 @@ final class PosixTCPSocket: @unchecked Sendable {
     private let host: String
     private let port: UInt16
     private let label: String
+    /// Whole-transaction deadline, set by the session for the duration of one command
+    /// transaction and cleared after. Only the transaction thread touches it (command I/O is
+    /// serialized by the session's transaction lock), so it needs no lock of its own. The event
+    /// socket never carries one — its waits are legitimately idle for minutes.
+    private var transactionDeadlineNanos: UInt64?
+
+    /// Arms the deadline for the transaction that is about to run.
+    func beginTransactionDeadline(nanoseconds: UInt64) {
+        transactionDeadlineNanos = PTPIPClientSession.monotonicNanoseconds() &+ nanoseconds
+    }
+
+    func clearTransactionDeadline() {
+        transactionDeadlineNanos = nil
+    }
     /// Per-poll timeout; mutable so teardown can shorten it (see `disconnect`).
     var timeoutMilliseconds: Int32
     private let descriptorLock = NSLock()
@@ -4789,8 +4814,24 @@ final class PosixTCPSocket: @unchecked Sendable {
         // Loop rather than recurse on EINTR / spurious wakeups (same rationale
         // as the iOS twin: a signal storm must not grow the stack).
         while true {
+            // The per-poll timeout below catches a link that has gone SILENT. It cannot catch a
+            // link that trickles — a byte per poll re-arms it forever, and that is exactly how a
+            // wedged write held the transaction gate (and the app's controls) for a whole
+            // session. The armed deadline bounds the WHOLE transaction, like the iOS transport's
+            // fifteen-second backstop; on breach the socket CLOSES, because bytes that arrive
+            // after a breached transaction would desynchronize the next one.
+            var pollBudget = Int32(min(timeoutMilliseconds, 30_000))
+            if let deadline = transactionDeadlineNanos {
+                let now = PTPIPClientSession.monotonicNanoseconds()
+                guard deadline > now else {
+                    close()
+                    throw PTPIPClientSessionError.timeout("\(label) transaction deadline")
+                }
+                let remainingMilliseconds = (deadline &- now) / 1_000_000
+                pollBudget = Int32(min(UInt64(pollBudget), max(1, remainingMilliseconds)))
+            }
             var pollDescriptor = pollfd(fd: descriptor, events: events, revents: 0)
-            let result = poll(&pollDescriptor, 1, min(timeoutMilliseconds, 30_000))
+            let result = poll(&pollDescriptor, 1, pollBudget)
             if result > 0 {
                 if (pollDescriptor.revents & events) != 0 {
                     return
