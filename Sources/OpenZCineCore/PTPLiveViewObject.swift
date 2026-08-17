@@ -64,6 +64,12 @@ public enum PTPLiveViewRotation: UInt8, Equatable, Sendable, CaseIterable {
 
     /// True when the frame presents tall — layout swaps the feed's width and height.
     public var isVertical: Bool { self == .portraitGripUp || self == .portraitGripDown }
+
+    /// Rotation the monitor applies. Off keeps the raster in the camera's native landscape
+    /// sensor orientation even when the body is on its side or upside down.
+    public func displayed(autoRotateEnabled: Bool) -> PTPLiveViewRotation {
+        autoRotateEnabled ? self : .landscape
+    }
 }
 
 /// The camera's audio-level readout from the LiveViewObject header — the same segmented meter the

@@ -4504,6 +4504,12 @@ struct OperatorSettingsPanel: View {
                     "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load — disable tools you are not using. iOS may still dim when the device overheats.",
                 isOn: model.preferences.keepScreenAwake
             ) { model.preferences.keepScreenAwake.toggle() }
+            SettingsSwitchInlineRow(
+                title: "Auto-Rotate Feed",
+                help:
+                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only — the recording is never affected.",
+                isOn: model.preferences.autoRotateFeedEnabled
+            ) { model.preferences.autoRotateFeedEnabled.toggle() }
         }
 
     }

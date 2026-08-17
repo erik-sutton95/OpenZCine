@@ -135,6 +135,13 @@ public enum class LiveFeedRotation(public val displayDegreesClockwise: Float) {
     /** True when the frame presents tall — layout swaps the feed's sides. */
     public val isVertical: Boolean
         get() = this == PORTRAIT_GRIP_UP || this == PORTRAIT_GRIP_DOWN
+
+    /**
+     * Rotation the monitor applies. Off keeps the raster in the camera's native
+     * landscape sensor orientation even when the body is on its side or upside down.
+     */
+    public fun displayed(autoRotateEnabled: Boolean): LiveFeedRotation =
+        if (autoRotateEnabled) this else LANDSCAPE
 }
 
 /** Camera-owned timecode parsed from the same live-view header as [LiveFrame]. */

@@ -2030,7 +2030,7 @@ struct MonitorShell: View {
         // the vertical viewer — feed spanning topBar→systemBar (the 9:16 picture pillarboxes
         // inside), the floating vertical assist rail, and the capture bar over the feed's
         // bottom edge — where fit's stacked toolbar/tile bands would strand the controls.
-        let isVerticalFeed = model.liveFeedRotation.isVertical
+        let isVerticalFeed = model.displayedFeedRotation.isVertical
         // Vertical is tested before photography, so a vertically held stills body reaches fill.
         let zoneAspect: PortraitFeedAspect =
             model.displayMode == .command

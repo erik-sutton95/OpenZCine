@@ -493,6 +493,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         bluetoothShutterEnabled: Bool = true,
         hapticsEnabled: Bool,
         keepScreenAwake: Bool,
+        autoRotateFeedEnabled: Bool = true,
         streamPreset: StreamPreset,
         qualityBias: QualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
@@ -523,6 +524,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.bluetoothShutterEnabled = bluetoothShutterEnabled
         self.hapticsEnabled = hapticsEnabled
         self.keepScreenAwake = keepScreenAwake
+        self.autoRotateFeedEnabled = autoRotateFeedEnabled
         self.streamPreset = streamPreset
         self.qualityBias = qualityBias
         self.portraitFeedAspect = portraitFeedAspect
@@ -565,6 +567,10 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var bluetoothShutterEnabled: Bool
     public var hapticsEnabled: Bool
     public var keepScreenAwake: Bool
+    /// Turns the monitoring image upright from the body's live-view orientation. Off keeps the
+    /// picture in the camera's native landscape sensor orientation. Display only — the recording
+    /// is never affected.
+    public var autoRotateFeedEnabled: Bool
     public var streamPreset: StreamPreset
     public var qualityBias: QualityBias
     /// Which aspect the portrait feed renders at (operator pinch, persisted).
@@ -669,7 +675,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case liveViewVisibleAssistTools, playbackVisibleAssistTools
         case visibleAssistTools
         case recordConfirmationEnabled, recordHoldEnabled, bluetoothShutterEnabled, hapticsEnabled,
-            keepScreenAwake, streamPreset, qualityBias, portraitFeedAspect, scopeActivationOrder
+            keepScreenAwake, autoRotateFeedEnabled, streamPreset, qualityBias, portraitFeedAspect,
+            scopeActivationOrder
         case cleanViewPinnedTools
         case cleanChrome, commandChrome
         case cleanChromeV2
@@ -720,6 +727,10 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             try container.decodeIfPresent(Bool.self, forKey: .bluetoothShutterEnabled) ?? true
         hapticsEnabled = try container.decode(Bool.self, forKey: .hapticsEnabled)
         keepScreenAwake = try container.decodeIfPresent(Bool.self, forKey: .keepScreenAwake) ?? true
+        // Predates this switch. Absent means the operator never chose, so the default-on that
+        // shipped with vertical mode applies; an explicitly saved false is a real opt-out.
+        autoRotateFeedEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .autoRotateFeedEnabled) ?? true
         streamPreset = try container.decode(StreamPreset.self, forKey: .streamPreset)
         qualityBias = try container.decode(QualityBias.self, forKey: .qualityBias)
         portraitFeedAspect =
@@ -811,6 +822,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(bluetoothShutterEnabled, forKey: .bluetoothShutterEnabled)
         try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
         try container.encode(keepScreenAwake, forKey: .keepScreenAwake)
+        try container.encode(autoRotateFeedEnabled, forKey: .autoRotateFeedEnabled)
         try container.encode(streamPreset, forKey: .streamPreset)
         try container.encode(qualityBias, forKey: .qualityBias)
         try container.encode(portraitFeedAspect, forKey: .portraitFeedAspect)
@@ -853,6 +865,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         recordConfirmationEnabled: true,
         hapticsEnabled: true,
         keepScreenAwake: true,
+        autoRotateFeedEnabled: true,
         // The smallest preset is ~320x240 — too little real detail for the focus and exposure
         // assists to read, and most of what a detector finds there is compression structure
         // rather than the lens. Default to the largest stream the body will send; the operator

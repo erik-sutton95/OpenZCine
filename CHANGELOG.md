@@ -23,6 +23,9 @@ All notable changes to this project are documented here. The format is based on
   fixed as part of the same work.)
 - **Vertical camera mode** (iOS + Android): turn the body on its side and the picture follows,
   in video and photo, with a portrait layout built for it.
+- **Auto-Rotate Feed switch** (iOS + Android): turn off upright rotation of the monitoring
+  image when the camera is on its side. On by default, under Settings → Controls; the
+  recording is never affected.
 - **Pinch-to-zoom on the live view** (iOS + Android), replacing the fixed 2×/3×/4× magnifier;
   tap-to-focus follows the zoom.
 - **Feed processing** (iOS): a Feed Upscaler (Off / Fast / Quality / AI) and temporal Feed Noise
