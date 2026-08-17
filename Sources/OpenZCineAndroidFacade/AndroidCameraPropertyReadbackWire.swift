@@ -289,6 +289,9 @@ public enum AndroidCameraPropertyReadbackWire {
         append("lens", value: properties.lens, to: &fields)
         append("focalLength", value: properties.focalLength, to: &fields)
         append("focusMode", value: properties.focusMode, to: &fields)
+        // Both sides go over the wire because the shell, not the readback, knows which one is on
+        // screen — see `CameraPropertySnapshot.activeFocusMode` on the Kotlin end.
+        append("stillFocusMode", value: properties.stillFocusMode, to: &fields)
         append("focusArea", value: properties.focusArea, to: &fields)
         append("focusSubject", value: properties.focusSubject, to: &fields)
         append("microphoneSensitivity", value: properties.microphoneSensitivity, to: &fields)

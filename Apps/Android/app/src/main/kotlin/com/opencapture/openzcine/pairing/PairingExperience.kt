@@ -623,6 +623,13 @@ internal const val CAMERA_AP_POST_JOIN_SETTLE_MILLIS: Long = 1_200L
 /** How many PTP-IP establish attempts after a camera-AP rejoin. */
 internal const val CAMERA_AP_CONNECT_ATTEMPTS: Int = 3
 
+/**
+ * How long a fresh NSD browse may take to name the camera on its own network after a join.
+ * Real hardware needs a while after association (DHCP + mDNS settling + the body's PTP
+ * service coming up) — iOS allows 45s for the same wait, with the card's Cancel to escape.
+ */
+internal const val CAMERA_AP_DISCOVER_AFTER_JOIN_MILLIS: Long = 45_000L
+
 internal const val CAMERA_AP_CONNECT_RETRY_DELAY_MILLIS: Long = 1_500L
 
 /** How often the USB discover step re-enumerates while waiting for a camera. */
@@ -1136,10 +1143,12 @@ public fun PairingExperience(
                     // Association can finish before the camera answers PTP-IP
                     // Init; match the saved-reconnect settle before handshaking.
                     delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
-                    // Discover on the live link — no fixed camera-AP IP.
+                    // Discover on the live link — no fixed camera-AP IP. The window matches the
+                    // saved-reconnect one (and iOS's 45s browse): 3s regularly lost the race
+                    // against a body still bringing up mDNS after association.
                     val host =
                         cameras.firstOrNull()?.host
-                            ?: withTimeoutOrNull(3_000) {
+                            ?: withTimeoutOrNull(CAMERA_AP_DISCOVER_AFTER_JOIN_MILLIS) {
                                 environment.hotspotCameras.first { it.isNotEmpty() }.first().host
                             }
                     if (host != null) {

@@ -151,6 +151,9 @@ public enum PTPPropertyCode: UInt32, Sendable {
     case batteryLevel = 0x5001  // ZR reports only 1/20/40/60/80/100 — a 5-bar gauge
     case focalLength = 0x5008
     case exposureProgramMode = 0x500E  // read-only MODE-tile poll; the dial owns it [verify-on-HW]
+    // The body's wall clock, PTP string "YYYYMMDDThhmmss". Read at bootstrap and written once per
+    // session when drifted — see `CameraClockSync` for the whole policy.
+    case dateTime = 0x5011
     case lensID = 0xD0E0
     case lensFocalMin = 0xD0E3
     case lensFocalMax = 0xD0E4

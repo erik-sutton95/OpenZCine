@@ -2563,12 +2563,12 @@ internal fun MonitorScreen(
                     onDisp = cycleDisplayMode,
                     onOpenMedia = {
                         activeAssistOptions = null
-                        if (pendingCommandControl == null) activeMonitorPickerKind = null
+                        activeMonitorPickerKind = null
                         onOpenMedia()
                     },
                     onOpenSettings = {
                         activeAssistOptions = null
-                        if (pendingCommandControl == null) activeMonitorPickerKind = null
+                        activeMonitorPickerKind = null
                         onOpenSettings()
                     },
                     resolutionPickerAvailable = MonitorPickerKind.RESOLUTION in topPillPickers,
@@ -2940,7 +2940,9 @@ internal fun MonitorScreen(
                     // no dial at all (the lens ring owns focus in MF); AF-F mounts it INERT below,
                     // because a dial that vanishes on a mode change reads as a bug while a greyed
                     // one says "wrong mode for this".
-                    mfDriveEligibility(cameraProperties.focusMode) != MfDriveEligibility.UNAVAILABLE &&
+                    mfDriveEligibility(
+                        cameraProperties.activeFocusMode(photography = isPhotographyMode),
+                    ) != MfDriveEligibility.UNAVAILABLE &&
                     // The strip absorbs taps (it drives on drag, swallows plain taps
                     // so they can't move the AF point under it). Mounting it over an
                     // open picker/popup would eat the popup's dismiss taps — picking
@@ -2961,8 +2963,9 @@ internal fun MonitorScreen(
                     MFDriveStrip(
                         atEnd = mfDriveAtEnd,
                         enabled =
-                            mfDriveEligibility(cameraProperties.focusMode) ==
-                                MfDriveEligibility.DRIVABLE,
+                            mfDriveEligibility(
+                                cameraProperties.activeFocusMode(photography = isPhotographyMode),
+                            ) == MfDriveEligibility.DRIVABLE,
                         onDrive = { pulses -> mfDrive.drive(recordScope, pulses) },
                         modifier =
                             Modifier.zone(
@@ -3027,7 +3030,7 @@ internal fun MonitorScreen(
                             recordChromeEditBounds,
                         ),
                         onClick = {
-                            if (pendingCommandControl == null) activeMonitorPickerKind = null
+                            activeMonitorPickerKind = null
                             onOpenSettings()
                         },
                         contentDescription = stringResource(R.string.a11y_monitor_settings),
@@ -3044,7 +3047,7 @@ internal fun MonitorScreen(
                             recordChromeEditBounds,
                         ),
                         onClick = {
-                            if (pendingCommandControl == null) activeMonitorPickerKind = null
+                            activeMonitorPickerKind = null
                             onOpenMedia()
                         },
                         contentDescription = stringResource(R.string.a11y_monitor_media),
@@ -3390,11 +3393,12 @@ internal fun MonitorScreen(
                             } else {
                                 applyCameraControl
                             },
+                        // Unconditional (#328): never hold the popup hostage to an in-flight
+                        // write — the drain loop completes it with the panel closed (iOS
+                        // `dismissActivePanel` has no pending gate either).
                         onDismiss = {
-                            if (pendingCommandControl == null) {
-                                activeMonitorPickerKind = null
-                                commandControlFeedback = null
-                            }
+                            activeMonitorPickerKind = null
+                            commandControlFeedback = null
                         },
                         slideFromTop = isTopDropDown,
                         // The stills SHUTTER picker has no movie TV-lock hold.

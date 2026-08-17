@@ -270,6 +270,43 @@ import Testing
     #expect(state.values.first(where: { $0.label == "FOCUS" })?.value == "AF-C")
 }
 
+/// The movie and stills focus modes are different camera settings that decode into the same
+/// label family. They used to share one snapshot field, last writer winning — so a stills
+/// focus-mode announcement during video repainted the FOCUS readout as AF-S while the body
+/// stayed AF-F, and a feed tap then fired the one-shot AF drive that AF-S needs but AF-F
+/// must never get (field report: "AF-F silently became AF-S when I touched the screen").
+@Test func aStillsFocusModeEventCannotRepaintTheMovieReadout() {
+    let snapshot = PTPCameraPropertySnapshot()
+        .applying(property: .movieFocusMode, data: Data([0x02]))  // movie AF-F
+        // Both stills spellings of the same setting: 0x500A (UINT16) and 0xD061 (UINT8).
+        .applying(property: .focusMode, data: Data(ByteCoding.uint16LE(0x8010)))  // stills AF-S
+        .applying(property: .stillFocusMode, data: Data([0x00]))  // stills AF-S
+
+    #expect(snapshot.focusMode == "AF-F")
+    #expect(snapshot.stillFocusMode == "AF-S")
+    // Each chrome reads its own side.
+    #expect(snapshot.activeFocusMode(photography: false) == "AF-F")
+    #expect(snapshot.activeFocusMode(photography: true) == "AF-S")
+    // The video FOCUS readout keeps the movie mode.
+    let state = CameraDisplayState.preview.applyingCameraProperties(snapshot, photography: false)
+    #expect(state.values.first(where: { $0.label == "FOCUS" })?.value == "AF-F")
+    // And the tap-to-focus rule sees the movie mode: continuous AF-F needs no one-shot drive.
+    #expect(
+        !StillCapturePolicy.focusPointNeedsAutofocusDrive(
+            focusMode: snapshot.activeFocusMode(photography: false), photography: false))
+}
+
+/// A body that has only ever reported one side still reads out — the split must not blank the
+/// readout on a camera that pushes just one of the two properties.
+@Test func aFocusModeFromEitherSideStillShowsWhenItIsTheOnlyOne() {
+    let stillsOnly = PTPCameraPropertySnapshot()
+        .applying(property: .stillFocusMode, data: Data([0x01]))  // stills AF-C
+    #expect(stillsOnly.activeFocusMode(photography: false) == "AF-C")
+    let movieOnly = PTPCameraPropertySnapshot()
+        .applying(property: .movieFocusMode, data: Data([0x00]))  // movie AF-S
+    #expect(movieOnly.activeFocusMode(photography: true) == "AF-S")
+}
+
 @Test func cameraPropertyWriteRequestsEncodePickerValues() {
     // Non dual-base path (default without snapshot): MovieExposureIndex 0xD1AA.
     #expect(

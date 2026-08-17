@@ -53,13 +53,15 @@ struct StillCaptureTests {
     @Test func snapshotDecodesStillsValueSpaces() {
         var snap = PTPCameraPropertySnapshot()
 
-        // 0xD061 is UINT8 0/1/4/5 — not the 0x500A UINT16 space.
+        // 0xD061 is UINT8 0/1/4/5 — not the 0x500A UINT16 space. Both are STILLS settings and
+        // land in `stillFocusMode`, never the movie `focusMode`.
         snap = snap.applying(property: .stillFocusMode, data: Data([1]))
-        #expect(snap.focusMode == "AF-C")
+        #expect(snap.stillFocusMode == "AF-C")
         snap = snap.applying(property: .stillFocusMode, data: Data([5]))
-        #expect(snap.focusMode == "AF-A")
+        #expect(snap.stillFocusMode == "AF-A")
         snap = snap.applying(property: .focusMode, data: Data(ByteCoding.uint16LE(0x8010)))
-        #expect(snap.focusMode == "AF-S")
+        #expect(snap.stillFocusMode == "AF-S")
+        #expect(snap.focusMode == nil)
 
         // Fraction-packed stills shutter including the mode-M open-shutter sentinels.
         snap = snap.applying(

@@ -519,7 +519,8 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_MODE,
                                 currentValue =
-                                    properties.focusMode?.takeIf { it in focusModeOptions }
+                                    properties.activeFocusMode(photography = true)
+                                        ?.takeIf { it in focusModeOptions }
                                         ?: focusModeOptions.first(),
                                 options = focusModeOptions,
                             ),
@@ -621,7 +622,13 @@ internal fun photographyCaptureSettings(
             "Single",
             drivePicker,
         ),
-        tile(MonitorPickerKind.FOCUS, "FOCUS", properties.focusMode, "Wide-L", focusPicker),
+        tile(
+            MonitorPickerKind.FOCUS,
+            "FOCUS",
+            properties.activeFocusMode(photography = true),
+            "Wide-L",
+            focusPicker,
+        ),
         tile(
             MonitorPickerKind.WHITE_BALANCE,
             "WB",

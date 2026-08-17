@@ -100,6 +100,7 @@ internal object CameraPropertySnapshotWire {
             lens = value.optionalString("lens"),
             focalLength = value.optionalString("focalLength"),
             focusMode = value.optionalString("focusMode"),
+            stillFocusMode = value.optionalString("stillFocusMode"),
             focusArea = value.optionalString("focusArea"),
             focusSubject = value.optionalString("focusSubject"),
             microphoneSensitivity = value.optionalString("microphoneSensitivity"),
