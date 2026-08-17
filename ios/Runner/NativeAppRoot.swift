@@ -315,10 +315,12 @@ struct MovablePanelStoredCenter: Codable, Equatable, Sendable {
 /// Why a LUT import failed.
 enum LUTImportError: LocalizedError {
     case unreadableArchive
+    case unreadableFile
 
     var errorDescription: String? {
         switch self {
         case .unreadableArchive: "The downloaded archive couldn't be read."
+        case .unreadableFile: "That file couldn't be read as a .cube LUT."
         }
     }
 }
@@ -368,13 +370,21 @@ struct LUTFileStore {
     }
 
     /// Copies an external `.cube` into `category`, replacing a same-named file.
+    ///
+    /// The file is parsed first so a cube the renderer cannot apply (wrong size, truncated table,
+    /// non-default domain) never appears in the library as a silent no-op.
     @discardableResult
     func importFile(from source: URL, into category: LUTCategory) throws -> StoredLUT {
+        let data = try Data(contentsOf: source)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw LUTImportError.unreadableFile
+        }
+        _ = try CubeLUT.parse(text)
         let directory = directory(for: category)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent(source.lastPathComponent)
         try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.copyItem(at: source, to: destination)
+        try data.write(to: destination, options: .atomic)
         return StoredLUT(fileName: source.lastPathComponent)
     }
 
@@ -12095,10 +12105,10 @@ final class NativeAppModel {
     }
 
     /// Imports a `.cube` the operator picked from Files, selects it, and turns the LUT on.
-    func importCustomLUT(from url: URL) {
+    func importCustomLUT(from url: URL) throws {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let stored = try? lutFileStore.importFile(from: url, into: .custom) else { return }
+        let stored = try lutFileStore.importFile(from: url, into: .custom)
         LUTCubeCache.invalidate(
             forKey: LUTSelection.stored(category: .custom, fileName: stored.fileName).cacheKey)
         refreshCustomLUTs()
@@ -14367,7 +14377,8 @@ extension NativeAppModel {
         switch assistConfiguration.selectedLUT {
         case .builtIn(let look): return look.cube()
         case .stored(let category, let fileName):
-            return lutFileStore.cube(category: category, fileName: fileName)
+            return lutFileStore.cube(category: category, fileName: fileName)?
+                .preparedForRenderer()
         }
     }
 

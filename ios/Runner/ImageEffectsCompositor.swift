@@ -43,7 +43,7 @@ enum ImageEffectsCompositor {
         if let falseColor = effects.falseColor, falseColor.scale == .limits {
             // Limits keeps the monitor's normal look between the zones: the base stays the
             // selected LUT (or the untouched feed) and the crush/clip paint composites on top.
-            if let lut = effects.lut, let cube = lutCube(lut) {
+            if let lut = effects.lut, let cube = lutCube(lut)?.preparedForRenderer() {
                 dimension = cube.size
                 data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
                 split = effects.splitComparison
@@ -71,7 +71,7 @@ enum ImageEffectsCompositor {
                 dimension = cube.size
                 data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
             }
-        } else if let lut = effects.lut, let cube = lutCube(lut) {
+        } else if let lut = effects.lut, let cube = lutCube(lut)?.preparedForRenderer() {
             dimension = cube.size
             data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
             split = effects.splitComparison
@@ -913,7 +913,8 @@ extension NativeAppModel {
             switch selection {
             case .builtIn(let look): return look.cube()
             case .stored(let category, let fileName):
-                return lutFileStore.cube(category: category, fileName: fileName)
+                return lutFileStore.cube(category: category, fileName: fileName)?
+                    .preparedForRenderer()
             }
         }
     }

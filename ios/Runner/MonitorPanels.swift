@@ -2800,6 +2800,7 @@ struct LUTPickerContent: View {
     @State private var redFilter: RedOutputFilter = .all
     @State private var pendingDeletion: PendingLUTDeletion?
     @State private var deletionErrorMessage: String?
+    @State private var importErrorMessage: String?
     /// Tracks whether a usable internet path exists, so the RED download (which needs the public
     /// internet) is blocked while the phone is on the camera's local-only Wi‑Fi AP.
     /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
@@ -2877,6 +2878,16 @@ struct LUTPickerContent: View {
             Button("OK") { deletionErrorMessage = nil }
         } message: {
             Text(deletionErrorMessage ?? "The LUT could not be deleted.")
+        }
+        .alert(
+            "Couldn’t Import LUT",
+            isPresented: Binding(
+                get: { importErrorMessage != nil },
+                set: { if !$0 { importErrorMessage = nil } })
+        ) {
+            Button("OK") { importErrorMessage = nil }
+        } message: {
+            Text(importErrorMessage ?? "The LUT could not be imported.")
         }
     }
 
@@ -3206,7 +3217,13 @@ struct LUTPickerContent: View {
             isPresented: $importing,
             allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data]
         ) { result in
-            if case .success(let url) = result { model.importCustomLUT(from: url) }
+            if case .success(let url) = result {
+                do {
+                    try model.importCustomLUT(from: url)
+                } catch {
+                    importErrorMessage = error.localizedDescription
+                }
+            }
         }
     }
 

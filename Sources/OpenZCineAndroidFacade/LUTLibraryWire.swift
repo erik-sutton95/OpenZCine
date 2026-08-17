@@ -86,7 +86,9 @@ public enum LUTLibraryWire {
             isStrictAndroidImport(text),
             let cube = try? CubeLUT.parse(text)
         else { return nil }
-        return cube
+        // Report and pack the renderer-safe table so a 65³ Resolve cube does not break the
+        // Android 8×8 atlas or iOS `CIColorCube` (both cap at 64).
+        return cube.preparedForRenderer()
     }
 
     /// Android imports fail closed on duplicate declarations and non-finite samples.

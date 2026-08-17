@@ -569,7 +569,7 @@ final class LiveFrameProcessor {
         let filter: CIFilter?
         if let cached = cubeFilters[versionedKey] {
             filter = cached
-        } else if let cube = LUTCubeCache.cube(forKey: key, makeCube) {
+        } else if let cube = LUTCubeCache.cube(forKey: key, makeCube)?.preparedForRenderer() {
             let data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
             let built = CIFilter(
                 name: "CIColorCube",
