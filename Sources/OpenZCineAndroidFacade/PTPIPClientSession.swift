@@ -626,6 +626,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// `commandLifecycleLock` is held so a refresh cannot race control writes,
     /// media ownership, or teardown.
     private var androidPropertySnapshot = PTPCameraPropertySnapshot()
+    /// A drifted body clock found at bootstrap, waiting for the first poll tick that carries the
+    /// shell's authoritative record state. See `CameraClockSync` for the policy and the reason
+    /// the write is deferred.
+    private var androidClockSyncStaged = false
     /// `false` from a codec transition until `MovScreenSize` (`D0A0`) is read back again. This
     /// prevents a previous codec's active resolution from being rendered as current while its
     /// camera-advertised picker domain is already refreshed.
@@ -1410,8 +1414,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
             // Steady-state `.next` starts after the complete set has been seeded.
             androidPropertyPollIndex = 0
+            stageAndroidClockSyncIfDrifted()
             return androidPropertyReadback(result: result)
         case .next(let isRecording):
+            consumeAndroidStagedClockSync(isRecording: isRecording)
             // While GetLiveViewImageEx is pumping, every extra PTP transaction
             // steals `transactionLock` and punches a visible hole in the feed
             // (seen as a hitch every ~1.5–3 s). Keep steady-state polls to a
@@ -3141,6 +3147,36 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Nikon body expects for that property width. Standard 16-bit `0xDxxx`
     /// properties must use `SetDevicePropValue` (0x1016); only 32-bit extended
     /// `0x0001_Dxxx` properties use Nikon's `SetDevicePropValueEx` (0x943C).
+    /// Reads the body's clock at bootstrap and STAGES a correction — the twin of the iOS shell's
+    /// `stageClockSyncIfDrifted`, with the same reason to defer: the record state is only
+    /// authoritative once the shell has seen a frame header, and a session opened against an
+    /// already-recording body must never step the clock mid-take. Refusals are logged nowhere
+    /// (this layer has no logger seam for it) and simply retried next connect.
+    private func stageAndroidClockSyncIfDrifted() {
+        androidClockSyncStaged = false
+        guard let payload = try? readProperty(.dateTime) else { return }
+        if case .write = CameraClockSync.decide(
+            cameraPayload: payload,
+            phoneNow: CameraClockSync.phoneNow(),
+            isRecording: false)
+        {
+            androidClockSyncStaged = true
+        }
+    }
+
+    /// Consumes a staged clock correction on the first poll tick. One shot either way: a
+    /// recording body keeps its clock for the whole session, and the payload is re-encoded here
+    /// so the deferred write does not set the clock slow by the bootstrap-to-poll gap.
+    private func consumeAndroidStagedClockSync(isRecording: Bool) {
+        guard androidClockSyncStaged else { return }
+        androidClockSyncStaged = false
+        guard !isRecording else { return }
+        try? writeCameraProperty(
+            PTPCameraPropertyWrite(
+                property: .dateTime,
+                data: CameraClockSync.encode(CameraClockSync.phoneNow())))
+    }
+
     private func writeCameraProperty(_ write: PTPCameraPropertyWrite) throws {
         let operation: PTPOperationCode =
             write.property.rawValue <= UInt32(UInt16.max)
