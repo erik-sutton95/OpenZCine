@@ -4386,6 +4386,8 @@ final class NativeAppModel {
     /// button can pulse in acknowledgement (the app-fired path animates via the press gesture).
     private(set) var bodyShutterPulse = 0
     private var propertyPollIndex = 0
+    /// A drifted body clock found at bootstrap, waiting for the first authoritative record state.
+    @ObservationIgnored private var clockSyncStaged = false
     /// Properties the CAMERA announced as changed (`DevicePropChanged`) and that have not been
     /// re-read yet. Drained ahead of the round-robin so a body-side dial/ring/menu edit lands in
     /// one poll tick instead of a full ~20 s cycle.
@@ -8535,7 +8537,62 @@ final class NativeAppModel {
         publishCameraDisplayState()
         syncFocusFromSnapshot()
         syncShutterLockFromSnapshot()
+        await stageClockSyncIfDrifted(session: session)
         logConnection("property-bootstrap: complete")
+    }
+
+    /// Reads the body's clock at bootstrap and STAGES a correction — the write itself waits for
+    /// the first steady-state poll tick, because the record state is only authoritative once
+    /// live view has delivered a frame header, and a session opened against an already-recording
+    /// body (a USB attach mid-take is the reported scenario) must never step the clock mid-take.
+    /// The payload is re-encoded at write time so the deferred clock is not set slow by the gap.
+    /// Policy in `CameraClockSync`; refusals are logged and dropped — the MfDrive lesson,
+    /// refusals are transient and never latch.
+    private func stageClockSyncIfDrifted(session: NativeCameraSession) async {
+        clockSyncStaged = false
+        do {
+            let payload = try await session.readCameraProperty(.dateTime)
+            let decision = CameraClockSync.decide(
+                cameraPayload: payload,
+                phoneNow: CameraClockSync.phoneNow(),
+                isRecording: false
+            )
+            switch decision {
+            case .write:
+                clockSyncStaged = true
+                logConnection("clock-sync: drift found — staged for first idle poll")
+            case .inSync:
+                break
+            case .recordingHoldOff:
+                // Unreachable with isRecording:false; the poll tick owns that gate.
+                break
+            case .unreadable:
+                logConnection("clock-sync: skipped — clock property unreadable")
+            }
+        } catch {
+            logConnection("clock-sync: read refused (\(error.localizedDescription))")
+        }
+    }
+
+    /// Consumes a staged clock correction on the first poll tick, where `isRecording` reflects
+    /// the frame header rather than a fresh session's default. One shot either way: a recording
+    /// body keeps its clock for the whole session, and the next connect retries.
+    private func consumeStagedClockSync(session: NativeCameraSession) async {
+        guard clockSyncStaged else { return }
+        clockSyncStaged = false
+        guard !isRecording else {
+            logConnection("clock-sync: dropped — body is recording")
+            return
+        }
+        do {
+            try await session.writeCameraProperty(
+                PTPCameraPropertyWrite(
+                    property: .dateTime,
+                    data: CameraClockSync.encode(CameraClockSync.phoneNow())))
+            logConnection("clock-sync: body clock set to phone time")
+        } catch {
+            logConnection("clock-sync: write refused (\(error.localizedDescription))")
+        }
     }
 
     /// Reads the active selector's whole monitor property set back-to-back (skipping properties
@@ -8582,6 +8639,10 @@ final class NativeAppModel {
     }
 
     private func pollNextCameraProperty(session: NativeCameraSession) async {
+        // A staged clock correction goes first: this is the earliest moment `isRecording`
+        // reflects the frame header rather than a fresh session's default.
+        await consumeStagedClockSync(session: session)
+        guard !Task.isCancelled, cameraSession === session else { return }
         // While the EV tool is on, the indicator reads on every poll tick alongside the
         // round-robin property — a needle visited once per full property cycle lags whole
         // seconds behind the meter. The lit-state gate refreshes on a slow stride, and
