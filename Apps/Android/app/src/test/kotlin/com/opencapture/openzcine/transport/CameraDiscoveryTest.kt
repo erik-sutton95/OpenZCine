@@ -145,4 +145,37 @@ class CameraDiscoveryTest {
         assertFalse(CameraDiscovery.isDialableHost(key))
         assertTrue(CameraDiscovery.isDialableHost("192.168.1.246"))
     }
+
+    // The #327 resolution rule: a saved setup's dial target is a live discovery first, else
+    // its own host when that is a real address — and the pending access-point key is NEVER
+    // handed to the dialer (it is a bookmark meaning "rediscover on the live link after join";
+    // dialling it surfaced the transport's numeric-IPv4 refusal instead of a connect).
+    @Test
+    fun `dialable saved host passes through without a discovery`() {
+        assertEquals("192.168.1.246", CameraDiscovery.dialableSavedHost("192.168.1.246", null))
+    }
+
+    @Test
+    fun `live discovery wins over the stored host`() {
+        assertEquals(
+            "192.168.1.7",
+            CameraDiscovery.dialableSavedHost("192.168.1.246", "192.168.1.7"),
+        )
+    }
+
+    @Test
+    fun `pending key resolves only via discovery`() {
+        val key = CameraDiscovery.pendingAccessPointHostKey("NIKON_Z50_2ABC")
+        assertEquals("192.168.1.1", CameraDiscovery.dialableSavedHost(key, "192.168.1.1"))
+        assertEquals(null, CameraDiscovery.dialableSavedHost(key, null))
+    }
+
+    @Test
+    fun `a non-dialable discovery result never becomes the dial target`() {
+        assertEquals(
+            "192.168.1.246",
+            CameraDiscovery.dialableSavedHost("192.168.1.246", "not-an-address"),
+        )
+        assertEquals(null, CameraDiscovery.dialableSavedHost("usb:abcd", null))
+    }
 }

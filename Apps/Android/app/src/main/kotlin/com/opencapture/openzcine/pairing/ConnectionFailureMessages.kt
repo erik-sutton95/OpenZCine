@@ -57,6 +57,12 @@ internal fun friendlyCameraConnectionFailure(raw: String?): String {
     if (lower.contains("first-time pairing") || lower.contains("savedprofilerequired")) {
         return "This camera needs to pair with this phone again. Use Pair new camera, or create a Connect to PC profile for this phone."
     }
+    // The transport refusing a non-numeric dial target is an implementation detail (#327):
+    // it means some path handed the dialer a non-address key, and the operator's remedy is
+    // the rejoin/rediscover flow — never address formatting.
+    if (lower.contains("numeric ipv4") || lower.contains("host names are not supported")) {
+        return "Couldn't find the camera's address on its network. Rejoin the camera's Wi‑Fi and try again."
+    }
     // Never surface raw PTP opcode dumps to the operator.
     if (lower.contains("ptp-ip") || lower.contains("0x")) {
         return "Couldn't reach the camera. Check Wi‑Fi and try again."

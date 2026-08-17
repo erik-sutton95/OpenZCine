@@ -77,6 +77,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -315,32 +316,16 @@ public fun SavedCamerasExperience(
         }
     }
 
-    fun resolvedHost(record: SavedCameraRecord): String {
+    /**
+     * The address this setup may dial right now, or null when nothing is dialable yet —
+     * a camera-AP record holding the pending key must rediscover on the live link after
+     * join, never hand the key itself to the transport (#327).
+     */
+    fun resolvedHost(record: SavedCameraRecord): String? {
         if (record.transport == SavedCameraTransport.USB_C) return record.host
         // Prefer a live discovery match; never invent a fixed camera-AP IP.
-        val discovered = discoveryFor(record)?.host
-        if (discovered != null) return discovered
-        return if (CameraDiscovery.isDialableHost(record.host)) record.host else record.host
+        return CameraDiscovery.dialableSavedHost(record.host, discoveryFor(record)?.host)
     }
-
-    fun createStrictSavedProfileSession(record: SavedCameraRecord): CameraSession? =
-        when (record.transport) {
-            SavedCameraTransport.CAMERA_ACCESS_POINT,
-            SavedCameraTransport.PHONE_HOTSPOT,
-            SavedCameraTransport.INFRASTRUCTURE,
-            -> environment.createSavedProfileSession(resolvedHost(record))
-            SavedCameraTransport.USB_C -> {
-                val source = environment.usbCameraSource ?: return null
-                val camera =
-                    usbCameras.firstOrNull {
-                        it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
-                    } ?: return null
-                when (val opened = source.open(camera)) {
-                    is UsbPtpOpenResult.Opened -> environment.createSavedProfileUsbSession(opened)
-                    is UsbPtpOpenResult.Rejected -> null
-                }
-            }
-        }
 
     /** Same session shape as a normal My-cameras reconnect (restore-then-pair). */
     fun createPostConfirmReconnectSession(record: SavedCameraRecord): CameraSession? =
@@ -348,7 +333,9 @@ public fun SavedCamerasExperience(
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
             SavedCameraTransport.INFRASTRUCTURE,
-            -> environment.createSession(resolvedHost(record))
+            // A null host means discovery has not named the camera yet: report "no session"
+            // so the owning retry loop keeps waiting instead of dialling a non-address.
+            -> resolvedHost(record)?.let(environment.createSession)
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
                 val camera =
@@ -399,7 +386,7 @@ public fun SavedCamerasExperience(
                                     session = session,
                                     savedCamera =
                                         record.copy(
-                                            host = resolvedHost(record),
+                                            host = resolvedHost(record) ?: record.host,
                                             cameraName = connected.identity.name,
                                             lastSeenAtEpochMillis = System.currentTimeMillis(),
                                         ),
@@ -450,7 +437,7 @@ public fun SavedCamerasExperience(
                                     session = session,
                                     savedCamera =
                                         record.copy(
-                                            host = resolvedHost(record),
+                                            host = resolvedHost(record) ?: record.host,
                                             cameraName = connected.identity.name,
                                             lastSeenAtEpochMillis = System.currentTimeMillis(),
                                         ),
@@ -484,7 +471,9 @@ public fun SavedCamerasExperience(
             scope.launch {
                 var session: CameraSession? = null
                 var handoffSucceeded = false
-                var host = resolvedHost(record)
+                // May still be the non-dialable pending key here: a camera-AP setup resolves
+                // it by discovery on the live link AFTER the join below (#327).
+                var host = resolvedHost(record) ?: record.host
                 try {
                     if (record.transport == SavedCameraTransport.USB_C) {
                         val source = environment.usbCameraSource
@@ -575,6 +564,30 @@ public fun SavedCamerasExperience(
                         // and a generic "Couldn't connect" with no system Wi‑Fi sheet
                         // (Android silently rejoins a previously approved AP).
                         delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
+                        // Discover on the live link — the design contract for a setup that
+                        // never learned an address (the pending key), which is NOT a dial
+                        // target (#327: dialling it surfaced the transport's numeric-IPv4
+                        // refusal on every connect). A FRESH browse, not the screen's running
+                        // one: results from the pre-join network are stale here (iOS restarts
+                        // its browse after the join for the same reason).
+                        if (!CameraDiscovery.isDialableHost(host)) {
+                            host =
+                                withTimeoutOrNull(CAMERA_AP_DISCOVER_AFTER_JOIN_MILLIS) {
+                                    environment.hotspotCameras
+                                        .first { it.isNotEmpty() }
+                                        .first()
+                                        .host
+                                }
+                                    ?: run {
+                                        // The iOS copy for the same dead end — actionable,
+                                        // never an address-format complaint.
+                                        phase =
+                                            SavedCameraPhase.Error(
+                                                "Joined $ssid but couldn't find the camera on its network. Keep the camera on its connection screen and try again.",
+                                            )
+                                        return@launch
+                                    }
+                        }
                     }
 
                     val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT

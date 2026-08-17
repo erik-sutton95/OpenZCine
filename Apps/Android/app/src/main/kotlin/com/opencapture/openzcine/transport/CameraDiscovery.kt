@@ -151,6 +151,17 @@ class CameraDiscovery(private val browser: NsdBrowser) {
         }
 
         /**
+         * The host a saved wireless setup may hand the dialer: a live discovery first, else
+         * the record's own host when that is a real address. The pending access-point key is
+         * NEVER a dial target — it is a bookmark meaning "rediscover on the live link after
+         * join", and dialling it surfaced the transport's numeric-IPv4 refusal instead of a
+         * connect (#327). Null means nothing is dialable yet: discover after join, or fail
+         * saying the camera was not found.
+         */
+        fun dialableSavedHost(recordHost: String, discoveredHost: String?): String? =
+            discoveredHost?.takeIf(::isDialableHost) ?: recordHost.takeIf(::isDialableHost)
+
+        /**
          * Whether an NSD-resolved host is usable by the current PTP-IP stack.
          *
          * The Swift PTP-IP facade only opens numeric IPv4 sockets. This mirrors the iOS
