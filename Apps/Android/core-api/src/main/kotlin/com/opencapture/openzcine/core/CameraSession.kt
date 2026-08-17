@@ -524,6 +524,11 @@ public data class CameraPropertySnapshot(
     val focalLength: String? = null,
     /** Movie focus-mode label. */
     val focusMode: String? = null,
+    /**
+     * STILLS focus-mode label (`FocusMode` 0x500A / `StillFocusMode` 0xD061) — a different camera
+     * setting that decodes into the same label family. See [activeFocusMode].
+     */
+    val stillFocusMode: String? = null,
     /** Movie focus-area label. */
     val focusArea: String? = null,
     /** Movie focus subject-detection label. */
@@ -596,6 +601,18 @@ public data class CameraPropertySnapshot(
             stillWhiteBalanceMode ?: whiteBalanceMode
         } else {
             whiteBalanceMode ?: stillWhiteBalanceMode
+        }
+
+    /**
+     * The focus mode belonging to the side of the camera currently on screen, with the same
+     * fallback rule as [activeWhiteBalanceMode]. Mirrors shared-core `activeFocusMode(photography:)`
+     * — a stills AF-S must never repaint (or drive) the movie AF-F.
+     */
+    public fun activeFocusMode(photography: Boolean): String? =
+        if (photography) {
+            stillFocusMode ?: focusMode
+        } else {
+            focusMode ?: stillFocusMode
         }
 }
 

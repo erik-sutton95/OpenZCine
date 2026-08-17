@@ -1092,7 +1092,7 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.STILL_SHUTTER -> snapshot.shutterSpeed == label
         CameraControl.STILL_IRIS -> snapshot.iris == label
         CameraControl.STILL_DRIVE -> snapshot.stillCaptureMode == label
-        CameraControl.STILL_FOCUS_MODE -> snapshot.focusMode == label
+        CameraControl.STILL_FOCUS_MODE -> snapshot.activeFocusMode(photography = true) == label
         CameraControl.STILL_FOCUS_AREA -> snapshot.focusArea == label
         CameraControl.STILL_FOCUS_SUBJECT -> snapshot.focusSubject == label
         CameraControl.STILL_METER -> snapshot.meteringMode == label
@@ -1141,7 +1141,8 @@ internal fun CameraPropertySnapshot.withOptimisticControlValue(
                 copy(whiteBalanceMode = label)
             }
         CameraControl.WHITE_BALANCE_TINT -> copy(whiteBalanceTint = label)
-        CameraControl.FOCUS_MODE, CameraControl.STILL_FOCUS_MODE -> copy(focusMode = label)
+        CameraControl.FOCUS_MODE -> copy(focusMode = label)
+        CameraControl.STILL_FOCUS_MODE -> copy(stillFocusMode = label)
         CameraControl.FOCUS_AREA, CameraControl.STILL_FOCUS_AREA -> copy(focusArea = label)
         CameraControl.FOCUS_SUBJECT, CameraControl.STILL_FOCUS_SUBJECT -> copy(focusSubject = label)
         CameraControl.EXPOSURE_MODE -> copy(exposureMode = label)

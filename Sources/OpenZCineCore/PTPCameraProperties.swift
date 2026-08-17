@@ -1788,6 +1788,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         focalMaxX100: UInt32? = nil,
         apertureMinX100: UInt16? = nil,
         focusMode: String? = nil,
+        stillFocusMode: String? = nil,
         focusArea: String? = nil,
         focusSubject: String? = nil,
         microphoneSensitivity: String? = nil,
@@ -1840,6 +1841,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.focalMaxX100 = focalMaxX100
         self.apertureMinX100 = apertureMinX100
         self.focusMode = focusMode
+        self.stillFocusMode = stillFocusMode
         self.focusArea = focusArea
         self.focusSubject = focusSubject
         self.microphoneSensitivity = microphoneSensitivity
@@ -1925,8 +1927,22 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
 
     // Movie AF.
     public let focusMode: String?  // MF / AF-S / AF-C / AF-F
+    /// The STILLS focus mode (`FocusMode` 0x500A / `StillFocusMode` 0xD061) — a different camera
+    /// setting that decodes into the same label family. See ``activeFocusMode(photography:)``.
+    public let stillFocusMode: String?
     public let focusArea: String?  // Single / Auto / Wide-S / …
     public let focusSubject: String?  // Auto / People / Animal / …
+
+    /// The focus mode that belongs to the side of the camera currently on screen.
+    ///
+    /// Falls back to the other one only when its own has never been reported, so a body that has
+    /// only ever pushed one of the two still reads out — but a value from the wrong side never
+    /// overwrites a value from the right one. (Field report: a stills AF-S announcement during
+    /// video repainted the FOCUS readout while the body stayed AF-F, and taps then fired the
+    /// single-servo AF drive against the operator's continuous mode.)
+    public func activeFocusMode(photography: Bool) -> String? {
+        photography ? (stillFocusMode ?? focusMode) : (focusMode ?? stillFocusMode)
+    }
 
     // Audio.
     public let microphoneSensitivity: String?  // Auto / High / Medium / Low / Off
@@ -2169,7 +2185,10 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             return replacing(imageArea: StillImageArea.decode(raw: bytes[0]))
         case .stillFocusMode where bytes.count >= 1:
             // UINT8 space (0 AF-S / 1 AF-C / 4 MF / 5 AF-A) — not the 0x500A UINT16 codes.
-            return replacing(focusMode: PTPCameraPropertyDecoders.stillFocusModeD061(bytes[0]))
+            // A STILLS setting: it must never overwrite the movie `focusMode` (a stills AF-S
+            // announcement during video repainted the FOCUS readout and made taps fire a
+            // single-servo AF drive against the body's AF-F).
+            return replacing(stillFocusMode: PTPCameraPropertyDecoders.stillFocusModeD061(bytes[0]))
         case .stillFocusMeteringMode where bytes.count >= 2:
             return replacing(
                 focusArea: PTPCameraPropertyDecoders.stillFocusArea(
@@ -2183,8 +2202,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                 stillWBMode: PTPCameraPropertyDecoders.whiteBalanceMode(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         case .focusMode where bytes.count >= 2:
+            // The get-only stills focus mode (0x500A) — same rule as 0xD061 above.
             return replacing(
-                focusMode: PTPCameraPropertyDecoders.stillFocusMode(
+                stillFocusMode: PTPCameraPropertyDecoders.stillFocusMode(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         default:
             return self
@@ -2216,6 +2236,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         focalMaxX100: UInt32? = nil,
         apertureMinX100: UInt16? = nil,
         focusMode: String? = nil,
+        stillFocusMode: String? = nil,
         focusArea: String? = nil,
         focusSubject: String? = nil,
         microphoneSensitivity: String? = nil,
@@ -2269,6 +2290,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             focalMaxX100: focalMaxX100 ?? self.focalMaxX100,
             apertureMinX100: apertureMinX100 ?? self.apertureMinX100,
             focusMode: focusMode ?? self.focusMode,
+            stillFocusMode: stillFocusMode ?? self.stillFocusMode,
             focusArea: focusArea ?? self.focusArea,
             focusSubject: focusSubject ?? self.focusSubject,
             microphoneSensitivity: microphoneSensitivity ?? self.microphoneSensitivity,
@@ -2380,7 +2402,8 @@ extension CameraDisplayState {
                 properties.wbKelvin.map { "\($0)K" } ?? existing
             }
         case "FOCUS":
-            properties.focusMode ?? existing
+            // Side-aware like WB above: the movie and stills focus modes are separate settings.
+            properties.activeFocusMode(photography: photography) ?? existing
         default:
             existing
         }

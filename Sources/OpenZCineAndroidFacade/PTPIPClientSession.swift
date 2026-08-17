@@ -3269,11 +3269,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
         // This used to key on photography alone, on the assumption that video
         // always runs continuous AF. A video AF-S body has no such loop, so the
         // tap moved the box and focused nothing — #272, where AF-F "worked" only
-        // because the camera's own loop chased the box. [verify-on-HW]
+        // because the camera's own loop chased the box. The policy keys on the
+        // ACTIVE side's focus mode: the stills mode (AF-S) driving this decision
+        // in video mode is how a tap fired a one-shot drive against a body
+        // running AF-F. [verify-on-HW]
+        let photography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: androidPropertySnapshot.captureSelector)
         if StillCapturePolicy.focusPointNeedsAutofocusDrive(
-            focusMode: androidPropertySnapshot.focusMode,
-            photography: StillCapturePolicy.prefersPhotographyChrome(
-                selector: androidPropertySnapshot.captureSelector))
+            focusMode: androidPropertySnapshot.activeFocusMode(photography: photography),
+            photography: photography)
         {
             _ = try? transactExpectingOK(.afDrive)
             for _ in 0..<4 {

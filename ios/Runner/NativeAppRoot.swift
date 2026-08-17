@@ -7750,11 +7750,15 @@ final class NativeAppModel {
                 // This used to key on photography alone, on the assumption that video always
                 // runs continuous AF. A video AF-S body has no such loop, so the tap moved the
                 // box and focused nothing — #272, where AF-F "worked" only because the camera's
-                // own loop chased the box. The policy keys on the focus mode now. [verify-on-HW]
+                // own loop chased the box. The policy keys on the focus mode now — the mode of
+                // the ACTIVE side: the stills mode (AF-S) driving this decision in video mode is
+                // how a tap fired a one-shot drive against a body running AF-F. [verify-on-HW]
+                let photography = StillCapturePolicy.prefersPhotographyChrome(
+                    selector: cameraPropertySnapshot.captureSelector)
                 if StillCapturePolicy.focusPointNeedsAutofocusDrive(
-                    focusMode: cameraPropertySnapshot.focusMode ?? cameraValue(for: .focus),
-                    photography: StillCapturePolicy.prefersPhotographyChrome(
-                        selector: cameraPropertySnapshot.captureSelector))
+                    focusMode: cameraPropertySnapshot.activeFocusMode(photography: photography)
+                        ?? cameraValue(for: .focus),
+                    photography: photography)
                 {
                     try await session.afDrive()
                     // Drain readiness one poll per safe point instead of sleeping ~0.5 s inline:
@@ -10205,7 +10209,9 @@ final class NativeAppModel {
     /// [verify-on-HW: whether continuous AF fights the drive in AF-C vs AF-S]
     /// Eligibility for the on-feed focus dial in the body's current focus mode.
     var mfDriveEligibility: MFDriveEligibility {
-        MFDriveEligibility.resolve(focusMode: cameraPropertySnapshot.focusMode)
+        // Both chromes show the scrub, so resolve against the active side's focus mode.
+        MFDriveEligibility.resolve(
+            focusMode: cameraPropertySnapshot.activeFocusMode(photography: isPhotographyMode))
     }
 
     var showsMFDriveScrub: Bool {
@@ -11285,7 +11291,7 @@ final class NativeAppModel {
         case .stillShutter: cameraPropertySnapshot.shutterSpeed ?? ""
         case .stillIris: cameraPropertySnapshot.fNumber ?? ""
         case .stillDrive: cameraPropertySnapshot.stillCaptureMode ?? ""
-        case .stillFocus: cameraPropertySnapshot.focusMode ?? ""
+        case .stillFocus: cameraPropertySnapshot.stillFocusMode ?? ""
         case .stillMeter: cameraPropertySnapshot.meteringMode ?? ""
         case .stillSize: stillSizeAreaDisplay ?? ""
         case .stillQuality: cameraPropertySnapshot.compression ?? ""
