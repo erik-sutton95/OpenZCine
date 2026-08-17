@@ -262,7 +262,7 @@ public enum ScopeFrameWire {
     /// Decodes the facade's packed-2D RGBA layout back into a core red-fastest
     /// cube. Size and byte count are checked before any allocation.
     static func unpackedVectorCube(packedRGBA: [UInt8], size: Int) -> CubeLUT? {
-        guard CubeLUT.supportedSizeRange.contains(size) else { return nil }
+        guard CubeLUT.rendererSizeRange.contains(size) else { return nil }
         let (square, squareOverflow) = size.multipliedReportingOverflow(by: size)
         let (sampleCount, cubeOverflow) = square.multipliedReportingOverflow(by: size)
         let (byteCount, byteOverflow) = sampleCount.multipliedReportingOverflow(by: 4)

@@ -80,6 +80,21 @@ struct LUTLibraryWireTests {
                 fileName: "oversized.cube") == nil)
     }
 
+    @Test("a 65³ Resolve cube validates and packs as the 33³ renderer grid")
+    func resolveSizedCubePacksForRenderer() throws {
+        let utf8 = Array(zeroCubeText(size: 65).utf8)
+        let record = try #require(
+            LUTLibraryWire.validatedImport(
+                utf8: utf8,
+                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
+                fileName: "clean-whites-a1b2c3d4e5.cube"))
+        #expect(
+            record.components(separatedBy: LUTLibraryWire.fieldSeparator)
+                == ["1", "33", "stored:Custom:clean-whites-a1b2c3d4e5.cube"])
+        let packed = try #require(LUTLibraryWire.packedImportedLUT(utf8: utf8))
+        #expect(packed.count == 33 * 33 * 33 * 4)
+    }
+
     @Test("packed imported cubes use the feed renderer's existing 2D layout")
     func packedCubeUsesExistingRendererLayout() throws {
         let bytes = try #require(LUTLibraryWire.packedImportedLUT(utf8: Array(identityCube.utf8)))
@@ -107,6 +122,15 @@ struct LUTLibraryWireTests {
             LUTLibraryWire.redDownloadAvailability(
                 hasInternetPath: false, isOnCameraAccessPoint: false)
                 == "1\u{001F}2")
+    }
+
+    private func zeroCubeText(size: Int) -> String {
+        var lines = ["LUT_3D_SIZE \(size)"]
+        lines.reserveCapacity(size * size * size + 1)
+        for _ in 0..<(size * size * size) {
+            lines.append("0 0 0")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private let identityCube = """

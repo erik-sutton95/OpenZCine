@@ -8,10 +8,20 @@ import Foundation
 /// (`CIColorCube`) is the platform shell's job.
 public struct CubeLUT: Equatable, Sendable {
     /// Supported cube edge lengths. The lower bound (2) is the minimum for trilinear
-    /// interpolation; the upper bound (64) is the maximum `inputCubeDimension` Core Image's
-    /// `CIColorCube` accepts, and it also caps the table at ~3 MB so a corrupt or hostile
-    /// `.cube` declaring a huge `LUT_3D_SIZE` cannot exhaust memory.
-    public static let supportedSizeRange = 2...64
+    /// interpolation. The upper bound (65) is DaVinci Resolve's standard high-resolution size.
+    /// Anything larger is rejected on the size line so a hostile `LUT_3D_SIZE` cannot force an
+    /// unbounded allocation.
+    ///
+    /// GPU upload still uses ``rendererSizeRange``: Core Image's `CIColorCube` and the Android
+    /// 8×8 slice atlas both stop at 64. Call ``preparedForRenderer()`` before those paths.
+    public static let supportedSizeRange = 2...65
+
+    /// Edge lengths a GPU renderer can consume without resampling.
+    public static let rendererSizeRange = 2...64
+
+    /// Monitoring grid used when a parsed cube is larger than ``rendererSizeRange``.
+    /// 65 = 2·32+1, so 65³ → 33³ hits every other source lattice point exactly.
+    public static let rendererDisplaySize = 33
 
     /// Edge length of the cube (e.g. 33 for a 33×33×33 LUT).
     public let size: Int
@@ -22,6 +32,36 @@ public struct CubeLUT: Equatable, Sendable {
     public init(size: Int, rgb: [Float]) {
         self.size = size
         self.rgb = rgb
+    }
+
+    /// The table a GPU renderer can consume. Cubes already inside ``rendererSizeRange`` are
+    /// returned unchanged; a 65³ import is resampled to ``rendererDisplaySize``.
+    public func preparedForRenderer() -> CubeLUT {
+        Self.rendererSizeRange.contains(size) ? self : resampled(to: Self.rendererDisplaySize)
+    }
+
+    /// A new cube of `newSize` sampled from this table with the same trilinear interpolation
+    /// ``map(red:green:blue:)`` uses.
+    public func resampled(to newSize: Int) -> CubeLUT {
+        precondition(newSize >= 2, "A 3D LUT needs at least a 2×2×2 grid.")
+        if newSize == size { return self }
+        var rgb = [Float]()
+        rgb.reserveCapacity(newSize * newSize * newSize * 3)
+        let denominator = Float(newSize - 1)
+        for b in 0..<newSize {
+            for g in 0..<newSize {
+                for r in 0..<newSize {
+                    let mapped = map(
+                        red: Float(r) / denominator,
+                        green: Float(g) / denominator,
+                        blue: Float(b) / denominator)
+                    rgb.append(mapped.red)
+                    rgb.append(mapped.green)
+                    rgb.append(mapped.blue)
+                }
+            }
+        }
+        return CubeLUT(size: newSize, rgb: rgb)
     }
 }
 

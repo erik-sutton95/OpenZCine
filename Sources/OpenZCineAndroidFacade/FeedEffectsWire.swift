@@ -140,7 +140,7 @@ public enum FeedEffectsWire {
     /// or `nil` for an unknown ordinal / unsupported size. 33³ matches the iOS
     /// built-ins (`MonitorLUT.cube`'s professional-`.cube` default).
     public static func bakedLUT(lookOrdinal: Int, size: Int = 33) -> [UInt8]? {
-        guard let look = look(lookOrdinal), CubeLUT.supportedSizeRange.contains(size)
+        guard let look = look(lookOrdinal), CubeLUT.rendererSizeRange.contains(size)
         else { return nil }
         return packedRGBA(cube: look.cube(size: size))
     }

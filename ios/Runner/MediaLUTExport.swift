@@ -42,8 +42,9 @@ enum MediaLUT {
     /// (cube dimension + data), rebuilding the filter inside the handler so it's concurrency-safe.
     /// Reused for both playback preview and the export session below.
     static func videoComposition(for asset: AVAsset, cube: CubeLUT) -> AVVideoComposition {
-        let dimension = cube.size
-        let cubeData = cube.rgbaComponents.withUnsafeBytes { Data($0) }
+        let prepared = cube.preparedForRenderer()
+        let dimension = prepared.size
+        let cubeData = prepared.rgbaComponents.withUnsafeBytes { Data($0) }
         let composition = AVVideoComposition(asset: asset) { request in
             let source = request.sourceImage
             let extent = source.extent

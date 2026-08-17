@@ -418,7 +418,7 @@ public enum FalseColorMap {
         scale: FalseColorScale, mapping: ExposureSignalMapping, size: Int = 64
     ) -> CubeLUT {
         precondition(
-            (2...64).contains(size),
+            CubeLUT.rendererSizeRange.contains(size),
             "Core Image false-colour cubes require a dimension from 2 through 64.")
         let denominator = Double(size - 1)
         let encoded = (0..<size).map { Double($0) / denominator }
@@ -503,7 +503,7 @@ public enum FalseColorMap {
         )
     ) -> CubeLUT {
         precondition(
-            (2...64).contains(size),
+            CubeLUT.rendererSizeRange.contains(size),
             "Core Image false-colour cubes require a dimension from 2 through 64.")
         let denominator = Double(size - 1)
         let decoded = (0..<size).map {
