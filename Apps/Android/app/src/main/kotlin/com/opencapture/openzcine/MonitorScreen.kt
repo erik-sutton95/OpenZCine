@@ -1480,7 +1480,9 @@ internal fun MonitorScreen(
         // that hides the readout instead of parking a frozen 00:00:00:00 on set. The same collector
         // that owns `liveFeedRotation` latches it, and a source change resets it.
         var cameraReportsTimecode by remember { mutableStateOf(false) }
-        val isVerticalFeed = liveFeedRotation.isVertical
+        val displayedFeedRotation =
+            liveFeedRotation.displayed(autoRotateEnabled = operatorSettings.autoRotateFeedEnabled.value)
+        val isVerticalFeed = displayedFeedRotation.isVertical
         val portraitAspect = operatorSettings.portraitFeedAspect
         // Zone/chrome layout: vertical mode always lays out as FILL, matching iOS — the fill
         // zones are exactly the vertical viewer (feed spanning the bands, floating assist rail,
@@ -2308,7 +2310,7 @@ internal fun MonitorScreen(
                 // Vertical mode first: the whole feed stack — raster, AF boxes, punch-in,
                 // gestures — lays out in the camera's own frame and rotates upright as one,
                 // inside the zone clip.
-                Modifier.liveFeedBodyRotation(liveFeedRotation)
+                Modifier.liveFeedBodyRotation(displayedFeedRotation)
                     // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
                     // AF box and focus ring are siblings of it, so scaling the raster alone would
                     // leave them behind at unmagnified positions over a magnified picture. Inside
@@ -2443,7 +2445,7 @@ internal fun MonitorScreen(
                         // the Compose layer and never rotate with it.
                         preferComposablePresentation =
                             glass.tier == GlassTier.FULL ||
-                                liveFeedRotation != LiveFeedRotation.LANDSCAPE,
+                                displayedFeedRotation != LiveFeedRotation.LANDSCAPE,
                     )
                     // Presentation-only texture: after the camera frame/effect renderer, before
                     // every geometry-bearing assist. Scopes continue sampling monitorFrameSource.

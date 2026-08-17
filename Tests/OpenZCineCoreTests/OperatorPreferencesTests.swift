@@ -23,6 +23,27 @@ import Testing
     #expect(OperatorPreferences.defaults.keepScreenAwake)
 }
 
+@Test func operatorPreferencesDefaultAutoRotateFeedEnabled() {
+    #expect(OperatorPreferences.defaults.autoRotateFeedEnabled)
+}
+
+@Test func operatorPreferencesAutoRotateFeedRoundTripsAndOlderBlobsDecodeToOn() throws {
+    var preferences = OperatorPreferences.defaults
+    preferences.autoRotateFeedEnabled = false
+    let decoded = try JSONDecoder().decode(
+        OperatorPreferences.self, from: try JSONEncoder().encode(preferences))
+    #expect(!decoded.autoRotateFeedEnabled)
+
+    var dict = try #require(
+        try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
+    dict.removeValue(forKey: "autoRotateFeedEnabled")
+    let legacy = try JSONDecoder().decode(
+        OperatorPreferences.self,
+        from: try JSONSerialization.data(withJSONObject: dict))
+    #expect(legacy.autoRotateFeedEnabled)
+}
+
 @Test func theDispKeyCanNeverBeHidden() {
     // The only visible way to change mode. It was briefly a switch with the feed swipe as the
     // fallback; an escape route the operator has to already know about is not an escape route.

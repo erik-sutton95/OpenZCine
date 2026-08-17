@@ -481,7 +481,7 @@ struct LiveFeedModule: View {
                 // inside it. The rotation wraps the whole feed stack — raster, AF boxes, zoom,
                 // gestures — so every existing coordinate mapping keeps operating in the
                 // camera's own (pre-rotation) space.
-                let feedRotation = model.liveFeedRotation
+                let feedRotation = model.displayedFeedRotation
                 let sourceAspect =
                     hdmiAspect
                     ?? (isPhotography

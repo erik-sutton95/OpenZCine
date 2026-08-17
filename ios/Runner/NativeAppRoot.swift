@@ -2055,10 +2055,15 @@ final class NativeAppModel {
     /// Camera-reported audio levels from the live-view header's sound indicator (bytes 824–827),
     /// mapped onto the meter's dBFS scale for the audio-levels panel. Silent until frames carry it.
     var liveAudioLevels: AudioMeterLevels = .silent
-    /// How the body is held, from the live-view header's rotation byte (839). Drives vertical
-    /// mode: the feed rotates upright and its displayed aspect inverts while the camera is on
-    /// its side. Only the camera's own stream ever sets this; HDMI capture stays `.landscape`.
+    /// How the body is held, from the live-view header's rotation byte (839). The body's own
+    /// orientation always lands here so flipping Auto-Rotate Feed back on can restore it.
+    /// Only the camera's own stream ever sets this; HDMI capture stays `.landscape`.
     var liveFeedRotation: PTPLiveViewRotation = .landscape
+    /// Rotation the monitor applies. Off (``OperatorPreferences/autoRotateFeedEnabled``) keeps
+    /// the picture in the camera's native landscape sensor orientation.
+    var displayedFeedRotation: PTPLiveViewRotation {
+        liveFeedRotation.displayed(autoRotateEnabled: preferences.autoRotateFeedEnabled)
+    }
     /// Latest scope sample plus derived traffic-light readings — one publish per throttle tick.
     var scopeAssist: ScopeAssistBundle = .empty
     /// Convenience accessor for scope panels that only need bins / points.
@@ -12252,7 +12257,7 @@ final class NativeAppModel {
     /// vertical body refused extra scopes for a zone that wasn't even mounted).
     var scopeCapActive: Bool {
         monitorIsPortrait && preferences.portraitFeedAspect == .fit16x9
-            && !liveFeedRotation.isVertical && activeScopeCount >= 2
+            && !displayedFeedRotation.isVertical && activeScopeCount >= 2
     }
 
     /// Whether activating `tool` is blocked by the fit-mode cap (a scope not yet active while the

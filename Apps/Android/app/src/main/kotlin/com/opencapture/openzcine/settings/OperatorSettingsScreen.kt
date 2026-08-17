@@ -1833,8 +1833,8 @@ private fun ControlsRows(
     onToggle: (OperatorSettings.Toggle) -> Unit,
 ) {
     // iOS Controls is one switch card: Record Confirmation, Bluetooth Remote
-    // Shutter, Haptics, Keep Screen Awake. The one caption below is Android-only, for an
-    // Android-only behaviour (see the comment on it).
+    // Shutter, Haptics, Keep Screen Awake, Auto-Rotate Feed. The one caption below is
+    // Android-only, for an Android-only behaviour (see the comment on it).
     SettingsRowCard {
         SettingsSwitchRow(
             stringResource(R.string.settings_record_confirmation),
@@ -1861,6 +1861,13 @@ private fun ControlsRows(
         }
         SettingsSwitchRow(stringResource(R.string.settings_keep_awake), isOn = settings.keepScreenAwake.value) {
             onToggle(settings.keepScreenAwake)
+        }
+        SettingsSwitchRow(
+            stringResource(R.string.settings_auto_rotate_feed),
+            isOn = settings.autoRotateFeedEnabled.value,
+            help = stringResource(R.string.help_controls_auto_rotate_feed),
+        ) {
+            onToggle(settings.autoRotateFeedEnabled)
         }
     }
 }

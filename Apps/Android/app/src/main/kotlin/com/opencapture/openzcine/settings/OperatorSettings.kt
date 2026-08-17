@@ -867,6 +867,13 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         Toggle("controls.mediaRemoteShutter.v1", default = true)
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
+    /**
+     * Turns the monitoring image upright from the body's live-view orientation. Off
+     * keeps the picture in the camera's native landscape sensor orientation. Display
+     * only — the recording is never affected. Default on, matching iOS
+     * `autoRotateFeedEnabled`.
+     */
+    public val autoRotateFeedEnabled: Toggle = Toggle("controls.autoRotateFeed", default = true)
 
     // Sharing (the monitor relay) — iOS `relayWatcherPasscode` / `relayAllowsControlRequests`.
     // The share switch itself is runtime state, exactly like iOS's `isRelayBroadcasting`.
@@ -1502,6 +1509,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             mediaRemoteShutterEnabled,
             hapticsEnabled,
             keepScreenAwake,
+            autoRotateFeedEnabled,
             mfDriveScrubEnabled,
             guidesVisible,
             guideMaskEnabled,

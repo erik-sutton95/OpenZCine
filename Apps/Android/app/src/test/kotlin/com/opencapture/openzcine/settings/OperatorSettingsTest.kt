@@ -62,6 +62,7 @@ class OperatorSettingsTest {
         assertTrue(settings.mediaRemoteShutterEnabled.value)
         assertTrue(settings.hapticsEnabled.value)
         assertTrue(settings.keepScreenAwake.value)
+        assertTrue(settings.autoRotateFeedEnabled.value)
         // The focus dial is opt-in on a fresh install, in video and photo mode alike.
         assertFalse(settings.mfDriveScrubEnabled.value)
         assertFalse(settings.guidesVisible.value)
@@ -234,6 +235,7 @@ class OperatorSettingsTest {
             recordConfirmationEnabled.toggle()
             mediaRemoteShutterEnabled.toggle()
             keepScreenAwake.toggle()
+            autoRotateFeedEnabled.toggle()
         }
 
         val restored = OperatorSettings(store)
@@ -245,6 +247,7 @@ class OperatorSettingsTest {
         assertFalse(restored.mediaRemoteShutterEnabled.value)
         assertFalse(restored.shouldKeepScreenAwake(monitorPresented = true))
         assertFalse(restored.shouldKeepScreenAwake(monitorPresented = false))
+        assertFalse(restored.autoRotateFeedEnabled.value)
     }
 
     @Test

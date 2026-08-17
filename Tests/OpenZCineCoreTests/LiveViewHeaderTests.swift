@@ -97,4 +97,11 @@ struct LiveViewHeaderTests {
         #expect(!PTPLiveViewRotation.landscape.isVertical)
         #expect(!PTPLiveViewRotation.upsideDown.isVertical)
     }
+
+    @Test func rotationDisplayHonoursTheAutoRotateSwitch() {
+        for rotation in PTPLiveViewRotation.allCases {
+            #expect(rotation.displayed(autoRotateEnabled: true) == rotation)
+            #expect(rotation.displayed(autoRotateEnabled: false) == .landscape)
+        }
+    }
 }

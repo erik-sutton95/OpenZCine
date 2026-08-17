@@ -742,6 +742,7 @@
     <string name="saved_setup_router_name_permission">To keep more than one router setup for this camera, OpenZCine needs to read the name of the network you are on — Android treats a network name as location information. Without it, every router shares one setup, exactly as before.</string>
     <string name="saved_setup_router_name_permission_action">Allow network names</string>
     <string name="settings_processing">Processing</string>
+    <string name="settings_auto_rotate_feed">Auto-Rotate Feed</string>
     <string name="settings_feed_upscaler">Feed Upscaler</string>
     <string name="settings_feed_noise_reduction">Feed Noise Reduction</string>
     <string name="settings_coming_soon">Coming soon</string>
@@ -1121,6 +1122,7 @@
     <string name="help_link_held_by">Which device the camera is currently taking commands from.</string>
     <string name="help_link_stream_preset">Combines Nikon live-view stream size and compression grade into three operator-facing choices.</string>
     <string name="help_link_quality_bias">Steers the selected stream preset toward smaller frames or more image detail.</string>
+    <string name="help_controls_auto_rotate_feed">Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera\'s native orientation. Display only — the recording is never affected.</string>
     <string name="help_link_feed_upscaler">How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this; Android runs the plain sample today and the hardware-assisted paths are not built yet.</string>
     <string name="help_link_feed_noise_reduction">Averages the live view against the frames either side of it to reduce sensor noise. Not built on Android yet; the recording is never affected either way.</string>
     <string name="help_sharing_watcher">This device is watching another device\'s broadcast. Sharing is done from the broadcasting device — re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.</string>
