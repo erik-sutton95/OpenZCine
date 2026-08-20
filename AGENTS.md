@@ -5,9 +5,9 @@ cinema-line cameras — primarily the **Nikon ZR**. Built openly with agentic co
 clean, exemplary engineering standards.
 
 > **Status:** Native iOS and Android implementation milestone. Production work targets the portable
-> Swift business/protocol core, a SwiftUI iOS shell, and a Jetpack Compose Android shell. Android is
-> not publicly released yet. The older Flutter prototype remains only as a protocol/live-view
-> reference while useful.
+> Swift business/protocol core, a SwiftUI iOS shell, and a Jetpack Compose Android shell. Both
+> shells ship in public beta — iOS on TestFlight, Android on Google Play. The older Flutter
+> prototype remains only as a protocol/live-view reference while useful.
 
 ## Stack & tooling
 

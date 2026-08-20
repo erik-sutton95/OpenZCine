@@ -41,5 +41,7 @@ The deployed `site/` tree should remain free of PSD files, full-resolution PNG s
 capture filenames, and other non-runtime material.
 
 GitHub Pages replaces `TESTFLIGHT_URL` from the public repository variable of the same name. The
-deployment fails unless it is a valid `https://testflight.apple.com/join/...` URL. Run
-`just site-check` before committing landing-page changes.
+deployment fails unless it is a valid `https://testflight.apple.com/join/...` URL. The Android CTA
+uses the public Play Store listing
+(`https://play.google.com/store/apps/details?id=com.opencapture.openzcine`). Run `just site-check`
+before committing landing-page changes.
