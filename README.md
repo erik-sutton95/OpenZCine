@@ -18,6 +18,8 @@
 <p align="center">
   <a href="https://testflight.apple.com/join/xu4d6UK8"><strong>Join the TestFlight beta</strong></a>
   &nbsp;·&nbsp;
+  <a href="https://play.google.com/store/apps/details?id=com.opencapture.openzcine"><strong>Join the Android beta</strong></a>
+  &nbsp;·&nbsp;
   <a href="https://openzcine.app/">Visit openzcine.app</a>
   &nbsp;·&nbsp;
   <a href="https://github.com/erik-sutton95/OpenZCine/discussions/22">Explore the roadmap</a>
@@ -26,8 +28,8 @@
 ## Made for the shot
 
 OpenZCine turns an iPhone, iPad, or Android phone into a production monitor and remote for Nikon Z
-cinema cameras, with current development and testing centered on the **Nikon ZR**. The iOS beta is
-public today; Android and Google Play availability are coming soon.
+cinema cameras, with current development and testing centered on the **Nikon ZR**. The iOS TestFlight
+and Android Google Play betas are both public today.
 
 - **Read the image like a colorist.** Waveform, RGB parade, histogram, and vectorscope run live
   beside the image you are judging.
@@ -76,7 +78,7 @@ public today; Android and Google Play availability are coming soon.
   </a>
 </p>
 
-## Available in the iOS open beta
+## Available in the open beta
 
 - Resilient Wi-Fi discovery, pairing, saved-camera profiles, and automatic reconnect
 - Live-view monitoring, timecode, battery, storage, temperature, and camera warning readouts
@@ -85,14 +87,12 @@ public today; Android and Google Play availability are coming soon.
 - Professional scopes, exposure and focus assists, framing tools, and customizable monitor layouts
 - On-device clip browsing, playback review, LUT preview, LUT-baked export, and Frame.io delivery
 - Adaptive live-view thermal management during long sessions and recording
-- Native iPhone and iPad layouts, an Apple Watch companion, and Bluetooth shutter integration
-  under hardware validation
+- Native iPhone, iPad, and Android layouts, plus Apple Watch and Wear OS companions, with
+  Bluetooth shutter integration under hardware validation
 - USB-C tethered transport foundation alongside the primary Wi-Fi workflow
 
-The native Android phone and Wear OS implementations live in this repository. They are not
-available through Google Play yet. Nikon ZR is the primary hardware target today; USB-C transport,
-both wearable companions, and wider phone/tablet coverage continue to be hardened with real-world
-testing.
+Nikon ZR is the primary hardware target today. USB-C transport, both wearable companions, and
+wider phone/tablet coverage continue to be hardened with real-world testing.
 
 ## Roadmap shaped in the open
 
