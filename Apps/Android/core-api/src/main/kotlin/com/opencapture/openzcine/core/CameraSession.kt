@@ -586,6 +586,12 @@ public data class CameraPropertySnapshot(
     val evIndicatorSixths: Int? = null,
     /** Whether the body reports its exposure indicator lit (value undefined while off). */
     val evIndicatorLit: Boolean? = null,
+    /**
+     * True when the shared core wants a bounded auto-exposure re-read (P/A/S/Auto
+     * or Auto ISO owns shutter, iris, and/or working ISO). Kotlin only uses this
+     * as a cadence gate — it never picks the Nikon property.
+     */
+    val autoExposurePoll: Boolean = false,
     /** Current descriptor-dependent camera-control capabilities. */
     val controlCapabilities: CameraControlCapabilities = CameraControlCapabilities(),
 ) {

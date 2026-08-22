@@ -385,6 +385,20 @@ final class FakeZRServer: @unchecked Sendable {
         updateCameraMovieFileTypeLocked(raw)
     }
 
+    /// Overrides a property's GetDevicePropValue payload without recording an app write.
+    func setCameraProperty(_ property: PTPPropertyCode, data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        propertyValueOverrides[property.rawValue] = data
+    }
+
+    /// How many times the scripted body has served this property.
+    func cameraPropertyReadCount(_ property: PTPPropertyCode) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return propertyReadCounts[property.rawValue] ?? 0
+    }
+
     /// Transaction IDs in arrival order (parallel to `receivedOperations`).
     func receivedTransactionIDs() -> [UInt32] {
         lock.lock()

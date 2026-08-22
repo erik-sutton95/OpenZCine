@@ -92,6 +92,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Aperture-priority (and other auto-exposure) shutter and ISO no longer sit stale.** Nikon
+  often does not announce those camera-owned changes on `DevicePropChanged`, so after the first
+  #268 fix a photo A-mode body could show 1/30 · ISO 1000 while the app still read 1/125 · A900.
+  The shared core now re-reads the camera-owned ISO / shutter / iris set on a bounded cadence —
+  one property per tick, skipped entirely in M + manual ISO — and both shells use it. Operator
+  dials still jump the queue when the body does announce them.
 - **Photo-mode FOCUS and tap-to-focus no longer borrow the movie AF mode.** The capture strip
   was reading the movie leftover, so it showed AF-F or an em dash while the Focus panel — which
   already used the stills setting — confirmed AF-S. A video tap could then fire the one-shot

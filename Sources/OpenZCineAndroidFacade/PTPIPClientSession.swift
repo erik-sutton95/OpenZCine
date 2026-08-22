@@ -644,6 +644,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var androidWhiteBalanceTint: String?
     private var androidPropertyPollIndex = 0
     private var androidEVIndicatorPollTick = 0
+    private var androidAutoExposurePollTick = 0
     private var androidLastStorageRefreshAt: Date?
     private var androidLastDescriptorRefreshAt: Date?
     /// Remaining property reads of a photo↔video flip's value burst, drained
@@ -1562,6 +1563,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 androidDescriptorsDueForModeFlip = true
             }
             return androidPropertyReadback(result: result)
+        case .autoExposure:
+            // Nikon often does not announce auto-exposure shutter/ISO (#268 round
+            // three). One rotating camera-owned readout, same cheap-tick shape as
+            // the EV needle. Empty set (M + manual ISO) is a no-op — no PTP.
+            guard
+                let property = CameraAutoExposureReadouts.nextProperty(
+                    pollIndex: androidAutoExposurePollTick,
+                    snapshot: androidPropertySnapshot)
+            else {
+                return androidPropertyReadback(result: .accepted)
+            }
+            androidAutoExposurePollTick &+= 1
+            return androidPropertyReadback(result: refreshAndroidProperty(property))
         case .propertyChanged(let rawCode):
             // Gate on the movie ∪ photo monitor union, not the movie order alone: photo chrome
             // watches `fNumber` / `stillShutterSpeed` / `imageSize`, none of which appear in

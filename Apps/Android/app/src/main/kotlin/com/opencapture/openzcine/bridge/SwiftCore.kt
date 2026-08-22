@@ -549,6 +549,14 @@ object SwiftCore {
      */
     const val PROPERTY_REFRESH_SELECTOR: Int = 4
 
+    /**
+     * One rotating camera-owned auto-exposure readout (working ISO / shutter /
+     * iris) while P/A/S/Auto or Auto ISO owns those values. Never advances the
+     * round-robin. A no-op in the core when the operator owns every exposure
+     * value.
+     */
+    const val PROPERTY_REFRESH_AUTO_EXPOSURE: Int = 5
+
     /** `sessionSetRecording` completed and the camera accepted the command. */
     const val RECORDING_COMMAND_ACCEPTED: Int = 0
 
@@ -667,8 +675,9 @@ object SwiftCore {
      * Refreshes semantic Android camera state through the Swift core and
      * returns a flat semantic record consumed by `SwiftCoreCameraSession`. [request]
      * must be one of [PROPERTY_REFRESH_BOOTSTRAP], [PROPERTY_REFRESH_NEXT],
-     * [PROPERTY_REFRESH_EVENT], [PROPERTY_REFRESH_EV_INDICATOR], or
-     * [PROPERTY_REFRESH_SELECTOR]. [recording] informs the core's shared
+     * [PROPERTY_REFRESH_EVENT], [PROPERTY_REFRESH_EV_INDICATOR],
+     * [PROPERTY_REFRESH_SELECTOR], or [PROPERTY_REFRESH_AUTO_EXPOSURE].
+     * [recording] informs the core's shared
      * low-rate poll policy. [propertyCode] is only a raw value forwarded from
      * an existing `DevicePropChanged` event; Kotlin never creates or decodes a
      * Nikon property identifier. Null is reserved for an unavailable native

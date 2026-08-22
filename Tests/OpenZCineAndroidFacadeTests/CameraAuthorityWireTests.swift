@@ -195,4 +195,51 @@ struct CameraPropertyChangeEventWireTests {
         _ = session.refreshAndroidPropertySnapshot(.propertyChanged(0xDEAD))
         #expect(valueReadCount(server) == baseline)
     }
+
+    @Test func autoExposureIsANoOpWhenTheOperatorOwnsEveryExposureValue() throws {
+        // Default fixture is video M + R3D dual-base: shutter, iris, and ISO are
+        // all operator-owned, so the bounded AE poll must not spend a PTP read.
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(!CameraAutoExposureReadouts.needsPoll(from: bootstrap.properties))
+
+        let baseline = valueReadCount(server)
+        let readback = session.refreshAndroidPropertySnapshot(.autoExposure)
+        #expect(readback.result == .accepted)
+        #expect(valueReadCount(server) == baseline)
+    }
+
+    @Test func photoAModeAutoExposureReadsStillShutterAndWorkingISO() throws {
+        // The August 2026 regression: photo A-mode, no DevicePropChanged for the
+        // camera-owned shutter/ISO, so the app sat on 1/125 · A900. The bounded
+        // poll has to hit those two properties without waiting out the round-robin.
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        server.setCameraProperty(.liveViewSelector, data: Data([0]))
+        server.setCameraProperty(
+            .exposureProgramMode, data: Data(ByteCoding.uint16LE(0x0003)))
+        server.setCameraProperty(.stillISOAutoControl, data: Data([1]))
+        server.setCameraProperty(
+            .stillShutterSpeed, data: Data(ByteCoding.uint32LE(0x0001_001E)))
+        server.setCameraProperty(
+            .isoControlSensitivity, data: Data(ByteCoding.uint32LE(1000)))
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.properties.captureSelector == .photo)
+        #expect(bootstrap.properties.exposureMode == "A")
+        #expect(CameraAutoExposureReadouts.needsPoll(from: bootstrap.properties))
+        #expect(bootstrap.properties.shutterSpeed == "1/30")
+        #expect(bootstrap.properties.iso == 1000)
+
+        let isoBefore = server.cameraPropertyReadCount(.isoControlSensitivity)
+        let shutterBefore = server.cameraPropertyReadCount(.stillShutterSpeed)
+        _ = session.refreshAndroidPropertySnapshot(.autoExposure)
+        _ = session.refreshAndroidPropertySnapshot(.autoExposure)
+        #expect(server.cameraPropertyReadCount(.isoControlSensitivity) > isoBefore)
+        #expect(server.cameraPropertyReadCount(.stillShutterSpeed) > shutterBefore)
+    }
 }
