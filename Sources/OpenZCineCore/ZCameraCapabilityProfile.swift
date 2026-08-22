@@ -83,6 +83,60 @@ public struct ZCameraOperationPolicy: Equatable, Sendable {
 
     /// Parameter for `GetVendorCodes` selecting the vendor DevicePropCode array.
     public static let vendorCodesPropertyListParameter: UInt32 = 0x0D
+
+    /// Conservative gen-1 OperationsSupported used only when DeviceInfo did not
+    /// arrive and the handshake / USB product name is an original Z 5 / Z 6 / Z 7 / Z 50.
+    ///
+    /// This is not a model table for op selection on a live body — advertised ops still
+    /// win. It exists so a failed probe cannot fall through to GetPairingInfo /
+    /// ChangeApplicationMode, which is how a gen-1 body shows a wireless error (#292)
+    /// and how an original Z 6 fails to connect (#348).
+    public static let generation1FallbackOperations: Set<UInt16> = [
+        0x90CA, 0x90C2, 0x9201, 0x9202, 0x9203, 0x9428, 0x90C7, 0x941C, 0x90C8,
+        0x100E, 0x9207, 0x90C0, 0x90CB, 0x920C,
+    ]
+
+    /// When DeviceInfo was not fetched, use a gen-1 surface if the camera name is an
+    /// original Z 5 / Z 6 / Z 7 / Z 50. Later bodies and unknown names keep the
+    /// modern-surface default so a failed probe cannot lock a gen-3 body out of pairing.
+    public func resolvingUnknown(cameraName: String?) -> ZCameraOperationPolicy {
+        guard !isKnown else { return self }
+        guard let cameraName, ZCameraBodyGeneration.inferred(fromCameraName: cameraName) == .one
+        else { return self }
+        return ZCameraOperationPolicy(operations: Self.generation1FallbackOperations)
+    }
+}
+
+/// Coarse Z-lineup generation inferred from a PTP-IP friendly name, USB product
+/// name, or camera-AP SSID. Used only when DeviceInfo is missing.
+public enum ZCameraBodyGeneration: Equatable, Sendable {
+    /// Z 5 / Z 6 / Z 7 / Z 50 — property app-mode, no pairing handshake.
+    case one
+    /// Z 6II / Z 7II / Z fc / Z 30 — ChangeApplicationMode, still no Ex ops.
+    case two
+    /// Z 8 / Z 9 / Z 6III / Z f / Z 5II / Z 50II / ZR — modern vendor + pairing surface.
+    case three
+
+    /// Longest-token match so "Z 6III" is not classified as the original Z 6.
+    public static func inferred(fromCameraName raw: String) -> ZCameraBodyGeneration? {
+        let compact = raw.uppercased().replacingOccurrences(of: "NIKON", with: "").filter {
+            $0.isLetter || $0.isNumber
+        }
+        guard !compact.isEmpty else { return nil }
+        let tokens: [(token: String, generation: ZCameraBodyGeneration)] = [
+            ("Z6III", .three), ("Z7III", .three),
+            ("Z50II", .three), ("Z5II", .three),
+            ("Z6II", .two), ("Z7II", .two),
+            ("ZFC", .two), ("Z30", .two),
+            ("Z50", .one),
+            ("ZR", .three), ("Z8", .three), ("Z9", .three), ("ZF", .three),
+            ("Z5", .one), ("Z6", .one), ("Z7", .one),
+        ]
+        for entry in tokens where compact.contains(entry.token) {
+            return entry.generation
+        }
+        return nil
+    }
 }
 
 /// Decodes the vendor property-code array returned by the vendor discovery ops:

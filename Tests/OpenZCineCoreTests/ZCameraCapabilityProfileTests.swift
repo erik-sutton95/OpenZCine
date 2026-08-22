@@ -53,6 +53,38 @@ struct ZCameraCapabilityProfileTests {
         #expect(policy.supportsPairing)
     }
 
+    /// #348 / residual of #292: when DeviceInfo never arrives, the handshake or USB
+    /// product name is the only generation signal. Original Z 6 / Z 5 / Z 7 / Z 50
+    /// names must not keep the modern pairing + ChangeApplicationMode surface.
+    @Test func unknownOpsWithGeneration1NameUsePropertyAppModeAndSkipPairing() {
+        for name in ["Z 6_1234567", "Z6_1234567", "Nikon Z 6", "NIKON_Z6_01234", "Z 5_7654321"] {
+            let policy = ZCameraOperationPolicy(operations: []).resolvingUnknown(cameraName: name)
+            #expect(policy.isKnown, "name: \(name)")
+            #expect(!policy.appModeViaOperation, "name: \(name)")
+            #expect(!policy.supportsPairing, "name: \(name)")
+            #expect(policy.vendorCodeDiscoveryOperation == .getVendorPropCodes, "name: \(name)")
+        }
+    }
+
+    @Test func unknownOpsWithLaterGenerationNameKeepModernPairingSurface() {
+        for name in [
+            "ZR_6001234", "Z 6III_1234567", "Z 6II_1234567", "Z 5II_123", "NIKON_ZR_01234",
+        ] {
+            let policy = ZCameraOperationPolicy(operations: []).resolvingUnknown(cameraName: name)
+            #expect(!policy.isKnown, "name: \(name)")
+            #expect(policy.supportsPairing, "name: \(name)")
+            #expect(policy.appModeViaOperation, "name: \(name)")
+        }
+    }
+
+    @Test func advertisedOpsAreNotOverriddenByAGeneration1Name() {
+        let policy = ZCameraOperationPolicy(operations: Self.gen3Ops.union([0x952B]))
+            .resolvingUnknown(cameraName: "Z 6_1234567")
+        #expect(policy.supportsPairing)
+        #expect(policy.appModeViaOperation)
+        #expect(policy.supportsExtendedPropertyOps)
+    }
+
     @Test func missingMediaCaptureFallsBackToStandardCapture() {
         let policy = ZCameraOperationPolicy(operations: [0x100E])
         #expect(policy.stillCaptureOperation == .initiateCapture)

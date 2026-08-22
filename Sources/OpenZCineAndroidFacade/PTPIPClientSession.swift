@@ -904,6 +904,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         /// streams 24 fps, full metadata.]
         private static func establishUSBSession(
             on session: PTPIPClientSession,
+            policy: ZCameraOperationPolicy,
             onPhase: (CameraConnectionPhase, String) -> Void
         ) throws {
             try performingUSBHandshake(.openSession) {
@@ -916,8 +917,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // is serviced with a concurrent event pump. The camera has no
             // GetPairingInfo/ConfirmPairing over USB (absent from its USB
             // OperationsSupported), so there is no pairing fallback here.
+            // App-control must follow the probed/name-fallback policy: sending
+            // ChangeApplicationMode at a gen-1 Z 6 is the USB twin of #292/#348.
             try performingUSBHandshake(.appMode) {
-                if try session.enableAppControlServicingEvents() != .ok {
+                if try session.enableAppControlServicingEvents(policy: policy) != .ok {
                     // App mode still refused. Degrade to remote mode: the live
                     // feed works, though the camera body stays on "Connected to
                     // computer" (tracked follow-up). Better a working feed than a
@@ -1052,15 +1055,22 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 // an OpenSession-first sequence is held unanswered while
                 // CloseSession still answers instantly — so match the
                 // universal order. Outside a session the TransactionID is 0.
-                try performingUSBHandshake(.deviceInfo) {
-                    _ = try transport.executeTransactionSynchronously(
+                let probe = try performingUSBHandshake(.deviceInfo) {
+                    try transport.executeTransactionSynchronously(
                         operationCode: .getDeviceInfo,
                         transactionID: 0,
                         dataPhase: .dataIn,
                         deadline: .seconds(5)
                     )
                 }
-                try establishUSBSession(on: session, onPhase: onPhase)
+                var policy = ZCameraOperationPolicy(operations: [])
+                if probe.operationResponse.responseCode == .ok,
+                    let info = try? PTPDeviceInfo(data: probe.data)
+                {
+                    policy = ZCameraOperationPolicy(deviceInfo: info)
+                }
+                policy = policy.resolvingUnknown(cameraName: cameraNameHint)
+                try establishUSBSession(on: session, policy: policy, onPhase: onPhase)
                 return session
             } catch {
                 session.disconnect()
@@ -1138,13 +1148,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// own screen (#292). Best-effort: a failed fetch yields an unknown policy, which keeps the
     /// modern-surface behaviour on every path. [verify-on-HW: Z 5 over camera AP]
     private func probeOperationPolicy() -> ZCameraOperationPolicy {
-        guard let probe = try? executeTransaction(.getDeviceInfo, dataPhase: .dataIn),
+        let probed: ZCameraOperationPolicy
+        if let probe = try? executeTransaction(.getDeviceInfo, dataPhase: .dataIn),
             probe.operationResponse.responseCode == .ok,
             let info = try? PTPDeviceInfo(data: probe.data)
-        else {
-            return ZCameraOperationPolicy(operations: [])
+        {
+            probed = ZCameraOperationPolicy(deviceInfo: info)
+        } else {
+            probed = ZCameraOperationPolicy(operations: [])
         }
-        return ZCameraOperationPolicy(deviceInfo: info)
+        return probed.resolvingUnknown(cameraName: identity.cameraName)
     }
 
     /// Nikon app-control gate. `true` when the camera accepted app control —
@@ -1181,8 +1194,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         /// stalls; our establish is single-threaded, so pump events here. The
         /// event endpoint has its own lock — this never blocks the command
         /// pipe carrying the app-mode request itself.
-        func enableAppControlServicingEvents() throws -> PTPResponseCode {
-            guard let usbTransport else { return try enableAppControlResponse() }
+        func enableAppControlServicingEvents(
+            policy: ZCameraOperationPolicy = ZCameraOperationPolicy(operations: [])
+        ) throws -> PTPResponseCode {
+            guard let usbTransport else { return try enableAppControlResponse(policy: policy) }
             let pump = USBEventPumpFlag()
             Thread.detachNewThread {
                 while !pump.stopRequested {
@@ -1190,7 +1205,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 }
             }
             defer { pump.requestStop() }
-            return try enableAppControlResponse()
+            return try enableAppControlResponse(policy: policy)
         }
     #endif
 

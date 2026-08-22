@@ -9,6 +9,7 @@ New and changed
 
 Fixes
 
+- Original Z 6, Z 5, and Z 7 no longer get pairing steps they do not support. iPad USB-C copy says this device, not iPhone.
 - Format a card and Media used to keep the old clip names. REFRESH now follows the card, and Settings > Clear Cache reloads Media from the card.
 - Share and Save to Photos work on clips from the camera. They used to fail with "Invalid sample cursor".
 - Share on the player is available while the camera is connected. You no longer have to disconnect and go through Operator Setup to reach it.
@@ -28,6 +29,7 @@ What to test
 - Save the same body on two different Wi-Fi networks. Each should stay its own setup with its own Stream Preset and Quality Bias, and renaming one should not touch the other.
 - Turn the camera on its side, then turn Auto-Rotate Feed off in Settings > Controls: the picture should stay put. Turn it back on and the picture should stand up. Then flip the iPhone to the opposite landscape: picture and controls swap sides, nothing under the island.
 - Turn on Share This Feed, ask for control from the second device, and start a take from it. Then screen-record on the sharing device and check the watcher stays with the action.
+- If you have an original Z 6, Z 5, or Z 7, connect over USB-C and the camera's own Wi-Fi. It should reach the monitor without a wireless error on the camera.
 - Watch a dim high-ISO shot with Feed Noise Reduction on and off, then step the Feed Upscaler through Fast, Quality and AI on the same framing.
 - Put the body in Aperture-priority photo, change the light, and check shutter and ISO on the phone match the camera. With full-time AF for video, change stills focus settings and tap the feed: FOCUS should hold.
 - Set stills AF-S and video full-time AF. Photo FOCUS should match the Focus panel, not leftover AF-F. Pull the focus dial, then tap: it should focus without a half-press. Set the clock a minute off, connect, and check it corrects.

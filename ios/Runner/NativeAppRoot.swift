@@ -584,7 +584,7 @@ final class NativeAppModel {
             case .usbC:
                 DeviceUSBConnector.current == .lightning
                     ? "Connect through Apple's Lightning to USB camera adapter — a USB-C to Lightning cable can't host the camera."
-                    : "Plug the camera into this iPhone with a USB-C cable."
+                    : "Plug the camera into this device with a USB-C cable."
             case .hdmiCapture:
                 "Feed the camera's HDMI output into a USB capture device — full-quality picture, no camera control."
             case .wiFiNetwork:

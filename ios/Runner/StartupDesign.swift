@@ -1742,7 +1742,7 @@ enum StartupWizardContent {
         case .usbC:
             return [
                 "In the camera's setup menu, set USB to MTP/PTP.",
-                "Connect the USB‑C cable between the camera and your iPhone.",
+                "Connect the USB‑C cable between the camera and this device.",
                 "Leave the camera switched on — no network profile is needed.",
             ]
         case .wiFiNetwork:
@@ -1810,11 +1810,11 @@ enum StartupWizardContent {
                     device: .camera,
                     steps: tight
                         ? [
-                            "Plug the camera into this iPhone with USB-C",
+                            "Plug the camera into this device with USB-C",
                             "Confirm any connection prompt on the camera",
                         ]
                         : [
-                            "Plug the camera into this iPhone with a USB-C cable",
+                            "Plug the camera into this device with a USB-C cable",
                             "If the camera shows a connection prompt, confirm it",
                         ]
                 ),
@@ -1874,7 +1874,7 @@ enum StartupWizardContent {
         case .usbC:
             return tight
                 ? "Plug in the cable, allow camera access, then find your camera."
-                : "Connect the cable, confirm the camera's prompt, and allow camera access on this iPhone when asked."
+                : "Connect the cable, confirm the camera's prompt, and allow camera access on this device when asked."
         case .wiFiNetwork:
             return tight
                 ? "Put both on the same network, then find the camera."

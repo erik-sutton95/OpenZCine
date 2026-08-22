@@ -1,6 +1,6 @@
+- Fixed: original Z 6, Z 5, and Z 7 connect without pairing steps they do not support.
 - Fixed: USB-C connect after Android grants permission. If the picture came up then dropped, or retry failed immediately, try the cable again — it should stay up.
 - Fixed: Aperture-priority shutter and ISO on the phone follow the camera as it meters.
 - Fixed: photo FOCUS and taps follow stills AF, not leftover video AF-F.
 - New: Media has REFRESH. After a format it follows the card, not old names; Clear Cache reloads Media from the camera.
 - Fixed: Share and Save to Photos work on clips from the camera.
-- Fixed: Share in playback is available while the camera is still connected.
