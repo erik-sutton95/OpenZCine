@@ -1135,7 +1135,9 @@
     <string name="help_sharing_camera_control">Take the camera back. This device holds the link, so it never has to ask.</string>
     <string name="help_storage_frameio">Sign in once here and the share sheet\'s Frame.io option unlocks everywhere. On the camera\'s Wi-Fi, Sign in over internet hops to another Wi-Fi network or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.</string>
     <string name="help_storage_cache">Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.</string>
-    <string name="help_storage_clear_cache">Removes completed cached clip files and thumbnails for every camera. Transfers still running are kept so they can resume, and favorites, upload history and camera indexes survive — clips re-cache from the camera on demand.</string>
+    <string name="help_storage_clear_cache">Removes completed cached clip files, thumbnails, and camera indexes for every camera. Transfers still running are kept so they can resume. Favorites survive; the gallery reloads from the camera when connected.</string>
+    <string name="media_refresh">REFRESH</string>
+    <string name="media_refresh_cd">Refresh camera media</string>
 
     <!-- Consented camera-AP internet hop from Operator Setup (iOS SettingsInternetDestination). -->
     <string name="settings_report_hop_title">Leave camera Wi-Fi?</string>

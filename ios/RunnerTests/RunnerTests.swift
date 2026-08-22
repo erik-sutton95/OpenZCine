@@ -1229,6 +1229,84 @@ extension RunnerTests {
         XCTAssertEqual(Set(sorted.suffix(2)), ["A.JPG", "D.JPG"])
     }
 
+    /// A formatted card recycles PTP handles. Removal of those handles must drop the
+    /// remote-only old filename so the next fetch can install the new object.
+    func testApplyCameraRemovalDropsRemoteOnlyRowWhenHandleIsSuperseded() {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        var clip = mediaClip("DSC_0001.JPG")
+        clip.handle = 10
+        clip.storageID = 0x0001_0001
+        store.upsertBatch([clip], cameraID: "cam")
+
+        let removed = store.applyCameraRemoval(
+            cameraID: "cam",
+            removedHandles: [MediaObjectHandle(storageID: 0x0001_0001, handle: 10)],
+            hasLocalFile: { _ in false }
+        )
+
+        XCTAssertEqual(removed, ["DSC_0001.JPG"])
+        XCTAssertTrue(store.list(cameraID: "cam").isEmpty)
+    }
+
+    /// Intentionally downloaded copies survive a card generation change as local-only rows.
+    func testApplyCameraRemovalKeepsDownloadedCopyWhenHandleLeavesTheCard() throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        var clip = mediaClip("C0001.MOV")
+        clip.handle = 4
+        clip.storageID = 0x0001_0001
+        clip.sizeBytes = 4
+        store.upsertBatch([clip], cameraID: "cam")
+        let url = try store.localURL(cameraID: "cam", filename: "C0001.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("clip".utf8).write(to: url)
+
+        let removed = store.applyCameraRemoval(
+            cameraID: "cam",
+            removedHandles: [MediaObjectHandle(storageID: 0x0001_0001, handle: 4)],
+            hasLocalFile: { candidate in
+                store.cachedByteCount(cameraID: candidate.cameraID, filename: candidate.filename)
+                    > 0
+            }
+        )
+
+        XCTAssertTrue(removed.isEmpty)
+        let row = try XCTUnwrap(store.list(cameraID: "cam").first)
+        XCTAssertEqual(row.filename, "C0001.MOV")
+        XCTAssertNil(row.handle)
+        XCTAssertNil(row.storageID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    /// Camera-bucket cache is not source of truth — clearing it must drop `index.json`.
+    func testClearingCameraCacheDropsTheIndex() {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        store.upsertBatch([mediaClip("DSC_0001.JPG")], cameraID: "cam")
+
+        store.clearCache(cameraID: "cam", preservingIndex: false)
+
+        XCTAssertTrue(store.list(cameraID: "cam").isEmpty)
+    }
+
+    /// The on-device library has no camera to rebuild from, so its index survives a cache clear.
+    func testClearingLocalCachePreservesTheIndex() {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        store.upsertBatch([mediaClip("IMPORT.MOV")], cameraID: MediaClipStore.localBucketID)
+
+        store.clearCache(cameraID: MediaClipStore.localBucketID, preservingIndex: true)
+
+        XCTAssertEqual(
+            store.list(cameraID: MediaClipStore.localBucketID).map(\.filename), ["IMPORT.MOV"])
+    }
+
     // MARK: - Fused peaking kernel vs the reference filter chain
 
     /// The single-pass CIKL detector must reproduce the filter chain exactly — every constant in

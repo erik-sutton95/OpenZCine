@@ -4921,7 +4921,7 @@ struct OperatorSettingsPanel: View {
             SettingsInlineRow(
                 title: "Clear Cache",
                 help:
-                    "Removes cached clip files and thumbnails for every camera. Favorites, upload history, and camera indexes survive — clips re-cache from the camera on demand."
+                    "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
             ) {
                 Button {
                     model.clearAllMediaCaches()

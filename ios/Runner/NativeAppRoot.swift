@@ -2288,7 +2288,10 @@ final class NativeAppModel {
     /// `fetchThumbnail` so a body that serves garbage for a clip isn't re-queried every scroll.
     @ObservationIgnored private var thumblessClipIDs: Set<String> = []
     @ObservationIgnored private var mediaFetchTask: Task<Void, Never>?
-    /// Bumped per listing pass so a cancelled pass finishing late can't clear a successor's state.
+    /// Debounced re-list while the gallery is open and the body is still writing objects.
+    @ObservationIgnored private var galleryRelistTask: Task<Void, Never>?
+    /// Bumped per listing pass so a cancelled pass finishing late can't clear a successor's state
+    /// or write an older snapshot into a cleared index.
     @ObservationIgnored private var mediaFetchGeneration = 0
     /// Tab the last listing pass that ran to completion (not cancelled) was scoped to, nil when
     /// none has. Lets the tab `didSet` skip redundant re-lists; cleared whenever a fresh pass is
@@ -6467,6 +6470,8 @@ final class NativeAppModel {
         cancelClipStream()
         mediaFetchTask?.cancel()
         mediaFetchTask = nil
+        galleryRelistTask?.cancel()
+        galleryRelistTask = nil
         mediaFetchCompletedTab = nil
         cancelThumbnailWork(resumingWaiters: true)
         resetLinkHealthMeasurements()
@@ -7240,6 +7245,9 @@ final class NativeAppModel {
         // The card object set changed — the next media pass must re-list (a backup twin fires
         // no event of its own).
         mediaFetchCompletedTab = nil
+        if isStandaloneMediaLibraryPresented, mediaBrowserSource == .camera {
+            scheduleDebouncedGalleryRelist()
+        }
         guard !isStillCapturing, !pendingStillCapture,
             StillCapturePolicy.prefersPhotographyChrome(
                 selector: cameraPropertySnapshot.captureSelector)
@@ -13661,14 +13669,39 @@ extension NativeAppModel {
     }
 
     /// Cancels any in-flight listing pass and starts a fresh camera discovery.
-    func scheduleFetchClipsFromCamera() {
+    /// `identityProbeBudget` caps how many reused handles are `GetObjectInfo`'d to
+    /// catch a formatted card that recycled PTP handles (#296).
+    func scheduleFetchClipsFromCamera(identityProbeBudget: Int = 8) {
         mediaFetchTask?.cancel()
         // Coverage re-arms only when the new pass runs to completion — until then a tab
         // switch must fall back to scheduling (see `mediaCategoryTab.didSet`).
         mediaFetchCompletedTab = nil
         mediaFetchGeneration += 1
         let generation = mediaFetchGeneration
-        mediaFetchTask = Task { await fetchClipsFromCamera(generation: generation) }
+        mediaFetchTask = Task {
+            await fetchClipsFromCamera(
+                generation: generation, identityProbeBudget: identityProbeBudget)
+        }
+    }
+
+    /// Operator Refresh: probe every reused handle so a recycled PTP generation cannot
+    /// keep stale filenames. Automatic listing uses the smaller default budget.
+    func refreshCameraMediaInventory() {
+        scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
+    }
+
+    /// Coalesces ObjectAdded bursts while the gallery is open into one listing pass.
+    private func scheduleDebouncedGalleryRelist() {
+        galleryRelistTask?.cancel()
+        galleryRelistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled, isStandaloneMediaLibraryPresented else { return }
+            scheduleFetchClipsFromCamera()
+        }
+    }
+
+    private func mediaFetchIsCurrent(_ generation: Int) -> Bool {
+        mediaFetchGeneration == generation && !Task.isCancelled
     }
 
     /// Total cached clip bytes across every camera bucket on disk (Settings → Storage readout).
@@ -13678,15 +13711,22 @@ extension NativeAppModel {
         }
     }
 
-    /// Clears cached clip files and thumbnails for EVERY bucket (Settings → Storage), preserving
-    /// each bucket's `index.json` (favorites, handles, upload flags) for re-fetch.
+    /// Clears cached clip files and thumbnails for every camera bucket (Settings → Storage).
+    /// Camera indexes are cache — preserving them after a format is what left thumbnail-less
+    /// ghosts in the gallery (#296). The on-device `local` library is left intact.
     func clearAllMediaCaches() {
         cancelClipStream()
+        mediaFetchTask?.cancel()
+        mediaFetchGeneration += 1
+        mediaFetchCompletedTab = nil
         mediaDownloadProgress.removeAll()
-        for bucket in mediaClipStore.allBucketIDs() {
-            mediaClipStore.clearCache(cameraID: bucket)
+        for bucket in mediaClipStore.allBucketIDs() where bucket != MediaClipStore.localBucketID {
+            mediaClipStore.clearCache(cameraID: bucket, preservingIndex: false)
         }
         refreshMediaClips()
+        if mediaBrowserSource == .camera, cameraSession != nil {
+            scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
+        }
     }
 
     /// Clears on-disk clip cache for the active Media browser source bucket. Cancels any in-flight
@@ -13709,7 +13749,7 @@ extension NativeAppModel {
         refreshMediaClips()
         // Connected and looking at the camera → rebuild authoritatively right away.
         if clearingCameraBucket, cameraSession != nil {
-            scheduleFetchClipsFromCamera()
+            scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
         }
     }
 
@@ -13737,7 +13777,7 @@ extension NativeAppModel {
     /// unchanged handles skip `GetObjectInfo`; discovers in batches so the grid updates
     /// incrementally without blocking the main thread. Thumbnails fetch on demand when cells
     /// appear. Safe no-op with no session. [ZR · verify-on-HW]
-    private func fetchClipsFromCamera(generation: Int) async {
+    private func fetchClipsFromCamera(generation: Int, identityProbeBudget: Int) async {
         guard let session = cameraSession else { return }
         mediaFetchInProgress = true
         mediaFetchListedCount = 0
@@ -13766,36 +13806,49 @@ extension NativeAppModel {
         let cachedLocationSet = Set(cachedByLocation.keys)
 
         let listedHandles = await session.listMediaObjectHandles()
-        if Task.isCancelled { return }
+        guard mediaFetchIsCurrent(generation) else { return }
 
         // Removal detection always runs against the FULL listing — a scoped pass must never
         // read "absent from my category" as "deleted from the card".
-        let delta = MediaClipDiscoveryDelta.compute(
+        var delta = MediaClipDiscoveryDelta.compute(
             cachedHandles: cachedLocationSet,
             cameraHandles: listedHandles
         )
+        delta = await verifyReusedIdentities(
+            delta,
+            cachedByLocation: cachedByLocation,
+            session: session,
+            budget: identityProbeBudget,
+            generation: generation
+        )
+        guard mediaFetchIsCurrent(generation) else { return }
 
         // The pass itself is scoped to the active sidebar category: Videos fetches only videos,
         // Photos only stills. Other categories' metadata is NOT enumerated here — each tab runs
         // its own delta pass on selection (mediaCategoryTab.didSet).
+        // Superseded handles no longer name the cached file — drop them from the tab cache so
+        // they are treated as unknown and fetched, not skipped as the old type.
+        var scopedCache = cachedByLocation
+        for location in delta.supersededHandles { scopedCache.removeValue(forKey: location) }
         let cameraHandles = await scopedHandles(
             listedHandles,
             for: mediaCategoryTab,
-            cachedByLocation: cachedByLocation,
+            cachedByLocation: scopedCache,
             session: session
         )
-        if Task.isCancelled { return }
+        guard mediaFetchIsCurrent(generation) else { return }
 
-        if !delta.removedHandles.isEmpty {
+        let staleHandles = delta.removedHandles.union(delta.supersededHandles)
+        if !staleHandles.isEmpty {
             let removedFilenames = mediaClipStore.applyCameraRemoval(
                 cameraID: bucket,
-                removedHandles: delta.removedHandles,
+                removedHandles: staleHandles,
                 hasLocalFile: { isClipDownloaded($0) }
             )
             if mediaBrowserSource == .camera, bucket == mediaBucketID {
                 applyRemovedClipsToMemory(
                     removedFilenames: removedFilenames,
-                    clearedLocations: delta.removedHandles
+                    clearedLocations: staleHandles
                 )
             }
         }
@@ -13809,6 +13862,7 @@ extension NativeAppModel {
         var lastFlush = ContinuousClock.now
 
         func flushPendingBatch(force: Bool = false) {
+            guard mediaFetchIsCurrent(generation) else { return }
             guard force || !pendingBatch.isEmpty else { return }
             let shouldFlush =
                 force
@@ -13839,7 +13893,7 @@ extension NativeAppModel {
         }
         var learnedOffTab = 0
         for objectHandle in cameraHandles {
-            if Task.isCancelled { break }
+            if !mediaFetchIsCurrent(generation) { break }
 
             let record: MediaClip
             if delta.reuseHandles.contains(objectHandle),
@@ -13875,7 +13929,7 @@ extension NativeAppModel {
 
         flushPendingBatch(force: true)
         mediaLibraryLogger.info(
-            "delta sync listed \(listedCount, privacy: .public) clip(s) on this tab — card objects: \(delta.reuseHandles.count, privacy: .public) reused, \(delta.fetchHandles.count, privacy: .public) fetched (\(learnedOffTab, privacy: .public) learned off-tab), \(delta.removedHandles.count, privacy: .public) removed"
+            "delta sync listed \(listedCount, privacy: .public) clip(s) on this tab — card objects: \(delta.reuseHandles.count, privacy: .public) reused, \(delta.fetchHandles.count, privacy: .public) fetched (\(learnedOffTab, privacy: .public) learned off-tab), \(delta.removedHandles.count, privacy: .public) removed, \(delta.supersededHandles.count, privacy: .public) superseded"
         )
 
         /// R3D masters in this bucket with no same-stem playable proxy, plus the proxy census.
@@ -13897,16 +13951,17 @@ extension NativeAppModel {
         // flat listing dropping them is exactly the symptom this fallback covers.
         var (unpairedMasters, proxyCount) = unpairedR3DMasters()
         var fallbackProxyCount = 0
-        if !unpairedMasters.isEmpty, !Task.isCancelled,
+        if !unpairedMasters.isEmpty, mediaFetchIsCurrent(generation),
             let videoHandles = try? await session.listMediaObjectHandles(
                 formats: MediaObjectFormats.video)
         {
             let seenThisPass = Set(cameraHandles)
+            let refetchable = delta.removedHandles.union(delta.supersededHandles)
             for objectHandle in videoHandles {
-                if Task.isCancelled { break }
+                if !mediaFetchIsCurrent(generation) { break }
                 guard !seenThisPass.contains(objectHandle),
                     cachedByLocation[objectHandle] == nil
-                        || delta.removedHandles.contains(objectHandle)
+                        || refetchable.contains(objectHandle)
                 else { continue }
                 guard
                     let camera = await session.fetchMediaClip(
@@ -13938,9 +13993,56 @@ extension NativeAppModel {
 
         // Arm the tab-switch skip only for a pass that ran to the end — a cancelled pass may
         // have left this tab's handles unfetched.
-        if !Task.isCancelled, mediaFetchGeneration == generation {
+        if mediaFetchIsCurrent(generation) {
             mediaFetchCompletedTab = passTab
         }
+    }
+
+    /// `GetObjectInfo` a spread of reused handles. One filename/date mismatch on a card
+    /// means that card's handles were recycled (format) and cached metadata is a lie.
+    private func verifyReusedIdentities(
+        _ delta: MediaClipDiscoveryDelta,
+        cachedByLocation: [MediaObjectHandle: MediaClip],
+        session: NativeCameraSession,
+        budget: Int,
+        generation: Int
+    ) async -> MediaClipDiscoveryDelta {
+        guard !delta.reuseHandles.isEmpty, budget > 0 else { return delta }
+        var cachedIdentities: [MediaObjectHandle: MediaClipObjectIdentity] = [:]
+        cachedIdentities.reserveCapacity(cachedByLocation.count)
+        for (location, clip) in cachedByLocation {
+            cachedIdentities[location] = MediaClipObjectIdentity(
+                location: location,
+                filename: clip.filename,
+                captureDate: clip.captureDate,
+                sizeBytes: clip.sizeBytes
+            )
+        }
+        var probed: [MediaObjectHandle: MediaClipObjectIdentity] = [:]
+        var working = delta
+        for location in delta.identityProbeHandles(budget: budget) {
+            guard mediaFetchIsCurrent(generation) else { return working }
+            guard working.reuseHandles.contains(location) else { continue }
+            let identity: MediaClipObjectIdentity
+            if let camera = await session.fetchMediaClip(
+                handle: location.handle, storageID: location.storageID),
+                let filename = MediaClipFilename.safeCameraBasename(camera.info.filename)
+            {
+                identity = MediaClipObjectIdentity(
+                    location: location,
+                    filename: filename,
+                    captureDate: camera.info.captureDate,
+                    sizeBytes: UInt64(camera.info.compressedSize)
+                )
+            } else {
+                identity = MediaClipObjectIdentity(
+                    location: location, filename: "", captureDate: "", sizeBytes: 0)
+            }
+            probed[location] = identity
+            working = working.verifyingReusedIdentities(
+                cached: cachedIdentities, probed: probed)
+        }
+        return working
     }
 
     /// The handles a listing pass should process for the active sidebar category, newest first.
