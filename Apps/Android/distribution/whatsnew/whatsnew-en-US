@@ -1,3 +1,4 @@
+- New: Media has REFRESH. After a format it follows the card, not old names; Clear Cache reloads Media from the camera.
 - Fixed: Share and Save to Photos work on clips from the camera.
 - Fixed: Share in playback is available while the camera is still connected.
 - New: Settings > Controls has Auto-Rotate Feed. Turn it off if you want the picture to stay put when the camera is on its side.
