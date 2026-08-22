@@ -9,6 +9,8 @@ New and changed
 
 Fixes
 
+- Share and Save to Photos work on clips from the camera. They used to fail with "Invalid sample cursor".
+- Share on the player is available while the camera is connected. You no longer have to disconnect and go through Operator Setup to reach it.
 - On iPad in photo mode, the battery gauges sit beside the lock instead of covering PLAY.
 - A camera whose clock has drifted is set to your phone's time on connect - automatically, never while recording.
 - Changing stills focus settings no longer flips the video FOCUS readout or makes taps refocus single-shot on a camera set to full-time AF.
@@ -20,6 +22,7 @@ Fixes
 
 What to test
 
+- Connect to the camera, play a clip, tap Share, then Share and Save to Photos. Both should finish. You should not have to disconnect first.
 - Save the same body on two different Wi-Fi networks. Each should stay its own setup with its own Stream Preset and Quality Bias, and renaming one should not touch the other.
 - Turn the camera on its side, then turn Auto-Rotate Feed off in Settings > Controls: the picture should stay put. Turn it back on and the picture should stand up. Then flip the iPhone to the opposite landscape: picture and controls swap sides, nothing under the island.
 - Turn on Share This Feed, ask for control from the second device, and start a take from it. Then screen-record on the sharing device and check the watcher stays with the action.

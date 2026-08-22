@@ -40,6 +40,109 @@ final class MediaTimecodeTests: XCTestCase {
         XCTAssertEqual(start?.frameQuanta, UInt32(Self.fps))
     }
 
+    func testCompositionExportSessionCompletes() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sourceURL = dir.appendingPathComponent("source.mov")
+        try await Self.writeMovieWithTimecode(to: sourceURL)
+        let source = AVURLAsset(
+            url: sourceURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let exportable = try await MediaLUT.audioVisualExportAsset(from: source)
+        let output = dir.appendingPathComponent("out.mp4")
+        guard
+            let session = AVAssetExportSession(
+                asset: exportable, presetName: AVAssetExportPresetHighestQuality)
+        else {
+            XCTFail("no export session")
+            return
+        }
+        session.outputURL = output
+        session.outputFileType = .mp4
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            nonisolated(unsafe) let exportSession = session
+            exportSession.exportAsynchronously {
+                if exportSession.status == .completed {
+                    cont.resume()
+                } else {
+                    cont.resume(
+                        throwing: exportSession.error ?? NSError(domain: "export", code: -1))
+                }
+            }
+        }
+        let size =
+            (try FileManager.default.attributesOfItem(atPath: output.path)[.size] as? UInt64) ?? 0
+        XCTAssertGreaterThan(size, 0)
+    }
+
+    func testExportCompositionDropsTimecodeTrack() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sourceURL = dir.appendingPathComponent("source.mov")
+        try await Self.writeMovieWithTimecode(to: sourceURL)
+        let source = AVURLAsset(
+            url: sourceURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let sourceTimecode = try await source.loadTracks(withMediaType: .timecode)
+        XCTAssertFalse(sourceTimecode.isEmpty)
+
+        let exportable = try await MediaLUT.audioVisualExportAsset(from: source)
+        let exportTimecode = try await exportable.loadTracks(withMediaType: .timecode)
+        let exportVideo = try await exportable.loadTracks(withMediaType: .video)
+        XCTAssertTrue(exportTimecode.isEmpty)
+        XCTAssertFalse(exportVideo.isEmpty)
+    }
+
+    func testLUTBakeExportSucceedsForTimecodeSource() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sourceURL = dir.appendingPathComponent("source.mov")
+        try await Self.writeMovieWithTimecode(to: sourceURL)
+
+        let result = try await MediaLUT.export(
+            sourceURL: sourceURL,
+            outputFilename: "lut-bake-\(UUID().uuidString).mov",
+            format: .mov,
+            cube: Self.identityCube(),
+            metadata: nil
+        ) { _ in }
+        defer { try? FileManager.default.removeItem(at: result.videoURL) }
+
+        let size =
+            (try FileManager.default.attributesOfItem(atPath: result.videoURL.path)[.size]
+                as? UInt64) ?? 0
+        XCTAssertGreaterThan(size, 0)
+        let start = try await Self.readStartTimecode(of: result.videoURL)
+        XCTAssertEqual(start?.frame, Self.startFrame)
+    }
+
+    func testExportReferenceProxyIfPresent() async throws {
+        let sample = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("samples")
+            .appendingPathComponent("A002_C057_0704BT.MP4")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: sample.path),
+            "reference proxy sample is not on this machine")
+
+        let source = AVURLAsset(
+            url: sample, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let exportable = try await MediaLUT.audioVisualExportAsset(from: source)
+        let exportTimecode = try await exportable.loadTracks(withMediaType: .timecode)
+        let exportVideo = try await exportable.loadTracks(withMediaType: .video)
+        XCTAssertTrue(exportTimecode.isEmpty)
+        XCTAssertFalse(exportVideo.isEmpty)
+    }
+
     // MARK: - Synthesis
 
     /// Writes a tiny H.264 movie with a `tmcd` track starting at `startFrame`.
@@ -117,6 +220,22 @@ final class MediaTimecodeTests: XCTestCase {
         guard writer.status == .completed else {
             throw writer.error ?? NSError(domain: "MediaTimecodeTests", code: -4)
         }
+    }
+
+    private static func identityCube(size: Int = 2) -> CubeLUT {
+        var rgb: [Float] = []
+        rgb.reserveCapacity(size * size * size * 3)
+        let denominator = Float(size - 1)
+        for b in 0..<size {
+            for g in 0..<size {
+                for r in 0..<size {
+                    rgb.append(Float(r) / denominator)
+                    rgb.append(Float(g) / denominator)
+                    rgb.append(Float(b) / denominator)
+                }
+            }
+        }
+        return CubeLUT(size: size, rgb: rgb)
     }
 
     private static func makePixelBuffer(

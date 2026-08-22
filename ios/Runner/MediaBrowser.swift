@@ -4005,7 +4005,7 @@ struct MediaPlayerView: View {
             )
             .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
             .foregroundStyle(
-                model.isClipDownloaded(activeClip) ? LiveDesign.text : LiveDesign.faint
+                canShareActiveClip ? LiveDesign.text : LiveDesign.faint
             )
             .frame(
                 width: PlaybackChrome.actionButtonSize.width,
@@ -4019,7 +4019,8 @@ struct MediaPlayerView: View {
                 interactive: true)
         }
         .buttonStyle(.zcTapTarget)
-        .disabled(!model.isClipDownloaded(activeClip))
+        .disabled(!canShareActiveClip)
+        .accessibilityLabel("Share")
         .background {
             GeometryReader { proxy in
                 Color.clear
@@ -4029,6 +4030,13 @@ struct MediaPlayerView: View {
                     }
             }
         }
+    }
+
+    /// Cached clips are ready now; on-camera clips are ready once the camera can cache them.
+    private var canShareActiveClip: Bool {
+        MediaDeliveryEligibility.canDeliver(
+            clipIsLocal: model.isClipDownloaded(activeClip),
+            cameraConnected: model.isConnected)
     }
 
     private func transportButton(

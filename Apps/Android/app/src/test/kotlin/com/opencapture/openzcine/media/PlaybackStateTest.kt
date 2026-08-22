@@ -45,7 +45,7 @@ class PlaybackStateTest {
     }
 
     @Test
-    fun `mute is player local and complete cache is the only shareable state`() {
+    fun `mute is player local and cache completeness is independent of delivery`() {
         assertEquals(PlaybackAudioMode.MUTED, PlaybackAudioMode.AUDIBLE.toggled())
         assertEquals(0f, PlaybackAudioMode.MUTED.volume)
         assertEquals(PlaybackAudioMode.AUDIBLE, PlaybackAudioMode.MUTED.toggled())
@@ -65,6 +65,14 @@ class PlaybackStateTest {
             PlaybackShareState.UNAVAILABLE,
             playbackShareState(MediaCacheState.FAILED, downloadedBytes = 10L, expectedLength = 10L),
         )
+    }
+
+    @Test
+    fun `connected camera can start delivery before the cache completes`() {
+        assertEquals(true, canDeliverMedia(readyCount = 0, clipCount = 1, cameraConnected = true))
+        assertEquals(true, canDeliverMedia(readyCount = 1, clipCount = 1, cameraConnected = false))
+        assertEquals(false, canDeliverMedia(readyCount = 0, clipCount = 1, cameraConnected = false))
+        assertEquals(false, canDeliverMedia(readyCount = 0, clipCount = 0, cameraConnected = true))
     }
 
     @Test
