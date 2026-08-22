@@ -1,9 +1,12 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.bridge.ZoneStyle
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** JVM coverage for photography chrome policy helpers. */
@@ -69,6 +72,90 @@ class PhotographyChromeTest {
         val laneCentre = lock.x + lock.width + 12f + ASSIST_RAIL_EXPANDED_WIDTH_DP / 2f
         assertEquals(laneCentre - ASSIST_RAIL_COLLAPSED_PILL_DP / 2f, frame.x)
     }
+
+    @Test
+    fun `inline battery cluster trailing is the cluster right edge, not the phone pill`() {
+        val lock = ZoneFrame(x = 16f, y = 12f, width = 40f, height = 40f)
+        val cluster = ZoneFrame(x = 68f, y = 12f, width = 52f, height = 40f)
+        val zones = tabletZones(lock = lock, batteryCluster = cluster)
+
+        assertEquals(cluster, landscapeBatteryIndicatorsFrame(zones))
+        assertEquals(120f, photographyBatteryTrailing(zones))
+
+        val rail =
+            photographyAssistRailFrame(
+                lock = lock,
+                batteryTrailing = photographyBatteryTrailing(zones),
+                assistBand = band,
+                measuredCaptureBar = null,
+                expanded = true,
+            )
+        assertEquals(120f + 12f, rail.x)
+        assertTrue(rail.x >= cluster.x + cluster.width)
+    }
+
+    @Test
+    fun `phone rail batteries still use the stacked row frame`() {
+        val lock = ZoneFrame(x = 16f, y = 12f, width = 40f, height = 40f)
+        val phone = ZoneFrame(x = 16f, y = 90f, width = 38f, height = 70f)
+        val zones =
+            tabletZones(
+                lock = lock,
+                batteryStyle = ZoneStyle.BATTERY_RAIL,
+                batteryCluster = ZoneFrame(x = 16f, y = 12f, width = 38f, height = 300f),
+                batteryPhone = phone,
+            )
+        val stack = batteryRowStackFrame(phone, lock)
+        assertEquals(stack, landscapeBatteryIndicatorsFrame(zones))
+        assertEquals(stack.x + stack.width, photographyBatteryTrailing(zones))
+    }
+
+    @Test
+    fun `photo rail hugs the lock when there is no battery cluster`() {
+        val zones =
+            tabletZones(
+                lock = lock,
+                batteryStyle = null,
+                batteryCluster = null,
+                batteryPhone = null,
+            )
+        assertNull(photographyBatteryTrailing(zones))
+        val rail =
+            photographyAssistRailFrame(
+                lock = lock,
+                batteryTrailing = photographyBatteryTrailing(zones),
+                assistBand = band,
+                measuredCaptureBar = null,
+                expanded = true,
+            )
+        assertEquals(lock.x + lock.width + 12f, rail.x)
+    }
+
+    private fun tabletZones(
+        lock: ZoneFrame,
+        batteryStyle: ZoneStyle? = ZoneStyle.BATTERY_INLINE,
+        batteryCluster: ZoneFrame?,
+        batteryPhone: ZoneFrame? = null,
+    ): MonitorZones =
+        MonitorZones(
+            feed = ZoneFrame(0f, 0f, 1133f, 744f),
+            infoBar = ZoneFrame(140f, 8f, 800f, 46f),
+            captureStrip = null,
+            assistStrip = band,
+            systemCluster = lock,
+            lock = lock,
+            disp = ZoneFrame(1000f, 300f, 44f, 34f),
+            record = ZoneFrame(1050f, 600f, 72f, 72f),
+            media = ZoneFrame(1000f, 12f, 40f, 40f),
+            settings = ZoneFrame(1090f, 12f, 40f, 40f),
+            batteryCluster = batteryCluster,
+            batteryStyle = batteryStyle,
+            batteryPhone = batteryPhone,
+            batteryCamera = null,
+            scopes = null,
+            controlsGrid = null,
+        )
+
     @Test
     fun `photo feed spans the full height between the reserved side lanes`() {
         val viewport = ZoneFrame(0f, 0f, 914f, 384f)

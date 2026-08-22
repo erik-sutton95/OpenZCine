@@ -897,6 +897,32 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
         usesClassicSideNotch(safeArea: safeArea) ? 0 : pillLeading + pillWidth
     }
 
+    /// Trailing x of lock-side chrome that photography's vertical assist rail must clear.
+    ///
+    /// On phones the stacked pill lives *under* the lock, so the rail only has to beat the
+    /// lock button and the island-hugging pill width. On width-constrained (4:3-ish iPad)
+    /// landscape the gauges sit *beside* the lock in the top band — using the phone pill
+    /// constant there parks PLAY on top of the cluster (GitHub #93).
+    public static func photographyLeftChromeTrailing(
+        lock: MonitorModuleFrame,
+        batteryCluster: MonitorZone?,
+        batteriesVisible: Bool,
+        safeArea: MonitorEdgeInsets
+    ) -> Double {
+        let lockTrailing = lock.x + lock.width
+        guard batteriesVisible, let battery = batteryCluster else { return lockTrailing }
+        let batteryTrailing: Double
+        switch battery.style {
+        case .batteryInline:
+            batteryTrailing = battery.frame.x + battery.frame.width
+        case .batteryRail:
+            batteryTrailing = batteryPillTrailing(safeArea: safeArea)
+        default:
+            batteryTrailing = battery.frame.x + battery.frame.width
+        }
+        return max(lockTrailing, batteryTrailing)
+    }
+
     /// Horizontal nudge that aligns the indicators with the Dynamic Island, which sits slightly
     /// inboard of the chrome's leading inset.
     public static let notchAlignmentInsetX = 3.0
