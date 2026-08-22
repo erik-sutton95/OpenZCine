@@ -186,4 +186,16 @@ class UsbPtpSelectionTest {
         assertFalse(state.isCurrent(originalLease))
         assertTrue(requireNotNull(state.captureOpenLease(token)).generation > originalLease.generation)
     }
+
+    @Test
+    fun `interrupt URBs are one packet, never a bulk-sized chunk`() {
+        // Swift asks the event endpoint for a 256 KiB bulk-style chunk. Queuing
+        // that on interrupt-IN makes some host controllers fail immediately
+        // (Redmi K90 Ultra / Snapdragon 8 Elite, issue #315): handshake
+        // succeeds on bulk, then the event channel dies within milliseconds.
+        assertEquals(16, interruptUrbSize(maxPacketSize = 16, requestedMaxBytes = 256 * 1024))
+        assertEquals(64, interruptUrbSize(maxPacketSize = 64, requestedMaxBytes = 512))
+        assertEquals(8, interruptUrbSize(maxPacketSize = 8, requestedMaxBytes = 8))
+        assertEquals(8, interruptUrbSize(maxPacketSize = 0, requestedMaxBytes = 512))
+    }
 }

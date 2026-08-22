@@ -28,6 +28,10 @@ class CameraSessionDiagnosticsTest {
             "failed.ptp: unreachable",
             cameraSessionDiagnosticMessage("failed.ptp", "unreachable"),
         )
+        assertEquals(
+            "usb.handshake.write: ",
+            cameraSessionDiagnosticMessage("usb.handshake.write", ""),
+        )
     }
 
     @Test

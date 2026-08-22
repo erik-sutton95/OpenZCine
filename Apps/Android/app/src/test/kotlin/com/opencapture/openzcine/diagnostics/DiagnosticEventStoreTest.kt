@@ -256,4 +256,28 @@ class DiagnosticEventStoreTest {
         assertTrue(wording.none { it.contains("/dev/") }, "a device path is not a diagnostic")
         assertTrue(wording.all { it.startsWith("usb.attached.") })
     }
+
+    @Test
+    fun `USB handshake stages map to distinct closed codes`() {
+        val codes =
+            listOf(
+                    "usb.open.claim",
+                    "usb.open.eventEndpoint",
+                    "usb.reconnect.closedTransport",
+                    "usb.handshake.deviceInfo",
+                    "usb.handshake.openSession",
+                    "usb.handshake.appMode",
+                    "usb.handshake.write",
+                    "usb.handshake.read",
+                )
+                .map { AndroidDiagnosticEvent.fromPhase(it) }
+
+        assertEquals(codes.size, codes.toSet().size, "each stage needs its own code")
+        assertTrue(codes.all { it != null })
+        assertTrue(codes.none { it == AndroidDiagnosticEvent.CONNECTION_USB_FAILED })
+        assertEquals(
+            AndroidDiagnosticEvent.USB_HANDSHAKE_WRITE,
+            AndroidDiagnosticEvent.fromPhase("usb.handshake.write"),
+        )
+    }
 }

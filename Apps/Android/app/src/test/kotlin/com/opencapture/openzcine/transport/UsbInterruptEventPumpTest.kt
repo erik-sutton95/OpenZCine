@@ -54,6 +54,8 @@ private class FakeInterruptChannel : UsbInterruptChannel {
     var connectionOpen: Boolean = true
     var queueAttempts: Int = 0
         private set
+    var lastQueuedWasDirect: Boolean = false
+        private set
     var cancelCount: Int = 0
         private set
     var waitCount: Int = 0
@@ -81,6 +83,7 @@ private class FakeInterruptChannel : UsbInterruptChannel {
 
     override fun queue(buffer: ByteBuffer): Boolean {
         queueAttempts += 1
+        lastQueuedWasDirect = buffer.isDirect
         if (queued != null) {
             illegalQueueAttempts += 1
             throw IllegalStateException("this request is currently queued")
@@ -148,6 +151,20 @@ class UsbInterruptEventPumpTest {
         assertEquals(1, channel.queueAttempts)
         assertTrue(channel.isQueued)
         assertEquals(0, channel.waitCount)
+    }
+
+    @Test
+    fun `interrupt URBs use a direct buffer so OEM host stacks that reject heap arrays can complete`() {
+        // AOSP UsbRequest.queue has a native_queue_array path for heap buffers.
+        // Some OEM USB HALs (HyperOS on Snapdragon 8 Elite) fail that path and
+        // succeed only with a DirectByteBuffer. The payload must still copy out.
+        val pump = primedPump()
+        val payload = byteArrayOf(0x10, 0x00, 0x00, 0x00, 0x01, 0x40)
+        assertTrue(channel.lastQueuedWasDirect)
+        channel.script(FakeInterruptChannel.Completion.Own(payload))
+
+        assertContentEquals(payload, pump.read(READ_BYTES, TIMEOUT_MILLIS))
+        assertEquals(0, channel.illegalQueueAttempts)
     }
 
     @Test

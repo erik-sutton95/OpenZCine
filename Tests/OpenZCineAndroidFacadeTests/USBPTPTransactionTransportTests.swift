@@ -213,6 +213,34 @@ struct USBPTPTransactionTransportTests {
         #expect(raw.isClosed())
         #expect(finished.wait(timeout: .now() + 1) == .success)
     }
+
+    @Test func usbHandshakeWriteFailureIsAClosedDiagnosticToken() {
+        #expect(
+            usbHandshakeDiagnosticPhase(
+                stage: .openSession,
+                error: AndroidUSBPTPTransportError.writeFailed(expected: 12, actual: -1)
+            ) == "usb.handshake.write")
+        #expect(
+            usbHandshakeDiagnosticPhase(
+                stage: .deviceInfo,
+                error: AndroidUSBPTPTransportError.timeout("the camera response")
+            ) == "usb.handshake.timeout")
+        #expect(
+            usbHandshakeDiagnosticPhase(
+                stage: .appMode,
+                error: AndroidUSBPTPTransportError.connectionClosed
+            ) == "usb.handshake.closed")
+    }
+
+    @Test func usbHandshakeCameraRejectionKeepsTheStageToken() {
+        struct CameraRejected: Error {}
+        #expect(
+            usbHandshakeDiagnosticPhase(stage: .openSession, error: CameraRejected())
+                == "usb.handshake.openSession")
+        #expect(
+            usbHandshakeDiagnosticPhase(stage: .identify, error: CameraRejected())
+                == "usb.handshake.identify")
+    }
 }
 
 private func response(transactionID: UInt32) -> [UInt8] {

@@ -50,6 +50,27 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     /** Permission held, but the ROM would not surface a USB serial descriptor. */
     USB_ATTACHED_NO_SERIAL("usb.attached.no-serial"),
     USB_ATTACHED_READY("usb.attached.ready"),
+
+    // USB open / handshake stages. The generic `error.connection.usb.failed`
+    // breadcrumb could not tell a claim failure from a dead interrupt endpoint
+    // from a PTP OpenSession refusal (issue #315).
+    USB_OPEN_DETACHED("usb.open.detached"),
+    USB_OPEN_NO_PERMISSION("usb.open.no-permission"),
+    USB_OPEN_NO_PTP_INTERFACE("usb.open.no-ptp-interface"),
+    USB_OPEN_DEVICE("usb.open.device"),
+    USB_OPEN_CLAIM("usb.open.claim"),
+    USB_OPEN_EVENT_ENDPOINT("usb.open.event-endpoint"),
+    USB_OPEN_CHANGED("usb.open.changed"),
+    USB_RECONNECT_CLOSED_TRANSPORT("usb.reconnect.closed-transport"),
+    USB_RECONNECT_NOT_READY("usb.reconnect.not-ready"),
+    USB_HANDSHAKE_DEVICE_INFO("usb.handshake.device-info"),
+    USB_HANDSHAKE_OPEN_SESSION("usb.handshake.open-session"),
+    USB_HANDSHAKE_APP_MODE("usb.handshake.app-mode"),
+    USB_HANDSHAKE_IDENTIFY("usb.handshake.identify"),
+    USB_HANDSHAKE_WRITE("usb.handshake.write"),
+    USB_HANDSHAKE_READ("usb.handshake.read"),
+    USB_HANDSHAKE_TIMEOUT("usb.handshake.timeout"),
+    USB_HANDSHAKE_CLOSED("usb.handshake.closed"),
     LIVE_VIEW_FAILED("error.live-view.failed"),
     LIVE_VIEW_STALLED("warning.live-view.stalled"),
     // Object star-rating writes. The vocabulary stays closed (no wire code leaks into the log);
@@ -115,6 +136,23 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "usb.attached.permissionDenied" -> USB_ATTACHED_PERMISSION_DENIED
                 "usb.attached.noSerial" -> USB_ATTACHED_NO_SERIAL
                 "usb.attached.ready" -> USB_ATTACHED_READY
+                "usb.open.detached" -> USB_OPEN_DETACHED
+                "usb.open.noPermission" -> USB_OPEN_NO_PERMISSION
+                "usb.open.noPtpInterface" -> USB_OPEN_NO_PTP_INTERFACE
+                "usb.open.device" -> USB_OPEN_DEVICE
+                "usb.open.claim" -> USB_OPEN_CLAIM
+                "usb.open.eventEndpoint" -> USB_OPEN_EVENT_ENDPOINT
+                "usb.open.changed" -> USB_OPEN_CHANGED
+                "usb.reconnect.closedTransport" -> USB_RECONNECT_CLOSED_TRANSPORT
+                "usb.reconnect.notReady" -> USB_RECONNECT_NOT_READY
+                "usb.handshake.deviceInfo" -> USB_HANDSHAKE_DEVICE_INFO
+                "usb.handshake.openSession" -> USB_HANDSHAKE_OPEN_SESSION
+                "usb.handshake.appMode" -> USB_HANDSHAKE_APP_MODE
+                "usb.handshake.identify" -> USB_HANDSHAKE_IDENTIFY
+                "usb.handshake.write" -> USB_HANDSHAKE_WRITE
+                "usb.handshake.read" -> USB_HANDSHAKE_READ
+                "usb.handshake.timeout" -> USB_HANDSHAKE_TIMEOUT
+                "usb.handshake.closed" -> USB_HANDSHAKE_CLOSED
                 "failed.scannerRecognizer" -> SCANNER_RECOGNIZER_UNAVAILABLE
                 "failed.scannerRecognizerUnsupported" -> SCANNER_RECOGNIZER_UNSUPPORTED
                 "liveViewFailed" -> LIVE_VIEW_FAILED

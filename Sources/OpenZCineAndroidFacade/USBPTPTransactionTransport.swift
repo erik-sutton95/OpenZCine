@@ -51,6 +51,52 @@ enum AndroidUSBPTPTransportError: Error, LocalizedError, Equatable {
     }
 }
 
+/// Closed USB handshake stage for the privacy-safe diagnostic export.
+enum USBHandshakeStage: String, Sendable {
+    case deviceInfo = "usb.handshake.deviceInfo"
+    case openSession = "usb.handshake.openSession"
+    case appMode = "usb.handshake.appMode"
+    case identify = "usb.handshake.identify"
+}
+
+/// A USB establish failure tagged with the stage that threw, so the export
+/// names the step instead of collapsing everything into `failed.usb`.
+struct USBHandshakeError: Error, LocalizedError {
+    let stage: USBHandshakeStage
+    let underlying: Error
+
+    var diagnosticPhase: String {
+        usbHandshakeDiagnosticPhase(stage: stage, error: underlying)
+    }
+
+    var errorDescription: String? {
+        (underlying as? LocalizedError)?.errorDescription ?? String(describing: underlying)
+    }
+}
+
+/// Maps a USB handshake throw to a closed diagnostic token.
+///
+/// Transport pipe failures (write/read/timeout/closed) are more specific than
+/// the PTP stage that happened to be in flight. A camera-level rejection keeps
+/// the stage token (OpenSession, application mode, identify).
+func usbHandshakeDiagnosticPhase(stage: USBHandshakeStage, error: Error) -> String {
+    if let transport = error as? AndroidUSBPTPTransportError {
+        switch transport {
+        case .connectionClosed:
+            return "usb.handshake.closed"
+        case .writeFailed:
+            return "usb.handshake.write"
+        case .readFailed:
+            return "usb.handshake.read"
+        case .timeout:
+            return "usb.handshake.timeout"
+        default:
+            break
+        }
+    }
+    return stage.rawValue
+}
+
 /// Generic-container PTP transport over Android's platform-owned USB bytes.
 ///
 /// This type is platform-neutral so its framing and idle-event semantics run

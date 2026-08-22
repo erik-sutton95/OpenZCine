@@ -83,6 +83,24 @@ public object UsbPtpInterfaceSelector {
 }
 
 /**
+ * Interrupt URB length for one PTP event read.
+ *
+ * The Swift session asks the event endpoint for a bulk-sized chunk (256 KiB).
+ * Queuing that on interrupt-IN makes some USB host controllers — notably
+ * Qualcomm on HyperOS — fail the transfer immediately. Handshake then succeeds
+ * on the bulk pipes and the event channel dies a few milliseconds later
+ * (field report: Redmi K90 Ultra, issue #315). One packet is the USB-correct
+ * size; Swift already assembles multi-packet PTP event containers.
+ */
+internal fun interruptUrbSize(maxPacketSize: Int, requestedMaxBytes: Int): Int {
+    val packet = maxPacketSize.coerceAtLeast(MINIMUM_INTERRUPT_PACKET_BYTES)
+    if (requestedMaxBytes <= 0) return packet
+    return requestedMaxBytes.coerceAtMost(packet)
+}
+
+private const val MINIMUM_INTERRUPT_PACKET_BYTES: Int = 8
+
+/**
  * Privacy-safe persistent identity for a USB camera.
  *
  * The USB serial never leaves the platform layer: the saved-camera host key

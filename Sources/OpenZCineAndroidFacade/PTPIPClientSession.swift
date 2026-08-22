@@ -906,7 +906,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
             on session: PTPIPClientSession,
             onPhase: (CameraConnectionPhase, String) -> Void
         ) throws {
-            try session.openSession()
+            try performingUSBHandshake(.openSession) {
+                try session.openSession()
+            }
             // Application mode — NOT remote mode — is what keeps the camera
             // BODY awake (remote mode locks it to "Connected to computer").
             // iOS only ever uses application mode. Over USB the ZR's app-mode
@@ -914,15 +916,32 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // is serviced with a concurrent event pump. The camera has no
             // GetPairingInfo/ConfirmPairing over USB (absent from its USB
             // OperationsSupported), so there is no pairing fallback here.
-            if try session.enableAppControlServicingEvents() != .ok {
-                // App mode still refused. Degrade to remote mode: the live
-                // feed works, though the camera body stays on "Connected to
-                // computer" (tracked follow-up). Better a working feed than a
-                // failed connect.
-                _ = try? session.executeTransaction(.changeCameraMode, parameters: [1])
+            try performingUSBHandshake(.appMode) {
+                if try session.enableAppControlServicingEvents() != .ok {
+                    // App mode still refused. Degrade to remote mode: the live
+                    // feed works, though the camera body stays on "Connected to
+                    // computer" (tracked follow-up). Better a working feed than a
+                    // failed connect.
+                    _ = try? session.executeTransaction(.changeCameraMode, parameters: [1])
+                }
             }
-            try session.identify()
+            try performingUSBHandshake(.identify) {
+                try session.identify()
+            }
             onPhase(.connected, session.identity.displayName)
+        }
+
+        private static func performingUSBHandshake<Result>(
+            _ stage: USBHandshakeStage,
+            _ body: () throws -> Result
+        ) throws -> Result {
+            do {
+                return try body()
+            } catch let error as USBHandshakeError {
+                throw error
+            } catch {
+                throw USBHandshakeError(stage: stage, underlying: error)
+            }
         }
     #endif
 
@@ -1033,12 +1052,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 // an OpenSession-first sequence is held unanswered while
                 // CloseSession still answers instantly — so match the
                 // universal order. Outside a session the TransactionID is 0.
-                _ = try transport.executeTransactionSynchronously(
-                    operationCode: .getDeviceInfo,
-                    transactionID: 0,
-                    dataPhase: .dataIn,
-                    deadline: .seconds(5)
-                )
+                try performingUSBHandshake(.deviceInfo) {
+                    _ = try transport.executeTransactionSynchronously(
+                        operationCode: .getDeviceInfo,
+                        transactionID: 0,
+                        dataPhase: .dataIn,
+                        deadline: .seconds(5)
+                    )
+                }
                 try establishUSBSession(on: session, onPhase: onPhase)
                 return session
             } catch {

@@ -89,6 +89,8 @@ import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpCameraSource
 import com.opencapture.openzcine.transport.UsbPtpOpenResult
+import com.opencapture.openzcine.transport.UsbPtpTransportReopener
+import com.opencapture.openzcine.transport.reopenReadyUsbTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -252,28 +254,25 @@ public fun realPairingEnvironment(
         },
         usbCameraSource = usbCameraSource,
         createUsbSession = { opened ->
-            SwiftCoreCameraSession(
-                host = opened.hostKey,
-                cameraNameHint = opened.displayName,
-                usbTransport = opened.transport,
+            usbCameraSession(
+                opened = opened,
+                source = usbCameraSource,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
                 phaseLogger = combinedPhaseLogger,
             )
         },
         createSavedProfileUsbSession = { opened ->
-            SwiftCoreCameraSession(
-                host = opened.hostKey,
-                cameraNameHint = opened.displayName,
-                usbTransport = opened.transport,
+            usbCameraSession(
+                opened = opened,
+                source = usbCameraSource,
                 connectionStrategy = PtpIpConnectionStrategy.SAVED_PROFILE,
                 phaseLogger = combinedPhaseLogger,
             )
         },
         createFirstTimePairingUsbSession = { opened ->
-            SwiftCoreCameraSession(
-                host = opened.hostKey,
-                cameraNameHint = opened.displayName,
-                usbTransport = opened.transport,
+            usbCameraSession(
+                opened = opened,
+                source = usbCameraSource,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
                 phaseLogger = combinedPhaseLogger,
             )
@@ -286,6 +285,24 @@ public fun realPairingEnvironment(
         },
     )
 }
+
+private fun usbCameraSession(
+    opened: UsbPtpOpenResult.Opened,
+    source: UsbPtpCameraSource,
+    connectionStrategy: PtpIpConnectionStrategy,
+    phaseLogger: (String, String) -> Unit,
+): SwiftCoreCameraSession =
+    SwiftCoreCameraSession(
+        host = opened.hostKey,
+        cameraNameHint = opened.displayName,
+        usbTransport = opened.transport,
+        connectionStrategy = connectionStrategy,
+        usbReopener =
+            UsbPtpTransportReopener {
+                reopenReadyUsbTransport(source, opened.hostKey)
+            },
+        phaseLogger = phaseLogger,
+    )
 
 /** Emits only safe connection failures to logcat, never pairing-phase details. */
 private fun logCameraSessionPhase(phase: String, detail: String) {
@@ -311,7 +328,12 @@ internal fun cameraSessionDiagnosticMessage(phase: String, detail: String): Stri
         // no pairing credential can ride it.
         "propertyWriteSlow",
         -> "$phase: $detail"
-        else -> null
+        else ->
+            if (phase.startsWith("usb.")) {
+                "$phase: $detail"
+            } else {
+                null
+            }
     }
 
 /** Closed diagnostic phase token for the first-run transport choice. */
