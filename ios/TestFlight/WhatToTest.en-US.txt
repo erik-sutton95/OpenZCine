@@ -18,7 +18,7 @@ Fixes
 - Changing stills focus settings no longer flips the video FOCUS readout or makes taps refocus single-shot on a camera set to full-time AF.
 - A weak or busy link degrades the picture instead of dropping the session, and screen recording while you share your feed no longer walks the watcher's picture behind the action.
 - A watcher granted camera control can now start and stop the take, and keeps that control through a brief drop-out instead of losing it the moment the link stutters.
-- Changes made on the camera reach the app quickly again - the aperture ring, ISO or shutter used to take twenty seconds, or in video never.
+- Aperture-priority shutter and ISO follow the camera as it meters - they used to sit stale, take twenty seconds, or in video never.
 - Unplugging the cable or power-cycling the camera used to wedge the app. Both recover on their own, or offer Retry connection.
 
 What to test
@@ -29,5 +29,6 @@ What to test
 - Turn the camera on its side, then turn Auto-Rotate Feed off in Settings > Controls: the picture should stay put. Turn it back on and the picture should stand up. Then flip the iPhone to the opposite landscape: picture and controls swap sides, nothing under the island.
 - Turn on Share This Feed, ask for control from the second device, and start a take from it. Then screen-record on the sharing device and check the watcher stays with the action.
 - Watch a dim high-ISO shot with Feed Noise Reduction on and off, then step the Feed Upscaler through Fast, Quality and AI on the same framing.
+- Put the body in Aperture-priority photo, change the light, and check shutter and ISO on the phone match the camera. With full-time AF for video, change stills focus settings and tap the feed: FOCUS should hold.
 - Set stills AF-S and video full-time AF. Photo FOCUS should match the Focus panel, not leftover AF-F. Pull the focus dial, then tap: it should focus without a half-press. Set the clock a minute off, connect, and check it corrects.
 - On an iPad (especially mini) in landscape photo mode, PLAY and the rest of the left tool column should be fully visible and tappable, with the battery gauges beside the lock — not on top of PLAY.

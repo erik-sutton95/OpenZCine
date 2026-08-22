@@ -1,6 +1,6 @@
+- Fixed: Aperture-priority shutter and ISO on the phone follow the camera as it meters.
 - Fixed: photo FOCUS and taps follow stills AF, not leftover video AF-F.
 - New: Media has REFRESH. After a format it follows the card, not old names; Clear Cache reloads Media from the camera.
 - Fixed: Share and Save to Photos work on clips from the camera.
 - Fixed: Share in playback is available while the camera is still connected.
 - New: Settings > Controls has Auto-Rotate Feed. Turn it off if you want the picture to stay put when the camera is on its side.
-- Fixed: in photo mode on a tablet, the battery gauges sit beside the lock instead of covering PLAY.
