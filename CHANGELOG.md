@@ -92,6 +92,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Photo-mode FOCUS and tap-to-focus no longer borrow the movie AF mode.** The capture strip
+  was reading the movie leftover, so it showed AF-F or an em dash while the Focus panel — which
+  already used the stills setting — confirmed AF-S. A video tap could then fire the one-shot
+  AF drive that AF-S needs against a body still in AF-F. Each chrome now reads and drives only
+  its own side; a missing readout stays "—" instead of a synthetic AF-F. Both platforms.
+- **A focus-dial pull that overruns the readiness poll no longer wedges tap-to-focus.** The poll
+  ceiling used to count as success while a native Z STM lens was still moving, so the next
+  AF-area change answered busy until a half-press on the body. The in-flight drive is now
+  aborted and the channel is freed. Both platforms.
 - Native Share and Save to Photos no longer fail with AVFoundation `Invalid sample cursor` on
   Nikon proxy clips. Export now strips the camera timecode track before the session, uses the
   stable export path, and restores timecode afterwards (iOS).

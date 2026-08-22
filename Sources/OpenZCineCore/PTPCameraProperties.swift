@@ -1935,13 +1935,13 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
 
     /// The focus mode that belongs to the side of the camera currently on screen.
     ///
-    /// Falls back to the other one only when its own has never been reported, so a body that has
-    /// only ever pushed one of the two still reads out — but a value from the wrong side never
-    /// overwrites a value from the right one. (Field report: a stills AF-S announcement during
-    /// video repainted the FOCUS readout while the body stayed AF-F, and taps then fired the
-    /// single-servo AF drive against the operator's continuous mode.)
+    /// Unlike white balance, this does **not** fall back to the other side. Movie AF-F is not a
+    /// stills mode, and stills AF-S is not the movie setting: borrowing either is how the photo
+    /// strip showed a leftover AF-F (or "—") while the Focus panel confirmed AF-S, and how a
+    /// video tap fired the one-shot AF drive against a body still in AF-F (#272). Unavailable
+    /// stays explicit until that chrome's own property arrives.
     public func activeFocusMode(photography: Bool) -> String? {
-        photography ? (stillFocusMode ?? focusMode) : (focusMode ?? stillFocusMode)
+        photography ? stillFocusMode : focusMode
     }
 
     // Audio.

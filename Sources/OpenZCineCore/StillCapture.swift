@@ -391,7 +391,10 @@ extension PTPCameraPropertySnapshot {
             CameraValue(label: "SHUTTER", value: shutterSpeed ?? "—"),
             CameraValue(label: "IRIS", value: fNumber ?? "—"),
             CameraValue(label: "DRIVE", value: compactDriveLabel ?? "—"),
-            CameraValue(label: "FOCUS", value: focusMode ?? "—"),
+            // Stills AF mode (`StillFocusMode` / `FocusMode`), never the movie leftover.
+            // The movie field here is how the capture bar showed AF-F or "—" while the
+            // Focus panel — which already reads `stillFocusMode` — confirmed AF-S (#272).
+            CameraValue(label: "FOCUS", value: stillFocusMode ?? "—"),
             CameraValue(label: "WB", value: stillWhiteBalanceValue),
             CameraValue(label: "METER", value: meteringMode ?? "—"),
             CameraValue(label: "PROFILE", value: compactPictureControlLabel ?? "—"),

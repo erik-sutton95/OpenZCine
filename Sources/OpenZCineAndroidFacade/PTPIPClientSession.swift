@@ -3221,9 +3221,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard start.operationResponse.responseCode == .ok else {
             return .refused(start.operationResponse.responseCode)
         }
-        // Bounded by `MFDriveChannelBudget`: this whole loop runs under `commandLifecycleLock`,
-        // which `changeAfArea` also needs — waiting out a long pull here is what left tap-to-focus
-        // blocked. Past the ceiling the lens keeps moving on the body; the app just stops watching.
+        // Bounded by `MFDriveChannelBudget`. Exhausting the ceiling used to return `.complete`
+        // while the lens was still moving, so `changeAfArea` (same lock) answered busy until a
+        // half-press. Abort the body-side drive and refuse so the next command is not blocked.
         for _ in 0..<MFDriveChannelBudget.readinessPollLimit {
             guard let ready = try? executeTransaction(.deviceReady) else {
                 return .refused(.deviceBusy)
@@ -3237,7 +3237,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
             case let other: return .refused(other)
             }
         }
-        return .complete
+        _ = try? executeTransaction(.afDriveCancel)
+        return .refused(.deviceBusy)
     }
 
     // MARK: - Autofocus area

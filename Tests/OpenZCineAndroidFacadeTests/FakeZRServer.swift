@@ -155,6 +155,10 @@ final class FakeZRServer: @unchecked Sendable {
         var endTrackingResponseCode: UInt16 = 0x2001
         /// Response sent for Nikon `AfDriveCancel`.
         var afDriveCancelResponseCode: UInt16 = 0x2001
+        /// How many `DeviceReady` polls after `MfDrive` report busy before OK. A value
+        /// at or above `MFDriveChannelBudget.readinessPollLimit` keeps the drive in
+        /// flight for the whole poll ceiling so tests can assert the abort path.
+        var mfDriveReadinessBusyPolls: Int = 0
         /// Whether synthesized live-view headers contain authoritative focus data.
         var focusMetadataEnabled = true
         var focusCoordinateWidth: UInt16 = 6_048
@@ -216,6 +220,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var propertyReadCounts: [UInt32: Int] = [:]
     private var stillCaptureRequests: [[UInt32]] = []
     private var stillReleaseBusyPollsRemaining = 0
+    private var mfDriveBusyPollsRemaining = 0
     private var terminateCaptureCount = 0
     private var descriptorReadCounts: [UInt32: Int] = [:]
     private var propertyValueOverrides: [UInt32: Data] = [:]
@@ -646,7 +651,10 @@ final class FakeZRServer: @unchecked Sendable {
         case .deviceReady:
             lock.lock()
             let busyCode: UInt16?
-            if stillReleaseBusyPollsRemaining > 0 {
+            if mfDriveBusyPollsRemaining > 0 {
+                mfDriveBusyPollsRemaining -= 1
+                busyCode = PTPResponseCode.deviceBusy.rawValue
+            } else if stillReleaseBusyPollsRemaining > 0 {
                 stillReleaseBusyPollsRemaining -= 1
                 busyCode = options.stillReleaseBusyResponseCode
             } else {
@@ -654,6 +662,11 @@ final class FakeZRServer: @unchecked Sendable {
             }
             lock.unlock()
             sendResponse(connection, code: busyCode ?? 0x2001, transactionID: transactionID)
+        case .mfDrive:
+            lock.lock()
+            mfDriveBusyPollsRemaining = options.mfDriveReadinessBusyPolls
+            lock.unlock()
+            sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .initiateCaptureRecInMedia:
             lock.lock()
             let captureResponse = options.stillCaptureResponseCode

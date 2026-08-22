@@ -625,6 +625,7 @@ internal fun photographyCaptureSettings(
         tile(
             MonitorPickerKind.FOCUS,
             "FOCUS",
+            // Stills AF mode only — leftover movie AF-F on this tile is #272.
             properties.activeFocusMode(photography = true),
             "Wide-L",
             focusPicker,

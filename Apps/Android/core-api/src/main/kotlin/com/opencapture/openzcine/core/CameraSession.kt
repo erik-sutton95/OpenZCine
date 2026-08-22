@@ -604,16 +604,15 @@ public data class CameraPropertySnapshot(
         }
 
     /**
-     * The focus mode belonging to the side of the camera currently on screen, with the same
-     * fallback rule as [activeWhiteBalanceMode]. Mirrors shared-core `activeFocusMode(photography:)`
-     * — a stills AF-S must never repaint (or drive) the movie AF-F.
+     * The focus mode belonging to the side of the camera currently on screen.
+     *
+     * Unlike [activeWhiteBalanceMode], this does not fall back to the other side. Movie AF-F is
+     * not a stills mode; borrowing it is how the photo strip showed AF-F (or "—") while the
+     * Focus panel confirmed AF-S, and how a video tap fired a one-shot drive into AF-F (#272).
+     * Mirrors shared-core `activeFocusMode(photography:)`.
      */
     public fun activeFocusMode(photography: Boolean): String? =
-        if (photography) {
-            stillFocusMode ?: focusMode
-        } else {
-            focusMode ?: stillFocusMode
-        }
+        if (photography) stillFocusMode else focusMode
 }
 
 /** The non-terminal reason an Android property refresh could not update the snapshot. */
