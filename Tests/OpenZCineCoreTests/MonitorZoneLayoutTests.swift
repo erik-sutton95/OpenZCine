@@ -528,6 +528,67 @@ private enum PadMiniViewport {
     }
 }
 
+@Test func padMiniPhotographyAssistRailClearsInlineBatteryCluster() throws {
+    let map = PadMiniViewport.map()
+    let lock = map.systemSlots.lock
+    let battery = try #require(map.batteryCluster)
+    #expect(battery.style == .batteryInline)
+
+    let trailing = MonitorBatteryRailLayout.photographyLeftChromeTrailing(
+        lock: lock,
+        batteryCluster: battery,
+        batteriesVisible: true,
+        safeArea: PadMiniViewport.safeArea
+    )
+    // PLAY sits 12pt past this trailing edge. It must not start inside the cluster.
+    #expect(trailing == battery.frame.x + battery.frame.width)
+    #expect(trailing > lock.x + lock.width)
+}
+
+@Test func photographyAssistRailHugsLockWhenBatteriesAreHidden() throws {
+    let map = PadMiniViewport.map()
+    let lock = map.systemSlots.lock
+    let battery = try #require(map.batteryCluster)
+
+    let trailing = MonitorBatteryRailLayout.photographyLeftChromeTrailing(
+        lock: lock,
+        batteryCluster: battery,
+        batteriesVisible: false,
+        safeArea: PadMiniViewport.safeArea
+    )
+    #expect(trailing == lock.x + lock.width)
+}
+
+@Test func phonePhotographyAssistRailStillClearsLockAndIslandPill() throws {
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 0, trailing: 0)
+    let map = MonitorZoneLayout.map(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        safeArea: safeArea,
+        mode: .live,
+        isPortrait: false,
+        aspect: .fill,
+        scopeCount: 0,
+        horizontalDirection: .standard,
+        bottomBarHeight: 58
+    )
+    let lock = map.systemSlots.lock
+    let battery = try #require(map.batteryCluster)
+    #expect(battery.style == .batteryRail)
+
+    let trailing = MonitorBatteryRailLayout.photographyLeftChromeTrailing(
+        lock: lock,
+        batteryCluster: battery,
+        batteriesVisible: true,
+        safeArea: safeArea
+    )
+    #expect(
+        trailing
+            == max(
+                lock.x + lock.width,
+                MonitorBatteryRailLayout.batteryPillTrailing(safeArea: safeArea)))
+}
+
 @Test func padMiniMirroredInfoBarBandMirrorsWithTheCornerClusters() {
     let standard = PadMiniViewport.map()
     let mirrored = PadMiniViewport.map(direction: .mirrored)

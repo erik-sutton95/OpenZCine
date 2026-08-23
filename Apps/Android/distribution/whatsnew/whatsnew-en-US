@@ -1,5 +1,5 @@
 - New: Settings > Controls has Auto-Rotate Feed. Turn it off if you want the picture to stay put when the camera is on its side.
-- Fixed: settings popups always close - the X and tapping outside work even during a slow camera write.
+- Fixed: in photo mode on a tablet, the battery gauges sit beside the lock instead of covering PLAY.
 - Fixed: joining the camera's own Wi-Fi finds the camera instead of failing with an address error.
 - Fixed: stills focus settings no longer change how video focus taps behave.
 - New: your camera's clock syncs to the phone on connect - never while recording.

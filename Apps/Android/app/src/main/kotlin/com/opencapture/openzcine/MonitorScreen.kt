@@ -105,6 +105,7 @@ import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
 import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.bridge.ZoneStyle
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraPropertySnapshot
@@ -1997,9 +1998,10 @@ internal fun MonitorScreen(
         val landscapePhotoFeed =
             if (!isPortrait && isPhotographyMode && !isCommand) {
                 val batteryTrailing =
-                    zones.batteryPhone?.let { anchor ->
-                        val stack = batteryRowStackFrame(anchor = anchor, lock = zones.lock)
-                        stack.x + stack.width
+                    if (railMounts(ChromeSection.BATTERY_INDICATORS)) {
+                        photographyBatteryTrailing(zones)
+                    } else {
+                        null
                     }
                 val leftChromeTrailing =
                     maxOf(zones.lock.x + zones.lock.width, batteryTrailing ?: 0f)
@@ -2782,13 +2784,10 @@ internal fun MonitorScreen(
                     if (assistToolbarVisible && isPhotography && !locked) {
                         zones.assistStrip?.let { band ->
                             val batteryTrailing =
-                                zones.batteryPhone?.let { anchor ->
-                                    val stack =
-                                        batteryRowStackFrame(
-                                            anchor = anchor,
-                                            lock = zones.lock,
-                                        )
-                                    stack.x + stack.width
+                                if (railMounts(ChromeSection.BATTERY_INDICATORS)) {
+                                    photographyBatteryTrailing(zones)
+                                } else {
+                                    null
                                 }
                             val railFrame =
                                 photographyAssistRailFrame(
@@ -2995,25 +2994,22 @@ internal fun MonitorScreen(
                         ),
                     ) { locked = !locked }
                 }
-                // Like iOS seating the combined indicator directly under the
-                // lock button, the two battery rows stack at the top of the
-                // leading lane, just below the lock's clearance.
-                zones.batteryPhone?.takeIf {
+                // Phone rails stack the gauges under the lock; width-constrained
+                // (tablet) maps seat them inline beside the lock in the top band.
+                landscapeBatteryIndicatorsFrame(zones)?.takeIf {
                     railMounts(ChromeSection.BATTERY_INDICATORS)
-                }?.let { anchor ->
+                }?.let { frame ->
+                    val placed =
+                        if (zones.batteryStyle == ZoneStyle.BATTERY_INLINE) {
+                            frame
+                        } else {
+                            frame.copy(x = frame.x - LEADING_RAIL_LEFT_NUDGE_DP)
+                        }
                     BatteryRowStack(
                         phonePercent = phoneBatteryReadout.percent,
                         cameraPercent = cameraReadouts.batteryPercent,
                         modifier =
-                            Modifier.zone(
-                                batteryRowStackFrame(
-                                    anchor =
-                                        anchor.copy(
-                                            x = anchor.x - LEADING_RAIL_LEFT_NUDGE_DP,
-                                        ),
-                                    lock = zones.lock,
-                                ),
-                            ).chromeEditable(
+                            Modifier.zone(placed).chromeEditable(
                                 ChromeSection.BATTERY_INDICATORS,
                                 chromeEditorMode,
                                 operatorSettings,
@@ -4652,6 +4648,21 @@ internal fun batteryRowStackFrame(anchor: ZoneFrame, lock: ZoneFrame): ZoneFrame
         width = BATTERY_STACK_WIDTH_DP,
         height = BATTERY_STACK_HEIGHT_DP,
     )
+
+/**
+ * Where the landscape battery gauges actually draw. Phone rails stack under the
+ * lock using the per-indicator `batteryPhone` anchor; width-constrained maps
+ * emit `.batteryInline` beside the lock and omit those per-indicator frames.
+ */
+internal fun landscapeBatteryIndicatorsFrame(zones: MonitorZones): ZoneFrame? =
+    when (zones.batteryStyle) {
+        ZoneStyle.BATTERY_INLINE -> zones.batteryCluster
+        else -> zones.batteryPhone?.let { batteryRowStackFrame(it, zones.lock) }
+    }
+
+/** Trailing x of lock-side batteries for photography rail / feed-lane clearance. */
+internal fun photographyBatteryTrailing(zones: MonitorZones): Float? =
+    landscapeBatteryIndicatorsFrame(zones)?.let { it.x + it.width }
 
 /**
  * Photography hides the command display mode — its dashboard is still

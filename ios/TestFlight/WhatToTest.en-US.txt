@@ -9,9 +9,9 @@ New and changed
 
 Fixes
 
+- On iPad in photo mode, the battery gauges sit beside the lock instead of covering PLAY.
 - A camera whose clock has drifted is set to your phone's time on connect - automatically, never while recording.
 - Changing stills focus settings no longer flips the video FOCUS readout or makes taps refocus single-shot on a camera set to full-time AF.
-- A Wi-Fi connection no longer asks you to join the camera's own network, and saved setups no longer read as offline while you are on that network.
 - A weak or busy link degrades the picture instead of dropping the session, and screen recording while you share your feed no longer walks the watcher's picture behind the action.
 - A watcher granted camera control can now start and stop the take, and keeps that control through a brief drop-out instead of losing it the moment the link stutters.
 - Fixed a crash that could end a live session on some iPads while Feed Noise Reduction was on. Thank you to whoever sent that report — the log had exactly what was needed.
@@ -24,4 +24,4 @@ What to test
 - Turn the camera on its side, then turn Auto-Rotate Feed off in Settings > Controls: the picture should stay put. Turn it back on and the picture should stand up. Then flip the iPhone to the opposite landscape: picture and controls swap sides, nothing under the island.
 - Turn on Share This Feed, ask for control from the second device, and start a take from it. Then screen-record on the sharing device and check the watcher stays with the action.
 - Watch a dim high-ISO shot with Feed Noise Reduction on and off, then step the Feed Upscaler through Fast, Quality and AI on the same framing.
-- With the body in full-time AF for video, change stills focus settings and tap around the feed: the FOCUS readout should hold, and focus should stay continuous. Set the camera clock a minute off, connect, and check it corrects.
+- On an iPad (especially mini) in landscape photo mode, PLAY and the rest of the left tool column should be fully visible and tappable, with the battery gauges beside the lock — not on top of PLAY.

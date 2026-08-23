@@ -1805,11 +1805,18 @@ struct MonitorShell: View {
                 let band = map.assistStrip
             {
                 let lock = map.systemSlots.lock
-                // The rail clears whichever left-edge chrome reaches furthest: the lock
-                // button or the combined battery pill.
-                let leftChromeTrailing = max(
-                    lock.x + lock.width,
-                    MonitorBatteryRailLayout.batteryPillTrailing(safeArea: context.feedSafeArea))
+                // The rail clears whichever lock-side chrome reaches furthest: the lock
+                // button, the island pill, or — on width-constrained iPad — the inline
+                // battery cluster beside the lock. Using the phone-pill constant there
+                // parked PLAY on top of the gauges (#93).
+                let leftChromeTrailing =
+                    MonitorBatteryRailLayout.photographyLeftChromeTrailing(
+                        lock: lock,
+                        batteryCluster: map.batteryCluster,
+                        batteriesVisible: model.railControlMounts(
+                            .batteryIndicators, plan: model.monitorSideRailPlan),
+                        safeArea: context.feedSafeArea
+                    )
                 let railX =
                     leftChromeTrailing + 12 + Double(MonitorAssistStrip.expandedWidth) / 2
                 // Expanded: the tool column's top hugs the lock row. Collapsed: the pill is
@@ -1876,19 +1883,33 @@ struct MonitorShell: View {
                 // landscape since the mirrored layout landed — no island there, just a bezel —
                 // which is how it went unseen: this button only mounts with an AF point active.)
                 let mirroredLane = context.horizontalDirection == .mirrored
-                let photographyRailEdge =
-                    mirroredLane
-                    ? min(
-                        map.systemSlots.lock.x,
-                        Double(context.viewportWidth)
-                            - MonitorBatteryRailLayout.batteryPillTrailing(
-                                safeArea: context.feedSafeArea)
-                    ) - 12 - Double(MonitorAssistStrip.expandedWidth)
-                    : max(
-                        map.systemSlots.lock.x + map.systemSlots.lock.width,
-                        MonitorBatteryRailLayout.batteryPillTrailing(
-                            safeArea: context.feedSafeArea)
-                    ) + 12 + Double(MonitorAssistStrip.expandedWidth)
+                let batteriesVisible = model.railControlMounts(
+                    .batteryIndicators, plan: model.monitorSideRailPlan)
+                let photographyLeftChromeTrailing =
+                    MonitorBatteryRailLayout.photographyLeftChromeTrailing(
+                        lock: map.systemSlots.lock,
+                        batteryCluster: battery,
+                        batteriesVisible: batteriesVisible,
+                        safeArea: context.feedSafeArea
+                    )
+                // Closure, not a ViewBuilder `if`: this is geometry, not a view branch.
+                let photographyRailEdge: Double = {
+                    if mirroredLane {
+                        // Frames are already mirrored: lock-side chrome is on the right,
+                        // and "toward the feed" is the inner (min-x) edge of that cluster.
+                        let lockInner = map.systemSlots.lock.x
+                        let batteryInner =
+                            (batteriesVisible && battery.style == .batteryInline)
+                            ? battery.frame.x
+                            : Double(context.viewportWidth)
+                                - MonitorBatteryRailLayout.batteryPillTrailing(
+                                    safeArea: context.feedSafeArea)
+                        return min(lockInner, batteryInner) - 12
+                            - Double(MonitorAssistStrip.expandedWidth)
+                    }
+                    return photographyLeftChromeTrailing + 12
+                        + Double(MonitorAssistStrip.expandedWidth)
+                }()
                 let assistInlineX =
                     map.assistStrip.map {
                         mirroredLane

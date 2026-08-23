@@ -184,7 +184,8 @@ internal const val ASSIST_RAIL_BOTTOM_FADE_DP = 40f
 /**
  * Seats photography's collapsible vertical assist rail beside the lock/battery
  * lane (iOS `MonitorUnified` photo-rail placement): the rail clears whichever
- * left-edge chrome reaches furthest (lock button or battery stack) plus 12dp,
+ * left-edge chrome reaches furthest (lock button, phone battery stack, or the
+ * width-constrained inline cluster beside the lock) plus 12dp,
  * hugs the lock row while expanded, centre-aligns the collapsed pill on the
  * lock button, and runs down to the assist band's bottom edge unless the
  * measured capture strip actually enters the rail's lane — then it stops 10dp
