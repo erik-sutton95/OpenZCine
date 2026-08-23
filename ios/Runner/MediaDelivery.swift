@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 
 /// Container format for baked media exports.
 enum MediaExportFormat: String, Sendable, CaseIterable, Identifiable {
@@ -199,8 +200,12 @@ extension NativeAppModel {
                     setClipExportStatus(.exported, for: clip)
                 }
             } catch {
+                let ns = error as NSError
+                let detail = "\(ns.domain) code=\(ns.code) \(ns.localizedDescription)"
                 result.failedClips.append((clip, error.localizedDescription))
                 if configuration.bakeLUT { setClipExportStatus(.failed, for: clip) }
+                Logger(subsystem: "OpenZCine", category: "media-export").error(
+                    "clip failed \(clip.filename, privacy: .public): \(detail, privacy: .public)")
             }
         }
         return result

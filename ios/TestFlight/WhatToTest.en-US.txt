@@ -11,7 +11,7 @@ Fixes
 
 - Original Z 6, Z 5, and Z 7 no longer get pairing steps they do not support. iPad USB-C copy says this device, not iPhone.
 - Format a card and Media used to keep the old clip names. REFRESH now follows the card, and Settings > Clear Cache reloads Media from the card.
-- Share and Save to Photos work on clips from the camera. They used to fail with "Invalid sample cursor".
+- Share and Save to Photos work on clips from the camera, including proxies whose media is shorter than the header. They used to fail with "Invalid sample cursor".
 - Share on the player is available while the camera is connected. You no longer have to disconnect and go through Operator Setup to reach it.
 - On iPad in photo mode, the battery gauges sit beside the lock instead of covering PLAY.
 - Photo FOCUS follows stills AF, not leftover video AF-F. After a focus-dial pull, a tap focuses without a half-press.

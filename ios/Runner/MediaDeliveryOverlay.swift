@@ -3,6 +3,7 @@ import Photos
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import os
 
 /// What to do with exported clips when the destination is native share.
 enum MediaDeliveryPostExportAction: Sendable {
@@ -526,6 +527,10 @@ enum MediaDeliveryRunner {
                     let count = try await MediaPhotosSaver.saveVideos(at: result.exportedURLs)
                     return .savedToPhotos(count: count)
                 } catch {
+                    let ns = error as NSError
+                    Logger(subsystem: "OpenZCine", category: "media-export").error(
+                        "save to photos failed: \(ns.domain, privacy: .public) code=\(ns.code) \(ns.localizedDescription, privacy: .public)"
+                    )
                     return .failed(message: error.localizedDescription)
                 }
             case .systemShare:

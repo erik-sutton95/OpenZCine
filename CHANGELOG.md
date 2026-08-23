@@ -115,6 +115,10 @@ All notable changes to this project are documented here. The format is based on
 - Native Share and Save to Photos no longer fail with AVFoundation `Invalid sample cursor` on
   Nikon proxy clips. Export now strips the camera timecode track before the session, uses the
   stable export path, and restores timecode afterwards (iOS).
+- LUT-baked Share, Save to Photos, and Frame.io finish a playable file when a Nikon proxy's
+  media data is shorter than the header (iOS). Those clips still failed with `Invalid sample
+  cursor` after #343 because the reader threw before `finishWriting`; export now treats that as
+  end-of-readable-media, writes the `moov`, and the progress bar follows the readable duration.
 - Playback Share is available while the camera is connected. The delivery run caches the clip
   from the camera first; disconnecting and opening Operator Setup media is no longer required
   (iOS and Android).
