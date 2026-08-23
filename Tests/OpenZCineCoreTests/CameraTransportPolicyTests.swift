@@ -293,3 +293,105 @@ import Testing
             hotspotSubnetBases: hotspotBases)
             == .available(overRouter))
 }
+
+@Suite("USB ICC session-open policy")
+struct USBICCSessionOpenPolicyTests {
+    @Test("A live session is adopted instead of opening a second ICC session")
+    func adoptExistingOpenSession() {
+        #expect(
+            USBICCSessionOpenPolicy.decision(
+                hasOpenSession: true,
+                prewarmInFlight: false,
+                recycleFirst: false,
+                recycleCompleted: false
+            ) == .adoptExisting)
+    }
+
+    @Test("A connect during attach-time pre-warm waits instead of issuing a duplicate open")
+    func waitForInFlightPrewarm() {
+        #expect(
+            USBICCSessionOpenPolicy.decision(
+                hasOpenSession: false,
+                prewarmInFlight: true,
+                recycleFirst: false,
+                recycleCompleted: false
+            ) == .waitForPrewarm)
+    }
+
+    @Test("The stale-session retry closes before it opens")
+    func recycleBeforeOpen() {
+        #expect(
+            USBICCSessionOpenPolicy.decision(
+                hasOpenSession: true,
+                prewarmInFlight: false,
+                recycleFirst: true,
+                recycleCompleted: false
+            ) == .recycleThenOpen)
+    }
+
+    @Test("A recycle that leaves the ICC session open is a failure, not another adopt")
+    func recycleThatDidNotCloseFails() {
+        // #254: the retry used to fall through to adoptExisting, so the "fresh"
+        // attempt reused the corpse the first command just failed on.
+        #expect(
+            USBICCSessionOpenPolicy.decision(
+                hasOpenSession: true,
+                prewarmInFlight: false,
+                recycleFirst: true,
+                recycleCompleted: true
+            ) == .failStillOpenAfterRecycle)
+    }
+
+    @Test("A completed recycle of a now-closed session requests a real open")
+    func recycleThenRequestOpen() {
+        #expect(
+            USBICCSessionOpenPolicy.decision(
+                hasOpenSession: false,
+                prewarmInFlight: false,
+                recycleFirst: true,
+                recycleCompleted: true
+            ) == .requestOpen)
+    }
+
+    @Test("No open session and no pre-warm means a normal open")
+    func requestOpenWhenIdle() {
+        #expect(
+            USBICCSessionOpenPolicy.decision(
+                hasOpenSession: false,
+                prewarmInFlight: false,
+                recycleFirst: false,
+                recycleCompleted: false
+            ) == .requestOpen)
+    }
+}
+
+@Suite("USB handshake diagnostic tokens")
+struct USBHandshakeDiagnosticTests {
+    @Test("Closed tokens match the Android anonymous-log vocabulary")
+    func closedTokens() {
+        #expect(USBHandshakeDiagnostic.sessionOpen.rawValue == "usb.session.open")
+        #expect(USBHandshakeDiagnostic.deviceInfo.rawValue == "usb.handshake.device-info")
+        #expect(USBHandshakeDiagnostic.openSession.rawValue == "usb.handshake.open-session")
+        #expect(USBHandshakeDiagnostic.appMode.rawValue == "usb.handshake.app-mode")
+        #expect(USBHandshakeDiagnostic.identify.rawValue == "usb.handshake.identify")
+    }
+
+    @Test("Establish stage strings map to a specific handshake token")
+    func stageMapping() {
+        #expect(USBHandshakeDiagnostic.from(stage: "capability probe") == .deviceInfo)
+        #expect(
+            USBHandshakeDiagnostic.from(stage: "stage:first command (OpenSession)") == .openSession)
+        #expect(USBHandshakeDiagnostic.from(stage: "app-control switch") == .appMode)
+        #expect(USBHandshakeDiagnostic.from(stage: "remote-mode fallback") == .appMode)
+        #expect(USBHandshakeDiagnostic.from(stage: "device info") == .identify)
+        #expect(USBHandshakeDiagnostic.from(stage: "vendor codes") == .identify)
+    }
+
+    @Test("Free-form camera or error text never becomes a handshake token")
+    func rejectsOpenText() {
+        #expect(USBHandshakeDiagnostic.from(stage: "Nikon ZR") == nil)
+        #expect(
+            USBHandshakeDiagnostic.from(stage: "com.apple.ImageCaptureCore error -21400") == nil)
+        #expect(USBHandshakeDiagnostic.from(stage: "") == nil)
+    }
+}

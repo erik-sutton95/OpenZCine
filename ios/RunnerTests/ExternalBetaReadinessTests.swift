@@ -255,6 +255,33 @@ struct AnonymousBugReportTests {
         #expect(snapshot.allSatisfy { AppDiagnosticEvent(rawValue: $0) != nil })
     }
 
+    @Test("USB handshake stages round-trip through the closed diagnostic vocabulary")
+    func usbHandshakeStagesAreClosedEvents() {
+        let stages: [USBHandshakeDiagnostic] = [
+            .sessionOpen, .deviceInfo, .openSession, .appMode, .identify,
+        ]
+        for stage in stages {
+            #expect(AppDiagnosticEvent(rawValue: stage.rawValue) != nil)
+        }
+
+        let snapshot = DiagnosticEventStore.anonymousActivityLog(
+            events: stages.enumerated().map { index, stage in
+                DiagnosticBreadcrumb(
+                    timestamp: Date(timeIntervalSince1970: 1_700_000_100 + TimeInterval(index)),
+                    event: stage.rawValue)
+            }
+        )
+        #expect(
+            snapshot == [
+                "usb.session.open",
+                "usb.handshake.device-info",
+                "usb.handshake.open-session",
+                "usb.handshake.app-mode",
+                "usb.handshake.identify",
+            ])
+        #expect(snapshot.allSatisfy { AppDiagnosticEvent(rawValue: $0) != nil })
+    }
+
     @Test("Screenshot sanitizer re-renders a metadata-bearing image as a clean bounded PNG")
     func screenshotSanitizer() throws {
         let source = try pngWithDescription("Bob’s iPhone")

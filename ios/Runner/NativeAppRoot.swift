@@ -3863,6 +3863,13 @@ final class NativeAppModel {
                     )
                     return
                 }
+                if transportKind == .usb,
+                    let token = USBHandshakeDiagnostic.from(
+                        stage: establishmentDiagnostic.withLock { $0 }),
+                    let event = AppDiagnosticEvent(rawValue: token.rawValue)
+                {
+                    AppDiagnostics.shared.record(event)
+                }
                 AppDiagnostics.shared.record(
                     connectionFailureDiagnostic(
                         transportKind: transportKind,
@@ -5878,11 +5885,19 @@ final class NativeAppModel {
     ) async throws -> (session: NativeCameraSession, requestedPairing: Bool) {
         connectionStageDetail = ""
         let diagnosticBox = establishmentDiagnostic
+        let isUSBHost = host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix)
         let recordEstablishmentDiagnostic: @Sendable (String) -> Void = { [weak self] summary in
             // "stage:" strings are live progress (shown so a stuck connect names its step —
             // that's how the USB hang was pinned down); everything else is the failure trace.
             if summary.hasPrefix("stage:") {
                 let stage = String(summary.dropFirst("stage:".count))
+                diagnosticBox.withLock { $0 = summary }
+                if isUSBHost,
+                    let token = USBHandshakeDiagnostic.from(stage: stage),
+                    let event = AppDiagnosticEvent(rawValue: token.rawValue)
+                {
+                    AppDiagnostics.shared.record(event)
+                }
                 // Operator-friendly wording; the technical stage ids stay in the failure trace.
                 let friendly =
                     switch stage {
@@ -6070,6 +6085,7 @@ final class NativeAppModel {
         } catch {
             scanTicker.cancel()
             usbTransport.close()
+            AppDiagnostics.shared.record(.usbSessionOpen)
             throw error
         }
         scanTicker.cancel()
@@ -6096,6 +6112,7 @@ final class NativeAppModel {
                 try await retryTransport.open(recycleFirst: true)
             } catch let openError {
                 retryTransport.close()
+                AppDiagnostics.shared.record(.usbSessionOpen)
                 throw openError
             }
             return try await NativeCameraSession.establish(
