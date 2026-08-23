@@ -55,9 +55,9 @@ internal enum class PlaybackAudioMode(val volume: Float) {
         if (this == AUDIBLE) MUTED else AUDIBLE
 }
 
-/** Complete-cache-only delivery state shown by playback chrome. */
+/** Cache completeness shown by playback chrome; delivery itself can still cache from the camera. */
 internal enum class PlaybackShareState {
-    /** The cache is still growing, so no external URI can be exposed. */
+    /** The cache is still growing. Share remains available when the camera can finish the copy. */
     BUFFERING,
 
     /** A validated final cache artifact may be staged into FileProvider storage. */
@@ -67,7 +67,7 @@ internal enum class PlaybackShareState {
     UNAVAILABLE,
 }
 
-/** Derives safe share eligibility solely from the cache entry's validated state. */
+/** Derives cache completeness from the entry's validated state. */
 internal fun playbackShareState(
     state: MediaCacheState,
     downloadedBytes: Long,
@@ -78,6 +78,18 @@ internal fun playbackShareState(
         state == MediaCacheState.ACTIVE -> PlaybackShareState.BUFFERING
         else -> PlaybackShareState.UNAVAILABLE
     }
+
+/**
+ * Native share / save (and Frame.io after a cache pre-pass) can start when a complete local
+ * copy exists, or the camera is connected so the delivery run can pull the file first.
+ *
+ * Mirrors iOS `MediaDeliveryEligibility`.
+ */
+internal fun canDeliverMedia(
+    readyCount: Int,
+    clipCount: Int,
+    cameraConnected: Boolean,
+): Boolean = clipCount > 0 && (readyCount > 0 || cameraConnected)
 
 /** Projects Media3's current state into the replay affordance without latching old end events. */
 internal fun requiresPlaybackReplay(playbackState: Int): Boolean =

@@ -412,9 +412,7 @@ private fun PlaybackClipSession(
     }
 
     fun beginShare(configuration: MediaDeliveryConfiguration) {
-        // The button arms only once this clip's full file has landed; the coordinator's cache
-        // pre-pass then finds it and transfers nothing.
-        if (shareableEntry == null || deliveryInProgress || actionInProgress) return
+        if (deliveryInProgress || actionInProgress) return
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
             activePlayer?.pause()
@@ -434,7 +432,7 @@ private fun PlaybackClipSession(
     }
 
     fun beginGallerySave(configuration: MediaDeliveryConfiguration) {
-        if (shareableEntry == null || deliveryInProgress || actionInProgress) return
+        if (deliveryInProgress || actionInProgress) return
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
             activePlayer?.pause()
@@ -450,7 +448,6 @@ private fun PlaybackClipSession(
     }
 
     fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
-        val completedEntry = shareableEntry ?: return
         if (deliveryInProgress || actionInProgress) return
         val resumeAfter = activePlayer?.isPlaying == true
         activePlayer?.pause()
@@ -459,6 +456,21 @@ private fun PlaybackClipSession(
                 val stageContext = coroutineContext
                 val runningJob = stageContext[Job]
                 try {
+                    val completedEntry =
+                        shareableEntry
+                            ?: mediaDeliveryCoordinator
+                                ?.cacheFromCamera(
+                                    destination = MediaDeliveryKind.FRAMEIO,
+                                    selection = listOf(MediaDeliverySelection(cameraID, clip)),
+                                    cameraTransferAvailable = cameraTransferAvailable,
+                                )
+                                ?.items
+                                ?.firstOrNull()
+                                ?.entry
+                    if (completedEntry == null) {
+                        deliveryMessage = "Couldn't cache this clip from the camera."
+                        return@launch
+                    }
                     val staged =
                         withContext(Dispatchers.IO) {
                             MediaShareStager(shareCacheDirectory).stage(completedEntry, clip) {
@@ -584,7 +596,12 @@ private fun PlaybackClipSession(
                     ratingShadeOpen = ratingShadeOpen,
                     onRatingShadeOpenChanged = { ratingShadeOpen = it },
                     onPlayerChanged = { activePlayer = it },
-                    shareReady = shareState == PlaybackShareState.READY,
+                    shareReady =
+                        canDeliverMedia(
+                            readyCount = if (shareState == PlaybackShareState.READY) 1 else 0,
+                            clipCount = 1,
+                            cameraConnected = cameraTransferAvailable,
+                        ),
                     deliveryInProgress = deliveryInProgress,
                     onShare = { deliveryChooserPresented = true },
                     ratingStars = ratingStars,
@@ -661,7 +678,11 @@ private fun PlaybackClipSession(
                 when (shareState) {
                     PlaybackShareState.BUFFERING ->
                         Text(
-                            "Buffering camera proxy. Delivery unlocks after the private cache completes.",
+                            if (cameraTransferAvailable) {
+                                "Still caching from the camera. Share will finish the copy first."
+                            } else {
+                                "Buffering camera proxy. Delivery unlocks after the private cache completes."
+                            },
                             modifier = Modifier.padding(start = 44.dp, top = 5.dp, end = 8.dp),
                             style = chromeStyle(10.5f, FontWeight.Medium),
                             color = LiveDesign.muted,
@@ -689,7 +710,7 @@ private fun PlaybackClipSession(
             MediaDeliveryPopup(
                 clipCount = 1,
                 readyCount = if (shareState == PlaybackShareState.READY) 1 else 0,
-                cameraConnected = true,
+                cameraConnected = cameraTransferAvailable,
                 selectedLut = deliveryLut.takeIf { deliveryLutLabel != null },
                 selectedLutLabel = deliveryLutLabel,
                 frameioController = frameioController,

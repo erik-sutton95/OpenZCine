@@ -92,6 +92,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- Native Share and Save to Photos no longer fail with AVFoundation `Invalid sample cursor` on
+  Nikon proxy clips. Export now strips the camera timecode track before the session, uses the
+  stable export path, and restores timecode afterwards (iOS).
+- Playback Share is available while the camera is connected. The delivery run caches the clip
+  from the camera first; disconnecting and opening Operator Setup media is no longer required
+  (iOS and Android).
+
 - A stills-side focus-mode event no longer repaints the movie FOCUS readout or makes feed taps
   fire a one-shot AF drive on a body running continuous AF — the two modes were decoding into
   one field, last writer wins (both platforms).

@@ -355,9 +355,10 @@ struct MediaDeliveryPopup: View {
 
     private var canContinue: Bool {
         destination != nil
-            // On-camera clips cache automatically when the camera is connected, so a selection
-            // with nothing local yet is still deliverable.
-            && (!downloadableClips.isEmpty || (model.isConnected && !clips.isEmpty))
+            && MediaDeliveryEligibility.canDeliver(
+                localCount: downloadableClips.count,
+                totalCount: clips.count,
+                cameraConnected: model.isConnected)
             && !(configuration.bakeLUT && !lutAvailable)
             && !(destination == .frameio && !frameioProjectReady)
     }
@@ -470,9 +471,10 @@ struct MediaDeliveryPopup: View {
     }
 
     private func isDestinationEnabled(_ candidate: MediaDeliveryDestination) -> Bool {
-        // On-camera clips cache automatically when the camera is connected.
-        let hasDeliverableClips =
-            !downloadableClips.isEmpty || (model.isConnected && !clips.isEmpty)
+        let hasDeliverableClips = MediaDeliveryEligibility.canDeliver(
+            localCount: downloadableClips.count,
+            totalCount: clips.count,
+            cameraConnected: model.isConnected)
         switch candidate {
         case .nativeShare:
             return hasDeliverableClips
@@ -896,9 +898,12 @@ struct MediaDeliveryPopup: View {
 
     private func beginDelivery(postExportAction: MediaDeliveryPostExportAction = .systemShare) {
         guard let destination else { return }
-        // On-camera clips cache automatically when the camera is connected, so an all-on-camera
-        // selection is still deliverable.
-        guard !downloadableClips.isEmpty || (model.isConnected && !clips.isEmpty) else {
+        guard
+            MediaDeliveryEligibility.canDeliver(
+                localCount: downloadableClips.count,
+                totalCount: clips.count,
+                cameraConnected: model.isConnected)
+        else {
             statusMessage = MediaDeliveryError.emptySelection.localizedDescription
             return
         }

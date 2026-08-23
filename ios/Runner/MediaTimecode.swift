@@ -18,16 +18,25 @@ enum MediaTimecode {
     static func copySourceTimecodeTrack(
         from sourceURL: URL, to outputURL: URL, as fileType: AVFileType
     ) async {
-        // Precise timing is required for cross-asset track inserts (AVFoundation -11838).
+        // Precise timing is required for cross-asset track inserts (AVFoundation -11838 / -11880).
         let source = AVURLAsset(
             url: sourceURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let stagedURL = outputURL.deletingLastPathComponent()
+            .appendingPathComponent(
+                ".\(outputURL.deletingPathExtension().lastPathComponent).tmcd"
+            )
+            .appendingPathExtension(outputURL.pathExtension)
         do {
             guard let sourceTrack = try await source.loadTracks(withMediaType: .timecode).first
             else { return }
             let timeRange = try await sourceTrack.load(.timeRange)
 
-            let movie = AVMutableMovie(url: outputURL, options: nil)
-            movie.defaultMediaDataStorage = AVMediaDataStorage(url: outputURL, options: nil)
+            try? FileManager.default.removeItem(at: stagedURL)
+            try FileManager.default.copyItem(at: outputURL, to: stagedURL)
+            defer { try? FileManager.default.removeItem(at: stagedURL) }
+
+            let movie = AVMutableMovie(url: stagedURL, options: nil)
+            movie.defaultMediaDataStorage = AVMediaDataStorage(url: stagedURL, options: nil)
             guard
                 let timecodeTrack = movie.addMutableTrack(
                     withMediaType: .timecode, copySettingsFrom: nil)
@@ -41,10 +50,31 @@ enum MediaTimecode {
                 video.addTrackAssociation(to: timecodeTrack, type: .timecode)
             }
             try movie.writeHeader(
-                to: outputURL, fileType: fileType, options: .addMovieHeaderToDestination)
+                to: stagedURL, fileType: fileType, options: .addMovieHeaderToDestination)
+            guard await hasReadableVideoTrack(at: stagedURL) else {
+                logger.error("timecode embed produced an unreadable movie; keeping the export")
+                return
+            }
+            try FileManager.default.removeItem(at: outputURL)
+            try FileManager.default.copyItem(at: stagedURL, to: outputURL)
         } catch {
             logger.error(
                 "timecode embed failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// True when the file still has a video track AVFoundation can cursor — a failed tmcd rewrite
+    /// must not replace a good export with a Photos-rejected file.
+    private static func hasReadableVideoTrack(at url: URL) async -> Bool {
+        let asset = AVURLAsset(
+            url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        do {
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                return false
+            }
+            return try await track.load(.isPlayable)
+        } catch {
+            return false
         }
     }
 }

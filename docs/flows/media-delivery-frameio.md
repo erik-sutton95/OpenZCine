@@ -71,11 +71,14 @@ flowchart TD
 
 - **Status:** shipped
 - **Screen:** Media grid: enter selection mode → **Share** (paperplane). Media player: transport
-  bar **Share** button (disabled until clip is cached locally).
+  bar **Share** button (enabled when the clip is cached, or when the camera is connected so the
+  run can cache it first).
 - **Code:** `MediaBrowser.swift` (`MediaBrowserView`, `MediaPlayerView`), `MediaDeliveryPopup.swift`
   (`MediaDeliveryRequest`, `MediaDeliveryPresentation`, `MediaDeliveryPopupOverlay`).
 - **Detail:** Popup anchors below the grid Share button or above the player share button (420pt
-  glass panel, dimmed backdrop). Player pauses playback while the popup is open.
+  glass panel, dimmed backdrop). Player pauses playback while the popup is open. Playback Share
+  is enabled when the clip is already cached **or** the camera is connected (the runner caches
+  on-camera files first). Disconnected uncached clips stay disabled.
 - 📝 Notes:
 
 ### DELIVERY-02 — Pick destination

@@ -85,6 +85,23 @@ enum MediaDeliveryDestination: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Whether native share / save (and Frame.io after a cache pre-pass) can start.
+///
+/// The player used to require a complete local file, which greyed Share out for every on-camera
+/// clip even though `MediaDeliveryRunner` already pulls those files before export. Cached clips
+/// stay deliverable offline; uncached clips need the camera.
+enum MediaDeliveryEligibility {
+    /// One clip, as the playback transport Share button sees it.
+    static func canDeliver(clipIsLocal: Bool, cameraConnected: Bool) -> Bool {
+        clipIsLocal || cameraConnected
+    }
+
+    /// A selection of clips, as the destination popup sees it.
+    static func canDeliver(localCount: Int, totalCount: Int, cameraConnected: Bool) -> Bool {
+        totalCount > 0 && (localCount > 0 || cameraConnected)
+    }
+}
+
 /// Options shared by native share and Frame.io delivery.
 struct MediaDeliveryConfiguration: Sendable {
     var bakeLUT: Bool = true

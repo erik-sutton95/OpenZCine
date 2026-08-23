@@ -1,5 +1,7 @@
 import AVFoundation
 import CoreImage
+import CoreMedia
+import CoreVideo
 import Foundation
 import UIKit
 import os
@@ -282,6 +284,65 @@ enum MediaLUT {
         return sourceURL.standardizedFileURL != outputURL.standardizedFileURL
     }
 
+    /// Video+audio composition of `asset`, dropping `tmcd` and other data tracks.
+    ///
+    /// Nikon ZR proxies attach a per-frame QuickTime timecode track. Feeding that original asset
+    /// to `AVAssetExportSession` fails on iOS with `AVErrorInvalidSampleCursor` (−11880), which
+    /// is why native Share and Save to Photos both died on the same export path.
+    static func audioVisualExportAsset(from asset: AVAsset) async throws -> AVMutableComposition {
+        let composition = AVMutableComposition()
+        let duration = try await asset.load(.duration)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        guard !videoTracks.isEmpty else { throw ExportError.sessionSetupFailed }
+
+        for track in videoTracks {
+            guard
+                let dest = composition.addMutableTrack(
+                    withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
+            else { continue }
+            do {
+                try insert(
+                    track, timeRange: try await track.load(.timeRange), into: dest,
+                    fallbackDuration: duration)
+                dest.preferredTransform = try await track.load(.preferredTransform)
+            } catch {
+                composition.removeTrack(dest)
+            }
+        }
+        guard !(try await composition.loadTracks(withMediaType: .video)).isEmpty else {
+            throw ExportError.sessionSetupFailed
+        }
+
+        for track in try await asset.loadTracks(withMediaType: .audio) {
+            guard
+                let dest = composition.addMutableTrack(
+                    withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+            else { continue }
+            do {
+                try insert(
+                    track, timeRange: try await track.load(.timeRange), into: dest,
+                    fallbackDuration: duration)
+            } catch {
+                composition.removeTrack(dest)
+            }
+        }
+        return composition
+    }
+
+    private static func insert(
+        _ source: AVAssetTrack,
+        timeRange: CMTimeRange,
+        into dest: AVMutableCompositionTrack,
+        fallbackDuration: CMTime
+    ) throws {
+        do {
+            try dest.insertTimeRange(timeRange, of: source, at: .zero)
+        } catch {
+            try dest.insertTimeRange(
+                CMTimeRange(start: .zero, duration: fallbackDuration), of: source, at: .zero)
+        }
+    }
+
     private static func transcode(
         sourceURL: URL,
         outputURL: URL,
@@ -289,14 +350,23 @@ enum MediaLUT {
         cube: CubeLUT?,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let asset = AVURLAsset(url: sourceURL)
+        let asset = AVURLAsset(
+            url: sourceURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        _ = try await asset.load(.tracks)
+        let exportAsset: AVAsset
+        do {
+            exportAsset = try await audioVisualExportAsset(from: asset)
+        } catch {
+            exportAsset = asset
+        }
+        let fileType = format.avFileType
         guard
             let session = AVAssetExportSession(
-                asset: asset, presetName: AVAssetExportPresetHighestQuality)
+                asset: exportAsset, presetName: AVAssetExportPresetHighestQuality)
         else { throw ExportError.sessionSetupFailed }
 
         if let cube {
-            session.videoComposition = videoComposition(for: asset, cube: cube)
+            session.videoComposition = videoComposition(for: exportAsset, cube: cube)
         }
         progress(0.05)
 
@@ -304,23 +374,246 @@ enum MediaLUT {
         let progressTask = Task { await reporter.poll() }
         defer { progressTask.cancel() }
 
-        if #available(iOS 18, *) {
-            try await session.export(to: outputURL, as: format.avFileType)
-        } else {
-            session.outputURL = outputURL
-            session.outputFileType = format.avFileType
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                nonisolated(unsafe) let exportSession = session
-                exportSession.exportAsynchronously {
-                    if exportSession.status == .completed {
-                        cont.resume()
-                    } else {
-                        cont.resume(throwing: exportSession.error ?? ExportError.failed("export"))
-                    }
+        do {
+            try await runExportSession(session, to: outputURL, as: fileType)
+        } catch {
+            guard isInvalidSampleCursor(error) else { throw error }
+            try? FileManager.default.removeItem(at: outputURL)
+            try await transcodeWithReaderWriter(
+                sourceURL: sourceURL, outputURL: outputURL, format: format, cube: cube,
+                progress: progress)
+        }
+        progress(0.95)
+    }
+
+    private static func runExportSession(
+        _ session: AVAssetExportSession, to outputURL: URL, as fileType: AVFileType
+    ) async throws {
+        // The iOS 18 `export(to:as:)` async API crashes with `_resumeCheckedContinuation`
+        // when the session's asset is an `AVMutableComposition` (the video+audio wrapper
+        // that drops Nikon `tmcd`). `exportAsynchronously` is the stable path.
+        session.outputURL = outputURL
+        session.outputFileType = fileType
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            nonisolated(unsafe) let exportSession = session
+            exportSession.exportAsynchronously {
+                if exportSession.status == .completed {
+                    cont.resume()
+                } else {
+                    cont.resume(throwing: exportSession.error ?? ExportError.failed("export"))
                 }
             }
         }
-        progress(0.95)
+    }
+
+    private static func isInvalidSampleCursor(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == AVFoundationErrorDomain
+            && ns.code == AVError.Code.invalidSampleCursor.rawValue
+    }
+
+    private static func transcodeWithReaderWriter(
+        sourceURL: URL,
+        outputURL: URL,
+        format: MediaExportFormat,
+        cube: CubeLUT?,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        let asset = AVURLAsset(
+            url: sourceURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            throw ExportError.sessionSetupFailed
+        }
+        let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
+        let naturalSize = try await videoTrack.load(.naturalSize)
+        let transform = try await videoTrack.load(.preferredTransform)
+        let displayed = naturalSize.applying(transform)
+        let width = max(16, Int(abs(displayed.width).rounded()))
+        let height = max(16, Int(abs(displayed.height).rounded()))
+        let duration = try await asset.load(.duration)
+
+        let reader = try AVAssetReader(asset: asset)
+        let videoOutput = AVAssetReaderTrackOutput(
+            track: videoTrack,
+            outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ])
+        videoOutput.alwaysCopiesSampleData = false
+        guard reader.canAdd(videoOutput) else { throw ExportError.sessionSetupFailed }
+        reader.add(videoOutput)
+
+        var audioOutput: AVAssetReaderTrackOutput?
+        if let audioTrack {
+            let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+            output.alwaysCopiesSampleData = false
+            if reader.canAdd(output) {
+                reader.add(output)
+                audioOutput = output
+            }
+        }
+
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: format.avFileType)
+        let videoInput = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: width,
+                AVVideoHeightKey: height,
+            ])
+        videoInput.expectsMediaDataInRealTime = false
+        videoInput.transform = transform
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: videoInput,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+            ])
+        guard writer.canAdd(videoInput) else { throw ExportError.sessionSetupFailed }
+        writer.add(videoInput)
+
+        var audioInput: AVAssetWriterInput?
+        if audioOutput != nil, let audioTrack {
+            let formats = try await audioTrack.load(.formatDescriptions)
+            let input = AVAssetWriterInput(
+                mediaType: .audio, outputSettings: nil, sourceFormatHint: formats.first)
+            input.expectsMediaDataInRealTime = false
+            if writer.canAdd(input) {
+                writer.add(input)
+                audioInput = input
+            }
+        }
+
+        guard writer.startWriting() else {
+            throw writer.error ?? ExportError.sessionSetupFailed
+        }
+        guard reader.startReading() else {
+            throw reader.error ?? ExportError.sessionSetupFailed
+        }
+        writer.startSession(atSourceTime: .zero)
+
+        let filter = cube.flatMap(colorCubeFilter(for:))
+        try await appendReaderWriterSamples(
+            reader: reader,
+            writer: writer,
+            videoOutput: videoOutput,
+            videoInput: videoInput,
+            adaptor: adaptor,
+            audioOutput: audioOutput,
+            audioInput: audioInput,
+            filter: filter,
+            duration: duration,
+            progress: progress)
+
+        videoInput.markAsFinished()
+        audioInput?.markAsFinished()
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw writer.error ?? reader.error ?? ExportError.failed("export")
+        }
+    }
+
+    private static func colorCubeFilter(for cube: CubeLUT) -> CIFilter? {
+        let prepared = cube.preparedForRenderer()
+        let cubeData = prepared.rgbaComponents.withUnsafeBytes { Data($0) }
+        return CIFilter(
+            name: "CIColorCube",
+            parameters: [
+                "inputCubeDimension": prepared.size,
+                "inputCubeData": cubeData,
+            ])
+    }
+
+    private static func appendReaderWriterSamples(
+        reader: AVAssetReader,
+        writer: AVAssetWriter,
+        videoOutput: AVAssetReaderTrackOutput,
+        videoInput: AVAssetWriterInput,
+        adaptor: AVAssetWriterInputPixelBufferAdaptor,
+        audioOutput: AVAssetReaderTrackOutput?,
+        audioInput: AVAssetWriterInput?,
+        filter: CIFilter?,
+        duration: CMTime,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        var videoDone = false
+        var audioDone = audioOutput == nil || audioInput == nil
+        while !videoDone || !audioDone {
+            if Task.isCancelled {
+                reader.cancelReading()
+                writer.cancelWriting()
+                throw CancellationError()
+            }
+            var progressed = false
+            if !videoDone, videoInput.isReadyForMoreMediaData {
+                if let sample = videoOutput.copyNextSampleBuffer() {
+                    try appendVideoSample(sample, adaptor: adaptor, filter: filter)
+                    let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+                    if duration.seconds > 0, pts.seconds > 0 {
+                        progress(min(0.9, 0.05 + 0.85 * (pts.seconds / duration.seconds)))
+                    }
+                    progressed = true
+                } else {
+                    videoDone = true
+                    progressed = true
+                }
+            }
+            if !audioDone, let audioOutput, let audioInput, audioInput.isReadyForMoreMediaData {
+                if let sample = audioOutput.copyNextSampleBuffer() {
+                    if !audioInput.append(sample) {
+                        throw writer.error ?? ExportError.failed("audio")
+                    }
+                    progressed = true
+                } else {
+                    audioDone = true
+                    progressed = true
+                }
+            }
+            if !progressed {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            if reader.status == .failed {
+                throw reader.error ?? ExportError.failed("export")
+            }
+            if writer.status == .failed {
+                throw writer.error ?? ExportError.failed("export")
+            }
+        }
+    }
+
+    private static func appendVideoSample(
+        _ sample: CMSampleBuffer,
+        adaptor: AVAssetWriterInputPixelBufferAdaptor,
+        filter: CIFilter?
+    ) throws {
+        let timestamp = CMSampleBufferGetPresentationTimeStamp(sample)
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample) else {
+            throw ExportError.failed("video")
+        }
+        if let filter {
+            let source = CIImage(cvPixelBuffer: pixelBuffer)
+            filter.setValue(source.clampedToExtent(), forKey: kCIInputImageKey)
+            let output = (filter.outputImage ?? source).cropped(to: source.extent)
+            var rendered: CVPixelBuffer?
+            if let pool = adaptor.pixelBufferPool {
+                CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &rendered)
+            }
+            if rendered == nil {
+                let width = CVPixelBufferGetWidth(pixelBuffer)
+                let height = CVPixelBufferGetHeight(pixelBuffer)
+                CVPixelBufferCreate(
+                    kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, nil, &rendered)
+            }
+            guard let rendered else { throw ExportError.failed("pixel buffer") }
+            renderContext.render(output, to: rendered)
+            if !adaptor.append(rendered, withPresentationTime: timestamp) {
+                throw ExportError.failed("video")
+            }
+            return
+        }
+        if !adaptor.append(pixelBuffer, withPresentationTime: timestamp) {
+            throw ExportError.failed("video")
+        }
     }
 
     /// Polls `AVAssetExportSession.progress` during transcode without crossing Swift 6 sendability.

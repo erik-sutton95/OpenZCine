@@ -135,7 +135,7 @@ internal fun MediaDeliveryPopup(
             frameioController != null
     val hopBusy =
         frameioController?.let { frameioHopBlocksDismissal(it.internetHopState) } == true
-    val hasDeliverable = readyCount > 0 || (cameraConnected && clipCount > 0)
+    val hasDeliverable = canDeliverMedia(readyCount, clipCount, cameraConnected)
     val frameioProjectReady =
         frameioController?.selectedDestination != null || onCameraAp == true
     val canContinue =
