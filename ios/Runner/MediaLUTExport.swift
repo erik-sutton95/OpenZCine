@@ -581,6 +581,7 @@ enum MediaLUT {
             throw error
         }
 
+        progress(0.9)
         videoInput.markAsFinished()
         audioInput?.markAsFinished()
         await writer.finishWriting()

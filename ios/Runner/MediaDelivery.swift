@@ -192,6 +192,7 @@ extension NativeAppModel {
                     fraction in
                     Task { @MainActor in onProgress(index + 1, total, fraction) }
                 }
+                await MainActor.run { onProgress(index + 1, total, 1) }
                 result.exportedURLs.append(export.videoURL)
                 if let metadataURL = export.metadataURL {
                     result.metadataURLs.append(metadataURL)

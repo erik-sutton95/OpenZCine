@@ -119,6 +119,9 @@ All notable changes to this project are documented here. The format is based on
   media data is shorter than the header (iOS). Those clips still failed with `Invalid sample
   cursor` after #343 because the reader threw before `finishWriting`; export now treats that as
   end-of-readable-media, writes the `moov`, and the progress bar follows the readable duration.
+- Save to Photos asks for library access before the long export, then shows “Saving to Photos…”
+  with a spinner while Photos ingests the file (iOS). The bar used to freeze mid-percent through
+  the permission prompt and the save, looking like a hang.
 - Playback Share is available while the camera is connected. The delivery run caches the clip
   from the camera first; disconnecting and opening Operator Setup media is no longer required
   (iOS and Android).
