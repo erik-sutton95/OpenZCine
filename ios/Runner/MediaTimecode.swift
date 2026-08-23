@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 import os
 
@@ -27,9 +28,26 @@ enum MediaTimecode {
             )
             .appendingPathExtension(outputURL.pathExtension)
         do {
+            if MediaLUT.mediaDataExtendsPastEndOfFile(at: sourceURL) {
+                logger.info("timecode embed skipped: source mdat is truncated")
+                return
+            }
             guard let sourceTrack = try await source.loadTracks(withMediaType: .timecode).first
-            else { return }
-            let timeRange = try await sourceTrack.load(.timeRange)
+            else {
+                logger.info("timecode embed skipped: source has no tmcd track")
+                return
+            }
+            let sourceRange = try await sourceTrack.load(.timeRange)
+            let destDuration = try await AVURLAsset(
+                url: outputURL,
+                options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+            ).load(.duration)
+            let timeRange: CMTimeRange
+            if destDuration.isNumeric, destDuration < sourceRange.duration {
+                timeRange = CMTimeRange(start: sourceRange.start, duration: destDuration)
+            } else {
+                timeRange = sourceRange
+            }
 
             try? FileManager.default.removeItem(at: stagedURL)
             try FileManager.default.copyItem(at: outputURL, to: stagedURL)
@@ -51,15 +69,18 @@ enum MediaTimecode {
             }
             try movie.writeHeader(
                 to: stagedURL, fileType: fileType, options: .addMovieHeaderToDestination)
-            guard await hasReadableVideoTrack(at: stagedURL) else {
-                logger.error("timecode embed produced an unreadable movie; keeping the export")
+            guard MediaLUT.movieHasFinishedHeader(at: stagedURL) else {
+                logger.error("timecode embed produced a file without moov; keeping the export")
                 return
             }
             try FileManager.default.removeItem(at: outputURL)
             try FileManager.default.copyItem(at: stagedURL, to: outputURL)
+            logger.info("timecode embed succeeded")
         } catch {
+            let ns = error as NSError
             logger.error(
-                "timecode embed failed: \(error.localizedDescription, privacy: .public)")
+                "timecode embed failed: \(ns.domain, privacy: .public) code=\(ns.code) \(ns.localizedDescription, privacy: .public)"
+            )
         }
     }
 

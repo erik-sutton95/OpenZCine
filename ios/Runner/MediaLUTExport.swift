@@ -9,8 +9,19 @@ import os
 /// LUT baking for media playback preview and export. Builds the same `CIColorCube` pipeline the live
 /// view uses (`cube.rgbaComponents` + `inputCubeDimension`, display-encoded sRGB working space,
 /// 16-bit half-float intermediates) and applies it either as a playback `AVVideoComposition`
-/// (preview) or baked into a new file via `AVAssetExportSession` (export).
+/// (preview) or baked into a new file via `AVAssetReader` / `AVAssetWriter` (export).
 enum MediaLUT {
+    private static let logger = Logger(subsystem: "OpenZCine", category: "media-export")
+
+    private static func describe(_ error: Error) -> String {
+        let ns = error as NSError
+        return "\(ns.domain) code=\(ns.code) \(ns.localizedDescription)"
+    }
+
+    private static func trace(_ message: String) {
+        logger.info("\(message, privacy: .public)")
+    }
+
     // Match `LiveFrameProcessor`: RGBAh working buffers in display-encoded sRGB so cube
     // trilinear interpolation doesn't posterize when AVFoundation composites 8-bit source frames.
     private static let displayColorSpace =
@@ -227,30 +238,55 @@ enum MediaLUT {
     ) async throws -> ExportResult {
         let outputURL = try makeExportURL(filename: outputFilename, format: format)
         progress(0.02)
+        trace(
+            "export start source=\(sourceURL.lastPathComponent) format=\(format.rawValue) bake=\(cube != nil) dest=\(outputFilename)"
+        )
 
+        let truncated = mediaDataExtendsPastEndOfFile(at: sourceURL)
+        if truncated {
+            trace("source mdat extends past EOF; exporting readable media only")
+        }
         let passthrough =
             cube == nil
+            && !truncated
             && canPassthroughCopy(sourceURL: sourceURL, outputURL: outputURL, format: format)
         if passthrough {
+            trace("export path=passthrough-copy")
             try FileManager.default.copyItem(at: sourceURL, to: outputURL)
             progress(0.9)
         } else {
-            try await transcode(
-                sourceURL: sourceURL, outputURL: outputURL, format: format, cube: cube,
-                progress: progress)
+            trace("export path=reader-writer")
+            do {
+                try await transcode(
+                    sourceURL: sourceURL, outputURL: outputURL, format: format, cube: cube,
+                    progress: progress)
+            } catch {
+                trace("transcode failed \(describe(error))")
+                throw mappedExportError(error)
+            }
         }
 
         try await ensureFileReady(at: outputURL)
+        guard movieHasFinishedHeader(at: outputURL) else {
+            trace("export missing moov header")
+            throw ExportError.failed("export file is incomplete")
+        }
 
         if !passthrough {
-            // The export session drops the camera's tmcd track; restore it from the source so
-            // Frame.io and NLEs keep the R3D NE / N-RAW master's start timecode.
             await MediaTimecode.copySourceTimecodeTrack(
                 from: sourceURL, to: outputURL, as: format.avFileType)
+            if !movieHasFinishedHeader(at: outputURL) {
+                trace("timecode embed left an incomplete movie")
+                throw ExportError.failed("export file is incomplete")
+            }
         }
 
         let metadataURL = try writeMetadataSidecar(metadata, nextTo: outputURL)
         progress(1.0)
+        let size =
+            (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? UInt64)
+            ?? 0
+        trace("export done file=\(outputURL.lastPathComponent) bytes=\(size)")
         return ExportResult(videoURL: outputURL, metadataURL: metadataURL)
     }
 
@@ -293,6 +329,11 @@ enum MediaLUT {
         let composition = AVMutableComposition()
         let duration = try await asset.load(.duration)
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        let timecodeTracks = try await asset.loadTracks(withMediaType: .timecode)
+        trace(
+            "source tracks video=\(videoTracks.count) audio=\(audioTracks.count) tmcd=\(timecodeTracks.count) duration=\(duration.seconds)"
+        )
         guard !videoTracks.isEmpty else { throw ExportError.sessionSetupFailed }
 
         for track in videoTracks {
@@ -306,6 +347,8 @@ enum MediaLUT {
                     fallbackDuration: duration)
                 dest.preferredTransform = try await track.load(.preferredTransform)
             } catch {
+                logger.error(
+                    "video insert failed: \(describe(error), privacy: .public)")
                 composition.removeTrack(dest)
             }
         }
@@ -313,7 +356,7 @@ enum MediaLUT {
             throw ExportError.sessionSetupFailed
         }
 
-        for track in try await asset.loadTracks(withMediaType: .audio) {
+        for track in audioTracks {
             guard
                 let dest = composition.addMutableTrack(
                     withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
@@ -323,6 +366,8 @@ enum MediaLUT {
                     track, timeRange: try await track.load(.timeRange), into: dest,
                     fallbackDuration: duration)
             } catch {
+                logger.error(
+                    "audio insert failed: \(describe(error), privacy: .public)")
                 composition.removeTrack(dest)
             }
         }
@@ -350,66 +395,74 @@ enum MediaLUT {
         cube: CubeLUT?,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let asset = AVURLAsset(
-            url: sourceURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-        _ = try await asset.load(.tracks)
-        let exportAsset: AVAsset
-        do {
-            exportAsset = try await audioVisualExportAsset(from: asset)
-        } catch {
-            exportAsset = asset
-        }
-        let fileType = format.avFileType
-        guard
-            let session = AVAssetExportSession(
-                asset: exportAsset, presetName: AVAssetExportPresetHighestQuality)
-        else { throw ExportError.sessionSetupFailed }
-
-        if let cube {
-            session.videoComposition = videoComposition(for: exportAsset, cube: cube)
-        }
+        // Device proof 2026-08-23: Nikon proxies can carry a complete `moov` whose `mdat`
+        // was cut off (edit list + truncated media). `AVAssetReader` then throws
+        // `AVErrorInvalidSampleCursor` (−11880) at the first missing sample. Treating that
+        // as end-of-readable-media and calling `finishWriting` yields a playable file;
+        // throwing leaves `mdat` size 0 and Photos/Share surface "Invalid sample cursor".
         progress(0.05)
-
-        let reporter = ExportProgressReporter(session: session, report: progress)
-        let progressTask = Task { await reporter.poll() }
-        defer { progressTask.cancel() }
-
-        do {
-            try await runExportSession(session, to: outputURL, as: fileType)
-        } catch {
-            guard isInvalidSampleCursor(error) else { throw error }
-            try? FileManager.default.removeItem(at: outputURL)
-            try await transcodeWithReaderWriter(
-                sourceURL: sourceURL, outputURL: outputURL, format: format, cube: cube,
-                progress: progress)
-        }
+        trace("reader/writer start")
+        try await transcodeWithReaderWriter(
+            sourceURL: sourceURL, outputURL: outputURL, format: format, cube: cube,
+            progress: progress)
+        trace("reader/writer completed")
         progress(0.95)
-    }
-
-    private static func runExportSession(
-        _ session: AVAssetExportSession, to outputURL: URL, as fileType: AVFileType
-    ) async throws {
-        // The iOS 18 `export(to:as:)` async API crashes with `_resumeCheckedContinuation`
-        // when the session's asset is an `AVMutableComposition` (the video+audio wrapper
-        // that drops Nikon `tmcd`). `exportAsynchronously` is the stable path.
-        session.outputURL = outputURL
-        session.outputFileType = fileType
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            nonisolated(unsafe) let exportSession = session
-            exportSession.exportAsynchronously {
-                if exportSession.status == .completed {
-                    cont.resume()
-                } else {
-                    cont.resume(throwing: exportSession.error ?? ExportError.failed("export"))
-                }
-            }
-        }
     }
 
     private static func isInvalidSampleCursor(_ error: Error) -> Bool {
         let ns = error as NSError
         return ns.domain == AVFoundationErrorDomain
             && ns.code == AVError.Code.invalidSampleCursor.rawValue
+    }
+
+    private static func mappedExportError(_ error: Error) -> Error {
+        if isInvalidSampleCursor(error) {
+            return ExportError.failed("this clip's media data is unreadable")
+        }
+        return error
+    }
+
+    private static func isEndOfReadableMedia(_ reader: AVAssetReader, samples: Int) -> Bool {
+        switch reader.status {
+        case .completed, .cancelled:
+            return true
+        case .failed:
+            if let error = reader.error, isInvalidSampleCursor(error) {
+                return true
+            }
+            return samples > 0
+        default:
+            return false
+        }
+    }
+
+    /// `copyNextSampleBuffer` can block forever on a truncated `mdat`. Time out and cancel
+    /// the reader so `finishWriting` can still emit a playable file.
+    private static let sampleCopyQueue = DispatchQueue(
+        label: "ozc.media-export.copy", attributes: .concurrent)
+
+    private final class SampleCopyBox: @unchecked Sendable {
+        var sample: CMSampleBuffer?
+    }
+
+    private static func copyNextSample(
+        from output: AVAssetReaderTrackOutput,
+        reader: AVAssetReader,
+        timeout: TimeInterval = 8
+    ) -> CMSampleBuffer? {
+        let box = SampleCopyBox()
+        let lock = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) let trackOutput = output
+        sampleCopyQueue.async {
+            box.sample = trackOutput.copyNextSampleBuffer()
+            lock.signal()
+        }
+        if lock.wait(timeout: .now() + timeout) == .timedOut {
+            reader.cancelReading()
+            _ = lock.wait(timeout: .now() + 1)
+            trace("copyNext timed out status=\(reader.status.rawValue)")
+        }
+        return box.sample
     }
 
     private static func transcodeWithReaderWriter(
@@ -427,27 +480,36 @@ enum MediaLUT {
         let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
         let naturalSize = try await videoTrack.load(.naturalSize)
         let transform = try await videoTrack.load(.preferredTransform)
-        let displayed = naturalSize.applying(transform)
-        let width = max(16, Int(abs(displayed.width).rounded()))
-        let height = max(16, Int(abs(displayed.height).rounded()))
+        // Encode in the track's coded size and stamp `preferredTransform`. Using the
+        // display size *and* the transform double-rotates ZR proxies that carry ±90°.
+        let width = max(16, Int(abs(naturalSize.width).rounded()))
+        let height = max(16, Int(abs(naturalSize.height).rounded()))
         let duration = try await asset.load(.duration)
+        let progressDuration = scaledProgressDuration(for: sourceURL, headerDuration: duration)
+        trace(
+            "reader tracks coded=\(width)x\(height) duration=\(duration.seconds) progressDuration=\(progressDuration.seconds) audio=\(audioTrack != nil)"
+        )
 
-        let reader = try AVAssetReader(asset: asset)
+        let videoReader = try AVAssetReader(asset: asset)
         let videoOutput = AVAssetReaderTrackOutput(
             track: videoTrack,
             outputSettings: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
             ])
-        videoOutput.alwaysCopiesSampleData = false
-        guard reader.canAdd(videoOutput) else { throw ExportError.sessionSetupFailed }
-        reader.add(videoOutput)
+        videoOutput.alwaysCopiesSampleData = true
+        guard videoReader.canAdd(videoOutput) else { throw ExportError.sessionSetupFailed }
+        videoReader.add(videoOutput)
 
+        var audioReader: AVAssetReader?
         var audioOutput: AVAssetReaderTrackOutput?
         if let audioTrack {
-            let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-            output.alwaysCopiesSampleData = false
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(
+                track: audioTrack, outputSettings: audioPCMSettings())
+            output.alwaysCopiesSampleData = true
             if reader.canAdd(output) {
                 reader.add(output)
+                audioReader = reader
                 audioOutput = output
             }
         }
@@ -474,9 +536,8 @@ enum MediaLUT {
 
         var audioInput: AVAssetWriterInput?
         if audioOutput != nil, let audioTrack {
-            let formats = try await audioTrack.load(.formatDescriptions)
             let input = AVAssetWriterInput(
-                mediaType: .audio, outputSettings: nil, sourceFormatHint: formats.first)
+                mediaType: .audio, outputSettings: await audioAACSettings(for: audioTrack))
             input.expectsMediaDataInRealTime = false
             if writer.canAdd(input) {
                 writer.add(input)
@@ -487,30 +548,55 @@ enum MediaLUT {
         guard writer.startWriting() else {
             throw writer.error ?? ExportError.sessionSetupFailed
         }
-        guard reader.startReading() else {
-            throw reader.error ?? ExportError.sessionSetupFailed
+        guard videoReader.startReading() else {
+            throw mappedExportError(videoReader.error ?? ExportError.sessionSetupFailed)
         }
-        writer.startSession(atSourceTime: .zero)
+        if let audioReader, !audioReader.startReading() {
+            trace("audio reader skipped \(audioReader.error.map(describe) ?? "nil")")
+            audioInput?.markAsFinished()
+            audioInput = nil
+            audioOutput = nil
+        }
 
         let filter = cube.flatMap(colorCubeFilter(for:))
-        try await appendReaderWriterSamples(
-            reader: reader,
-            writer: writer,
-            videoOutput: videoOutput,
-            videoInput: videoInput,
-            adaptor: adaptor,
-            audioOutput: audioOutput,
-            audioInput: audioInput,
-            filter: filter,
-            duration: duration,
-            progress: progress)
+        let stats: ReaderWriterStats
+        do {
+            stats = try await appendReaderWriterSamples(
+                videoReader: videoReader,
+                videoOutput: videoOutput,
+                videoInput: videoInput,
+                adaptor: adaptor,
+                audioReader: audioReader,
+                audioOutput: audioOutput,
+                audioInput: audioInput,
+                writer: writer,
+                filter: filter,
+                duration: progressDuration,
+                progress: progress)
+        } catch {
+            trace("pump threw \(describe(error)); cancelling writer")
+            videoInput.markAsFinished()
+            audioInput?.markAsFinished()
+            writer.cancelWriting()
+            throw error
+        }
 
+        progress(0.9)
         videoInput.markAsFinished()
         audioInput?.markAsFinished()
         await writer.finishWriting()
-        guard writer.status == .completed else {
-            throw writer.error ?? reader.error ?? ExportError.failed("export")
+        guard writer.status == .completed, stats.videoFrames > 0 else {
+            trace(
+                "writer failed status=\(writer.status.rawValue) video=\(stats.videoFrames) \(writer.error.map(describe) ?? "nil")"
+            )
+            try? FileManager.default.removeItem(at: outputURL)
+            throw writer.error
+                ?? mappedExportError(
+                    videoReader.error ?? ExportError.failed("export"))
         }
+        trace(
+            "writer finished frames=\(stats.videoFrames) audio=\(stats.audioSamples) lastPTS=\(stats.lastVideoPTS.seconds) truncated=\(stats.endedEarly)"
+        )
     }
 
     private static func colorCubeFilter(for cube: CubeLUT) -> CIFilter? {
@@ -524,61 +610,187 @@ enum MediaLUT {
             ])
     }
 
+    private struct ReaderWriterStats {
+        var videoFrames = 0
+        var audioSamples = 0
+        var lastVideoPTS = CMTime.zero
+        var endedEarly = false
+        var sessionStarted = false
+    }
+
+    private static func audioPCMSettings() -> [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+    }
+
+    private static func audioAACSettings(for track: AVAssetTrack) async -> [String: Any] {
+        var sampleRate = 48_000.0
+        var channels = 2
+        if let format = try? await track.load(.formatDescriptions).first,
+            let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee
+        {
+            if asbd.mSampleRate > 0 { sampleRate = asbd.mSampleRate }
+            if asbd.mChannelsPerFrame > 0 { channels = Int(asbd.mChannelsPerFrame) }
+        }
+        return [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: channels,
+            AVEncoderBitRateKey: 192_000,
+        ]
+    }
+
     private static func appendReaderWriterSamples(
-        reader: AVAssetReader,
-        writer: AVAssetWriter,
+        videoReader: AVAssetReader,
         videoOutput: AVAssetReaderTrackOutput,
         videoInput: AVAssetWriterInput,
         adaptor: AVAssetWriterInputPixelBufferAdaptor,
+        audioReader: AVAssetReader?,
         audioOutput: AVAssetReaderTrackOutput?,
         audioInput: AVAssetWriterInput?,
+        writer: AVAssetWriter,
         filter: CIFilter?,
         duration: CMTime,
         progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
+    ) async throws -> ReaderWriterStats {
+        var stats = ReaderWriterStats()
         var videoDone = false
         var audioDone = audioOutput == nil || audioInput == nil
+        var idleSpins = 0
         while !videoDone || !audioDone {
             if Task.isCancelled {
-                reader.cancelReading()
+                videoReader.cancelReading()
+                audioReader?.cancelReading()
                 writer.cancelWriting()
                 throw CancellationError()
             }
             var progressed = false
-            if !videoDone, videoInput.isReadyForMoreMediaData {
-                if let sample = videoOutput.copyNextSampleBuffer() {
-                    try appendVideoSample(sample, adaptor: adaptor, filter: filter)
-                    let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-                    if duration.seconds > 0, pts.seconds > 0 {
-                        progress(min(0.9, 0.05 + 0.85 * (pts.seconds / duration.seconds)))
+            if !videoDone {
+                let videoReady = videoInput.isReadyForMoreMediaData
+                let videoReaderStopped =
+                    videoReader.status == .failed || videoReader.status == .completed
+                    || videoReader.status == .cancelled
+                if videoReady {
+                    if let sample = copyNextSample(from: videoOutput, reader: videoReader) {
+                        startWriterSessionIfNeeded(
+                            writer, stats: &stats,
+                            at: CMSampleBufferGetPresentationTimeStamp(sample))
+                        try appendVideoSample(sample, adaptor: adaptor, filter: filter)
+                        stats.videoFrames += 1
+                        stats.lastVideoPTS = CMSampleBufferGetPresentationTimeStamp(sample)
+                        if duration.seconds > 0, stats.lastVideoPTS.seconds > 0 {
+                            let fraction = stats.lastVideoPTS.seconds / duration.seconds
+                            progress(min(0.9, 0.05 + 0.85 * fraction))
+                        }
+                        progressed = true
+                    } else if isEndOfReadableMedia(videoReader, samples: stats.videoFrames) {
+                        if videoReader.status == .failed {
+                            stats.endedEarly = true
+                            trace(
+                                "video readable-end frames=\(stats.videoFrames) \(videoReader.error.map(describe) ?? "nil")"
+                            )
+                            progress(0.9)
+                        }
+                        videoDone = true
+                        progressed = true
+                    } else if videoReaderStopped {
+                        videoDone = true
+                        progressed = true
                     }
-                    progressed = true
-                } else {
+                } else if videoReaderStopped {
                     videoDone = true
                     progressed = true
                 }
             }
-            if !audioDone, let audioOutput, let audioInput, audioInput.isReadyForMoreMediaData {
-                if let sample = audioOutput.copyNextSampleBuffer() {
-                    if !audioInput.append(sample) {
-                        throw writer.error ?? ExportError.failed("audio")
+            if !audioDone, let audioOutput, let audioInput, let audioReader {
+                let audioReady = audioInput.isReadyForMoreMediaData
+                let audioReaderStopped =
+                    audioReader.status == .failed || audioReader.status == .completed
+                    || audioReader.status == .cancelled
+                if audioReady {
+                    if let sample = copyNextSample(from: audioOutput, reader: audioReader) {
+                        startWriterSessionIfNeeded(
+                            writer, stats: &stats,
+                            at: CMSampleBufferGetPresentationTimeStamp(sample))
+                        if audioInput.append(sample) {
+                            stats.audioSamples += 1
+                            progressed = true
+                        } else {
+                            trace("audio append stopped \(writer.error.map(describe) ?? "nil")")
+                            audioDone = true
+                            progressed = true
+                        }
+                    } else if isEndOfReadableMedia(audioReader, samples: stats.audioSamples) {
+                        if audioReader.status == .failed {
+                            stats.endedEarly = true
+                            trace(
+                                "audio readable-end samples=\(stats.audioSamples) \(audioReader.error.map(describe) ?? "nil")"
+                            )
+                        }
+                        audioDone = true
+                        progressed = true
+                    } else if audioReaderStopped {
+                        audioDone = true
+                        progressed = true
                     }
-                    progressed = true
-                } else {
+                } else if audioReaderStopped {
                     audioDone = true
                     progressed = true
                 }
             }
-            if !progressed {
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            if reader.status == .failed {
-                throw reader.error ?? ExportError.failed("export")
-            }
             if writer.status == .failed {
                 throw writer.error ?? ExportError.failed("export")
             }
+            if !progressed {
+                idleSpins += 1
+                // Writer back-pressure plus a failed reader used to spin forever and
+                // never `finishWriting`. After ~500ms with no progress, drop a stopped track.
+                if idleSpins == 50 {
+                    if !videoDone,
+                        videoReader.status == .failed || videoReader.status == .completed
+                    {
+                        videoDone = true
+                        stats.endedEarly = true
+                        trace("video idle-stop frames=\(stats.videoFrames)")
+                    }
+                    if !audioDone,
+                        let audioReader,
+                        audioReader.status == .failed || audioReader.status == .completed
+                    {
+                        audioDone = true
+                        stats.endedEarly = true
+                        trace("audio idle-stop samples=\(stats.audioSamples)")
+                    }
+                }
+                if idleSpins >= 500, stats.videoFrames > 0 {
+                    videoDone = true
+                    audioDone = true
+                    stats.endedEarly = true
+                    trace("idle timeout frames=\(stats.videoFrames) audio=\(stats.audioSamples)")
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            } else {
+                idleSpins = 0
+            }
         }
+        if stats.videoFrames == 0 {
+            throw mappedExportError(
+                videoReader.error ?? ExportError.failed("this clip's media data is unreadable"))
+        }
+        return stats
+    }
+
+    private static func startWriterSessionIfNeeded(
+        _ writer: AVAssetWriter, stats: inout ReaderWriterStats, at time: CMTime
+    ) {
+        guard !stats.sessionStarted else { return }
+        writer.startSession(atSourceTime: time)
+        stats.sessionStarted = true
     }
 
     private static func appendVideoSample(
@@ -616,27 +828,6 @@ enum MediaLUT {
         }
     }
 
-    /// Polls `AVAssetExportSession.progress` during transcode without crossing Swift 6 sendability.
-    private final class ExportProgressReporter: @unchecked Sendable {
-        private let session: AVAssetExportSession
-        private let report: @Sendable (Double) -> Void
-
-        init(session: AVAssetExportSession, report: @escaping @Sendable (Double) -> Void) {
-            self.session = session
-            self.report = report
-        }
-
-        func poll() async {
-            while !Task.isCancelled {
-                let exportProgress = Double(session.progress)
-                if exportProgress > 0 {
-                    report(0.05 + exportProgress * 0.85)
-                }
-                try? await Task.sleep(for: .milliseconds(180))
-            }
-        }
-    }
-
     private static func makeExportURL(filename: String, format: MediaExportFormat) throws -> URL {
         let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ExportError.invalidFilename }
@@ -665,6 +856,99 @@ enum MediaLUT {
         let data = try encoder.encode(metadata)
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    /// True when the file has a finished QuickTime/`moov` header, not just an open `mdat`.
+    static func movieHasFinishedHeader(at url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let fileSize = (try? handle.seekToEnd()) ?? 0
+        var offset: UInt64 = 0
+        while offset + 8 <= fileSize {
+            try? handle.seek(toOffset: offset)
+            guard let sizeBytes = try? handle.read(upToCount: 4), sizeBytes.count == 4,
+                let typeBytes = try? handle.read(upToCount: 4), typeBytes.count == 4
+            else { return false }
+            var atomSize = sizeBytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            let type = String(bytes: typeBytes, encoding: .ascii) ?? ""
+            if atomSize == 1 {
+                guard let ext = try? handle.read(upToCount: 8), ext.count == 8 else { return false }
+                atomSize = ext.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            }
+            if type == "moov" { return true }
+            if atomSize < 8 || atomSize == 0 { return false }
+            offset += atomSize
+        }
+        return false
+    }
+
+    /// True when an `mdat` atom's declared size runs past EOF — Nikon proxies (and partial
+    /// caches) can ship a complete `moov` for more media than the file actually contains.
+    static func mediaDataExtendsPastEndOfFile(at url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let fileSize = (try? handle.seekToEnd()) ?? 0
+        var offset: UInt64 = 0
+        while offset + 8 <= fileSize {
+            try? handle.seek(toOffset: offset)
+            guard let sizeBytes = try? handle.read(upToCount: 4), sizeBytes.count == 4,
+                let typeBytes = try? handle.read(upToCount: 4), typeBytes.count == 4
+            else { return false }
+            var atomSize = sizeBytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            let type = String(bytes: typeBytes, encoding: .ascii) ?? ""
+            if atomSize == 1 {
+                guard let ext = try? handle.read(upToCount: 8), ext.count == 8 else { return false }
+                atomSize = ext.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            }
+            if type == "mdat", atomSize >= 8, offset + atomSize > fileSize {
+                return true
+            }
+            if atomSize < 8 { return false }
+            offset += atomSize
+        }
+        return false
+    }
+
+    /// Header duration scaled by how much of `mdat` is actually on disk.
+    ///
+    /// Nikon proxies can advertise a full clip duration while the file was cut off halfway
+    /// through media data. Progress uses this so the bar isn't stuck at ~50% of a lying header.
+    static func scaledProgressDuration(for url: URL, headerDuration: CMTime) -> CMTime {
+        guard headerDuration.isNumeric, headerDuration.seconds > 0,
+            let fraction = mdatAvailableFraction(at: url), fraction > 0, fraction < 0.98
+        else { return headerDuration }
+        return CMTimeMultiplyByFloat64(headerDuration, multiplier: fraction)
+    }
+
+    /// Available `mdat` payload / declared payload when the atom runs past EOF; otherwise `nil`.
+    static func mdatAvailableFraction(at url: URL) -> Double? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let fileSize = (try? handle.seekToEnd()) ?? 0
+        var offset: UInt64 = 0
+        while offset + 8 <= fileSize {
+            try? handle.seek(toOffset: offset)
+            guard let sizeBytes = try? handle.read(upToCount: 4), sizeBytes.count == 4,
+                let typeBytes = try? handle.read(upToCount: 4), typeBytes.count == 4
+            else { return nil }
+            var atomSize = sizeBytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            let type = String(bytes: typeBytes, encoding: .ascii) ?? ""
+            var header: UInt64 = 8
+            if atomSize == 1 {
+                guard let ext = try? handle.read(upToCount: 8), ext.count == 8 else { return nil }
+                atomSize = ext.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+                header = 16
+            }
+            if type == "mdat", atomSize >= header, offset + atomSize > fileSize {
+                let declaredPayload = atomSize - header
+                let available = fileSize - (offset + header)
+                guard declaredPayload > 0 else { return nil }
+                return Double(available) / Double(declaredPayload)
+            }
+            if atomSize < 8 { return nil }
+            offset += atomSize
+        }
+        return nil
     }
 
     /// Waits briefly for AVFoundation / copy writes to become readable on disk.

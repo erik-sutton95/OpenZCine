@@ -123,6 +123,57 @@ final class MediaTimecodeTests: XCTestCase {
         XCTAssertEqual(start?.frame, Self.startFrame)
     }
 
+    func testCompleteMovieIsNotFlaggedTruncated() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sourceURL = dir.appendingPathComponent("source.mov")
+        try await Self.writeMovieWithTimecode(to: sourceURL)
+        XCTAssertFalse(MediaLUT.mediaDataExtendsPastEndOfFile(at: sourceURL))
+        XCTAssertTrue(MediaLUT.movieHasFinishedHeader(at: sourceURL))
+        XCTAssertNil(MediaLUT.mdatAvailableFraction(at: sourceURL))
+    }
+
+    func testTruncatedFastStartProxyExportWritesPlayableFile() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sourceURL = dir.appendingPathComponent("source.mov")
+        try await Self.writeMovieWithTimecode(
+            to: sourceURL, frameCount: 60, optimizeForNetworkUse: true)
+        let truncatedURL = dir.appendingPathComponent("truncated.mov")
+        try Self.truncateMdatPayload(from: sourceURL, to: truncatedURL, keepFraction: 0.35)
+        try XCTSkipUnless(
+            MediaLUT.mediaDataExtendsPastEndOfFile(at: truncatedURL),
+            "fast-start rewrite did not leave moov before a declared-oversize mdat")
+        let fraction = try XCTUnwrap(MediaLUT.mdatAvailableFraction(at: truncatedURL))
+        XCTAssertGreaterThan(fraction, 0.1)
+        XCTAssertLessThan(fraction, 0.9)
+        let header = CMTime(seconds: 10, preferredTimescale: 25_000)
+        let scaled = MediaLUT.scaledProgressDuration(for: truncatedURL, headerDuration: header)
+        XCTAssertLessThan(scaled.seconds, header.seconds)
+
+        let result = try await MediaLUT.export(
+            sourceURL: truncatedURL,
+            outputFilename: "truncated-export-\(UUID().uuidString).mov",
+            format: .mov,
+            cube: Self.identityCube(),
+            metadata: nil
+        ) { _ in }
+        defer { try? FileManager.default.removeItem(at: result.videoURL) }
+
+        let size =
+            (try FileManager.default.attributesOfItem(atPath: result.videoURL.path)[.size]
+                as? UInt64) ?? 0
+        XCTAssertGreaterThan(size, 0)
+        XCTAssertTrue(MediaLUT.movieHasFinishedHeader(at: result.videoURL))
+        XCTAssertFalse(MediaLUT.mediaDataExtendsPastEndOfFile(at: result.videoURL))
+    }
+
     func testExportReferenceProxyIfPresent() async throws {
         let sample = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -146,8 +197,11 @@ final class MediaTimecodeTests: XCTestCase {
     // MARK: - Synthesis
 
     /// Writes a tiny H.264 movie with a `tmcd` track starting at `startFrame`.
-    private static func writeMovieWithTimecode(to url: URL) async throws {
+    private static func writeMovieWithTimecode(
+        to url: URL, frameCount: Int = 5, optimizeForNetworkUse: Bool = false
+    ) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        writer.shouldOptimizeForNetworkUse = optimizeForNetworkUse
 
         let videoInput = AVAssetWriterInput(
             mediaType: .video,
@@ -189,7 +243,6 @@ final class MediaTimecodeTests: XCTestCase {
         }
         writer.startSession(atSourceTime: .zero)
 
-        let frameCount = 5
         for frame in 0..<frameCount {
             while !videoInput.isReadyForMoreMediaData {
                 try await Task.sleep(for: .milliseconds(10))
@@ -333,5 +386,40 @@ final class MediaTimecodeTests: XCTestCase {
         guard let pointer, length >= 4 else { return nil }
         let raw = pointer.withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
         return StartTimecode(frame: UInt32(bigEndian: raw), frameQuanta: quanta)
+    }
+
+    /// Copies `from` up through the `mdat` header plus `keepFraction` of its payload, leaving
+    /// the declared atom size intact so the file looks like a Nikon proxy whose media was cut off.
+    private static func truncateMdatPayload(from: URL, to: URL, keepFraction: Double) throws {
+        let data = try Data(contentsOf: from)
+        var offset = 0
+        var output = Data()
+        while offset + 8 <= data.count {
+            var atomSize = data.subdata(in: offset..<(offset + 4)).reduce(0) {
+                ($0 << 8) | Int($1)
+            }
+            let type =
+                String(data: data.subdata(in: (offset + 4)..<(offset + 8)), encoding: .ascii) ?? ""
+            var header = 8
+            if atomSize == 1, offset + 16 <= data.count {
+                atomSize = data.subdata(in: (offset + 8)..<(offset + 16)).reduce(0) {
+                    ($0 << 8) | Int($1)
+                }
+                header = 16
+            }
+            guard atomSize >= header else { break }
+            if type == "mdat" {
+                let payload = max(0, atomSize - header)
+                let keepPayload = min(payload, max(1, Int(Double(payload) * keepFraction)))
+                let end = min(data.count, offset + header + keepPayload)
+                output.append(data.subdata(in: offset..<end))
+                try output.write(to: to)
+                return
+            }
+            let end = min(data.count, offset + atomSize)
+            output.append(data.subdata(in: offset..<end))
+            offset += atomSize
+        }
+        throw NSError(domain: "MediaTimecodeTests", code: -6)
     }
 }
