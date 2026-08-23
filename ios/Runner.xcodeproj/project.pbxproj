@@ -142,6 +142,7 @@
 		TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000093 /* RelayRecordControlTests.swift */; };
 		TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */; };
 		TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */; };
+		TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */; };
 		USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBC00000000000000000001 /* PTPUSBContainer.swift */; };
 		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
 		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
@@ -355,6 +356,7 @@
 		TEST00000000000000000093 /* RelayRecordControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRecordControlTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFeedNoiseFilterWindowTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryEligibilityTests.swift; sourceTree = "<group>"; };
+		TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryOverlayStateTests.swift; sourceTree = "<group>"; };
 		USBC00000000000000000001 /* PTPUSBContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPUSBContainer.swift; path = ../Sources/OpenZCineCore/PTPUSBContainer.swift; sourceTree = SOURCE_ROOT; };
 		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
 		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
@@ -415,6 +417,7 @@
 				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
 				TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */,
+				TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -765,6 +768,7 @@
 				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
 				TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */,
+				TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

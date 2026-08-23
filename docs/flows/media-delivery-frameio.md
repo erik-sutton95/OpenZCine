@@ -177,7 +177,8 @@ flowchart TD
   `MediaLUTExport.swift` (`MediaLUT.export`).
 - **Detail:** Per-clip LUT bake via Metal/AVFoundation export to `Documents/exports`, or raw cached
   file when bake off. Sets `exportStatus` (.exported / .failed). Combined batch progress:
-  `(clipIndex-1 + fraction) / total`.
+  `(clipIndex-1 + fraction) / total`. Nikon proxies whose `mdat` is shorter than the header
+  duration are transcoded to the readable media and still get a finished `moov` (iOS).
 - 📝 Notes:
 
 ### DELIVERY-08 — Share sheet

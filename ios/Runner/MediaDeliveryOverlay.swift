@@ -3,6 +3,7 @@ import Photos
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import os
 
 /// What to do with exported clips when the destination is native share.
 enum MediaDeliveryPostExportAction: Sendable {
@@ -28,6 +29,13 @@ enum MediaDeliveryRunOutcome: Sendable {
 
 /// Live progress for the on-clip delivery overlay.
 struct MediaDeliveryOverlayState: Equatable {
+    /// Operator-visible step after export, when the determinate bar would otherwise freeze.
+    enum Phase: Equatable {
+        case working
+        case awaitingPhotosAccess
+        case savingToPhotos
+    }
+
     let destination: MediaDeliveryDestination
     let totalClips: Int
     var clipIndex: Int
@@ -36,6 +44,8 @@ struct MediaDeliveryOverlayState: Equatable {
     var isCaching = false
     /// True while the phone hops off the camera's Wi‑Fi to reach the internet (Frame.io on AP).
     var isSwitchingNetworks = false
+    var postExportAction: MediaDeliveryPostExportAction = .systemShare
+    var phase: Phase = .working
 
     var overallFraction: Double {
         guard totalClips > 0 else { return 0 }
@@ -45,20 +55,37 @@ struct MediaDeliveryOverlayState: Equatable {
 
     var isPreparingClip: Bool { clipFraction <= 0 }
 
+    /// Spinner stays up during permission and Photos ingest — the bar does not move then.
+    var showsBusySpinner: Bool {
+        isPreparingClip || isSwitchingNetworks || phase != .working
+    }
+
     var percentText: String {
-        guard !isPreparingClip else { return "" }
+        guard !isPreparingClip, phase == .working else { return "" }
         return "\(Int((overallFraction * 100).rounded()))%"
     }
 
     var statusLine: String {
         if isSwitchingNetworks { return "Switching networks…" }
+        switch phase {
+        case .awaitingPhotosAccess:
+            return "Waiting for Photos access…"
+        case .savingToPhotos:
+            return "Saving to Photos…"
+        case .working:
+            break
+        }
         let verb: String
         if isCaching {
             verb = isPreparingClip ? "Caching from camera…" : "Caching from camera"
         } else {
             switch destination {
             case .nativeShare:
-                verb = isPreparingClip ? "Preparing…" : "Preparing to share"
+                if postExportAction == .saveToPhotos {
+                    verb = isPreparingClip ? "Saving to Photos…" : "Saving to Photos"
+                } else {
+                    verb = isPreparingClip ? "Preparing…" : "Preparing to share"
+                }
             case .frameio:
                 verb = isPreparingClip ? "Preparing…" : "Uploading to Frame.io"
             }
@@ -279,7 +306,7 @@ struct MediaDeliveryGlobalOverlay: View {
                 withAnimation(.spring(duration: 0.28)) { coordinator.isExpanded = true }
             } label: {
                 HStack(spacing: 10) {
-                    if state.isPreparingClip {
+                    if state.showsBusySpinner {
                         ProgressView()
                             .controlSize(.small)
                             .tint(LiveDesign.accent)
@@ -370,7 +397,7 @@ struct MediaDeliveryOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 10) {
-                if state.isPreparingClip {
+                if state.showsBusySpinner {
                     ProgressView()
                         .controlSize(.small)
                         .tint(LiveDesign.accent)
@@ -434,6 +461,25 @@ enum MediaDeliveryRunner {
         model: NativeAppModel,
         onProgress: @escaping (MediaDeliveryOverlayState) -> Void
     ) async -> MediaDeliveryRunOutcome {
+        if request.destination == .nativeShare, request.postExportAction == .saveToPhotos {
+            if MediaPhotosSaver.addOnlyStatus == .notDetermined {
+                onProgress(
+                    MediaDeliveryOverlayState(
+                        destination: request.destination,
+                        totalClips: max(request.clips.count, 1),
+                        clipIndex: 1,
+                        clipFraction: 0,
+                        postExportAction: .saveToPhotos,
+                        phase: .awaitingPhotosAccess
+                    ))
+            }
+            do {
+                try await MediaPhotosSaver.ensureAuthorized()
+            } catch {
+                return .failed(message: error.localizedDescription)
+            }
+        }
+
         // Cache on-camera clips first, sequentially (one PTP data channel); clips that still
         // can't cache (disconnected, no handle) are reported, not silently dropped.
         let toCache = request.clips.filter { !model.isClipDownloaded($0) }
@@ -484,7 +530,8 @@ enum MediaDeliveryRunner {
             destination: request.destination,
             totalClips: total,
             clipIndex: 1,
-            clipFraction: 0
+            clipFraction: 0,
+            postExportAction: request.postExportAction
         )
         onProgress(overlay)
 
@@ -522,10 +569,17 @@ enum MediaDeliveryRunner {
 
             switch request.postExportAction {
             case .saveToPhotos:
+                overlay.phase = .savingToPhotos
+                overlay.clipFraction = max(overlay.clipFraction, 0.9)
+                onProgress(overlay)
                 do {
                     let count = try await MediaPhotosSaver.saveVideos(at: result.exportedURLs)
                     return .savedToPhotos(count: count)
                 } catch {
+                    let ns = error as NSError
+                    Logger(subsystem: "OpenZCine", category: "media-export").error(
+                        "save to photos failed: \(ns.domain, privacy: .public) code=\(ns.code) \(ns.localizedDescription, privacy: .public)"
+                    )
                     return .failed(message: error.localizedDescription)
                 }
             case .systemShare:
@@ -738,6 +792,24 @@ enum MediaPhotosSaver {
         }
     }
 
+    static var addOnlyStatus: PHAuthorizationStatus {
+        PHPhotoLibrary.authorizationStatus(for: .addOnly)
+    }
+
+    static func ensureAuthorized() async throws {
+        switch addOnlyStatus {
+        case .authorized, .limited:
+            return
+        case .notDetermined:
+            let granted = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard granted == .authorized || granted == .limited else {
+                throw SaveError.permissionDenied
+            }
+        default:
+            throw SaveError.permissionDenied
+        }
+    }
+
     static func saveVideos(at urls: [URL]) async throws -> Int {
         let videos = MediaShareStaging.filterShareableVideos(urls)
         guard !videos.isEmpty else { throw SaveError.noVideos }
@@ -746,10 +818,7 @@ enum MediaPhotosSaver {
             try MediaShareStaging.validateReadableFile(at: url)
         }
 
-        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else {
-            throw SaveError.permissionDenied
-        }
+        try await ensureAuthorized()
 
         var saved = 0
         var failed = 0

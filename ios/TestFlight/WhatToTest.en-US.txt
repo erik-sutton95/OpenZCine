@@ -11,7 +11,7 @@ Fixes
 
 - Original Z 6, Z 5, and Z 7 no longer get pairing steps they do not support. iPad USB-C copy says this device, not iPhone.
 - Format a card and Media used to keep the old clip names. REFRESH now follows the card, and Settings > Clear Cache reloads Media from the card.
-- Share and Save to Photos work on clips from the camera. They used to fail with "Invalid sample cursor".
+- Share and Save to Photos work on clips from the camera, including proxies whose media is shorter than the header. They used to fail with "Invalid sample cursor".
 - Share on the player is available while the camera is connected. You no longer have to disconnect and go through Operator Setup to reach it.
 - On iPad in photo mode, the battery gauges sit beside the lock instead of covering PLAY.
 - Photo FOCUS follows stills AF, not leftover video AF-F. After a focus-dial pull, a tap focuses without a half-press.
@@ -22,6 +22,6 @@ What to test
 
 - If you have an original Z 6, Z 5, or Z 7, connect over USB-C and the camera's own Wi-Fi. It should reach the monitor without a wireless error on the camera.
 - Format a spare card or delete a shot, then tap REFRESH on Media: gone files leave and new ones show. Clear Cache in Settings and reopen Media to rebuild from the card.
-- Connect to the camera, play a clip, tap Share, then Share and Save to Photos. Both should finish. You should not have to disconnect first.
+- Connect to the camera, play a clip, tap Share, then Share and Save to Photos. Both should finish. Save to Photos should ask for access up front, then keep a spinner while Photos writes — not a frozen percent. You should not have to disconnect first.
 - Put the body in Aperture-priority photo, change the light, and check shutter and ISO on the phone match the camera.
 - Set stills AF-S and video full-time AF. Photo FOCUS should match the Focus panel, not leftover AF-F. Pull the focus dial, then tap: it should focus without a half-press.
