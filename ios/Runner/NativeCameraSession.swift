@@ -1299,33 +1299,42 @@ final class NativeCameraSession: @unchecked Sendable {
         // eat the 180 s USB first-command budget. [verify-on-HW: Z 6 over USB-C on iPad]
         let isUSB = transport.kind == .usb
         var gatePolicy = ZCameraOperationPolicy(operations: [])
+        var usbIccSessionProven = false
         if isUSB {
+            // ICC already opened the PTP session in `USBCameraTransport.open`. GetDeviceInfo
+            // with auto-assigned TIDs is a normal in-session command; TID 0 is reserved for
+            // OpenSession and desyncs a session ICC already holds (#254 ZR handshake).
             onStage?("capability probe")
             if let probe = try? await transact(
                 operationCode: .getDeviceInfo,
-                transactionID: 0,
                 dataPhase: .dataIn,
                 deadline: .seconds(8)
             ),
-                probe.operationResponse.responseCode == .ok,
-                let probedInfo = try? PTPDeviceInfo(data: probe.data)
+                probe.operationResponse.responseCode == .ok
             {
-                gatePolicy = ZCameraOperationPolicy(deviceInfo: probedInfo)
+                usbIccSessionProven = true
+                if let probedInfo = try? PTPDeviceInfo(data: probe.data) {
+                    gatePolicy = ZCameraOperationPolicy(deviceInfo: probedInfo)
+                }
             }
         }
 
-        onStage?("first command (OpenSession)")
-        let open = try await transact(
-            operationCode: .openSession,
-            transactionID: 0,
-            parameters: [1],
-            deadline: isUSB ? .seconds(180) : Self.commandTransactionTimeout
-        )
-        // `Session_Already_Open` is success: over USB, ImageCaptureCore opens the PTP session
-        // itself before handing the device to the app. [VERIFY-ON-HW] on the ZR over USB-C.
-        let openResponse = open.operationResponse.responseCode
-        guard openResponse == .ok || openResponse == .sessionAlreadyOpen else {
-            throw NativeCameraSessionError.operationRejected(.openSession, openResponse)
+        if !usbIccSessionProven {
+            onStage?("first command (OpenSession)")
+            let open = try await transact(
+                operationCode: .openSession,
+                transactionID: 0,
+                parameters: [1],
+                deadline: isUSB ? .seconds(180) : Self.commandTransactionTimeout
+            )
+            // `Session_Already_Open` is success: over USB, ImageCaptureCore opens the PTP
+            // session itself before handing the device to the app. [VERIFY-ON-HW] on the ZR.
+            let openResponse = open.operationResponse.responseCode
+            guard openResponse == .ok || openResponse == .sessionAlreadyOpen else {
+                throw NativeCameraSessionError.operationRejected(.openSession, openResponse)
+            }
+        } else {
+            establishmentSummary += "openSession=icc "
         }
 
         // DeviceInfo before pairing or the app-control switch, because both must be gated

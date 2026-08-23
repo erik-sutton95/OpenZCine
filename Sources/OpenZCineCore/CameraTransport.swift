@@ -59,3 +59,78 @@ public protocol CameraTransport: Sendable {
     /// Tears the transport down. Safe to call more than once.
     func close()
 }
+
+/// Next action for opening an ImageCaptureCore session on iOS USB.
+///
+/// ICC owns the PTP session: attach-time pre-warm may already have it open, and a
+/// retry after a failed first command must close that session for real before
+/// requesting a new one. Adopting a session that `requestCloseSession` did not
+/// actually close is how a cable-knock / background return stayed dead until
+/// force-quit (#254).
+public enum USBICCSessionOpenDecision: Equatable, Sendable {
+    /// Attach-time `requestOpenSession` is still in flight — wait, do not duplicate it.
+    case waitForPrewarm
+    /// A previous connect parked a live session; take it over.
+    case adoptExisting
+    /// The retry path: close the adopted session, then open fresh.
+    case recycleThenOpen
+    /// Recycle ran, but ICC still reports the session open — do not adopt the corpse.
+    case failStillOpenAfterRecycle
+    /// No open session; issue `requestOpenSession`.
+    case requestOpen
+}
+
+/// Pure decision table for the iOS USB transport's session-open path.
+public enum USBICCSessionOpenPolicy {
+    public static func decision(
+        hasOpenSession: Bool,
+        prewarmInFlight: Bool,
+        recycleFirst: Bool,
+        recycleCompleted: Bool
+    ) -> USBICCSessionOpenDecision {
+        if prewarmInFlight, !hasOpenSession {
+            return .waitForPrewarm
+        }
+        if recycleFirst, hasOpenSession, !recycleCompleted {
+            return .recycleThenOpen
+        }
+        if recycleFirst, hasOpenSession, recycleCompleted {
+            return .failStillOpenAfterRecycle
+        }
+        if hasOpenSession {
+            return .adoptExisting
+        }
+        return .requestOpen
+    }
+}
+
+/// Closed USB handshake tokens for the privacy-safe diagnostic export.
+///
+/// Raw values match the Android anonymous-log vocabulary so a field report names
+/// the same step on either shell (accessory discovery stays `usb.camera.attached`;
+/// live-view setup stays `live-view.failed`).
+public enum USBHandshakeDiagnostic: String, Sendable {
+    case sessionOpen = "usb.session.open"
+    case deviceInfo = "usb.handshake.device-info"
+    case openSession = "usb.handshake.open-session"
+    case appMode = "usb.handshake.app-mode"
+    case identify = "usb.handshake.identify"
+
+    /// Maps an establish `stage:` string (or the bare stage id) onto a closed token.
+    /// Unknown or free-form text — camera names, raw ICC errors — returns `nil`.
+    public static func from(stage raw: String) -> USBHandshakeDiagnostic? {
+        var stage = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if stage.lowercased().hasPrefix("stage:") {
+            stage = String(stage.dropFirst("stage:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let key = stage.lowercased()
+        guard !key.isEmpty else { return nil }
+        if key.contains("capability probe") { return .deviceInfo }
+        if key.contains("first command") || key.contains("opensession") { return .openSession }
+        if key.contains("app-control") || key.contains("remote-mode") { return .appMode }
+        if key == "device info" || key.contains("vendor") { return .identify }
+        if key.contains("session") && key.contains("open") { return .sessionOpen }
+        return nil
+    }
+}

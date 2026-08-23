@@ -330,43 +330,58 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     func open(timeout: Duration = .seconds(30), recycleFirst: Bool = false) async throws {
         device.delegate = self
         USBCameraDeviceBrowser.shared.adoptSession(self)
-        // If the attach-time pre-warm's open is still in flight, wait it out instead of issuing a
-        // duplicate requestOpenSession — ICC swallows the duplicate, so a connect started in that
-        // window used to hang for the full timeout.
         let waitStart = ContinuousClock.now
-        while !device.hasOpenSession,
-            USBCameraDeviceBrowser.shared.isPrewarmOpenInFlight(for: device),
-            ContinuousClock.now - waitStart < timeout
-        {
-            try await Task.sleep(for: .milliseconds(100))
-        }
-        if recycleFirst, device.hasOpenSession {
-            // Retry path: the adopted session just failed its first command — it went stale while
-            // parked (camera sleep, ICC housekeeping). Close it for real, await the ack (bounded),
-            // and fall through to a fresh open. Costs a new card scan; correctness over speed here.
-            await recycleStaleSession()
-        }
-        // Adopt an already-open session (attach-time pre-warm, or a previous connect that parked
-        // it warm). The passthrough gate, if ICC's catalog pass is still running, is waited out by
-        // the first transaction's long USB deadline — a close→reopen "abort" was tried here and
-        // did NOT skip the gate on the ZR; it only risks restarting a mostly-done pass.
-        if device.hasOpenSession {
-            lock.withLock { didOpenSession = true }
-            return
-        }
-        let timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: timeout)
-            guard !Task.isCancelled else { return }
-            self?.resumeOpen(
-                throwing: NativeCameraSessionError.timeout("USB camera session open"))
-        }
-        defer { timeoutTask.cancel() }
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            lock.lock()
-            openContinuation = continuation
-            lock.unlock()
-            device.requestOpenSession()
+        var recycleCompleted = false
+        while true {
+            try Task.checkCancellation()
+            if ContinuousClock.now - waitStart >= timeout {
+                throw NativeCameraSessionError.timeout("USB camera session open")
+            }
+            let decision = USBICCSessionOpenPolicy.decision(
+                hasOpenSession: device.hasOpenSession,
+                prewarmInFlight: USBCameraDeviceBrowser.shared.isPrewarmOpenInFlight(for: device),
+                recycleFirst: recycleFirst,
+                recycleCompleted: recycleCompleted
+            )
+            switch decision {
+            case .waitForPrewarm:
+                // Duplicate requestOpenSession is swallowed by ICC, so a connect started during
+                // attach-time pre-warm used to hang for the full timeout.
+                try await Task.sleep(for: .milliseconds(100))
+            case .recycleThenOpen:
+                // Retry path: the adopted session just failed its first command — it went stale
+                // while parked (camera sleep, ICC housekeeping). Close it for real, await the ack
+                // (bounded), then open fresh. Costs a new card scan; correctness over speed here.
+                await recycleStaleSession()
+                recycleCompleted = true
+            case .failStillOpenAfterRecycle:
+                // #254: adopting here reused the corpse the first command just failed on, so the
+                // "fresh" attempt died in 1–2 s with the same ICC error and needed a force-quit.
+                throw NativeCameraSessionError.connectionFailed(
+                    "The USB link got stuck. Unplug the cable, plug it back in, and try again.")
+            case .adoptExisting:
+                // Attach-time pre-warm, or a previous connect that parked the catalog warm.
+                lock.withLock { didOpenSession = true }
+                return
+            case .requestOpen:
+                let elapsed = ContinuousClock.now - waitStart
+                let remaining = elapsed < timeout ? timeout - elapsed : .milliseconds(1)
+                let timeoutTask = Task { [weak self] in
+                    try? await Task.sleep(for: remaining)
+                    guard !Task.isCancelled else { return }
+                    self?.resumeOpen(
+                        throwing: NativeCameraSessionError.timeout("USB camera session open"))
+                }
+                defer { timeoutTask.cancel() }
+                try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<Void, Error>) in
+                    lock.lock()
+                    openContinuation = continuation
+                    lock.unlock()
+                    device.requestOpenSession()
+                }
+                return
+            }
         }
     }
 

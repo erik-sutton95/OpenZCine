@@ -43,6 +43,13 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case connectionFailed = "error.connection.failed"
     case connectionWifiJoinFailed = "error.connection.wifi-join.failed"
     case connectionUsbFailed = "error.connection.usb.failed"
+    // USB handshake stages. The generic `error.connection.usb.failed` breadcrumb cannot
+    // tell ICC session-open from PTP OpenSession from application-mode (issue #254).
+    case usbSessionOpen = "usb.session.open"
+    case usbHandshakeDeviceInfo = "usb.handshake.device-info"
+    case usbHandshakeOpenSession = "usb.handshake.open-session"
+    case usbHandshakeAppMode = "usb.handshake.app-mode"
+    case usbHandshakeIdentify = "usb.handshake.identify"
     case connectionPtpFailed = "error.connection.ptp.failed"
     case connectionPairingFailed = "error.connection.pairing.failed"
     case connectionReconnectFailed = "error.connection.reconnect.failed"
