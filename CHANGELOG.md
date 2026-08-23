@@ -92,6 +92,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Original Z 6 / Z 5 / Z 7 connect no longer sends pairing or ChangeApplicationMode when
+  DeviceInfo is missing.** Those bodies have no pairing handshake; polling it is what put a
+  wireless error on the camera and left the app connecting. The PTP-IP name or USB product name
+  now selects the gen-1 app-mode property write instead. iOS USB also probes GetDeviceInfo
+  before OpenSession, matching Android. Cable-pairing copy on iPad no longer says iPhone.
 - **Aperture-priority (and other auto-exposure) shutter and ISO no longer sit stale.** Nikon
   often does not announce those camera-owned changes on `DevicePropChanged`, so after the first
   #268 fix a photo A-mode body could show 1/30 · ISO 1000 while the app still read 1/125 · A900.
@@ -113,7 +118,6 @@ All notable changes to this project are documented here. The format is based on
 - Playback Share is available while the camera is connected. The delivery run caches the clip
   from the camera first; disconnecting and opening Operator Setup media is no longer required
   (iOS and Android).
-
 - A stills-side focus-mode event no longer repaints the movie FOCUS readout or makes feed taps
   fire a one-shot AF drive on a body running continuous AF — the two modes were decoding into
   one field, last writer wins (both platforms).

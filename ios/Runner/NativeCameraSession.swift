@@ -1291,12 +1291,35 @@ final class NativeCameraSession: @unchecked Sendable {
         // which scales with card fullness (thousands of stills = minutes, not seconds) — the 15 s
         // wedge backstop would mistake that wait for a dead camera. Wi-Fi keeps the short deadline.
         // [verify-on-HW: ZR over USB-C with a full card]
+        //
+        // USB matches libgphoto2 / Android: GetDeviceInfo is valid outside a session. An
+        // OpenSession-first sequence has been observed to hang unanswered on the cable until
+        // CloseSession; ICC often already opened the session, in which case this probe is a
+        // normal in-session GetDeviceInfo. Keep the deadline short so a wedged probe cannot
+        // eat the 180 s USB first-command budget. [verify-on-HW: Z 6 over USB-C on iPad]
+        let isUSB = transport.kind == .usb
+        var gatePolicy = ZCameraOperationPolicy(operations: [])
+        if isUSB {
+            onStage?("capability probe")
+            if let probe = try? await transact(
+                operationCode: .getDeviceInfo,
+                transactionID: 0,
+                dataPhase: .dataIn,
+                deadline: .seconds(8)
+            ),
+                probe.operationResponse.responseCode == .ok,
+                let probedInfo = try? PTPDeviceInfo(data: probe.data)
+            {
+                gatePolicy = ZCameraOperationPolicy(deviceInfo: probedInfo)
+            }
+        }
+
         onStage?("first command (OpenSession)")
         let open = try await transact(
             operationCode: .openSession,
             transactionID: 0,
             parameters: [1],
-            deadline: transport.kind == .usb ? .seconds(180) : Self.commandTransactionTimeout
+            deadline: isUSB ? .seconds(180) : Self.commandTransactionTimeout
         )
         // `Session_Already_Open` is success: over USB, ImageCaptureCore opens the PTP session
         // itself before handing the device to the app. [VERIFY-ON-HW] on the ZR over USB-C.
@@ -1305,28 +1328,34 @@ final class NativeCameraSession: @unchecked Sendable {
             throw NativeCameraSessionError.operationRejected(.openSession, openResponse)
         }
 
-        // DeviceInfo FIRST, before pairing or the app-control switch, because both must be gated
+        // DeviceInfo before pairing or the app-control switch, because both must be gated
         // on what this body actually advertises. Sending gen-3 operations at a gen-1 body isn't a
         // harmless rejection — a Z 5 polled with a pairing op it never implemented put a wireless
         // error on its own screen while the app spun (#292). GetDeviceInfo itself is the one
         // operation every generation answers from a fresh session. Best-effort: a failed fetch
-        // yields an unknown policy, which keeps today's modern-surface behaviour on every path.
-        // [verify-on-HW: Z 5 over camera AP; ZR unpaired first-connect still reaches the PIN]
-        onStage?("capability probe")
-        var gatePolicy = ZCameraOperationPolicy(operations: [])
-        if let probe = try? await transact(operationCode: .getDeviceInfo, dataPhase: .dataIn),
-            probe.operationResponse.responseCode == .ok,
-            let probedInfo = try? PTPDeviceInfo(data: probe.data)
-        {
-            gatePolicy = ZCameraOperationPolicy(deviceInfo: probedInfo)
+        // yields an unknown policy, then a gen-1 handshake/USB name (#348) takes the property
+        // app-mode path instead of pairing. [verify-on-HW: Z 5 / Z 6 over camera AP; ZR unpaired
+        // first-connect still reaches the PIN]
+        if !gatePolicy.isKnown {
+            onStage?("capability probe")
+            if let probe = try? await transact(operationCode: .getDeviceInfo, dataPhase: .dataIn),
+                probe.operationResponse.responseCode == .ok,
+                let probedInfo = try? PTPDeviceInfo(data: probe.data)
+            {
+                gatePolicy = ZCameraOperationPolicy(deviceInfo: probedInfo)
+            }
         }
+        let probedKnown = gatePolicy.isKnown
+        gatePolicy = gatePolicy.resolvingUnknown(cameraName: cameraName)
         establishmentSummary += "gateOps=\(gatePolicy.isKnown ? "known" : "unknown") "
+        if !probedKnown, gatePolicy.isKnown {
+            establishmentSummary += "gateFallback=gen1-name "
+        }
 
         // USB has no pairing surface: GetPairingInfo/ConfirmPairing are absent from the camera's
         // USB OperationsSupported, so polling them only times the connect out — the cable itself is
         // the trust boundary. [verify-on-HW: ZR over USB-C] Gen-1 bodies have no pairing surface
         // over the network either; joining their access point is the trust boundary there.
-        let isUSB = transport.kind == .usb
         if requestPairing, !isUSB, gatePolicy.supportsPairing {
             onStage?("pairing")
             try await completePairing(onPairingChallenge: onPairingChallenge)

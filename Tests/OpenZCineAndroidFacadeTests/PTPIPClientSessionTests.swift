@@ -184,6 +184,34 @@ struct PTPIPClientSessionTests {
         #expect(write?.data == Data([1]))
     }
 
+    /// #348: original Z 6 over Wi-Fi whose DeviceInfo ops list is empty (probe failed or
+    /// MTP-shaped) still must not be polled with GetPairingInfo / ChangeApplicationMode —
+    /// the Init ACK name is enough to take the gen-1 path.
+    @Test func generation1HandshakeNameConnectsWithoutPairingWhenDeviceInfoOpsAreUnknown() throws {
+        var options = FakeZRServer.Options()
+        options.cameraName = "Z 6_1234567"
+        options.model = "Z 6"
+        options.advertisedOperations = []
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [CameraConnectionPhase] = []
+        let session = try connect(to: server, strategy: .firstTimePairing) { phase, _ in
+            phases.append(phase)
+        }
+        defer { session.disconnect() }
+
+        #expect(phases == [.handshaking, .connected])
+        let operations = server.receivedOperations()
+        #expect(!operations.contains(.getPairingInfo))
+        #expect(!operations.contains(.confirmPairing))
+        #expect(!operations.contains(.changeApplicationMode))
+        #expect(operations.prefix(3) == [.openSession, .getDeviceInfo, .setDevicePropValue])
+        let write = server.receivedPropertyWrites().first
+        #expect(write?.property == PTPPropertyCode.applicationMode.rawValue)
+        #expect(write?.data == Data([1]))
+    }
+
     @Test func savedProfileRejectsWithoutStartingFirstTimePairing() throws {
         var options = FakeZRServer.Options()
         options.acceptsAppControlImmediately = false

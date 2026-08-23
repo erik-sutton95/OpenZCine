@@ -38,6 +38,18 @@ struct FirstPairWizardStepTests {
                 transport: .cameraAccessPoint, skipsPermissions: true) == 3)
     }
 
+    @Test("USB-C prepare and network copy is device-neutral for iPad")
+    func usbCopyDoesNotAssumeIPhone() {
+        let steps = StartupWizardContent.preparationSteps(for: .usbC).joined(separator: " ")
+        #expect(!steps.localizedCaseInsensitiveContains("iPhone"))
+        let network = StartupWizardContent.networkSections(for: .usbC, tight: false)
+            .flatMap(\.steps).joined(separator: " ")
+        #expect(!network.localizedCaseInsensitiveContains("iPhone"))
+        #expect(
+            !StartupWizardContent.networkSubtitle(for: .usbC, tight: false)
+                .localizedCaseInsensitiveContains("iPhone"))
+    }
+
     @Test("Phone Hotspot and USB-C keep five steps when permissions are shown")
     func hotspotAndUSBWithPermissions() {
         for transport: NativeAppModel.FirstPairTransportMethod in [.phoneHotspot, .usbC] {
