@@ -79,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -473,6 +474,8 @@ internal fun MediaBrowseScreen(
     selectedLut: FeedLutSelection,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
+    /** Bumped when Settings clears the camera media cache so an open gallery reloads. */
+    cacheRevision: Int = 0,
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onClose: () -> Unit,
@@ -637,6 +640,7 @@ internal fun MediaBrowseScreen(
         librarySource,
         effectiveCameraConnected,
         reloadKey,
+        cacheRevision,
         pendingDeletion != null,
     ) {
         // A deletion owns the camera between the cancelled old listing and the
@@ -1414,6 +1418,11 @@ internal fun MediaBrowseScreen(
             // bottom; portrait = category strip + bottom density band.
             val showsGridControls =
                 !isSelecting && !shareInProgress && !frameioPreparationInProgress
+            val showRefresh =
+                librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected
+            val refreshInProgress =
+                state is BrowseState.Loading ||
+                    (state as? BrowseState.Loaded)?.isLoadingMore == true
             if (portrait) {
                 Column(contentModifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MediaCategoryStrip(
@@ -1445,6 +1454,9 @@ internal fun MediaBrowseScreen(
                         deleteAvailable =
                             librarySource == MediaLibrarySource.CAMERA &&
                                 effectiveCameraConnected,
+                        showRefresh = showRefresh,
+                        refreshInProgress = refreshInProgress,
+                        onRefresh = { reloadKey += 1 },
                         onExitSelection = ::cancelActiveShareOrExitSelection,
                         onDelete = { deleteConfirmTargets = selectedSeriesClips },
                         onShare = {
@@ -1540,6 +1552,9 @@ internal fun MediaBrowseScreen(
                             deleteAvailable =
                                 librarySource == MediaLibrarySource.CAMERA &&
                                     effectiveCameraConnected,
+                            showRefresh = showRefresh,
+                            refreshInProgress = refreshInProgress,
+                            onRefresh = { reloadKey += 1 },
                             onExitSelection = ::cancelActiveShareOrExitSelection,
                             onDelete = { deleteConfirmTargets = selectedSeriesClips },
                             onShare = { presentNativeDelivery() },
@@ -2161,6 +2176,9 @@ private fun MediaLibraryHeader(
     sortOrder: MediaLibrarySortOrder,
     activeFilterCount: Int,
     deleteAvailable: Boolean,
+    showRefresh: Boolean,
+    refreshInProgress: Boolean,
+    onRefresh: () -> Unit,
     onExitSelection: () -> Unit,
     onDelete: () -> Unit,
     onShare: () -> Unit,
@@ -2189,6 +2207,9 @@ private fun MediaLibraryHeader(
     ) {
         Box(Modifier.weight(1f)) {
             MediaHeaderIdentity(state, category, displayedCount)
+        }
+        if (showRefresh) {
+            RefreshControl(enabled = !refreshInProgress, onClick = onRefresh)
         }
         FilterControl(activeCount = activeFilterCount, onClick = onShowFilters)
         SortControl(sortOrder = sortOrder, onSelect = onSortChange)
@@ -2474,6 +2495,30 @@ private fun LayoutControl(layout: MediaLibraryLayout, onToggle: (MediaLibraryLay
         Text(
             if (layout == MediaLibraryLayout.GRID) "☷" else "▦",
             style = chromeStyle(18f, FontWeight.Medium),
+            color = LiveDesign.muted,
+        )
+    }
+}
+
+/** iOS gallery REFRESH — an on-demand authoritative re-enumeration. */
+@Composable
+private fun RefreshControl(enabled: Boolean, onClick: () -> Unit) {
+    val description = stringResource(R.string.media_refresh_cd)
+    Row(
+        Modifier.glass(CapsuleShape)
+            .alpha(if (enabled) 1f else 0.5f)
+            .semantics {
+                contentDescription = description
+                role = Role.Button
+                if (!enabled) disabled()
+            }
+            .chromeClickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(R.string.media_refresh),
+            style = chromeStyle(10f, FontWeight.Bold, mono = true),
             color = LiveDesign.muted,
         )
     }

@@ -269,6 +269,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
                             indexKey(cameraID),
                             MediaLibraryRecordCodec.encode(reconciled),
                         )
+                        rememberIndexedCameraLocked(cameraID)
                     }
                     reconciled
                 }
@@ -293,6 +294,20 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
     /** Returns only records previously received from the shared-core listing wire. */
     fun persistedClips(cameraID: String): List<MediaClipRecord> =
         synchronized(persistenceLock) { persistedClipsLocked(cameraID) }
+
+    /**
+     * Drops every camera catalog the Settings cache-clear must not leave behind.
+     * Favorites stay — they are a separate store — so a shot still on the card
+     * can remain favorited after the next authoritative listing.
+     */
+    fun clearCameraCatalogs() {
+        synchronized(persistenceLock) {
+            indexedCameraIDsLocked().forEach { cameraID ->
+                preferences.putString(indexKey(cameraID), null)
+            }
+            preferences.putString(INDEXED_CAMERAS_KEY, null)
+        }
+    }
 
     /**
      * Drops one deliberately deleted clip's index row and favorite (iOS
@@ -431,6 +446,25 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
 
     private fun favoritesKey(cameraID: String): String = "favorites.${digest(cameraID)}"
 
+    private fun rememberIndexedCameraLocked(cameraID: String) {
+        val ids = indexedCameraIDsLocked()
+        if (cameraID in ids) return
+        preferences.putString(
+            INDEXED_CAMERAS_KEY,
+            (ids + cameraID).sorted().joinToString(separator = "\n"),
+        )
+    }
+
+    private fun indexedCameraIDsLocked(): Set<String> {
+        val recorded =
+            preferences.getString(INDEXED_CAMERAS_KEY)
+                ?.lineSequence()
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                .orEmpty()
+        return recorded + registeredCameraBuckets().map { it.cameraID }
+    }
+
     private fun registeredCameraBuckets(): List<MediaLibraryCameraBucket> =
         preferences.getString(CAMERA_BUCKETS_KEY)
             ?.let(MediaLibraryCameraBucketCodec::decode)
@@ -438,6 +472,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
 
     private companion object {
         const val CAMERA_BUCKETS_KEY = "camera-buckets"
+        const val INDEXED_CAMERAS_KEY = "indexed-cameras"
         const val PREF_SOURCE = "view.source"
         const val PREF_CATEGORY = "view.category"
         const val PREF_LAYOUT = "view.layout"

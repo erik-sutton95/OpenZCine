@@ -928,10 +928,10 @@ struct MediaBrowserView: View {
 
     /// Authoritative re-enumeration on demand (#296): the camera's inventory is the truth, and
     /// after a card format the operator wants a way to say "ask it again" without reconnecting.
-    /// The pass it schedules already reconciles removals and cannot duplicate (delta-keyed).
+    /// Refresh probes reused PTP handles so a recycled generation cannot keep stale filenames.
     private var refreshButton: some View {
         Button {
-            model.scheduleFetchClipsFromCamera()
+            model.refreshCameraMediaInventory()
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.clockwise")

@@ -679,7 +679,10 @@ class MainActivity : ComponentActivity() {
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =
                                     liveViewGuide::replayOnNextRealFrame,
-                                onCompletedMediaCacheCleared = { mediaCacheRevision += 1 },
+                                onCompletedMediaCacheCleared = {
+                                    mediaLibraryIndex.clearCameraCatalogs()
+                                    mediaCacheRevision += 1
+                                },
                                 // The watcher leaves from the session controls, exactly like
                                 // iOS (`model.disconnect()` routes a relay viewer through
                                 // leaveRelay).
@@ -705,6 +708,7 @@ class MainActivity : ComponentActivity() {
                         cameraID = primary?.cameraID ?: "offline-all-cameras",
                         cameraConnected = false,
                         cameraSessionAvailable = false,
+                        cacheRevision = mediaCacheRevision,
                         savedCameraID = primary?.savedCameraID,
                         cameraDisplayName =
                             when {
@@ -934,7 +938,10 @@ class MainActivity : ComponentActivity() {
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =
                                     liveViewGuide::replayOnNextRealFrame,
-                                onCompletedMediaCacheCleared = { mediaCacheRevision += 1 },
+                                onCompletedMediaCacheCleared = {
+                                    mediaLibraryIndex.clearCameraCatalogs()
+                                    mediaCacheRevision += 1
+                                },
                                 onClose = { standaloneSettingsPresented = false },
                             )
                         }
@@ -1310,6 +1317,10 @@ class MainActivity : ComponentActivity() {
                                             liveViewGuide.replayOnNextRealFrame()
                                             overlay = MonitorOverlay.NONE
                                         },
+                                        onCompletedMediaCacheCleared = {
+                                            mediaLibraryIndex.clearCameraCatalogs()
+                                            mediaCacheRevision += 1
+                                        },
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                                 MonitorOverlay.MEDIA ->
@@ -1317,6 +1328,7 @@ class MainActivity : ComponentActivity() {
                                         cameraID = cameraID,
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
+                                        cacheRevision = mediaCacheRevision,
                                         savedCameraID = activeSavedCamera?.id,
                                         cameraDisplayName = activeSavedCamera?.displayTitle,
                                         cameraStorageSlots = currentCameraProperties.storageSlots,

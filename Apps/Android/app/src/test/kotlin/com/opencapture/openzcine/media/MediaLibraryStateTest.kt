@@ -295,7 +295,8 @@ class MediaLibraryStateTest {
         }
         checkpoint.commit()
 
-        assertEquals(1, preferences.writeCount)
+        // One catalog encode plus the first-time indexed-cameras registry write.
+        assertEquals(2, preferences.writeCount)
         assertEquals(1_280, index.persistedClips("camera").size)
     }
 
@@ -319,6 +320,46 @@ class MediaLibraryStateTest {
             listOf(stillOnCard.handle, deletedButDownloaded.handle),
             index.persistedClips("camera").map { it.handle }.sorted(),
         )
+    }
+
+    @Test
+    fun `a complete pass replaces a reused PTP handle with the new identity`() {
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val stale =
+            clip(
+                handle = 1,
+                filename = "OLD.JPG",
+                kind = MediaContentKind.STILL_PHOTO,
+                captureDate = "20260101T120000",
+            )
+        val fresh =
+            clip(
+                handle = 1,
+                filename = "NEW.JPG",
+                kind = MediaContentKind.STILL_PHOTO,
+                captureDate = "20260818T090000",
+            )
+        index.rememberCameraListing("camera", listOf(stale))
+
+        index.beginCameraListing("camera").apply {
+            applyPage(listOf(fresh), emptyList())
+            commit(prunesUnlistedClips = true)
+        }
+
+        assertEquals(listOf("NEW.JPG"), index.persistedClips("camera").map { it.filename })
+    }
+
+    @Test
+    fun `cache clear drops camera catalogs and keeps favorites`() {
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val clip = clip(handle = 4, filename = "C0001.MOV")
+        index.rememberCameraListing("serial-a", listOf(clip))
+        index.setFavorite("serial-a", clip, favorite = true)
+
+        index.clearCameraCatalogs()
+
+        assertTrue(index.persistedClips("serial-a").isEmpty())
+        assertEquals(setOf(clip.libraryKey("serial-a")), index.favoriteIDs("serial-a"))
     }
 
     @Test
