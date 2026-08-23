@@ -1259,6 +1259,11 @@
                     session.identity.displayName, session.identity.model,
                     session.identity.serialNumber,
                 ])
+        } catch let error as USBHandshakeError {
+            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            transport.close()
+            callStrings(handle.onPhase, [error.diagnosticPhase, ""])
+            callStrings(handle.onFailed, [error.localizedDescription ?? "USB handshake failed."])
         } catch {
             ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
             transport.close()

@@ -70,6 +70,40 @@ public interface UsbPtpTransport : Closeable {
     public fun isClosed(): Boolean
 }
 
+/**
+ * Re-claims a USB PTP interface after the previous transport closed.
+ *
+ * Monitor recovery reconnects through the same session object. USB events share
+ * that claimed interface, so an interrupt failure closes it; the next connect
+ * must open a new one instead of handing JNI a dead handle.
+ */
+public fun interface UsbPtpTransportReopener {
+    /** Opens a fresh transport, or a closed diagnostic reason the camera cannot be claimed. */
+    public fun reopen(): UsbPtpOpenResult
+}
+
+/**
+ * Re-opens the currently attached, permissioned camera that matches [hostKey].
+ *
+ * Used by USB monitor recovery after the previous transport closed. Never
+ * invents a device identity: if the body is gone or still needs permission,
+ * the operator sees a reconnect failure instead of a 1 ms handshake collapse.
+ */
+internal fun reopenReadyUsbTransport(
+    source: UsbPtpCameraSource,
+    hostKey: String,
+): UsbPtpOpenResult {
+    val camera =
+        source.cameras.value.firstOrNull { candidate ->
+            candidate.access == UsbPtpCameraAccess.READY && candidate.hostKey == hostKey
+        }
+            ?: return UsbPtpOpenResult.Rejected(
+                message = "Connect your USB-C camera and approve access, then try again.",
+                diagnosticPhase = "usb.reconnect.notReady",
+            )
+    return source.open(camera)
+}
+
 /** Result of opening a platform-owned USB transport for the Swift facade. */
 public sealed interface UsbPtpOpenResult {
     /** A permissioned connection with a stable saved-record host key. */
@@ -81,7 +115,11 @@ public sealed interface UsbPtpOpenResult {
     ) : UsbPtpOpenResult
 
     /** The requested camera was no longer available for a safe connection. */
-    public data class Rejected(public val message: String) : UsbPtpOpenResult
+    public data class Rejected(
+        public val message: String,
+        /** Closed diagnostic token; never a device path, serial, or exception text. */
+        public val diagnosticPhase: String = "failed.usb",
+    ) : UsbPtpOpenResult
 }
 
 /**
@@ -206,36 +244,47 @@ public class AndroidUsbPtpCameraSource(
 
     override fun open(camera: UsbPtpCamera): UsbPtpOpenResult {
         val device = usbManager.deviceList[camera.token]
-            ?: return UsbPtpOpenResult.Rejected(
+            ?: return rejectOpen(
                 "The USB-C camera is no longer attached. Reconnect the cable and try again.",
+                "usb.open.detached",
             )
         val attachmentLease =
             synchronized(lifecycleLock) {
-                if (closed) return UsbPtpOpenResult.Rejected("USB camera discovery is no longer active.")
+                if (closed) {
+                    return rejectOpen(
+                        "USB camera discovery is no longer active.",
+                        "usb.open.detached",
+                    )
+                }
                 attachmentState.captureOpenLease(device.deviceName)
             }
-                ?: return UsbPtpOpenResult.Rejected(
+                ?: return rejectOpen(
                     "The USB-C camera is no longer attached. Reconnect the cable and try again.",
+                    "usb.open.detached",
                 )
         if (!usbManager.hasPermission(device)) {
-            return UsbPtpOpenResult.Rejected(
+            return rejectOpen(
                 "Allow USB access for this camera, then try connecting again.",
+                "usb.open.noPermission",
             )
         }
         val selection = descriptorSelection(device)
-            ?: return UsbPtpOpenResult.Rejected(
+            ?: return rejectOpen(
                 "This USB device does not expose the complete PTP camera interface OpenZCine needs.",
+                "usb.open.noPtpInterface",
             )
         val hostKey = stableHostKey(device)
         val connection = usbManager.openDevice(device)
-            ?: return UsbPtpOpenResult.Rejected(
+            ?: return rejectOpen(
                 "Android could not open this USB camera. Disconnect it, approve access again, and retry.",
+                "usb.open.device",
             )
         val usbInterface = device.getInterface(selection.interfaceIndex)
         if (!connection.claimInterface(usbInterface, true)) {
             connection.close()
-            return UsbPtpOpenResult.Rejected(
+            return rejectOpen(
                 "Android could not claim the camera's PTP USB interface. Close other camera apps and retry.",
+                "usb.open.claim",
             )
         }
         val bulkIn = endpoint(usbInterface, selection.bulkInAddress)
@@ -253,8 +302,9 @@ public class AndroidUsbPtpCameraSource(
             connection.releaseInterface(usbInterface)
             connection.close()
             eventRequest.close()
-            return UsbPtpOpenResult.Rejected(
+            return rejectOpen(
                 "Android could not open the camera's PTP event endpoint. Reconnect the cable and retry.",
+                "usb.open.eventEndpoint",
             )
         }
         val transport =
@@ -263,6 +313,7 @@ public class AndroidUsbPtpCameraSource(
                 usbInterface = usbInterface,
                 bulkIn = bulkIn,
                 bulkOut = bulkOut,
+                eventIn = eventIn,
                 eventRequest = eventRequest,
             )
         transport.setOnClosed {
@@ -289,8 +340,9 @@ public class AndroidUsbPtpCameraSource(
             }
         if (rejectOpenedTransport) {
             transport.close()
-            return UsbPtpOpenResult.Rejected(
+            return rejectOpen(
                 "The USB-C camera changed while Android opened it. Reconnect the cable and try again.",
+                "usb.open.changed",
             )
         }
         replacedTransport?.close()
@@ -484,6 +536,11 @@ public class AndroidUsbPtpCameraSource(
         return if (device.vendorId == NIKON_VENDOR_ID) "Nikon USB camera" else "USB PTP camera"
     }
 
+    private fun rejectOpen(message: String, diagnosticPhase: String): UsbPtpOpenResult.Rejected {
+        onDiagnosticPhase(diagnosticPhase)
+        return UsbPtpOpenResult.Rejected(message, diagnosticPhase)
+    }
+
     private fun permissionIntent(): PendingIntent =
         PendingIntent.getBroadcast(
             appContext,
@@ -506,6 +563,18 @@ public class AndroidUsbPtpCameraSource(
         const val usbPermissionAction: String = "com.opencapture.openzcine.USB_PTP_PERMISSION"
         const val USB_DIAG_TAG: String = "UsbPtpDiag"
     }
+}
+
+/** Copies completed UsbRequest bytes from a heap or direct buffer. */
+private fun copyUsbRequestPayload(buffer: ByteBuffer): ByteArray {
+    val length = buffer.position().coerceAtLeast(0)
+    if (length == 0) return ByteArray(0)
+    val bytes = ByteArray(length)
+    val savedPosition = buffer.position()
+    buffer.rewind()
+    buffer.get(bytes)
+    buffer.position(savedPosition)
+    return bytes
 }
 
 private const val PTP_STATUS_OK: Int = 0x2001
@@ -643,7 +712,7 @@ internal class UsbInterruptEventPump(private val channel: UsbInterruptChannel) {
                     return@synchronized null
                 }
                 queuedBuffer = null
-                buffer.array().copyOf(buffer.position())
+                copyUsbRequestPayload(buffer)
             } catch (_: TimeoutException) {
                 // A sparse PTP event channel is healthy. The request stays
                 // queued on purpose and its buffer is still framework-owned, so
@@ -689,7 +758,10 @@ internal class UsbInterruptEventPump(private val channel: UsbInterruptChannel) {
 
     /** Queues a fresh buffer, or retires the pump when the framework refuses. */
     private fun queueLocked(maxBytes: Int): ByteBuffer? {
-        val fresh = ByteBuffer.allocate(maxBytes)
+        // Direct: some OEM USB HALs reject UsbRequest.queue on a heap array
+        // (HyperOS / Snapdragon 8 Elite) while the bulkTransfer byte[] path
+        // still works — handshake succeeds, then the event channel dies.
+        val fresh = ByteBuffer.allocateDirect(maxBytes.coerceAtLeast(1))
         // Guarded, not bare: the framework throws for a closed connection or a
         // request teardown retired underneath us, and this is the exact call
         // that used to escape the event pump and kill the process.
@@ -753,12 +825,14 @@ private class AndroidUsbPtpTransport(
     private val usbInterface: UsbInterface,
     private val bulkIn: UsbEndpoint,
     private val bulkOut: UsbEndpoint,
+    private val eventIn: UsbEndpoint,
     eventRequest: UsbRequest,
 ) : UsbPtpTransport {
     private val closeLock = Any()
     private val commandLock = Any()
     private val eventPump =
         UsbInterruptEventPump(UsbRequestInterruptChannel(connection, eventRequest))
+    private val eventPacketBytes: Int = interruptUrbSize(eventIn.maxPacketSize, INITIAL_EVENT_BYTES)
     @Volatile private var closed: Boolean = false
     private var deadWriteRecoveryDone: Boolean = false
     private var onClosed: (() -> Unit)? = null
@@ -769,8 +843,9 @@ private class AndroidUsbPtpTransport(
         // application mode makes the ZR emit StoreRemoved here, and it stalls
         // that switch until the event is drained (see the Swift establish's
         // concurrent event pump). This just ensures a buffer is already
-        // waiting before the pump's first read.
-        eventPump.prime(INITIAL_EVENT_BYTES)
+        // waiting before the pump's first read. Size is one interrupt packet,
+        // never the bulk-sized chunk Swift asks for on later reads.
+        eventPump.prime(eventPacketBytes)
     }
 
     fun setOnClosed(callback: () -> Unit) {
@@ -806,7 +881,7 @@ private class AndroidUsbPtpTransport(
 
     override fun readEvent(maxBytes: Int, timeoutMillis: Int): ByteArray? {
         if (closed || maxBytes !in 1..MAX_READ_BYTES) return null
-        val bytes = eventPump.read(maxBytes, timeoutMillis)
+        val bytes = eventPump.read(interruptUrbSize(eventIn.maxPacketSize, maxBytes), timeoutMillis)
         // A retired pump can never queue another interrupt read, so this USB
         // session is over. Close it here instead of letting the caller retry
         // into a pipe that will never deliver; Swift then sees a typed

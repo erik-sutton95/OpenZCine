@@ -13,6 +13,7 @@ import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CodecBitDepthOption
+import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import com.opencapture.openzcine.transport.UsbPtpTransport
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -708,6 +709,85 @@ class SwiftCoreCameraSessionTest {
         assertEquals(CameraSessionState.Disconnected, session.state.value)
         assertEquals(1, bridge.disconnects)
         assertTrue(transport.isClosed())
+    }
+
+    @Test
+    fun `USB reconnect after event teardown does not reuse the closed transport`() = runTest {
+        // Field report #315 (Redmi K90 Ultra): handshake succeeded, the interrupt
+        // channel ended, then every reconnect failed in ~1 ms. Monitor recovery
+        // called connect() on the same session, which handed the already-closed
+        // Kotlin transport back to JNI.
+        val bridge = FakeBridge()
+        val transport = FakeUsbTransport()
+        val session =
+            SwiftCoreCameraSession(
+                host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                automaticallyRefreshProperties = false,
+                usbTransport = transport,
+                cameraNameHint = "Nikon USB camera",
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        bridge.eventListeners.single().onEnded("The camera closed the USB event endpoint.")
+        runCurrent()
+        assertTrue(transport.isClosed())
+
+        val reconnecting = async { session.connect() }
+        runCurrent()
+        reconnecting.await()
+
+        assertEquals(1, bridge.usbConnects.size)
+        assertEquals(CameraSessionState.Disconnected, session.state.value)
+    }
+
+    @Test
+    fun `USB reconnect after event teardown opens a fresh transport`() = runTest {
+        val bridge = FakeBridge()
+        val first = FakeUsbTransport()
+        val second = FakeUsbTransport()
+        val session =
+            SwiftCoreCameraSession(
+                host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                automaticallyRefreshProperties = false,
+                usbTransport = first,
+                usbReopener = {
+                    UsbPtpOpenResult.Opened(
+                        transport = second,
+                        hostKey = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                        displayName = "Nikon USB camera",
+                    )
+                },
+                cameraNameHint = "Nikon USB camera",
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        bridge.eventListeners.single().onEnded("The camera closed the USB event endpoint.")
+        runCurrent()
+        assertTrue(first.isClosed())
+
+        val reconnecting = async { session.connect() }
+        runCurrent()
+        assertEquals(2, bridge.usbConnects.size)
+        assertEquals(second, bridge.usbConnects.last().transport)
+        bridge.listeners.last().onConnected("ZR", "NIKON ZR", "6001234")
+        reconnecting.await()
+
+        assertTrue(session.state.value is CameraSessionState.Connected)
+        assertFalse(second.isClosed())
     }
 
     @Test

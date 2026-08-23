@@ -18,7 +18,9 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.MFDriveOutcome
 import com.opencapture.openzcine.core.StillReleasePoll
+import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import com.opencapture.openzcine.transport.UsbPtpTransport
+import com.opencapture.openzcine.transport.UsbPtpTransportReopener
 import com.opencapture.openzcine.withOptimisticControlValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -310,13 +312,15 @@ class SwiftCoreCameraSession internal constructor(
     private val selectorPollIntervalMillis: Long = SELECTOR_POLL_INTERVAL_MILLIS,
     private val propertyEventDebounceMillis: Long = PROPERTY_EVENT_DEBOUNCE_MILLIS,
     private val automaticallyRefreshProperties: Boolean = true,
-    private val usbTransport: UsbPtpTransport? = null,
+    usbTransport: UsbPtpTransport? = null,
+    private val usbReopener: UsbPtpTransportReopener? = null,
     private val cameraNameHint: String? = null,
     private val connectionStrategy: PtpIpConnectionStrategy =
         PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
     initiatorGuid: ByteArray = defaultPtpIpInitiatorGuid,
 ) : CameraSession {
     private val initiatorGuid: ByteArray = initiatorGuid.copyOf()
+    private var usbTransport: UsbPtpTransport? = usbTransport
 
     init {
         require(initiatorGuid.size == INITIATOR_GUID_BYTE_COUNT) {
@@ -349,12 +353,14 @@ class SwiftCoreCameraSession internal constructor(
         host: String,
         cameraNameHint: String,
         usbTransport: UsbPtpTransport,
+        usbReopener: UsbPtpTransportReopener? = null,
         phaseLogger: (String, String) -> Unit = { _, _ -> },
     ) : this(
         host = host,
         phaseLogger = phaseLogger,
         core = SwiftCoreSessionBridge.Production,
         usbTransport = usbTransport,
+        usbReopener = usbReopener,
         cameraNameHint = cameraNameHint,
     )
 
@@ -364,12 +370,14 @@ class SwiftCoreCameraSession internal constructor(
         cameraNameHint: String,
         usbTransport: UsbPtpTransport,
         connectionStrategy: PtpIpConnectionStrategy,
+        usbReopener: UsbPtpTransportReopener? = null,
         phaseLogger: (String, String) -> Unit = { _, _ -> },
     ) : this(
         host = host,
         phaseLogger = phaseLogger,
         core = SwiftCoreSessionBridge.Production,
         usbTransport = usbTransport,
+        usbReopener = usbReopener,
         cameraNameHint = cameraNameHint,
         connectionStrategy = connectionStrategy,
     )
@@ -528,8 +536,9 @@ class SwiftCoreCameraSession internal constructor(
             if (usbTransport == null) {
                 core.connect(host, connectionOwner, connectionStrategy, initiatorGuid, listener)
             } else {
+                val transport = preparedUsbTransport(attempt) ?: return
                 core.connectUsb(
-                    transport = usbTransport,
+                    transport = transport,
                     host = host,
                     cameraNameHint = cameraNameHint.orEmpty(),
                     connectionOwner = connectionOwner,
@@ -553,6 +562,52 @@ class SwiftCoreCameraSession internal constructor(
     /** Closed phase token distinguishing USB PTP vs Wi‑Fi PTP-IP session failures. */
     private fun sessionFailurePhaseToken(): String =
         if (usbTransport != null) "failed.usb" else "failed.ptp"
+
+    /**
+     * Returns a live USB transport for this attempt, re-opening the interface
+     * when the previous one was closed by an event-channel failure.
+     *
+     * A closed handle handed back to JNI fails in ~1 ms (issue #315).
+     */
+    private fun preparedUsbTransport(attempt: Long): UsbPtpTransport? {
+        val current = usbTransport ?: return null
+        if (!current.isClosed()) return current
+        val reopener = usbReopener
+        if (reopener == null) {
+            failClosedUsbReconnect(
+                attempt,
+                "usb.reconnect.closedTransport",
+                "The USB-C camera connection was already closed.",
+            )
+            return null
+        }
+        return when (val opened = reopener.reopen()) {
+            is UsbPtpOpenResult.Opened -> {
+                usbTransport = opened.transport
+                opened.transport
+            }
+            is UsbPtpOpenResult.Rejected -> {
+                failClosedUsbReconnect(attempt, "failed.usb", opened.message)
+                null
+            }
+        }
+    }
+
+    private fun failClosedUsbReconnect(attempt: Long, phase: String, message: String) {
+        val shouldLog =
+            synchronized(attemptLock) {
+                if (activeAttempt != attempt) return
+                activeAttempt = null
+                activeConnectionOwner = null
+                _state.value = CameraSessionState.Disconnected
+                _connectionProgress.value =
+                    CameraConnectionProgress(CameraConnectionPhase.FAILED, message)
+                true
+            }
+        if (!shouldLog) return
+        phaseLogger(phase, "")
+        if (phase != "failed.usb") phaseLogger("failed.usb", message)
+    }
 
     /**
      * Reads one camera property (see `SwiftCore.PROP_*`), decoded by the Swift
