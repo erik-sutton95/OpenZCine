@@ -20,6 +20,10 @@ public enum AndroidCameraPropertyRefreshRequest: Sendable {
     /// within ~1s of the body's lever (iOS polls it off the frame loop). No
     /// round-robin advance — the heavy property set keeps its slow cadence.
     case selector
+    /// One rotating camera-owned auto-exposure readout (working ISO / shutter /
+    /// iris) while P/A/S/Auto or Auto ISO owns those values. No round-robin
+    /// advance. A no-op when the operator owns every exposure value.
+    case autoExposure
 }
 
 /// Non-terminal result of one Android camera-property refresh.
@@ -320,6 +324,10 @@ public enum AndroidCameraPropertyReadbackWire {
         append(
             "evIndicatorSixths", value: properties.evIndicatorSixths.map(String.init), to: &fields)
         append("evIndicatorLit", value: properties.evIndicatorLit.map(String.init), to: &fields)
+        append(
+            "autoExposurePoll",
+            value: CameraAutoExposureReadouts.needsPoll(from: properties) ? "true" : "false",
+            to: &fields)
         let controls = readback.controls
         append("resolutionFrameRate", value: controls.resolutionFrameRate, to: &fields)
         append("codecSelection", value: controls.codec, to: &fields)

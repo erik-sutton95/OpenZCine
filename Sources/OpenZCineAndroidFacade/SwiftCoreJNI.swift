@@ -1334,6 +1334,8 @@
             refreshRequest = .evIndicator
         case 4:
             refreshRequest = .selector
+        case 5:
+            refreshRequest = .autoExposure
         default:
             return javaString(
                 env,

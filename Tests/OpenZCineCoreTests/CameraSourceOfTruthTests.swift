@@ -228,6 +228,197 @@ struct MonitorPollFallbackTests {
     }
 }
 
+// MARK: - #268 · camera-owned auto-exposure readouts (silent AE, no 0x4006)
+
+struct CameraAutoExposureReadoutTests {
+    /// The August 2026 TestFlight regression: photo A-mode, body 1/30 · ISO 1000,
+    /// app 1/125 · A900, aperture already matching. Nikon often does not announce
+    /// auto-exposure shutter/ISO on `DevicePropChanged`, so those two have to be
+    /// re-read on a bounded cadence instead of waiting out the ~20 s round-robin.
+    private let photoA = PTPCameraPropertySnapshot(
+        iso: 900,
+        isoAuto: true,
+        exposureMode: "A",
+        shutterSpeed: "1/125",
+        fNumber: "f/4",
+        fileType: "JPEG",
+        captureSelector: .photo)
+
+    @Test func photoAModePollsWorkingISOAndStillShutterNotIris() {
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: photoA)
+                == [.isoControlSensitivity, .stillShutterSpeed])
+        #expect(CameraAutoExposureReadouts.needsPoll(from: photoA))
+    }
+
+    @Test func photoAModeWithALeftoverR3DMovieCodecStillPollsISO() {
+        // The movie codec is not the stills ISO circuit. Gating photo ISO on R3D
+        // dual-base would leave A-mode stills on a stale A900 forever.
+        let leftover = PTPCameraPropertySnapshot(
+            isoAuto: true,
+            exposureMode: "A",
+            fileType: "R3D NE 12-bit R3D",
+            captureSelector: .photo)
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: leftover)
+                .contains(.isoControlSensitivity))
+    }
+
+    @Test func photoMModeManualISOPollsNothing() {
+        let snapshot = PTPCameraPropertySnapshot(
+            isoAuto: false,
+            exposureMode: "M",
+            fileType: "JPEG",
+            captureSelector: .photo)
+        #expect(CameraAutoExposureReadouts.polledProperties(from: snapshot).isEmpty)
+        #expect(!CameraAutoExposureReadouts.needsPoll(from: snapshot))
+        #expect(
+            CameraAutoExposureReadouts.nextProperty(pollIndex: 0, snapshot: snapshot) == nil)
+    }
+
+    @Test func photoMModeAutoISOPollsOnlyWorkingISO() {
+        let snapshot = PTPCameraPropertySnapshot(
+            isoAuto: true,
+            exposureMode: "M",
+            fileType: "JPEG",
+            captureSelector: .photo)
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: snapshot)
+                == [.isoControlSensitivity])
+    }
+
+    @Test func photoSModePollsIrisAndWorkingISONotShutter() {
+        let snapshot = PTPCameraPropertySnapshot(
+            isoAuto: false,
+            exposureMode: "S",
+            fileType: "JPEG",
+            captureSelector: .photo)
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: snapshot)
+                == [.isoControlSensitivity, .fNumber])
+    }
+
+    @Test func videoAModePollsTheMovieShutterFamily() {
+        let speed = PTPCameraPropertySnapshot(
+            isoAuto: true,
+            exposureMode: "A",
+            shutterMode: .speed,
+            fileType: "ProRes 422 HQ",
+            captureSelector: .video)
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: speed)
+                == [.isoControlSensitivity, .movieShutterSpeed])
+
+        let angle = PTPCameraPropertySnapshot(
+            isoAuto: false,
+            exposureMode: "A",
+            shutterMode: .angle,
+            fileType: "ProRes 422 HQ",
+            captureSelector: .video)
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: angle)
+                == [.isoControlSensitivity, .movieShutterAngle])
+    }
+
+    @Test func r3dManualISODoesNotPollWorkingISO() {
+        let snapshot = PTPCameraPropertySnapshot(
+            isoAuto: true,
+            exposureMode: "A",
+            shutterMode: .angle,
+            fileType: "R3D NE 12-bit R3D",
+            captureSelector: .video)
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: snapshot)
+                == [.movieShutterAngle])
+    }
+
+    @Test func aLockedMovieShutterIsNotPolled() {
+        let snapshot = PTPCameraPropertySnapshot(
+            isoAuto: false,
+            exposureMode: "A",
+            shutterMode: .speed,
+            shutterLocked: true,
+            fileType: "H.265",
+            captureSelector: .video)
+        // A-mode still owns ISO; only the locked TV circuit drops out.
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: snapshot)
+                == [.isoControlSensitivity])
+    }
+
+    @Test func userBankFollowsTheStoredProgram() {
+        let u1AsAperture = PTPCameraPropertySnapshot(
+            isoAuto: true,
+            exposureMode: "U1",
+            fileType: "JPEG",
+            captureSelector: .photo,
+            userModeProgram: "A")
+        #expect(
+            CameraAutoExposureReadouts.polledProperties(from: u1AsAperture)
+                == [.isoControlSensitivity, .stillShutterSpeed])
+
+        let u1AsManual = PTPCameraPropertySnapshot(
+            isoAuto: false,
+            exposureMode: "U1",
+            fileType: "JPEG",
+            captureSelector: .photo,
+            userModeProgram: "M")
+        #expect(CameraAutoExposureReadouts.polledProperties(from: u1AsManual).isEmpty)
+    }
+
+    @Test func rotationWalksTheCameraOwnedSet() {
+        #expect(
+            CameraAutoExposureReadouts.nextProperty(pollIndex: 0, snapshot: photoA)
+                == .isoControlSensitivity)
+        #expect(
+            CameraAutoExposureReadouts.nextProperty(pollIndex: 1, snapshot: photoA)
+                == .stillShutterSpeed)
+        #expect(
+            CameraAutoExposureReadouts.nextProperty(pollIndex: 2, snapshot: photoA)
+                == .isoControlSensitivity)
+    }
+
+    @Test func photoRoundRobinStillLeavesStillShutterStaleForSeconds() throws {
+        // Documents WHY the auto-exposure path exists: `stillShutterSpeed` in the
+        // photo order is visited about as rarely as movie aperture was in #268.
+        let order = StillCapturePolicy.photoMonitorPollOrder
+        var visits: [Int] = []
+        for tick in 0..<(order.count * 6)
+        where
+            CameraMonitorPollPolicy.nextProperty(
+                pollIndex: tick, isRecording: false, captureSelector: .photo)
+            == .stillShutterSpeed
+        {
+            visits.append(tick)
+        }
+        let first = try #require(visits.first)
+        let second = try #require(visits.dropFirst().first)
+        #expect(second - first > order.count)
+    }
+
+    @Test func displayTilesFollowACameraOwnedStillShutterAndWorkingISO() {
+        let stale = CameraDisplayState.preview.applyingCameraProperties(
+            photoA, photography: true)
+        #expect(stale.values.first { $0.label == "SHUTTER" }?.value == "1/125")
+        #expect(stale.values.first { $0.label == "ISO" }?.value == "A900")
+        #expect(stale.values.first { $0.label == "IRIS" }?.value == "f/4")
+
+        let live = stale.applyingCameraProperties(
+            PTPCameraPropertySnapshot(
+                iso: 1000,
+                isoAuto: true,
+                exposureMode: "A",
+                shutterSpeed: "1/30",
+                fNumber: "f/4",
+                fileType: "JPEG",
+                captureSelector: .photo),
+            photography: true)
+        #expect(live.values.first { $0.label == "SHUTTER" }?.value == "1/30")
+        #expect(live.values.first { $0.label == "ISO" }?.value == "A1000")
+        #expect(live.values.first { $0.label == "IRIS" }?.value == "f/4")
+    }
+}
+
 // MARK: - #257 · shutter mode and value are one camera-supported state
 
 struct ShutterModeAtomicityTests {

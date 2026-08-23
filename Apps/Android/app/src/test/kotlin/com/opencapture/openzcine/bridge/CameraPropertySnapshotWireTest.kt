@@ -167,6 +167,18 @@ class CameraPropertySnapshotWireTest {
         assertNull(bare.snapshot.pictureControl)
         assertNull(bare.snapshot.evIndicatorSixths)
         assertNull(bare.snapshot.evIndicatorLit)
+        assertFalse(bare.snapshot.autoExposurePoll)
+    }
+
+    @Test
+    fun decodesTheAutoExposurePollGate() {
+        val on =
+            CameraPropertySnapshotWire.decode(validPayload() + "\nautoExposurePoll\ttrue")
+        assertTrue(on.snapshot.autoExposurePoll)
+
+        val off =
+            CameraPropertySnapshotWire.decode(validPayload() + "\nautoExposurePoll\tfalse")
+        assertFalse(off.snapshot.autoExposurePoll)
     }
 
     private fun assertRejected(payload: String) {

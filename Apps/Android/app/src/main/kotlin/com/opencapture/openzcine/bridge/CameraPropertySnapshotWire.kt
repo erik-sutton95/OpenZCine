@@ -128,6 +128,7 @@ internal object CameraPropertySnapshotWire {
             pictureControl = value.optionalString("pictureControl"),
             evIndicatorSixths = value.optionalInt("evIndicatorSixths"),
             evIndicatorLit = value.optionalBoolean("evIndicatorLit"),
+            autoExposurePoll = value.optionalBoolean("autoExposurePoll") == true,
             controlCapabilities =
                 CameraControlCapabilities(
                     isoValues = value.options("options.iso"),

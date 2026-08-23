@@ -884,6 +884,43 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
+    fun `auto-exposure fast polling alternates with the selector`() = runTest {
+        val bridge = FakeBridge()
+        bridge.propertyRefreshPayload = propertyPayload() + "\nautoExposurePoll\ttrue"
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                propertyPollIntervalMillis = 3_000,
+                selectorPollIntervalMillis = 750,
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        runCurrent()
+        bridge.clearRefreshRequests()
+        advanceTimeBy(3_100)
+        runCurrent()
+
+        assertEquals(
+            listOf(
+                SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                SwiftCore.PROPERTY_REFRESH_AUTO_EXPOSURE,
+                SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                SwiftCore.PROPERTY_REFRESH_AUTO_EXPOSURE,
+                SwiftCore.PROPERTY_REFRESH_NEXT,
+            ),
+            bridge.refreshRequests().map { it.request },
+        )
+
+        session.disconnect()
+    }
+
+    @Test
     fun `property events debounce and coalesce into one semantic refresh`() = runTest {
         val bridge = FakeBridge()
         bridge.propertyRefreshHandler = { request ->

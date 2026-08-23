@@ -1149,6 +1149,7 @@ class SwiftCoreCameraSession internal constructor(
                     }
                 }
                 var fastTick = 0
+                var autoExposureFastTick = 0
                 var selectorElapsedMillis = 0L
                 var lastCaptureSelector = _cameraProperties.value.captureSelector
                 var flipFastTicksRemaining = 0
@@ -1189,11 +1190,30 @@ class SwiftCoreCameraSession internal constructor(
                         // propertyPollIntervalMillis.
                         delay(selectorPollIntervalMillis.coerceAtLeast(1L))
                         if (!isActive || !ownsConnectedAttempt(attempt)) break
-                        refreshCameraProperties(
-                            attempt = attempt,
-                            request = SwiftCore.PROPERTY_REFRESH_SELECTOR,
-                            propertyCode = 0L,
-                        )
+                        // Auto-exposure shutter/ISO often change with no event
+                        // (#268). Alternate those camera-owned reads with the
+                        // selector on the same 750 ms lane so the feed still
+                        // pays one PTP per tick. The core no-ops when M +
+                        // manual ISO owns every exposure value.
+                        val autoExposurePoll =
+                            _cameraProperties.value.autoExposurePoll &&
+                                _recordingState.value != CameraRecordingState.RECORDING
+                        if (autoExposurePoll) {
+                            autoExposureFastTick += 1
+                        }
+                        if (autoExposurePoll && autoExposureFastTick % 2 == 0) {
+                            refreshCameraProperties(
+                                attempt = attempt,
+                                request = SwiftCore.PROPERTY_REFRESH_AUTO_EXPOSURE,
+                                propertyCode = 0L,
+                            )
+                        } else {
+                            refreshCameraProperties(
+                                attempt = attempt,
+                                request = SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                                propertyCode = 0L,
+                            )
+                        }
                         val fastSelector = _cameraProperties.value.captureSelector
                         if (fastSelector != lastCaptureSelector) {
                             lastCaptureSelector = fastSelector

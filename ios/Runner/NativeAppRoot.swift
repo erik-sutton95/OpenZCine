@@ -8684,6 +8684,21 @@ final class NativeAppModel {
                     ? .exposureIndicateLightup : .exposureIndicateStatus)
             guard !Task.isCancelled, cameraSession === session else { return }
         }
+        // Auto-exposure shutter/ISO/iris often change with no DevicePropChanged (#268
+        // round three: photo A-mode left 1/125 · A900 on screen while the body showed
+        // 1/30 · 1000). One rotating camera-owned readout per idle tick; M + manual
+        // ISO is a no-op. Recording keeps the compact health poll.
+        if !isRecording,
+            let autoExposure = CameraAutoExposureReadouts.nextProperty(
+                pollIndex: autoExposurePollTick,
+                snapshot: cameraPropertySnapshot)
+        {
+            autoExposurePollTick &+= 1
+            if session.supportsProperty(autoExposure) {
+                await readAndApplyCameraProperty(session: session, property: autoExposure)
+                guard !Task.isCancelled, cameraSession === session else { return }
+            }
+        }
         // Properties the CAMERA announced as changed jump the queue: they are the operator's own
         // edit on the body, and the round-robin would otherwise take a full cycle to notice. The
         // WHOLE pending burst drains on the tick that sees it, oldest first and capped
@@ -9761,6 +9776,8 @@ final class NativeAppModel {
     @ObservationIgnored private var stillTimerTask: Task<Void, Never>?
     /// Tick counter for the EV meter's per-tick indicator read (see `pollNextCameraProperty`).
     @ObservationIgnored private var evFastPollTick = 0
+    /// Rotates camera-owned auto-exposure readouts (see `pollNextCameraProperty`).
+    @ObservationIgnored private var autoExposurePollTick = 0
 
     /// The Timer tab's display value ("Off" / "5s").
     var photoTimerLabel: String {
