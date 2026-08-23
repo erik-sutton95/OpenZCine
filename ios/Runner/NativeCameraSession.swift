@@ -845,10 +845,15 @@ final class NativeCameraSession: @unchecked Sendable {
         guard start.operationResponse.responseCode == .ok else {
             return .refused(start.operationResponse.responseCode)
         }
-        // Bounded by `MFDriveChannelBudget`: past the ceiling the lens keeps moving on the body
-        // and the app stops owning the transaction gate to watch it — holding it longer is what
-        // starved `ChangeAfArea` and made tap-to-focus look dead.
+        // Bounded by `MFDriveChannelBudget`. Exhausting the ceiling used to return `.complete`
+        // while the STM lens was still moving — native Z glass especially — so the next
+        // `ChangeAfArea` answered busy until a body half-press (#272). Abort and refuse so a
+        // tap can own the channel, and so a cancelled Task does not keep polling.
         for _ in 0..<MFDriveChannelBudget.readinessPollLimit {
+            if Task.isCancelled {
+                try? await afDriveCancel()
+                return .refused(.deviceBusy)
+            }
             guard let ready = try? await transact(operationCode: .deviceReady) else {
                 return .refused(.deviceBusy)
             }
@@ -862,7 +867,8 @@ final class NativeCameraSession: @unchecked Sendable {
             case let other: return .refused(other)
             }
         }
-        return .complete
+        try? await afDriveCancel()
+        return .refused(.deviceBusy)
     }
 
     func afDriveCancel() async throws {

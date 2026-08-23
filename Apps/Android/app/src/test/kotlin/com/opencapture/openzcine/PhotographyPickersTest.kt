@@ -318,6 +318,22 @@ class PhotographyPickersTest {
     }
 
     @Test
+    fun `focus tile and mode tab read the stills side not leftover movie AF-F`() {
+        // iOS `photographyCaptureValues` used the movie `focusMode` field, so the
+        // photo strip showed AF-F or "—" while the Focus panel confirmed AF-S (#272).
+        val split =
+            snapshot.copy(focusMode = "AF-F", stillFocusMode = "AF-S")
+        val tiles = settings(split)
+        val focus = tiles.first { it.kind == MonitorPickerKind.FOCUS }
+        assertEquals("AF-S", focus.value)
+        assertEquals("AF-S", focus.picker?.modes?.get(0)?.request?.currentValue)
+
+        val movieOnly = snapshot.copy(focusMode = "AF-F", stillFocusMode = null)
+        val blank = settings(movieOnly).first { it.kind == MonitorPickerKind.FOCUS }
+        assertEquals("—", blank.value)
+    }
+
+    @Test
     fun `focus picker routes three independent stills controls`() {
         val picker = settings().first { it.kind == MonitorPickerKind.FOCUS }.picker
         assertNotNull(picker)

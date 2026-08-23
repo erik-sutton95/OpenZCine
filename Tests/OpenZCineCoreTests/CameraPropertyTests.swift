@@ -294,17 +294,36 @@ import Testing
     #expect(
         !StillCapturePolicy.focusPointNeedsAutofocusDrive(
             focusMode: snapshot.activeFocusMode(photography: false), photography: false))
+    // The photography strip must use the stills side too — it used to render `focusMode`
+    // (movie AF-F here), so the capture bar showed AF-F or "—" while the Focus panel,
+    // which reads `stillFocusMode`, confirmed AF-S (#272).
+    #expect(
+        snapshot.photographyCaptureValues.first { $0.label == "FOCUS" }?.value == "AF-S")
 }
 
-/// A body that has only ever reported one side still reads out — the split must not blank the
-/// readout on a camera that pushes just one of the two properties.
-@Test func aFocusModeFromEitherSideStillShowsWhenItIsTheOnlyOne() {
+/// Borrowing the other chrome's focus mode is how photo showed a leftover movie AF-F (or
+/// an em dash, when movie had never been polled) and how a video tap fired the AF-S
+/// one-shot drive against a body still in AF-F. Unavailable stays explicit.
+@Test func aMissingFocusModeOnTheActiveSideDoesNotBorrowTheOtherChrome() {
     let stillsOnly = PTPCameraPropertySnapshot()
         .applying(property: .stillFocusMode, data: Data([0x01]))  // stills AF-C
-    #expect(stillsOnly.activeFocusMode(photography: false) == "AF-C")
+    #expect(stillsOnly.activeFocusMode(photography: true) == "AF-C")
+    #expect(stillsOnly.activeFocusMode(photography: false) == nil)
+    #expect(
+        stillsOnly.photographyCaptureValues.first { $0.label == "FOCUS" }?.value == "AF-C")
+
     let movieOnly = PTPCameraPropertySnapshot()
-        .applying(property: .movieFocusMode, data: Data([0x00]))  // movie AF-S
-    #expect(movieOnly.activeFocusMode(photography: true) == "AF-S")
+        .applying(property: .movieFocusMode, data: Data([0x02]))  // movie AF-F
+    #expect(movieOnly.activeFocusMode(photography: false) == "AF-F")
+    #expect(movieOnly.activeFocusMode(photography: true) == nil)
+    // Not AF-F: that movie leftover is the false photo readout in the field report.
+    #expect(
+        movieOnly.photographyCaptureValues.first { $0.label == "FOCUS" }?.value == "—")
+    // A video body whose movie mode is not in yet must not inherit stills AF-S and
+    // fire a one-shot drive into continuous AF.
+    #expect(
+        !StillCapturePolicy.focusPointNeedsAutofocusDrive(
+            focusMode: stillsOnly.activeFocusMode(photography: false), photography: false))
 }
 
 @Test func cameraPropertyWriteRequestsEncodePickerValues() {

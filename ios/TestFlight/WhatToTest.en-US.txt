@@ -14,6 +14,7 @@ Fixes
 - Share on the player is available while the camera is connected. You no longer have to disconnect and go through Operator Setup to reach it.
 - On iPad in photo mode, the battery gauges sit beside the lock instead of covering PLAY.
 - A camera whose clock has drifted is set to your phone's time on connect - automatically, never while recording.
+- Photo FOCUS follows stills AF, not leftover video AF-F. After a focus-dial pull, a tap focuses without a half-press.
 - Changing stills focus settings no longer flips the video FOCUS readout or makes taps refocus single-shot on a camera set to full-time AF.
 - A weak or busy link degrades the picture instead of dropping the session, and screen recording while you share your feed no longer walks the watcher's picture behind the action.
 - A watcher granted camera control can now start and stop the take, and keeps that control through a brief drop-out instead of losing it the moment the link stutters.
@@ -28,4 +29,5 @@ What to test
 - Turn the camera on its side, then turn Auto-Rotate Feed off in Settings > Controls: the picture should stay put. Turn it back on and the picture should stand up. Then flip the iPhone to the opposite landscape: picture and controls swap sides, nothing under the island.
 - Turn on Share This Feed, ask for control from the second device, and start a take from it. Then screen-record on the sharing device and check the watcher stays with the action.
 - Watch a dim high-ISO shot with Feed Noise Reduction on and off, then step the Feed Upscaler through Fast, Quality and AI on the same framing.
+- Set stills AF-S and video full-time AF. Photo FOCUS should match the Focus panel, not leftover AF-F. Pull the focus dial, then tap: it should focus without a half-press. Set the clock a minute off, connect, and check it corrects.
 - On an iPad (especially mini) in landscape photo mode, PLAY and the rest of the left tool column should be fully visible and tappable, with the battery gauges beside the lock — not on top of PLAY.

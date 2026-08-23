@@ -1510,6 +1510,35 @@ struct PTPIPClientSessionTests {
         #expect(!server.isRecording())
     }
 
+    @Test func mfDriveCompletesWhenTheBodyBecomesReady() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(session.mfDrive(towardNear: false, pulses: 40) == .complete)
+        #expect(server.receivedOperations().contains(.mfDrive))
+        #expect(!server.receivedOperations().contains(.afDriveCancel))
+    }
+
+    @Test func mfDrivePollCeilingAbortsTheBodySoTouchAFIsNotLeftBusy() throws {
+        // #272: a native Z STM lens can still be moving when the poll ceiling hits.
+        // Returning `.complete` there left ChangeAfArea answering busy until a
+        // half-press. Abort the in-flight drive and refuse so the channel is free.
+        var options = FakeZRServer.Options()
+        options.mfDriveReadinessBusyPolls = MFDriveChannelBudget.readinessPollLimit + 4
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(session.mfDrive(towardNear: true, pulses: 80) == .refused(.deviceBusy))
+        let operations = server.receivedOperations()
+        #expect(operations.contains(.mfDrive))
+        #expect(operations.contains(.afDriveCancel))
+        #expect(operations.last == .afDriveCancel)
+    }
+
     @Test func changeAfAreaUsesExactParametersWithoutADataOutPhase() throws {
         let server = try FakeZRServer()
         defer { server.stop() }

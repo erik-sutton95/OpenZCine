@@ -313,8 +313,9 @@ public enum MFDriveEligibility: Equatable, Sendable {
 ///
 /// Mirrored in Kotlin by `MFDriveController` (same numbers, same rule).
 public enum MFDriveChannelBudget: Sendable {
-    /// Readiness polls inside ONE drive before it stops waiting and frees the channel. The lens
-    /// keeps moving on the body; the app just stops owning the transaction gate to watch it.
+    /// Readiness polls inside ONE drive before it stops waiting and frees the channel.
+    /// Exhausting this is not success: the body may still be driving, and callers abort that
+    /// in-flight move so `ChangeAfArea` is not left answering busy until a half-press (#272).
     public static let readinessPollLimit = 12
     public static let readinessPollIntervalSeconds = 0.12
 

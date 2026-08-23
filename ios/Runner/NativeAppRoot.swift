@@ -7779,8 +7779,7 @@ final class NativeAppModel {
                 let photography = StillCapturePolicy.prefersPhotographyChrome(
                     selector: cameraPropertySnapshot.captureSelector)
                 if StillCapturePolicy.focusPointNeedsAutofocusDrive(
-                    focusMode: cameraPropertySnapshot.activeFocusMode(photography: photography)
-                        ?? cameraValue(for: .focus),
+                    focusMode: cameraPropertySnapshot.activeFocusMode(photography: photography),
                     photography: photography)
                 {
                     try await session.afDrive()
