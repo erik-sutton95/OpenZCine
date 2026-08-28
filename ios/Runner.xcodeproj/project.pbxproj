@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C0DE000000000000000000F5 /* ZCameraCapabilityProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F6 /* ZCameraCapabilityProfile.swift */; };
+		C0DE00000000000000000111 /* ConnectAttemptDiagnostic.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000112 /* ConnectAttemptDiagnostic.swift */; };
 		C0DE000000000000000000F3 /* StillCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F4 /* StillCapture.swift */; };
 		C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F2 /* PhotographyChrome.swift */; };
 		079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */; };
@@ -290,6 +291,7 @@
 		C0DE00000000000000000021 /* PTPLiveViewObject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPLiveViewObject.swift; path = ../Sources/OpenZCineCore/PTPLiveViewObject.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000023 /* PTPCameraProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPCameraProperties.swift; path = ../Sources/OpenZCineCore/PTPCameraProperties.swift; sourceTree = SOURCE_ROOT; };
 		C0DE000000000000000000F6 /* ZCameraCapabilityProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ZCameraCapabilityProfile.swift; path = ../Sources/OpenZCineCore/ZCameraCapabilityProfile.swift; sourceTree = SOURCE_ROOT; };
+		C0DE00000000000000000112 /* ConnectAttemptDiagnostic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConnectAttemptDiagnostic.swift; path = ../Sources/OpenZCineCore/ConnectAttemptDiagnostic.swift; sourceTree = SOURCE_ROOT; };
 		C0DE000000000000000000F4 /* StillCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StillCapture.swift; path = ../Sources/OpenZCineCore/StillCapture.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000025 /* LinkExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkExperience.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000027 /* StartupDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupDesign.swift; sourceTree = "<group>"; };
@@ -550,6 +552,7 @@
 				C0DE00000000000000000021 /* PTPLiveViewObject.swift */,
 				C0DE00000000000000000023 /* PTPCameraProperties.swift */,
 				C0DE000000000000000000F6 /* ZCameraCapabilityProfile.swift */,
+				C0DE00000000000000000112 /* ConnectAttemptDiagnostic.swift */,
 				C0DE000000000000000000F4 /* StillCapture.swift */,
 				C0DE0000000000000000000A /* CameraDisplayState.swift */,
 				C0DE00000000000000000011 /* MonitorLayoutPolicy.swift */,
@@ -840,6 +843,7 @@
 				C0DE00000000000000000020 /* PTPLiveViewObject.swift in Sources */,
 				C0DE00000000000000000022 /* PTPCameraProperties.swift in Sources */,
 				C0DE000000000000000000F5 /* ZCameraCapabilityProfile.swift in Sources */,
+				C0DE00000000000000000111 /* ConnectAttemptDiagnostic.swift in Sources */,
 				C0DE000000000000000000F3 /* StillCapture.swift in Sources */,
 				C0DE00000000000000000012 /* OperatorPreferences.swift in Sources */,
 				C0DE00000000000000000032 /* MonitorTextFormat.swift in Sources */,

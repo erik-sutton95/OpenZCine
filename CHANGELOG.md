@@ -92,6 +92,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Z 6III USB product names are no longer treated as an original Z 6.** Nikon's USB
+  iProduct `NIKON DSC Z6_3` (and `Z 6_2` / `Z5_2`) was compacted to `Z63` and matched
+  generation 1, so a missed DeviceInfo probe skipped pairing and wrote the gen-1
+  ApplicationMode property — the camera-side connection error in Discussion #12.
+  Camera AP setups that cannot derive an SSID from a Z 6III name now prefix-join a
+  Nikon camera network instead of skipping the join. Share Diagnostics includes a
+  local-only connect-attempt trace (body family, DeviceInfo known/unknown, pairing
+  decision) that never leaves the phone unless the operator shares the file.
 - **Original Z 6 / Z 5 / Z 7 connect no longer sends pairing or ChangeApplicationMode when
   DeviceInfo is missing.** Those bodies have no pairing handshake; polling it is what put a
   wireless error on the camera and left the app connecting. The PTP-IP name or USB product name

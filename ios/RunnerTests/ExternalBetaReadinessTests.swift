@@ -140,6 +140,7 @@ struct ExternalBetaDiagnosticsTests {
         #expect(report.contains("live-view.started"))
         #expect(report.contains("Review this file before sharing it publicly."))
         #expect(report.contains("Wi-Fi details"))
+        #expect(report.contains("Connect attempt trace"))
         #expect(report.contains("No MetricKit payloads"))
     }
 
@@ -160,10 +161,18 @@ struct ExternalBetaDiagnosticsTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DiagnosticEventStore(rootDirectory: root)
         await store.record(.connectionConnected, at: metadata.generatedAt)
+        await store.recordConnectTrace(
+            "event=connect.gate body=z6iii inferred=three ops=unknown fallback=none pairing=attempt"
+        )
         let url = try await store.makeReport(metadata: metadata)
         let report = try String(contentsOf: url, encoding: .utf8)
         #expect(report.contains("connection.connected"))
         #expect(report.contains("OpenZCine 0.2.0 (build 200)"))
+        #expect(report.contains("body=z6iii"))
+        #expect(report.contains("Connect attempt trace"))
+        let anonymous = await store.anonymousActivityLog()
+        #expect(anonymous == ["connection.connected"])
+        #expect(!anonymous.joined(separator: " ").contains("z6iii"))
     }
 }
 

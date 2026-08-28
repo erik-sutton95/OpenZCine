@@ -57,7 +57,10 @@ struct ZCameraCapabilityProfileTests {
     /// product name is the only generation signal. Original Z 6 / Z 5 / Z 7 / Z 50
     /// names must not keep the modern pairing + ChangeApplicationMode surface.
     @Test func unknownOpsWithGeneration1NameUsePropertyAppModeAndSkipPairing() {
-        for name in ["Z 6_1234567", "Z6_1234567", "Nikon Z 6", "NIKON_Z6_01234", "Z 5_7654321"] {
+        for name in [
+            "Z 6_1234567", "Z6_1234567", "Nikon Z 6", "NIKON_Z6_01234", "Z 5_7654321",
+            "NIKON DSC Z 5", "NIKON DSC Z 6", "NIKON DSC Z 7", "NIKON DSC Z 50",
+        ] {
             let policy = ZCameraOperationPolicy(operations: []).resolvingUnknown(cameraName: name)
             #expect(policy.isKnown, "name: \(name)")
             #expect(!policy.appModeViaOperation, "name: \(name)")
@@ -69,12 +72,49 @@ struct ZCameraCapabilityProfileTests {
     @Test func unknownOpsWithLaterGenerationNameKeepModernPairingSurface() {
         for name in [
             "ZR_6001234", "Z 6III_1234567", "Z 6II_1234567", "Z 5II_123", "NIKON_ZR_01234",
+            "NIKON DSC Z6_3", "NIKON DSC Z 6_2", "NIKON DSC Z5_2", "NIKON DSC Z50_2",
+            "NIKON DSC Z 7_2", "NIKON DSC Z 30", "NIKON DSC Z fc", "NIKON DSC Z f",
+            "NIKON DSC Z 8", "NIKON DSC Z 9", "NIKON DSC ZR",
         ] {
             let policy = ZCameraOperationPolicy(operations: []).resolvingUnknown(cameraName: name)
             #expect(!policy.isKnown, "name: \(name)")
             #expect(policy.supportsPairing, "name: \(name)")
             #expect(policy.appModeViaOperation, "name: \(name)")
         }
+    }
+
+    /// USB iProduct strings use an underscore generation mark (`Z6_3` = Z 6III).
+    /// Dropping punctuation before rewriting that mark made `Z6_3` match original Z 6.
+    ///
+    /// The strings below are the USB product names the bodies advertise (observable on
+    /// the bus). Later bodies drop the space (`Z6_3`, `Z5_2`, `Z50_2`); II-generation
+    /// stills keep it (`Z 6_2`, `Z 7_2`).
+    @Test func usbProductGenerationMarksAreNotOriginalBodies() {
+        let cases: [(name: String, token: String, generation: ZCameraBodyGeneration)] = [
+            ("NIKON DSC Z 5", "Z5", .one),
+            ("NIKON DSC Z 6", "Z6", .one),
+            ("NIKON DSC Z 7", "Z7", .one),
+            ("NIKON DSC Z 50", "Z50", .one),
+            ("NIKON DSC Z 6_2", "Z6II", .two),
+            ("NIKON DSC Z 7_2", "Z7II", .two),
+            ("NIKON DSC Z 30", "Z30", .two),
+            ("NIKON DSC Z fc", "ZFC", .two),
+            ("NIKON DSC Z6_3", "Z6III", .three),
+            ("NIKON DSC Z5_2", "Z5II", .three),
+            ("NIKON DSC Z50_2", "Z50II", .three),
+            ("NIKON DSC Z 8", "Z8", .three),
+            ("NIKON DSC Z 9", "Z9", .three),
+            ("NIKON DSC Z f", "ZF", .three),
+            ("NIKON DSC ZR", "ZR", .three),
+        ]
+        for entry in cases {
+            let matched = ZCameraBodyGeneration.matchedToken(fromCameraName: entry.name)
+            #expect(matched?.token == entry.token, "name: \(entry.name)")
+            #expect(matched?.generation == entry.generation, "name: \(entry.name)")
+        }
+        // A serial after the original Z 6 must still be generation 1.
+        #expect(ZCameraBodyGeneration.inferred(fromCameraName: "Z 6_1234567") == .one)
+        #expect(ZCameraBodyGeneration.inferred(fromCameraName: "Z6_1234567") == .one)
     }
 
     @Test func advertisedOpsAreNotOverriddenByAGeneration1Name() {
@@ -107,6 +147,33 @@ struct ZCameraCapabilityProfileTests {
         let narrowCodes = PTPVendorPropertyCodeList.decode(narrow, fourByteCodes: false)
         #expect(narrowCodes.contains(0xD0A2))
         #expect(narrowCodes.count == 8)
+    }
+
+    @Test func connectAttemptDiagnosticKeepsClosedTokensAndDropsFreeForm() throws {
+        let line = ConnectAttemptDiagnostic.line(
+            event: "connect.gate",
+            cameraName: "NIKON DSC Z6_3",
+            facts: [
+                "ops": "unknown",
+                "fallback": "none",
+                "pairing": "attempt",
+                "ssid": "NIKON_Z6III_00042",
+            ]
+        )
+        let rendered = try #require(line)
+        #expect(rendered.contains("event=connect.gate"))
+        #expect(rendered.contains("body=z6iii"))
+        #expect(rendered.contains("inferred=three"))
+        #expect(rendered.contains("ops=unknown"))
+        #expect(rendered.contains("pairing=attempt"))
+        #expect(!rendered.contains("NIKON_Z6III"))
+        #expect(!rendered.contains("00042"))
+
+        #expect(
+            ConnectAttemptDiagnostic.sanitizedSummary(
+                "gateOps=known gateFallback=gen1-name pairing=usb appMode=0x2001 pairInfoLastError=The operation couldn't complete"
+            ) == "gateOps=known gateFallback=gen1-name pairing=usb appMode=0x2001")
+        #expect(ConnectAttemptDiagnostic.sanitizedSummary("host=192.168.1.1 ssid=SECRET") == nil)
     }
 
     @Test func vendorPropertyListRejectsGarbledPayloads() {

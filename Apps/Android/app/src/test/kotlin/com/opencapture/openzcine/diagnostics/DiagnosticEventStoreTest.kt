@@ -188,7 +188,37 @@ class DiagnosticEventStoreTest {
         assertTrue(report.contains("ANR  foreground"))
         assertTrue(report.contains("No diagnostics are uploaded"))
         assertTrue(report.contains("arbitrary exception text"))
+        assertTrue(report.contains("Connect attempt trace"))
         assertFalse(report.contains("beta!"))
+    }
+
+    @Test
+    fun `connect trace stays out of the anonymous activity log`() {
+        val file = temporaryEventFile()
+        val store = DiagnosticEventStore(file, nowMillis = { 1_000 })
+        store.record(AndroidDiagnosticEvent.CONNECTION_CONNECTED)
+        store.recordConnectTrace("event=connect.gate body=z6iii inferred=three ops=unknown")
+
+        val activity = store.privacyFilteredActivityLog()
+        assertEquals(listOf("connection.connected"), activity)
+        assertFalse(activity.joinToString().contains("z6iii"))
+
+        val report =
+            DiagnosticReportRenderer.render(
+                metadata =
+                    DiagnosticReportMetadata(
+                        generatedAtMillis = 1_000,
+                        appVersion = "0.2.5",
+                        buildNumber = 1,
+                        androidApi = 34,
+                        deviceClass = DiagnosticDeviceClass.PHONE,
+                    ),
+                events = store.recentEvents(),
+                historicalExits = emptyList(),
+                connectTrace = store.recentConnectTrace(),
+            )
+        assertTrue(report.contains("body=z6iii"))
+        assertTrue(report.contains("ops=unknown"))
     }
 
     @Test

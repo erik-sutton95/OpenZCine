@@ -5719,6 +5719,16 @@ final class NativeAppModel {
         if let savedCamera, savedCamera.path?.kind != .cameraAccessPoint {
             logConnection(
                 "join skipped: setup path is \(savedCamera.path?.kind.rawValue ?? "none")")
+            if let line = ConnectAttemptDiagnostic.line(
+                event: "connect.join",
+                cameraName: savedCamera.displayName,
+                facts: [
+                    "join": "skipped-path",
+                    "path": savedCamera.path?.kind.rawValue ?? "none",
+                ]
+            ) {
+                AppDiagnostics.shared.recordConnectTrace(line)
+            }
             return
         }
         // The operator picked a path that never puts this device on the camera's own access point,
@@ -5758,6 +5768,17 @@ final class NativeAppModel {
                     + "discovered=\(discoveredCamera == nil ? "nil" : "yes") "
                     + "ssid=\(CameraWiFiJoinPolicy.resolvedSSID(savedCamera: savedCamera, discoveredCamera: discoveredCamera) ?? "unresolvable") "
                     + "connectedSSID=\(connectedWiFiSSID ?? "unreadable")")
+            if let line = ConnectAttemptDiagnostic.line(
+                event: "connect.join",
+                cameraName: savedCamera?.displayName ?? discoveredCamera?.name,
+                facts: [
+                    "join": "skipped-unresolvable",
+                    "ssid": "unresolvable",
+                    "path": savedCamera?.path?.kind.rawValue ?? "none",
+                ]
+            ) {
+                AppDiagnostics.shared.recordConnectTrace(line)
+            }
             return
         }
 
@@ -5777,6 +5798,14 @@ final class NativeAppModel {
             proactiveTarget = .specificSSID(ssid)
         } else if let prefix = joinTarget.ssidPrefix {
             proactiveTarget = .ssidPrefix(prefix)
+            AppDiagnostics.shared.record(.connectionJoinPrefix)
+            if let line = ConnectAttemptDiagnostic.line(
+                event: "connect.join",
+                cameraName: savedCamera?.displayName ?? discoveredCamera?.name,
+                facts: ["join": "prefix", "ssid": "unresolvable"]
+            ) {
+                AppDiagnostics.shared.recordConnectTrace(line)
+            }
         } else {
             logConnection("join skipped: target names neither an SSID nor a prefix")
             return
@@ -5889,6 +5918,16 @@ final class NativeAppModel {
         let recordEstablishmentDiagnostic: @Sendable (String) -> Void = { [weak self] summary in
             // "stage:" strings are live progress (shown so a stuck connect names its step —
             // that's how the USB hang was pinned down); everything else is the failure trace.
+            if summary.hasPrefix("connect.gate ") {
+                let line = String(summary.dropFirst("connect.gate ".count))
+                AppDiagnostics.shared.recordConnectTrace(line)
+                if line.contains("fallback=gen1-name") {
+                    AppDiagnostics.shared.record(.connectionGateGen1Fallback)
+                } else if line.contains("ops=unknown") {
+                    AppDiagnostics.shared.record(.connectionGateUnknownOps)
+                }
+                return
+            }
             if summary.hasPrefix("stage:") {
                 let stage = String(summary.dropFirst("stage:".count))
                 diagnosticBox.withLock { $0 = summary }

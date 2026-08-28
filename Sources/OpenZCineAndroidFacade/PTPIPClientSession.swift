@@ -727,6 +727,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// callers, so reads never race the write.
     public private(set) var identity: PTPIPClientIdentity
 
+    /// Privacy-safe connect-gate line sink. Set by the JNI connect wrappers so
+    /// a Share Diagnostics report can show body family and DeviceInfo outcome.
+    var connectTraceSink: ((String) -> Void)?
+
     /// True only for the production target whose stable descriptor omissions have explicit policy.
     private var usesNikonZRFallbacks: Bool {
         let manufacturer = identity.manufacturer.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -770,7 +774,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         friendlyName: String = AndroidPTPIPInitiator.friendlyName,
         timeoutMilliseconds: Int32 = 10_000,
         strategy: ConnectionStrategy = .restoreProfileThenPairing,
-        onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
+        onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in },
+        onConnectTrace: @escaping (String) -> Void = { _ in }
     ) throws -> PTPIPClientSession {
         onPhase(.handshaking, "")
         switch strategy {
@@ -781,7 +786,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 guid: guid,
                 friendlyName: friendlyName,
                 timeoutMilliseconds: timeoutMilliseconds,
-                onPhase: onPhase
+                onPhase: onPhase,
+                onConnectTrace: onConnectTrace
             )
         case .firstTimePairing:
             return try connectFirstTimePairing(
@@ -790,7 +796,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 guid: guid,
                 friendlyName: friendlyName,
                 timeoutMilliseconds: timeoutMilliseconds,
-                onPhase: onPhase
+                onPhase: onPhase,
+                onConnectTrace: onConnectTrace
             )
         case .restoreProfileThenPairing:
             do {
@@ -800,7 +807,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     guid: guid,
                     friendlyName: friendlyName,
                     timeoutMilliseconds: timeoutMilliseconds,
-                    onPhase: onPhase
+                    onPhase: onPhase,
+                    onConnectTrace: onConnectTrace
                 )
             } catch {
                 guard let sessionError = error as? PTPIPClientSessionError,
@@ -814,7 +822,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     guid: guid,
                     friendlyName: friendlyName,
                     timeoutMilliseconds: timeoutMilliseconds,
-                    onPhase: onPhase
+                    onPhase: onPhase,
+                    onConnectTrace: onConnectTrace
                 )
             }
         }
@@ -833,7 +842,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guid: Data,
         friendlyName: String,
         timeoutMilliseconds: Int32,
-        onPhase: (CameraConnectionPhase, String) -> Void
+        onPhase: (CameraConnectionPhase, String) -> Void,
+        onConnectTrace: @escaping (String) -> Void
     ) throws -> PTPIPClientSession {
         do {
             return try connectSavedProfile(
@@ -842,7 +852,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 guid: guid,
                 friendlyName: friendlyName,
                 timeoutMilliseconds: timeoutMilliseconds,
-                onPhase: onPhase
+                onPhase: onPhase,
+                onConnectTrace: onConnectTrace
             )
         } catch PTPIPClientSessionError.initFailed(.busy) {
             Thread.sleep(forTimeInterval: 5)
@@ -852,7 +863,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 guid: guid,
                 friendlyName: friendlyName,
                 timeoutMilliseconds: timeoutMilliseconds,
-                onPhase: onPhase
+                onPhase: onPhase,
+                onConnectTrace: onConnectTrace
             )
         }
     }
@@ -863,7 +875,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guid: Data,
         friendlyName: String,
         timeoutMilliseconds: Int32,
-        onPhase: (CameraConnectionPhase, String) -> Void
+        onPhase: (CameraConnectionPhase, String) -> Void,
+        onConnectTrace: @escaping (String) -> Void
     ) throws -> PTPIPClientSession {
         let session = try establishLink(
             host: host,
@@ -872,6 +885,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             friendlyName: friendlyName,
             timeoutMilliseconds: timeoutMilliseconds
         )
+        session.connectTraceSink = onConnectTrace
         do {
             try establishSavedProfile(on: session, onPhase: onPhase)
             return session
@@ -886,7 +900,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase: (CameraConnectionPhase, String) -> Void
     ) throws {
         try session.openSession()
-        let policy = session.probeOperationPolicy()
+        let policy = session.probeOperationPolicy(requestPairing: false)
         guard try session.enableAppControl(policy: policy) else {
             throw PTPIPClientSessionError.savedProfileRequired
         }
@@ -954,7 +968,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guid: Data,
         friendlyName: String,
         timeoutMilliseconds: Int32,
-        onPhase: (CameraConnectionPhase, String) -> Void
+        onPhase: (CameraConnectionPhase, String) -> Void,
+        onConnectTrace: @escaping (String) -> Void
     ) throws -> PTPIPClientSession {
         let session = try establishLink(
             host: host,
@@ -963,6 +978,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             friendlyName: friendlyName,
             timeoutMilliseconds: timeoutMilliseconds
         )
+        session.connectTraceSink = onConnectTrace
         do {
             try establishFirstTimePairing(on: session, onPhase: onPhase)
             return session
@@ -977,7 +993,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase: (CameraConnectionPhase, String) -> Void
     ) throws {
         try session.openSession()
-        let policy = session.probeOperationPolicy()
+        let policy = session.probeOperationPolicy(requestPairing: true)
         guard policy.supportsPairing else {
             // No pairing surface on this body (gen 1): joining its access point IS the trust
             // boundary, so first-time connect is just the saved-profile shape. Polling
@@ -1021,7 +1037,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
             host: String,
             cameraNameHint: String,
             strategy: ConnectionStrategy = .restoreProfileThenPairing,
-            onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
+            onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in },
+            onConnectTrace: @escaping (String) -> Void = { _ in }
         ) throws -> PTPIPClientSession {
             onPhase(.handshaking, "")
             let session = PTPIPClientSession(
@@ -1034,6 +1051,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     serialNumber: ""
                 )
             )
+            session.connectTraceSink = onConnectTrace
             // The privacy-safe USB key is a Kotlin-local saved-record lookup;
             // PTP has no network host, so it is neither addressed nor sent here.
             _ = host
@@ -1069,7 +1087,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 {
                     policy = ZCameraOperationPolicy(deviceInfo: info)
                 }
+                let probedKnown = policy.isKnown
                 policy = policy.resolvingUnknown(cameraName: cameraNameHint)
+                session.emitConnectGate(
+                    probedKnown: probedKnown,
+                    policy: policy,
+                    isUSB: true,
+                    requestPairing: false
+                )
                 try establishUSBSession(on: session, policy: policy, onPhase: onPhase)
                 return session
             } catch {
@@ -1147,7 +1172,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// rejection — a Z 5 polled with a pairing op it never implemented put a wireless error on its
     /// own screen (#292). Best-effort: a failed fetch yields an unknown policy, which keeps the
     /// modern-surface behaviour on every path. [verify-on-HW: Z 5 over camera AP]
-    private func probeOperationPolicy() -> ZCameraOperationPolicy {
+    private func probeOperationPolicy(requestPairing: Bool) -> ZCameraOperationPolicy {
         let probed: ZCameraOperationPolicy
         if let probe = try? executeTransaction(.getDeviceInfo, dataPhase: .dataIn),
             probe.operationResponse.responseCode == .ok,
@@ -1157,7 +1182,36 @@ public final class PTPIPClientSession: @unchecked Sendable {
         } else {
             probed = ZCameraOperationPolicy(operations: [])
         }
-        return probed.resolvingUnknown(cameraName: identity.cameraName)
+        let resolved = probed.resolvingUnknown(cameraName: identity.cameraName)
+        emitConnectGate(
+            probedKnown: probed.isKnown,
+            policy: resolved,
+            isUSB: false,
+            requestPairing: requestPairing
+        )
+        return resolved
+    }
+
+    fileprivate func emitConnectGate(
+        probedKnown: Bool,
+        policy: ZCameraOperationPolicy,
+        isUSB: Bool,
+        requestPairing: Bool
+    ) {
+        guard
+            let line = ConnectAttemptDiagnostic.line(
+                event: "connect.gate",
+                cameraName: identity.cameraName,
+                facts: [
+                    "ops": probedKnown ? "known" : "unknown",
+                    "fallback": (!probedKnown && policy.isKnown) ? "gen1-name" : "none",
+                    "pairing": ConnectAttemptDiagnostic.pairingDecision(
+                        policy: policy, isUSB: isUSB, requestPairing: requestPairing),
+                    "transport": isUSB ? "usb" : "ptpIP",
+                ]
+            )
+        else { return }
+        connectTraceSink?(line)
     }
 
     /// Nikon app-control gate. `true` when the camera accepted app control —

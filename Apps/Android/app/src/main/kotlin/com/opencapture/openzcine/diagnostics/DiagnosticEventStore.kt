@@ -92,6 +92,10 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     // log, not the vocabulary.
     PROPERTY_WRITE_SLOW("camera.write.slow"),
 
+    CONNECTION_GATE_GEN1_FALLBACK("connection.gate.gen1-fallback"),
+    CONNECTION_GATE_UNKNOWN_OPS("connection.gate.unknown-ops"),
+    CONNECTION_JOIN_PREFIX("connection.join.prefix"),
+
     // Camera-AP credential scanner: on-device OCR could not run. The two codes
     // separate a recoverable state from a device/build that will never manage
     // it, so a report distinguishes "retry helped" from "OCR is impossible here".
@@ -158,6 +162,11 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "liveViewFailed" -> LIVE_VIEW_FAILED
                 "liveViewStalled" -> LIVE_VIEW_STALLED
                 "propertyWriteSlow" -> PROPERTY_WRITE_SLOW
+                "gate.gen1Fallback",
+                "connect.gate.gen1",
+                -> CONNECTION_GATE_GEN1_FALLBACK
+                "gate.unknownOps" -> CONNECTION_GATE_UNKNOWN_OPS
+                "join.prefix" -> CONNECTION_JOIN_PREFIX
                 else -> null
             }
 
@@ -249,6 +258,34 @@ internal class DiagnosticEventStore(
         writeEvents(bounded(next))
     }
 
+    /**
+     * Appends one already-sanitized connect-attempt line. Stays on the phone until
+     * the operator shares a diagnostics report; never enters the anonymous log.
+     */
+    @Synchronized
+    fun recordConnectTrace(line: String) {
+        val sanitized = line.trim()
+        if (sanitized.isEmpty() || sanitized.length > 240) return
+        if (sanitized.any { it == '\n' || it == '\r' }) return
+        val file = connectTraceFile()
+        file.parentFile?.mkdirs()
+        file.appendText("${nowMillis()} $sanitized\n", Charsets.UTF_8)
+        trimConnectTrace(file)
+    }
+
+    @Synchronized
+    fun recentConnectTrace(): List<String> {
+        val file = connectTraceFile()
+        if (!file.isFile) return emptyList()
+        return file.useLines { lines ->
+            lines
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toList()
+                .takeLast(CONNECT_TRACE_MAXIMUM_LINES)
+        }
+    }
+
     @Synchronized
     fun recentEvents(): List<DiagnosticBreadcrumb> {
         if (!eventFile.isFile) return emptyList()
@@ -300,6 +337,17 @@ internal class DiagnosticEventStore(
     private fun encodeLine(event: DiagnosticBreadcrumb): String =
         "${event.timestampMillis}|${event.event.wireValue}"
 
+    private fun connectTraceFile(): File = File(eventFile.parentFile, "connect-trace.log")
+
+    private fun trimConnectTrace(file: File) {
+        val lines = file.readLines().filter { it.isNotBlank() }
+        if (lines.size <= CONNECT_TRACE_MAXIMUM_LINES) return
+        file.writeText(
+            lines.takeLast(CONNECT_TRACE_MAXIMUM_LINES).joinToString(separator = "\n", postfix = "\n"),
+            Charsets.UTF_8,
+        )
+    }
+
     private fun decodeLine(line: String): DiagnosticBreadcrumb? {
         val delimiter = line.indexOf('|')
         if (delimiter <= 0 || delimiter == line.lastIndex) return null
@@ -311,6 +359,7 @@ internal class DiagnosticEventStore(
     internal companion object {
         const val DEFAULT_MAXIMUM_EVENT_COUNT: Int = 500
         const val DEFAULT_MAXIMUM_EVENT_BYTES: Int = 256 * 1_024
+        const val CONNECT_TRACE_MAXIMUM_LINES: Int = 200
         private const val MINIMUM_EVENT_BYTES: Int = 128
     }
 }
@@ -321,6 +370,7 @@ internal object DiagnosticReportRenderer {
         metadata: DiagnosticReportMetadata,
         events: List<DiagnosticBreadcrumb>,
         historicalExits: List<DiagnosticHistoricalExit>,
+        connectTrace: List<String> = emptyList(),
     ): String {
         val version = normalizedVersion(metadata.appVersion)
         val lines =
@@ -332,6 +382,9 @@ internal object DiagnosticReportRenderer {
                 "This local report intentionally excludes camera identities and serials, Wi-Fi",
                 "names and network addresses, media names and paths, account identities and tokens,",
                 "credentials, camera frames, arbitrary exception text, and user-entered text.",
+                "The connect-attempt trace is closed tokens only (body family, DeviceInfo",
+                "known/unknown, pairing decision) and never leaves this phone unless you share",
+                "this file.",
                 "No diagnostics are uploaded automatically by OpenZCine.",
                 "Anonymous reports can include only separately selected closed app-event and incident codes.",
                 "",
@@ -347,6 +400,16 @@ internal object DiagnosticReportRenderer {
         } else {
             events.takeLast(DiagnosticEventStore.DEFAULT_MAXIMUM_EVENT_COUNT).forEach { event ->
                 lines += "${isoTimestamp(event.timestampMillis)}  ${event.event.wireValue}"
+            }
+        }
+        lines += ""
+        lines += "Connect attempt trace"
+        lines += "---------------------"
+        if (connectTrace.isEmpty()) {
+            lines += "No retained connect-attempt trace."
+        } else {
+            connectTrace.takeLast(DiagnosticEventStore.CONNECT_TRACE_MAXIMUM_LINES).forEach { line ->
+                lines += line
             }
         }
         lines += ""

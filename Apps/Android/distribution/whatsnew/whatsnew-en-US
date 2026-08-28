@@ -1,4 +1,4 @@
-- Fixed: original Z 6, Z 5, and Z 7 connect without pairing steps they do not support.
+- Fixed: original Z 6 / Z 5 / Z 7 skip pairing they lack; Z 6III is not treated as Z 6. Share Diagnostics keeps a connect trace until you send it.
 - Fixed: USB-C connect after permission, and a retry after the picture drops should stay up.
 - Fixed: Aperture-priority shutter and ISO on the phone follow the camera as it meters.
 - Fixed: photo FOCUS and taps follow stills AF, not leftover video AF-F.

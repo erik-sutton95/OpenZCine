@@ -178,7 +178,12 @@ public enum CameraWiFiJoinPolicy {
                 savedCamera: savedCamera,
                 discoveredCamera: discoveredCamera
             )
-        else { return nil }
+        else {
+            // ZR derives NIKON_ZR_… from its PTP name. A Z 6III cannot, so a Camera AP
+            // setup without a stored SSID used to skip the join entirely. Prefix-join
+            // still prompts for a Nikon camera AP without inventing a model-specific SSID.
+            return JoinTarget(ssidPrefix: CameraWiFiSSID.nikonAccessPointBrandPrefix)
+        }
         return JoinTarget(ssid: ssid)
     }
 

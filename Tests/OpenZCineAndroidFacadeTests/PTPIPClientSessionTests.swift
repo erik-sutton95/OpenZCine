@@ -212,6 +212,28 @@ struct PTPIPClientSessionTests {
         #expect(write?.data == Data([1]))
     }
 
+    /// USB iProduct `NIKON DSC Z6_3` is a Z 6III. Empty DeviceInfo must not take the
+    /// original-Z 6 path (skip pairing, write ApplicationMode).
+    @Test func z6iiiUsbProductNameStillPairsWhenDeviceInfoOpsAreUnknown() throws {
+        var options = FakeZRServer.Options()
+        options.cameraName = "NIKON DSC Z6_3"
+        options.model = "Z6III"
+        options.advertisedOperations = []
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [CameraConnectionPhase] = []
+        let session = try connect(to: server, strategy: .firstTimePairing) { phase, _ in
+            phases.append(phase)
+        }
+        defer { session.disconnect() }
+
+        let operations = server.receivedOperations()
+        #expect(operations.contains(.getPairingInfo))
+        #expect(!operations.contains(.setDevicePropValue))
+        #expect(phases.contains(.pairing) || phases.contains(.connected))
+    }
+
     @Test func savedProfileRejectsWithoutStartingFirstTimePairing() throws {
         var options = FakeZRServer.Options()
         options.acceptsAppControlImmediately = false

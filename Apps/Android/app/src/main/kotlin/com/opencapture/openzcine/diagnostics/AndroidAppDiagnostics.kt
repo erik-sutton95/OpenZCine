@@ -102,6 +102,18 @@ internal class AndroidAppDiagnostics private constructor(
         runCatching { store.record(event) }
     }
 
+    fun recordConnectTrace(line: String) {
+        runCatching { store.recordConnectTrace(line) }
+        when {
+            line.contains("fallback=gen1-name") ->
+                record(AndroidDiagnosticEvent.CONNECTION_GATE_GEN1_FALLBACK)
+            line.contains("ops=unknown") ->
+                record(AndroidDiagnosticEvent.CONNECTION_GATE_UNKNOWN_OPS)
+            line.contains("join=prefix") ->
+                record(AndroidDiagnosticEvent.CONNECTION_JOIN_PREFIX)
+        }
+    }
+
     /**
      * The opt-in anonymous-report activity log, reduced to closed event and incident codes.
      *
@@ -134,6 +146,7 @@ internal class AndroidAppDiagnostics private constructor(
                         ),
                     events = store.recentEvents(),
                     historicalExits = exitReader.recentExits(),
+                    connectTrace = store.recentConnectTrace(),
                 )
             File(readyDirectory, "OpenZCine-Android-Diagnostics-$generatedAt.txt").also { file ->
                 file.writeText(report, Charsets.UTF_8)
