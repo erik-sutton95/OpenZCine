@@ -77,6 +77,13 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     // A camera property write held the transaction gate unusually long (>1.5s) — the feed and
     // queued writes stall behind it. The property rides the connection log, not the vocabulary.
     case propertyWriteSlow = "camera.write.slow"
+
+    /// DeviceInfo was empty, so generation was taken from the USB / PTP-IP name.
+    case connectionGateGen1Fallback = "connection.gate.gen1-fallback"
+    /// DeviceInfo did not arrive; modern pairing / app-mode is still assumed.
+    case connectionGateUnknownOps = "connection.gate.unknown-ops"
+    /// Camera AP path had no stored or derived SSID, so join used the Nikon prefix.
+    case connectionJoinPrefix = "connection.join.prefix"
 }
 
 struct DiagnosticBreadcrumb: Codable, Equatable, Sendable {
@@ -126,6 +133,7 @@ actor DiagnosticEventStore {
     private let fileManager: FileManager
     private let rootDirectory: URL
     private let eventsURL: URL
+    private let connectTraceURL: URL
     private let payloadDirectory: URL
     private let maximumEventBytes: Int
     private let maximumPayloadCount: Int
@@ -144,10 +152,44 @@ actor DiagnosticEventStore {
                 "OpenZCine/Diagnostics", isDirectory: true)
         self.rootDirectory = rootDirectory ?? defaultRoot
         self.eventsURL = (rootDirectory ?? defaultRoot).appendingPathComponent("events.jsonl")
+        self.connectTraceURL = (rootDirectory ?? defaultRoot).appendingPathComponent(
+            "connect-trace.jsonl")
         self.payloadDirectory = (rootDirectory ?? defaultRoot).appendingPathComponent(
             "metrickit", isDirectory: true)
         self.maximumEventBytes = max(1_024, maximumEventBytes)
         self.maximumPayloadCount = max(1, maximumPayloadCount)
+    }
+
+    /// Appends one sanitized connect-attempt line. Stays on device until the operator
+    /// exports a diagnostics report; never enters the anonymous activity log.
+    func recordConnectTrace(_ line: String, at timestamp: Date = Date()) {
+        guard let sanitized = ConnectAttemptDiagnostic.sanitizedSummary(line) else { return }
+        do {
+            try prepareDirectories()
+            let stamp = ISO8601DateFormatter().string(from: timestamp)
+            let data = Data("\(stamp)  \(sanitized)\n".utf8)
+            if !fileManager.fileExists(atPath: connectTraceURL.path) {
+                guard fileManager.createFile(atPath: connectTraceURL.path, contents: nil) else {
+                    return
+                }
+            }
+            let handle = try FileHandle(forWritingTo: connectTraceURL)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try compactConnectTraceIfNeeded()
+        } catch {
+            // Diagnostics must never interfere with camera control.
+        }
+    }
+
+    func recentConnectTrace() -> [String] {
+        guard let data = try? Data(contentsOf: connectTraceURL) else { return [] }
+        return String(decoding: data, as: UTF8.self)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .suffix(ConnectAttemptDiagnostic.maximumLineCount)
+            .map(String.init)
     }
 
     func record(_ event: AppDiagnosticEvent, at timestamp: Date = Date()) {
@@ -237,6 +279,7 @@ actor DiagnosticEventStore {
         let report = Self.renderReport(
             metadata: metadata,
             events: recentEvents(),
+            connectTrace: recentConnectTrace(),
             payloads: metricPayloads()
         )
         guard let data = report.data(using: .utf8) else {
@@ -256,6 +299,7 @@ actor DiagnosticEventStore {
     static func renderReport(
         metadata: DiagnosticReportMetadata,
         events: [DiagnosticBreadcrumb],
+        connectTrace: [String] = [],
         payloads: [(name: String, data: Data)]
     ) -> String {
         let formatter = ISO8601DateFormatter()
@@ -266,6 +310,9 @@ actor DiagnosticEventStore {
             "Review this file before sharing it publicly.",
             "It intentionally excludes camera frames, media names, camera identities, network",
             "addresses, Wi-Fi details, pairing data, credentials, and account identifiers.",
+            "The connect-attempt trace below is closed tokens only (body family, DeviceInfo",
+            "known/unknown, pairing decision). It never leaves this phone unless you share",
+            "this file.",
             "",
             "Generated: \(formatter.string(from: metadata.generatedAt))",
             "App: OpenZCine \(metadata.appVersion) (build \(metadata.buildNumber))",
@@ -282,6 +329,13 @@ actor DiagnosticEventStore {
                 contentsOf: events.suffix(500).map {
                     "\(formatter.string(from: $0.timestamp))  \($0.event)"
                 })
+        }
+
+        lines.append(contentsOf: ["", "Connect attempt trace", "---------------------"])
+        if connectTrace.isEmpty {
+            lines.append("No retained connect-attempt trace.")
+        } else {
+            lines.append(contentsOf: connectTrace.suffix(ConnectAttemptDiagnostic.maximumLineCount))
         }
 
         lines.append(contentsOf: ["", "MetricKit diagnostics", "---------------------"])
@@ -324,6 +378,13 @@ actor DiagnosticEventStore {
     private func prepareDirectories() throws {
         try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: payloadDirectory, withIntermediateDirectories: true)
+    }
+
+    private func compactConnectTraceIfNeeded() throws {
+        let data = try Data(contentsOf: connectTraceURL)
+        guard data.count > maximumEventBytes else { return }
+        let compacted = Self.compactedEventData(data, limit: maximumEventBytes)
+        try compacted.write(to: connectTraceURL, options: .atomic)
     }
 
     private func compactEventsIfNeeded() throws {
@@ -374,6 +435,10 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
 
     func record(_ event: AppDiagnosticEvent) {
         Task { await store.record(event) }
+    }
+
+    func recordConnectTrace(_ line: String) {
+        Task { await store.recordConnectTrace(line) }
     }
 
     @MainActor

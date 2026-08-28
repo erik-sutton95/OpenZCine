@@ -1167,6 +1167,9 @@
                 strategy: strategy,
                 onPhase: { phase, detail in
                     callStrings(handle.onPhase, [String(describing: phase), detail])
+                },
+                onConnectTrace: { line in
+                    callStrings(handle.onPhase, ["connect.gate", line])
                 }
             )
             let completion = ActiveSessionSlot.shared.completeConnection(
@@ -1237,6 +1240,9 @@
                 strategy: strategy,
                 onPhase: { phase, detail in
                     callStrings(handle.onPhase, [String(describing: phase), detail])
+                },
+                onConnectTrace: { line in
+                    callStrings(handle.onPhase, ["connect.gate", line])
                 }
             )
             let completion = ActiveSessionSlot.shared.completeConnection(

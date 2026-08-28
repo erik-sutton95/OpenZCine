@@ -488,7 +488,8 @@ final class NativeCameraSession: @unchecked Sendable {
             return try await session.openAndIdentify(
                 requestPairing: requestPairing,
                 onPairingChallenge: onPairingChallenge,
-                onStage: { onEstablishmentDiagnostic?("stage:\($0)") }
+                onStage: { onEstablishmentDiagnostic?("stage:\($0)") },
+                onConnectTrace: { onEstablishmentDiagnostic?("connect.gate \($0)") }
             )
         } catch {
             if !session.establishmentSummary.isEmpty {
@@ -1285,7 +1286,8 @@ final class NativeCameraSession: @unchecked Sendable {
     private func openAndIdentify(
         requestPairing: Bool,
         onPairingChallenge: NativePairingChallengeHandler?,
-        onStage: (@Sendable (String) -> Void)? = nil
+        onStage: (@Sendable (String) -> Void)? = nil,
+        onConnectTrace: (@Sendable (String) -> Void)? = nil
     ) async throws -> NativeCameraSession {
         // Over USB the first transaction can sit behind ImageCaptureCore's own card enumeration,
         // which scales with card fullness (thousands of stills = minutes, not seconds) — the 15 s
@@ -1359,6 +1361,19 @@ final class NativeCameraSession: @unchecked Sendable {
         establishmentSummary += "gateOps=\(gatePolicy.isKnown ? "known" : "unknown") "
         if !probedKnown, gatePolicy.isKnown {
             establishmentSummary += "gateFallback=gen1-name "
+        }
+        if let line = ConnectAttemptDiagnostic.line(
+            event: "connect.gate",
+            cameraName: cameraName,
+            facts: [
+                "ops": probedKnown ? "known" : "unknown",
+                "fallback": (!probedKnown && gatePolicy.isKnown) ? "gen1-name" : "none",
+                "pairing": ConnectAttemptDiagnostic.pairingDecision(
+                    policy: gatePolicy, isUSB: isUSB, requestPairing: requestPairing),
+                "transport": isUSB ? "usb" : "ptpIP",
+            ]
+        ) {
+            onConnectTrace?(line)
         }
 
         // USB has no pairing surface: GetPairingInfo/ConfirmPairing are absent from the camera's

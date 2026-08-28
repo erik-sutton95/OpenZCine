@@ -11,6 +11,31 @@ import Testing
 @Test func cameraWiFiSSIDRejectsNonZRNames() {
     #expect(CameraWiFiSSID.deriveSSID(fromCameraName: "Nikon ZR") == nil)
     #expect(CameraWiFiSSID.deriveSSID(fromCameraName: "PTP-IP Camera") == nil)
+    #expect(CameraWiFiSSID.deriveSSID(fromCameraName: "Z 6III_1234567") == nil)
+}
+
+/// Camera AP setups of a Z 6III cannot derive an SSID from the PTP name. Skipping
+/// the join left the phone on house Wi-Fi; prefix-join still asks iOS to join a
+/// Nikon camera AP without synthesizing a body-specific SSID.
+@Test func cameraApSetupWithoutStoredSSIDStillProducesPrefixJoin() {
+    let saved = PTPIPSavedCameraRecord(
+        host: "192.168.1.1",
+        displayName: "Z 6III_1234567",
+        transport: "Wi-Fi",
+        lastSeenAt: nil,
+        path: .cameraAccessPoint(ssid: nil)
+    )
+    let target = CameraWiFiJoinPolicy.joinTargetIfNeeded(
+        transportKind: .ptpIP,
+        localAddresses: ["10.0.0.12"],
+        savedCamera: saved,
+        discoveredCamera: nil,
+        connectedSSID: "HOME-WIFI"
+    )
+    #expect(
+        target
+            == CameraWiFiJoinPolicy.JoinTarget(
+                ssidPrefix: CameraWiFiSSID.nikonAccessPointBrandPrefix))
 }
 
 @Test func cameraWiFiSSIDRecognizesModelSpecificNikonZAccessPointShapes() {

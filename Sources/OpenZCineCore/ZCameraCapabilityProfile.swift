@@ -118,24 +118,75 @@ public enum ZCameraBodyGeneration: Equatable, Sendable {
     case three
 
     /// Longest-token match so "Z 6III" is not classified as the original Z 6.
+    ///
+    /// USB product strings mark generation with an underscore digit (`Z6_3`, `Z 6_2`)
+    /// rather than roman numerals. Those marks are rewritten before punctuation is
+    /// stripped, otherwise `Z6_3` collapses to `Z63` and matches the original Z 6.
     public static func inferred(fromCameraName raw: String) -> ZCameraBodyGeneration? {
-        let compact = raw.uppercased().replacingOccurrences(of: "NIKON", with: "").filter {
-            $0.isLetter || $0.isNumber
-        }
+        matchedToken(fromCameraName: raw)?.generation
+    }
+
+    /// The model token that won the longest-match, such as `Z6III` or `Z6`. Nil when
+    /// the name does not look like a Z body. Safe for a diagnostics export: it never
+    /// includes a serial.
+    public static func matchedToken(fromCameraName raw: String) -> (
+        token: String, generation: ZCameraBodyGeneration
+    )? {
+        let compact = compactName(raw)
         guard !compact.isEmpty else { return nil }
-        let tokens: [(token: String, generation: ZCameraBodyGeneration)] = [
-            ("Z6III", .three), ("Z7III", .three),
-            ("Z50II", .three), ("Z5II", .three),
-            ("Z6II", .two), ("Z7II", .two),
-            ("ZFC", .two), ("Z30", .two),
-            ("Z50", .one),
-            ("ZR", .three), ("Z8", .three), ("Z9", .three), ("ZF", .three),
-            ("Z5", .one), ("Z6", .one), ("Z7", .one),
-        ]
-        for entry in tokens where compact.contains(entry.token) {
-            return entry.generation
+        for entry in modelTokens where compact.contains(entry.token) {
+            return entry
         }
         return nil
+    }
+
+    /// USB product / PTP-IP names reduced to alphanumerics after generation marks
+    /// such as `Z6_3` / `Z5_2` / `Z50_2` have been rewritten to roman-numeral tokens.
+    public static func compactName(_ raw: String) -> String {
+        var compact = raw.uppercased()
+        compact = compact.replacingOccurrences(of: "NIKON", with: "")
+        compact = compact.replacingOccurrences(of: "DSC", with: "")
+        compact = applyingUsbGenerationMarks(compact)
+        return compact.filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static let modelTokens: [(token: String, generation: ZCameraBodyGeneration)] = [
+        ("Z6III", .three), ("Z7III", .three),
+        ("Z50II", .three), ("Z5II", .three),
+        ("Z6II", .two), ("Z7II", .two),
+        ("ZFC", .two), ("Z30", .two),
+        ("Z50", .one),
+        ("ZR", .three), ("Z8", .three), ("Z9", .three), ("ZF", .three),
+        ("Z5", .one), ("Z6", .one), ("Z7", .one),
+    ]
+
+    /// Nikon USB iProduct generation marks. Longest needles first so `Z50_2` is
+    /// not eaten as `Z5_2`. A following digit means this underscore starts a
+    /// serial (`Z 6_1234567`), not a generation suffix.
+    private static let usbGenerationMarks: [(needle: String, token: String)] = [
+        ("Z50_2", "Z50II"), ("Z 50_2", "Z50II"),
+        ("Z7_3", "Z7III"), ("Z 7_3", "Z7III"),
+        ("Z6_3", "Z6III"), ("Z 6_3", "Z6III"),
+        ("Z5_2", "Z5II"), ("Z 5_2", "Z5II"),
+        ("Z7_2", "Z7II"), ("Z 7_2", "Z7II"),
+        ("Z6_2", "Z6II"), ("Z 6_2", "Z6II"),
+    ]
+
+    private static func applyingUsbGenerationMarks(_ raw: String) -> String {
+        var result = raw
+        for (needle, token) in usbGenerationMarks {
+            var searchStart = result.startIndex
+            while let range = result.range(of: needle, range: searchStart..<result.endIndex) {
+                let after = range.upperBound
+                if after < result.endIndex, result[after].isNumber {
+                    searchStart = after
+                    continue
+                }
+                result.replaceSubrange(range, with: token)
+                searchStart = result.index(range.lowerBound, offsetBy: token.count)
+            }
+        }
+        return result
     }
 }
 

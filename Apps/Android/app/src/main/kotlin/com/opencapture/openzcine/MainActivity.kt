@@ -407,7 +407,11 @@ class MainActivity : ComponentActivity() {
                 val pairingEnvironment =
                     remember(pairingScript) {
                         pairingScript?.environment
-                            ?: realPairingEnvironment(applicationContext) { phase, _ ->
+                            ?: realPairingEnvironment(applicationContext) { phase, detail ->
+                                if (phase == "connect.gate") {
+                                    diagnostics.recordConnectTrace(detail)
+                                    return@realPairingEnvironment
+                                }
                                 // Closed phase tokens only; free-form detail is discarded here.
                                 AndroidDiagnosticEvent.fromPhase(phase)?.let {
                                     diagnostics.record(it)
@@ -904,8 +908,10 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onDiagnosticPhase = { phase ->
-                                        AndroidDiagnosticEvent.fromPhase(phase)?.let {
-                                            diagnostics.record(it)
+                                        if (phase != "connect.gate") {
+                                            AndroidDiagnosticEvent.fromPhase(phase)?.let {
+                                                diagnostics.record(it)
+                                            }
                                         }
                                     },
                                 )
