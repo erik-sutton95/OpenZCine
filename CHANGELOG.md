@@ -92,6 +92,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Android USB reconnect no longer fails the attempt that unwedged the pipe.** A
+  dead first bulk-out (`USB wrote -1 of 12 bytes`, the GetDeviceInfo command) already
+  issued a PTP Device Reset, but still returned failure so every reconnect showed
+  the error. That write is now retried once on the same attempt. Android-only; iOS
+  USB goes through ImageCaptureCore.
 - **Z 6III USB product names are no longer treated as an original Z 6.** Nikon's USB
   iProduct `NIKON DSC Z6_3` (and `Z 6_2` / `Z5_2`) was compacted to `Z63` and matched
   generation 1, so a missed DeviceInfo probe skipped pairing and wrote the gen-1
