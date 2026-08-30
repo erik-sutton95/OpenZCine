@@ -292,9 +292,8 @@ public class AndroidUsbPtpCameraSource(
         // The system MTP handler (com.android.mtp) grabs a PTP camera on attach
         // and often leaves a stuck session: its aborted OpenSession stalls the
         // bulk pipes, so our first write fails with -1 even after a force-claim.
-        // The PTP class recovery is a Device Reset (class request 0x66) followed
-        // by clearing any HALT on the bulk endpoints — the standard sequence
-        // libptp/gPhoto use to take a camera another host left mid-transaction.
+        // Status-gated Device Reset here, plus a one-shot reset-and-retry on the
+        // first dead bulk-out (GET_DEVICE_STATUS can still read OK).
         recoverStalledPtpInterface(connection, usbInterface.id, bulkIn.address, bulkOut.address)
         val eventIn = endpoint(usbInterface, selection.eventInAddress)
         val eventRequest = UsbRequest()
@@ -579,6 +578,45 @@ private fun copyUsbRequestPayload(buffer: ByteBuffer): ByteArray {
 
 private const val PTP_STATUS_OK: Int = 0x2001
 
+/** Outcome of one bulk-out, including a one-shot reset-and-retry after a dead write. */
+internal data class UsbPtpDeadWriteOutcome(
+    val byteCount: Int,
+    val recoveryAttempted: Boolean,
+    val retried: Boolean = false,
+)
+
+/**
+ * GET_DEVICE_STATUS can still read OK while bulk-out is wedged (the system MTP
+ * handler left an aborted session on attach). A negative write is the only
+ * reliable signal. Reset once and retry THIS transfer so the operator does not
+ * have to tap Connect again — returning the original -1 made every reconnect
+ * fail in the UI even when the reset would have unwedged the next tap.
+ *
+ * [verify-on-HW] Z 6III USB-C on OnePlus 15: reconnect after a pending live
+ * view must not show "USB wrote -1 of 12 bytes".
+ */
+internal fun recoverDeadBulkOutWrite(
+    isClosed: () -> Boolean,
+    alreadyRecovered: Boolean,
+    write: () -> Int,
+    reset: () -> Unit,
+): UsbPtpDeadWriteOutcome {
+    if (isClosed()) {
+        return UsbPtpDeadWriteOutcome(byteCount = -1, recoveryAttempted = alreadyRecovered)
+    }
+    val first = write()
+    if (first >= 0 || isClosed() || alreadyRecovered) {
+        return UsbPtpDeadWriteOutcome(byteCount = first, recoveryAttempted = alreadyRecovered)
+    }
+    reset()
+    val retried = if (isClosed()) -1 else write()
+    return UsbPtpDeadWriteOutcome(
+        byteCount = retried,
+        recoveryAttempted = true,
+        retried = true,
+    )
+}
+
 /** PTP class GET_DEVICE_STATUS; returns the status code or 0 on failure. */
 private fun ptpDeviceStatus(
     connection: UsbDeviceConnection,
@@ -859,21 +897,27 @@ private class AndroidUsbPtpTransport(
 
     override fun writeBulk(bytes: ByteArray, timeoutMillis: Int): Int =
         synchronized(commandLock) {
-            if (closed) return@synchronized -1
-            val count = connection.bulkTransfer(bulkOut, bytes, bytes.size, timeoutMillis)
-            if (count < 0 && !closed && !deadWriteRecoveryDone) {
-                // GET_DEVICE_STATUS reads OK even while the body's bulk-out
-                // is wedged (Samsung's com.android.mtp left an aborted session
-                // on attach), so a dead write is the only reliable wedge
-                // signal. Reset once so the NEXT attempt starts on a healthy
-                // interface; this attempt still reports failure.
-                deadWriteRecoveryDone = true
-                android.util.Log.i(USB_DIAG_TAG, "USB bulk-out wedged; PTP reset")
-                ptpResetAndSettle(
-                    connection, usbInterface.id, bulkIn.address, bulkOut.address, USB_DIAG_TAG,
+            val outcome =
+                recoverDeadBulkOutWrite(
+                    isClosed = { closed },
+                    alreadyRecovered = deadWriteRecoveryDone,
+                    write = { connection.bulkTransfer(bulkOut, bytes, bytes.size, timeoutMillis) },
+                    reset = {
+                        android.util.Log.i(USB_DIAG_TAG, "USB bulk-out wedged; PTP reset")
+                        ptpResetAndSettle(
+                            connection,
+                            usbInterface.id,
+                            bulkIn.address,
+                            bulkOut.address,
+                            USB_DIAG_TAG,
+                        )
+                    },
                 )
+            deadWriteRecoveryDone = outcome.recoveryAttempted
+            if (outcome.retried && outcome.byteCount >= 0) {
+                android.util.Log.i(USB_DIAG_TAG, "USB bulk-out recovered after PTP reset")
             }
-            count
+            outcome.byteCount
         }
 
     override fun readBulk(maxBytes: Int, timeoutMillis: Int): ByteArray? =
