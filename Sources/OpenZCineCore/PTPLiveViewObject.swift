@@ -317,30 +317,44 @@ extension PTPLiveViewFocusInfo {
 
 /// Parser for Nikon LiveViewObject payloads returned by `GetLiveViewImageEx`.
 public enum PTPLiveViewObject {
-    /// Fixed display-info header before the standalone JPEG.
+    /// Display-info header length for Gen-3 bodies (Z8/Z9/ZR/Z6III/…), confirmed on ZR.
     public static let headerLength = 1_024
+    /// Display-info header length for Gen-1 bodies (Z5/Z6/Z7/Z50), confirmed on Z7.
+    public static let headerLengthGen1 = 512
 
     /// Extracts the JPEG image from a LiveViewObject.
     public static func jpeg(from liveViewObject: Data) throws -> Data {
-        guard liveViewObject.count >= headerLength + 3 else {
+        guard liveViewObject.count >= headerLengthGen1 + 3 else {
             throw PTPLiveViewObjectError.tooShort(actualLength: liveViewObject.count)
         }
-
-        let headerBytes = Array(liveViewObject.prefix(16))
-        let declaredLength = Int(ByteCoding.readUInt32LE(headerBytes, at: 12))
-        let imageEnd =
-            declaredLength > 0 && headerLength + declaredLength <= liveViewObject.count
-            ? headerLength + declaredLength
-            : liveViewObject.count
-        let jpeg = liveViewObject.subdata(in: headerLength..<imageEnd)
-        guard jpeg.count >= 3,
-            jpeg[0] == 0xFF,
-            jpeg[1] == 0xD8,
-            jpeg[2] == 0xFF
-        else {
-            throw PTPLiveViewObjectError.missingJPEGSoi(offset: headerLength)
+        // Try the known header lengths first, then fall back to a bounded scan for
+        // any future untested body. Gen-1 (Z5/Z6/Z7/Z50) uses 512 bytes; Gen-3 uses 1024.
+        for candidateOffset in [headerLength, headerLengthGen1] {
+            guard candidateOffset + 2 < liveViewObject.count else { continue }
+            if liveViewObject[candidateOffset] == 0xFF,
+                liveViewObject[candidateOffset + 1] == 0xD8,
+                liveViewObject[candidateOffset + 2] == 0xFF
+            {
+                let headerBytes = Array(liveViewObject.prefix(16))
+                let declaredLength = Int(ByteCoding.readUInt32LE(headerBytes, at: 12))
+                let imageEnd =
+                    declaredLength > 0 && candidateOffset + declaredLength <= liveViewObject.count
+                    ? candidateOffset + declaredLength
+                    : liveViewObject.count
+                return liveViewObject.subdata(in: candidateOffset..<imageEnd)
+            }
         }
-        return jpeg
+        // Unknown body — scan the first 2 KB for the JPEG SOI.
+        let searchBound = min(2048, liveViewObject.count - 3)
+        for offset in 0...searchBound {
+            if liveViewObject[offset] == 0xFF,
+                liveViewObject[offset + 1] == 0xD8,
+                liveViewObject[offset + 2] == 0xFF
+            {
+                return liveViewObject.subdata(in: offset..<liveViewObject.count)
+            }
+        }
+        throw PTPLiveViewObjectError.missingJPEGSoi(offset: headerLength)
     }
 
     /// Copies just the display-info header — never materialize the whole multi-MB LiveViewObject
