@@ -104,4 +104,30 @@ struct LiveViewHeaderTests {
             #expect(rotation.displayed(autoRotateEnabled: false) == .landscape)
         }
     }
+
+    /// Builds a synthetic Gen-1 live view object: 512 zero bytes followed by a minimal JPEG SOI
+    /// and enough padding to reach offset 852 (past all Gen-3 metadata offsets).
+    /// Bytes inside the JPEG region (>= 512) are set to the supplied poison value so that any
+    /// parser that accidentally reads them will return a wrong result.
+    private func gen1LiveViewObject(jpegPoison: UInt8 = 0x02) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 1024)
+        bytes[512] = 0xFF  // JPEG SOI
+        bytes[513] = 0xD8
+        // Poison every byte from 514 onward so metadata parsers reading JPEG data get bad values.
+        for i in 514..<1024 { bytes[i] = jpegPoison }
+        // Overwrite the Gen-3 metadata offsets with the poison value to make the bug detectable.
+        bytes[828] = 0x01  // would trip recordState to true if read
+        bytes[839] = jpegPoison  // would decode as a non-landscape rotation if read
+        return Data(bytes)
+    }
+
+    @Test func gen1HeaderBytesAreCappedAtJpegBoundary() {
+        let obj = gen1LiveViewObject()
+        // All Gen-3-only fields must return their safe defaults because the parser should not
+        // read past byte 512 when the JPEG SOI is present there.
+        #expect(PTPLiveViewObject.rotation(from: obj) == .landscape)
+        #expect(!PTPLiveViewObject.recordingState(from: obj))
+        #expect(PTPLiveViewObject.soundIndicator(from: obj) == nil)
+        #expect(PTPLiveViewObject.levelAngles(from: obj) == nil)
+    }
 }

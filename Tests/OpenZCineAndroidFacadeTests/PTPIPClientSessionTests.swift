@@ -408,11 +408,11 @@ struct PTPIPClientSessionTests {
             writes.prefix(2)
                 == [
                     FakeZRPropertyWrite(
-                        operation: .setDevicePropValueEx,
+                        operation: .setDevicePropValue,
                         property: PTPPropertyCode.liveViewImageSize.rawValue,
                         data: Data([1])),
                     FakeZRPropertyWrite(
-                        operation: .setDevicePropValueEx,
+                        operation: .setDevicePropValue,
                         property: PTPPropertyCode.liveViewImageCompression.rawValue,
                         data: Data([3])),
                 ])

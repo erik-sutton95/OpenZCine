@@ -1,5 +1,5 @@
+- Fixed: original Z 7 / Z 5 / Z 6 / Z 50 now reach live view instead of stalling on start.
 - Fixed: original Z 6 / Z 5 / Z 7 skip pairing they lack; Z 6III is not treated as Z 6. Share Diagnostics keeps a connect trace until you send it.
 - Fixed: USB-C reconnect after a stuck pipe, permission, or dropped picture should stay up.
 - Fixed: Aperture-priority shutter and ISO on the phone follow the camera as it meters.
 - Fixed: photo FOCUS and taps follow stills AF, not leftover video AF-F.
-- New: Media has REFRESH. After a format it follows the card; Clear Cache reloads from the camera.

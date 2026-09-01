@@ -1578,9 +1578,12 @@ final class NativeCameraSession: @unchecked Sendable {
     }
 
     private func setLiveViewByte(label: String, property: PTPPropertyCode, value: UInt8) async {
+        // 2-byte (≤0xFFFF) props use the standard PIMA op; only 4-byte extended codes need Ex.
+        let op: PTPOperationCode =
+            property.rawValue <= 0xFFFF ? .setDevicePropValue : .setDevicePropValueEx
         do {
             let result = try await transact(
-                operationCode: .setDevicePropValueEx,
+                operationCode: op,
                 parameters: [property.rawValue],
                 dataPhase: .dataOut,
                 dataOut: Data([value])
