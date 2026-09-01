@@ -360,8 +360,17 @@ public enum PTPLiveViewObject {
     /// Copies just the display-info header — never materialize the whole multi-MB LiveViewObject
     /// into an array per frame. `frame(from:)` slices this **once** and derives every header field
     /// from it, so the hot path pays a single ≤1 KB copy per frame.
+    ///
+    /// Gen-1 bodies (Z5/Z6/Z7/Z50) use a 512-byte header; fields at offsets 824–852 (sound,
+    /// record state, rotation, level angles) are Gen-3 additions and are not present. Capping at
+    /// 512 causes those parsers to return their safe defaults rather than reading JPEG data.
     private static func headerBytes(from liveViewObject: Data) -> [UInt8] {
-        Array(liveViewObject.prefix(headerLength))
+        let len =
+            liveViewObject.count > headerLengthGen1 + 1
+                && liveViewObject[headerLengthGen1] == 0xFF
+                && liveViewObject[headerLengthGen1 + 1] == 0xD8
+            ? headerLengthGen1 : headerLength
+        return Array(liveViewObject.prefix(len))
     }
 
     /// Decodes movie timecode from the LiveViewObject header.
