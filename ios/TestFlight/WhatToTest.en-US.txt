@@ -9,14 +9,13 @@ New and changed
 
 Fixes
 
-- Original Z 7 (and Z 5, Z 6, Z 50) over USB-C now reaches live view. It used to show "Starting live view…" and never progress.
+- Original Z 7, Z 6, Z 5, and Z 50 now reach live view over USB-C.
 - USB-C reconnects after the cable is knocked loose, or after a few seconds in the background, without force-quitting the app.
 - Original Z 6, Z 5, and Z 7 no longer get pairing steps they do not support. A Z 6III is no longer treated as an original Z 6. iPad USB-C copy says this device, not iPhone. Settings → Share Diagnostics now keeps a connect-attempt trace on the phone until you send it.
 - Share and Save to Photos work on clips from the camera, including proxies whose media is shorter than the header. They used to fail with "Invalid sample cursor".
 
 What to test
 
-- If you have an original Z 7, Z 6, Z 5, or Z 50, plug in over USB-C. The app should reach the live-view monitor — not stay stuck on "Starting live view…".
 - Plug in over USB-C, connect, then knock the cable loose and plug it back in. It should come back without force-quitting. Background the app for a few seconds with the cable in, then return.
 - If you have an original Z 6, Z 5, Z 7, or Z 6III, connect over USB-C and the camera's own Wi-Fi. It should reach the monitor without a wireless error on the camera. If a Z 6III still fails, share diagnostics from Settings.
 - Connect to the camera, play a clip, tap Share, then Share and Save to Photos. Both should finish. Save to Photos should ask for access up front, then keep a spinner while Photos writes — not a frozen percent. You should not have to disconnect first.

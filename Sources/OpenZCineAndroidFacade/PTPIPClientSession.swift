@@ -2652,8 +2652,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Applies one shared-policy preview request before the next live-view start.
     ///
     /// The two Nikon properties control only the monitor JPEG stream. They are
-    /// deliberately configured through the same `SetDevicePropValueEx` path
-    /// as the iOS shell, and the frame interval only changes Android's
+    /// configured through `writeCameraProperty`, which selects `SetDevicePropValue`
+    /// for 2-byte codes and `SetDevicePropValueEx` for extended codes. The frame interval only changes Android's
     /// `GetLiveViewImageEx` pull cadence. No recording property is read or
     /// written here.
     @discardableResult
@@ -2697,11 +2697,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// with the latest safe request instead of mutating a recording setting.
     private func setLiveViewByte(_ property: PTPPropertyCode, value: UInt8) -> Bool {
         do {
-            try transactExpectingOK(
-                .setDevicePropValueEx,
-                parameters: [property.rawValue],
-                dataPhase: .dataOut,
-                dataOut: Data([value]))
+            try writeCameraProperty(PTPCameraPropertyWrite(property: property, data: Data([value])))
             return true
         } catch {
             return false
