@@ -83,6 +83,10 @@ jobs:
 
       - name: EditorConfig check
         uses: editorconfig-checker/action-editorconfig-checker@d2ed4fd072ae6f887e9407c909af0f585d2ad9f4 # v2
+        with:
+          # editorconfig-checker v4 renamed its release assets (ec-* → editorconfig-checker-*),
+          # which the v2 action's "latest" lookup cannot find. Pin the last v3 release.
+          version: v3.11.3
 
       - name: Actionlint
         # Digest-pinned for reproducibility. Update the version manually when needed. v1.7.12
