@@ -1,7 +1,9 @@
 package com.opencapture.openzcine.bridge
 
+import android.system.Os
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.transport.UsbPtpTransport
+import java.util.TimeZone
 
 /**
  * JNI binding to `libOpenZCineAndroid.so` — the shared Swift core
@@ -20,6 +22,16 @@ object SwiftCore {
     val isAvailable: Boolean by lazy {
         try {
             System.loadLibrary("OpenZCineAndroid")
+            // Swift Foundation on Android resolves `TimeZone.current` from the libc zone
+            // ABBREVIATION ("KST", "CEST"), which ICU rarely recognises, and falls back to
+            // GMT — so every Calendar.current wall clock in the core was UTC. The camera
+            // clock sync then wrote UTC into a body that keeps local time (#369). The TZ
+            // env var is the one input Foundation resolves reliably. Foundation reads it
+            // lazily on first use, so after load (before any entry point) is early enough
+            // and keeps the no-core JVM path free of the android.jar stub.
+            // ponytail: read once per process; a zone change while the app runs needs a
+            // restart, re-set it on ACTION_TIMEZONE_CHANGED if that ever matters.
+            Os.setenv("TZ", TimeZone.getDefault().id, true)
             true
         } catch (_: UnsatisfiedLinkError) {
             false
