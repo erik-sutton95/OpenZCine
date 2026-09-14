@@ -82,7 +82,7 @@ jobs:
           fail: true
 
       - name: EditorConfig check
-        uses: editorconfig-checker/action-editorconfig-checker@d2ed4fd072ae6f887e9407c909af0f585d2ad9f4 # v2
+        uses: editorconfig-checker/action-editorconfig-checker@52c9b3667d59817ab9d523c644ee59a70886aec1 # v2
         with:
           # editorconfig-checker v4 renamed its release assets (ec-* → editorconfig-checker-*),
           # which the v2 action's "latest" lookup cannot find. Pin the last v3 release.
