@@ -131,6 +131,23 @@ required for any real upload. `just android-release-check` validates that either
 unsigned or both carry the same signing certificate. The debug path (`just android-build` /
 `android-check`) never needs signing variables.
 
+## Sideload APK (no Google Play)
+
+Devices without the Play Store cannot run the package Play serves. That package stops at launch
+and tells the operator to enable Google Play. Android field monitors are the usual case. Publish
+a single arm64 release APK on a GitHub Release instead.
+
+- Sign `assembleRelease` with the gitignored sideload keystore, alias `sideload`. Keep that
+  keystore backed up. It is a different certificate from the Play upload key, so a sideload
+  install and a Play install cannot update each other. The operator uninstalls one before
+  installing the other.
+- Tag `sideload-v<openzcine.versionName>`, for example `sideload-v0.2.5`. Do not use `android-v*`.
+  That tag pattern belongs to the Play internal workflow.
+- Attach one file, `OpenZCine-<versionName>-sideload.apk`. It contains only `arm64-v8a` and
+  requires Android 10 (API 29).
+- On a device with no camera, the pairing wizard does not ask for camera permission, and the
+  camera Wi-Fi step opens on typed network name and key.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |

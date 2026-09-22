@@ -143,6 +143,14 @@ class PairingFlowTest {
      * each new path had to remember to opt out, and the ones that forgot cost real bugs.
      */
     @Test
+    fun `camera permission is waived only when the device has no camera`() {
+        assertTrue(isCameraPermissionSatisfied(hasCamera = false, granted = false))
+        assertTrue(isCameraPermissionSatisfied(hasCamera = false, granted = true))
+        assertFalse(isCameraPermissionSatisfied(hasCamera = true, granted = false))
+        assertTrue(isCameraPermissionSatisfied(hasCamera = true, granted = true))
+    }
+
+    @Test
     fun `only the camera access point joins the camera's own network`() {
         for (path in PairingPath.entries) {
             assertEquals(path == PairingPath.CAMERA_ACCESS_POINT, path.joinsCameraAccessPoint)

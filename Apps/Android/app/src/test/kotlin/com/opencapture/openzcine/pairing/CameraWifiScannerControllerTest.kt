@@ -168,6 +168,18 @@ class CameraWifiScannerControllerTest {
     }
 
     @Test
+    fun `a device without a camera opens typed Wi-Fi entry and cannot return to a viewfinder`() {
+        assertEquals(
+            CameraWifiScannerState.Scanning,
+            initialCameraWifiScannerState(hasCamera = true),
+        )
+        assertEquals(
+            CameraWifiScannerState.ManualEntry(canReturnToScan = false),
+            initialCameraWifiScannerState(hasCamera = false),
+        )
+    }
+
+    @Test
     fun `manual entry decodes only a fully validated shared-core result`() {
         val validating =
             CameraWifiManualParser { ssid, key ->

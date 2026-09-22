@@ -1,5 +1,16 @@
-// Vulkan live-feed presenter: upload RGBA frame + grade with SPIR-V LUT pass.
+// Vulkan live-feed presenter: upload one camera frame and grade it with the SPIR-V LUT pass.
 // Falls back is owned by Kotlin when create/init fails.
+//
+// Two Android facts this file has to honor, or a landscape panel (a field monitor) shows a
+// sideways, blue picture while a phone on the GLES path looks fine:
+//   * Bitmap ARGB_8888 is Skia N32. On Android that is little-endian BGRA, even though
+//     AndroidBitmap_getInfo reports ANDROID_BITMAP_FORMAT_RGBA_8888. GLUtils swizzles; a raw
+//     copy into an R8G8B8A8 image swaps red and blue.
+//   * VkSurfaceCapabilitiesKHR::currentTransform is the rotation the compositor would apply to
+//     make the buffer match the panel. Setting preTransform to that value says we already
+//     rotated the pixels. This presenter draws in window space and does not, so the feed
+//     appears turned (90° clockwise when the panel's transform is 270°). Identity preTransform
+//     leaves the rotation to the compositor, which is what the rest of the UI already does.
 
 #include "live_feed_vk_renderer.h"
 
@@ -19,9 +30,39 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ZCLiveFeedVk", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ZCLiveFeedVk", __VA_ARGS__)
 
+// Memory order of Android Bitmap.Config.ARGB_8888 (Skia kN32 on little-endian).
+constexpr VkFormat kAndroidBitmapFormat = VK_FORMAT_B8G8R8A8_UNORM;
+
 namespace {
 
+bool isEightBitUnorm(VkFormat format) {
+    return format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM;
+}
+
+// Prefer an 8-bit sRGB swapchain. The first 8-bit format a panel offers is often a wide-gamut
+// or linear space, and a Rec.709 monitor then displays the JPEG's sRGB numbers shifted cold.
+VkSurfaceFormatKHR chooseSwapchainFormat(const std::vector<VkSurfaceFormatKHR>& formats) {
+    const VkSurfaceFormatKHR fallback{
+        VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
+    if (formats.empty()) return fallback;
+    const VkFormat preferred[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM};
+    for (VkFormat format : preferred) {
+        for (const auto& candidate : formats) {
+            if (candidate.format == format &&
+                candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                return candidate;
+            }
+        }
+    }
+    for (const auto& candidate : formats) {
+        if (isEightBitUnorm(candidate.format)) return candidate;
+    }
+    return formats[0];
+}
+
 constexpr int kMaxFramesInFlight = 2;
+
+
 
 // Mirrors the `Params` block in shaders/feed.frag, under std140 rules — which are NOT C++'s. The
 // byte offsets are in the trailing comments and every one of them is load-bearing: a `vec4` member
@@ -278,13 +319,7 @@ bool rebuildSwapchain(LiveFeedVkSession* s) {
     vkGetPhysicalDeviceSurfaceFormatsKHR(s->physical, s->surface, &formatCount, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(formatCount);
     vkGetPhysicalDeviceSurfaceFormatsKHR(s->physical, s->surface, &formatCount, formats.data());
-    VkSurfaceFormatKHR chosen = formats[0];
-    for (const auto& f : formats) {
-        if (f.format == VK_FORMAT_R8G8B8A8_UNORM || f.format == VK_FORMAT_B8G8R8A8_UNORM) {
-            chosen = f;
-            break;
-        }
-    }
+    const VkSurfaceFormatKHR chosen = chooseSwapchainFormat(formats);
     // Keep render-pass attachment format in lockstep with the swapchain.
     if (s->swapFormat != chosen.format || !s->renderPass) {
         if (s->renderPass) {
@@ -320,11 +355,18 @@ bool rebuildSwapchain(LiveFeedVkSession* s) {
     }
     s->swapFormat = chosen.format;
 
-    VkExtent2D extent{
+    // Draw in the window's orientation. currentTransform is how the panel is mounted relative
+    // to that window; claiming it as preTransform without rotating the draw turns the picture.
+    const VkExtent2D windowExtent{
         static_cast<uint32_t>(s->surfaceW),
         static_cast<uint32_t>(s->surfaceH),
     };
-    if (caps.currentExtent.width != UINT32_MAX) extent = caps.currentExtent;
+    VkSurfaceTransformFlagBitsKHR preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    VkExtent2D extent = windowExtent;
+    if ((caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) == 0) {
+        preTransform = caps.currentTransform;
+        if (caps.currentExtent.width != UINT32_MAX) extent = caps.currentExtent;
+    }
 
     uint32_t imageCount = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
@@ -338,11 +380,19 @@ bool rebuildSwapchain(LiveFeedVkSession* s) {
     sci.imageArrayLayers = 1;
     sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    sci.preTransform = caps.currentTransform;
+    sci.preTransform = preTransform;
     sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     sci.clipped = VK_TRUE;
     if (vkCreateSwapchainKHR(s->device, &sci, nullptr, &s->swapchain) != VK_SUCCESS) return false;
+    LOGI(
+        "swapchain format=%d colorSpace=%d preTransform=%d extent=%ux%u (panel transform=%d)",
+        static_cast<int>(chosen.format),
+        static_cast<int>(chosen.colorSpace),
+        static_cast<int>(preTransform),
+        extent.width,
+        extent.height,
+        static_cast<int>(caps.currentTransform));
 
     uint32_t count = 0;
     vkGetSwapchainImagesKHR(s->device, s->swapchain, &count, nullptr);
@@ -589,11 +639,11 @@ bool initDevice(LiveFeedVkSession* s) {
         s,
         1,
         1,
-        VK_FORMAT_R8G8B8A8_UNORM,
+        kAndroidBitmapFormat,
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         s->feedImage,
         s->feedMem);
-    s->feedView = createView(s, s->feedImage, VK_FORMAT_R8G8B8A8_UNORM);
+    s->feedView = createView(s, s->feedImage, kAndroidBitmapFormat);
     s->feedW = 1;
     s->feedH = 1;
     createImage2D(
@@ -1045,7 +1095,8 @@ bool LiveFeedVk_SubmitBitmap(LiveFeedVkSession* session, JNIEnv* env, jobject bi
     }
     const int w = static_cast<int>(info.width);
     const int h = static_cast<int>(info.height);
-    const size_t bytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
+    const size_t rowBytes = static_cast<size_t>(w) * 4u;
+    const size_t bytes = rowBytes * static_cast<size_t>(h);
     if (w != session->feedW || h != session->feedH) {
         if (session->feedView) vkDestroyImageView(session->device, session->feedView, nullptr);
         if (session->feedImage) vkDestroyImage(session->device, session->feedImage, nullptr);
@@ -1054,16 +1105,29 @@ bool LiveFeedVk_SubmitBitmap(LiveFeedVkSession* session, JNIEnv* env, jobject bi
             session,
             w,
             h,
-            VK_FORMAT_R8G8B8A8_UNORM,
+            kAndroidBitmapFormat,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             session->feedImage,
             session->feedMem);
-        session->feedView = createView(session, session->feedImage, VK_FORMAT_R8G8B8A8_UNORM);
+        session->feedView = createView(session, session->feedImage, kAndroidBitmapFormat);
         session->feedW = w;
         session->feedH = h;
     }
-    const bool ok =
-        uploadRgba(session, session->feedImage, w, h, static_cast<const uint8_t*>(pixels), bytes);
+    // Row stride can exceed width * 4. Copying the buffer as one block then skews the picture.
+    const auto* src = static_cast<const uint8_t*>(pixels);
+    std::vector<uint8_t> packed;
+    const uint8_t* uploadSrc = src;
+    if (info.stride != rowBytes) {
+        packed.resize(bytes);
+        for (int y = 0; y < h; ++y) {
+            std::memcpy(
+                packed.data() + static_cast<size_t>(y) * rowBytes,
+                src + static_cast<size_t>(y) * info.stride,
+                rowBytes);
+        }
+        uploadSrc = packed.data();
+    }
+    const bool ok = uploadRgba(session, session->feedImage, w, h, uploadSrc, bytes);
     AndroidBitmap_unlockPixels(env, bitmap);
     if (!ok) return false;
     session->params.sourceSize[0] = static_cast<float>(w);

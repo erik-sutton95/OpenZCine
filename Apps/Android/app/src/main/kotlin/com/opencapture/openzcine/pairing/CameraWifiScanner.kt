@@ -190,7 +190,7 @@ internal class CameraWifiScannerController(
     }
 }
 
-private sealed interface CameraWifiScannerState {
+internal sealed interface CameraWifiScannerState {
     data object Scanning : CameraWifiScannerState
 
     /** Releases any candidate from Compose state while the overlay closes. */
@@ -219,6 +219,17 @@ internal enum class CameraWifiScannerFailure {
     RECOGNIZER_UNSUPPORTED,
     CORE_UNAVAILABLE,
 }
+
+/**
+ * Opens on the live viewfinder when a camera exists, and on typed SSID/key
+ * entry when it does not. A field monitor has nothing to scan with.
+ */
+internal fun initialCameraWifiScannerState(hasCamera: Boolean): CameraWifiScannerState =
+    if (hasCamera) {
+        CameraWifiScannerState.Scanning
+    } else {
+        CameraWifiScannerState.ManualEntry(canReturnToScan = false)
+    }
 
 /** Whether a failure panel should offer "Try again", or only manual entry. */
 internal fun cameraWifiScannerFailureIsRetryable(failure: CameraWifiScannerFailure): Boolean =
@@ -259,8 +270,9 @@ internal fun CameraWifiScannerOverlay(
     val lifecycleOwner = LocalLifecycleOwner.current
     val controller = remember { CameraWifiScannerController(SwiftCameraWifiTranscriptParser) }
     val debugCandidate = remember(context) { CameraWifiScannerDemo.initialCandidate(context) }
+    val hasCamera = remember { deviceHasCamera(context) }
     var scannerState by remember {
-        mutableStateOf<CameraWifiScannerState>(CameraWifiScannerState.Scanning)
+        mutableStateOf(initialCameraWifiScannerState(hasCamera))
     }
     // Bumped by every retry so the recognizer is rebuilt from scratch instead of
     // reusing a remembered failure — "Try again" must always do new work.
