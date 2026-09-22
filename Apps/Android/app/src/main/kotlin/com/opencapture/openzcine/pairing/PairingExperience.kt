@@ -384,9 +384,25 @@ public fun isPairingPermissionGranted(context: Context): Boolean =
 public fun isCameraPermissionGranted(context: Context): Boolean =
     context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
+/**
+ * Whether this device has a camera the credential scanner can open.
+ *
+ * A field monitor can run Android with no camera at all. Typed Wi-Fi entry
+ * still pairs, so the camera permission must not block the rest of the wizard.
+ */
+public fun deviceHasCamera(context: Context): Boolean =
+    context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+
+/**
+ * Camera permission is satisfied when the device has no camera, or the grant is held.
+ */
+internal fun isCameraPermissionSatisfied(hasCamera: Boolean, granted: Boolean): Boolean =
+    !hasCamera || granted
+
 /** Whether every permission the wizard's permissions step lists is granted. */
 public fun arePairingPermissionsGranted(context: Context): Boolean =
-    isPairingPermissionGranted(context) && isCameraPermissionGranted(context)
+    isPairingPermissionGranted(context) &&
+        isCameraPermissionSatisfied(deviceHasCamera(context), isCameraPermissionGranted(context))
 
 // MARK: - Copy
 
@@ -713,6 +729,7 @@ public fun PairingExperience(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
+    val cameraRequired = remember { deviceHasCamera(context) }
     var permissionGranted by remember { mutableStateOf(isPairingPermissionGranted(context)) }
     var permissionDenied by remember { mutableStateOf(false) }
     var cameraPermissionGranted by remember {
@@ -1424,6 +1441,7 @@ public fun PairingExperience(
                             flow = flow,
                             permissionGranted = permissionGranted,
                             permissionDenied = permissionDenied,
+                            cameraRequired = cameraRequired,
                             cameraPermissionGranted = cameraPermissionGranted,
                             cameraPermissionDenied = cameraPermissionDenied,
                             cameras = cameras,
@@ -1465,6 +1483,7 @@ public fun PairingExperience(
                             flow = flow,
                             permissionGranted = permissionGranted,
                             permissionDenied = permissionDenied,
+                            cameraRequired = cameraRequired,
                             cameraPermissionGranted = cameraPermissionGranted,
                             cameraPermissionDenied = cameraPermissionDenied,
                             cameras = cameras,
@@ -1771,6 +1790,7 @@ private fun StepCard(
     flow: PairingFlowState,
     permissionGranted: Boolean,
     permissionDenied: Boolean,
+    cameraRequired: Boolean,
     cameraPermissionGranted: Boolean,
     cameraPermissionDenied: Boolean,
     cameras: List<DiscoveredCamera>,
@@ -1820,6 +1840,7 @@ private fun StepCard(
                     PermissionsBody(
                         nearbyGranted = permissionGranted,
                         nearbyDenied = permissionDenied,
+                        cameraRequired = cameraRequired,
                         cameraGranted = cameraPermissionGranted,
                         cameraDenied = cameraPermissionDenied,
                         onRequestNearby = onRequestPermission,
@@ -1885,7 +1906,11 @@ private fun StepCard(
                             stringResource(R.string.action_continue),
                             enabled =
                                 flow.step != PairingStep.PERMISSIONS ||
-                                    (permissionGranted && cameraPermissionGranted),
+                                    (permissionGranted &&
+                                        isCameraPermissionSatisfied(
+                                            cameraRequired,
+                                            cameraPermissionGranted,
+                                        )),
                             onClick = onAdvance,
                             modifier =
                                 if (compact) Modifier.weight(1f) else Modifier.width(220.dp),
@@ -1904,6 +1929,7 @@ private fun StepCard(
 private fun PermissionsBody(
     nearbyGranted: Boolean,
     nearbyDenied: Boolean,
+    cameraRequired: Boolean,
     cameraGranted: Boolean,
     cameraDenied: Boolean,
     onRequestNearby: () -> Unit,
@@ -1931,20 +1957,22 @@ private fun PermissionsBody(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            PermissionRow(
-                glyph = StartupGlyphKind.CAMERA,
-                title = stringResource(R.string.pairing_permission_camera),
-                detail = stringResource(R.string.pairing_permission_camera_detail),
-                granted = cameraGranted,
-                denied = cameraDenied,
-                onRequest = onRequestCamera,
-            )
-            Box(
-                Modifier.fillMaxWidth()
-                    .padding(start = 42.dp)
-                    .height(1.dp)
-                    .background(StartupColors.border.copy(alpha = 0.10f))
-            )
+            if (cameraRequired) {
+                PermissionRow(
+                    glyph = StartupGlyphKind.CAMERA,
+                    title = stringResource(R.string.pairing_permission_camera),
+                    detail = stringResource(R.string.pairing_permission_camera_detail),
+                    granted = cameraGranted,
+                    denied = cameraDenied,
+                    onRequest = onRequestCamera,
+                )
+                Box(
+                    Modifier.fillMaxWidth()
+                        .padding(start = 42.dp)
+                        .height(1.dp)
+                        .background(StartupColors.border.copy(alpha = 0.10f))
+                )
+            }
             PermissionRow(
                 glyph = StartupGlyphKind.WIFI,
                 title = stringResource(PairingCopy.permissionTitle),
@@ -1954,7 +1982,7 @@ private fun PermissionsBody(
                 onRequest = onRequestNearby,
             )
         }
-        if (!nearbyGranted || !cameraGranted) {
+        if (cameraRequired && (!nearbyGranted || !cameraGranted)) {
             Text(
                 stringResource(R.string.pairing_permission_required),
                 color = StartupColors.dim,
