@@ -95,9 +95,10 @@ Nikon ZR is the primary hardware target today. USB-C transport, both wearable co
 wider phone/tablet coverage continue to be hardened with real-world testing.
 
 Android devices without the Play Store, including field monitors, install the sideload APK from
-[GitHub Releases](https://github.com/erik-sutton95/OpenZCine/releases/tag/sideload-v0.2.5). It is
-one arm64 package for Android 10 and newer. Remove any copy installed from Play or an APK mirror
-first. That copy is signed by Google and cannot update this file in place.
+[GitHub Releases](https://github.com/erik-sutton95/OpenZCine/releases/tag/sideload-v0.2.5-upright).
+The current file is **OpenZCine 0.2.5 (2)**. It is one arm64 package for Android 10 or newer.
+Remove any copy installed from Play or an APK mirror first. That copy is signed by Google and
+cannot update this file in place.
 
 ## Roadmap shaped in the open
 

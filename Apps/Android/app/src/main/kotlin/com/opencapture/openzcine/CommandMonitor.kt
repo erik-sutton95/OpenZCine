@@ -591,9 +591,12 @@ internal fun commandDashboardPresentation(
                     val cameraIso = capabilities.options(CameraControl.ISO)
                     // Always keep the policy ladder available so Auto ISO codecs never
                     // padlock the drum — operators exit auto by choosing a value.
+                    // A live readout with no advertised enum still opens the same ladder the
+                    // capture bar uses. Leaving the tile request-less made ISO a dead cell on
+                    // the command grid while the strip could change it.
                     val isoOptions =
                         cameraIso.ifEmpty {
-                            if (codec == null) emptyList() else IsoPickerPolicy.unifiedOptions
+                            if (isoValue != null) IsoPickerPolicy.unifiedOptions else emptyList()
                         }
                     val displayValue =
                         when {
@@ -647,13 +650,35 @@ internal fun commandDashboardPresentation(
                     )
                 },
             CommandTileKind.WHITE_BALANCE to
-                advertisedEditable(
-                    kind = CommandTileKind.WHITE_BALANCE,
-                    title = strings.resolve(R.string.command_title_white_balance),
-                    value = whiteBalance,
-                    control = CameraControl.WHITE_BALANCE,
-                    blockedReason = strings.resolve(R.string.command_reason_white_balance),
-                ),
+                run {
+                    val advertised = capabilities.options(CameraControl.WHITE_BALANCE)
+                    val live = whiteBalance
+                    val options =
+                        advertised.ifEmpty {
+                            if (live == null) {
+                                emptyList()
+                            } else {
+                                WbPickerPolicy.kelvinOptions(emptyList(), live) +
+                                    WbPickerPolicy.presetOptions(emptyList())
+                            }
+                        }
+                    if (options.isEmpty()) {
+                        readOnly(
+                            CommandTileKind.WHITE_BALANCE,
+                            strings.resolve(R.string.command_title_white_balance),
+                            live,
+                            strings.resolve(R.string.command_reason_white_balance),
+                        )
+                    } else {
+                        editable(
+                            kind = CommandTileKind.WHITE_BALANCE,
+                            title = strings.resolve(R.string.command_title_white_balance),
+                            value = live,
+                            control = CameraControl.WHITE_BALANCE,
+                            options = options,
+                        )
+                    }
+                },
             CommandTileKind.RESOLUTION_FRAMERATE to
                 recordingModeEditable(
                     kind = CommandTileKind.RESOLUTION_FRAMERATE,
