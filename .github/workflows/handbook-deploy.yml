@@ -1,0 +1,27 @@
+name: Deploy handbook
+
+# opencapture.org (Vercel) builds the handbook from this repo at /openzcine/docs/.
+# A merge that changes handbook/ pings its deploy hook so the site rebuilds.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "handbook/**"
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Trigger opencapture.org deploy
+    if: github.repository == 'erik-sutton95/OpenZCine'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the Vercel deploy hook
+        env:
+          VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK" ]; then
+            echo "::notice::VERCEL_DEPLOY_HOOK is not set; skipping the opencapture.org deploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$VERCEL_DEPLOY_HOOK"

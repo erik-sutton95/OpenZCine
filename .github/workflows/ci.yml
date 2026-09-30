@@ -115,6 +115,7 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       android: ${{ steps.filter.outputs.android }}
       bug_relay: ${{ steps.filter.outputs.bug_relay }}
+      handbook: ${{ steps.filter.outputs.handbook }}
     steps:
       # `dorny/paths-filter` fetches the base ref to diff on push events, which needs the checkout's
       # git credentials — so this job keeps them (unlike the others). It runs no repository code, so
@@ -151,6 +152,9 @@ jobs:
               - 'services/bug-relay/**'
               - 'justfile'
               - '.github/workflows/ci.yml'
+            handbook:
+              - 'handbook/**'
+              - '.github/workflows/ci.yml'
 
   native:
     name: Native Swift/iOS
@@ -180,7 +184,7 @@ jobs:
     # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
     # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
     if: always()
-    needs: [meta, secrets, changes, native, android, bug-relay]
+    needs: [meta, secrets, changes, native, android, bug-relay, handbook]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have passed or been deliberately skipped
@@ -252,3 +256,28 @@ jobs:
       - name: Validate Worker
         working-directory: services/bug-relay
         run: npm run check
+
+  handbook:
+    name: Handbook
+    needs: changes
+    # Build the public Starlight handbook at the base path opencapture.org serves it from.
+    if: ${{ needs.changes.outputs.handbook == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: handbook/package-lock.json
+      - name: Install handbook dependencies
+        working-directory: handbook
+        run: npm ci
+      - name: Build handbook at /openzcine/docs/
+        working-directory: handbook
+        env:
+          ASTRO_TELEMETRY_DISABLED: "1"
+          HANDBOOK_BASE: /openzcine/docs
+        run: npm run build
