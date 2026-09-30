@@ -144,7 +144,12 @@ void main() {
     // peaking's neighbourhood alike — flips together and the overlay stays on its edge. The split
     // boundary deliberately does not: it reads raw `vUv` because it is a question about where the
     // pixel lands for the operator, not about the picture.
-    vec2 uv = vec2(mix(vUv.x, 1.0 - vUv.x, u.mirror), 1.0 - vUv.y);
+    //
+    // Do not invert Y. Bitmap row 0 is the top of the frame and Vulkan samples v=0 at the top of
+    // the image. `vUv.y` is already 0 at the top of the viewport (clip y = -1). The GLES path
+    // flips because GL's texture v=0 is the bottom; copying that flip here turns the picture
+    // upside down, and a 180° body rotation then looks like it "fixes" it.
+    vec2 uv = vec2(mix(vUv.x, 1.0 - vUv.x, u.mirror), vUv.y);
     vec3 source = texture(uFeed, uv).rgb;
     vec3 color = splitIsGradedSide(vUv) ? grade(source) : source;
 

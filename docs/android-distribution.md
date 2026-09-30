@@ -141,10 +141,17 @@ a single arm64 release APK on a GitHub Release instead.
   keystore backed up. It is a different certificate from the Play upload key, so a sideload
   install and a Play install cannot update each other. The operator uninstalls one before
   installing the other.
-- Tag `sideload-v<openzcine.versionName>`, for example `sideload-v0.2.5`. Do not use `android-v*`.
+- Name the GitHub release `OpenZCine <versionName> (<sideload build>)`, the same shape as
+  TestFlight's `0.2.5 (260)` and Play's version name plus build. The sideload build starts at 1
+  for each version name and increases by one for each published APK. It is not the Play version
+  code and not the TestFlight build number.
+- Notes are a short changelist: one to five tester-facing bullets, the same voice as
+  `Apps/Android/distribution/whatsnew/whatsnew-en-US`, then one line on how to install over the
+  previous sideload build.
+- Tag `sideload-v<versionName>-<build>`, for example `sideload-v0.2.5-2`. Do not use `android-v*`.
   That tag pattern belongs to the Play internal workflow.
-- Attach one file, `OpenZCine-<versionName>-sideload.apk`. It contains only `arm64-v8a` and
-  requires Android 10 (API 29).
+- Attach one file, `OpenZCine-<versionName>-<build>-sideload.apk`. It contains only `arm64-v8a`
+  and requires Android 10 (API 29).
 - On a device with no camera, the pairing wizard does not ask for camera permission, and the
   camera Wi-Fi step opens on typed network name and key.
 

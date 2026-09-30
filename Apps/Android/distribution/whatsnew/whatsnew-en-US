@@ -1,2 +1,2 @@
-- Live view stays upright and matches the camera's colors.
-- A device with no camera can type the Wi-Fi name and key to connect.
+- The live picture stays upright on a field monitor.
+- ISO and white balance on the command grid open their pickers.

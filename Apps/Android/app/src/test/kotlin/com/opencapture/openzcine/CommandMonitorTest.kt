@@ -600,6 +600,30 @@ class CommandMonitorTest {
     }
 
     @Test
+    fun `live ISO and white balance stay tappable when the body has not advertised enums`() {
+        val presentation =
+            commandDashboardPresentation(
+                snapshot = CameraPropertySnapshot(iso = 800, whiteBalanceKelvin = 4700),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        val iso = assertNotNull(presentation.tiles.first { it.kind == CommandTileKind.ISO }.request)
+        assertEquals("800", iso.currentValue)
+        assertContains(iso.options, "800")
+        val whiteBalance =
+            assertNotNull(
+                presentation.tiles.first { it.kind == CommandTileKind.WHITE_BALANCE }.request,
+            )
+        assertEquals(CameraControl.WHITE_BALANCE, whiteBalance.control)
+        assertContains(whiteBalance.options, "4700K")
+    }
+
+    @Test
     fun `electronic VR is only on the primary VR tile not the side column`() {
         // iOS removed Assist/DISP/Guides and side-column VR/e-VR — VR lives on the
         // primary grid as "VR / e-VR". Side Image is Tone + Picture Profile only.
