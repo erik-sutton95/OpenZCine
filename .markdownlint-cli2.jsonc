@@ -24,6 +24,9 @@
     "ios/**",
     "android/**",
     "build/**",
+    // Handbook build output and generated types.
+    "handbook/dist/**",
+    "handbook/.astro/**",
     // SwiftPM dependency checkouts and build products.
     ".build/**",
     "**/node_modules/**"

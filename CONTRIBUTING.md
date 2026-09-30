@@ -53,6 +53,13 @@ committed to this repo**.
   [`Apps/Android/distribution/whatsnew/whatsnew-en-US`](Apps/Android/distribution/whatsnew/whatsnew-en-US)
   with plain-language tester notes (1–5 bullets).
 
+## Documentation
+
+The public handbook at [opencapture.org/openzcine/docs](https://opencapture.org/openzcine/docs/)
+is built from [`handbook/`](handbook/README.md). When a change alters protocol behavior, app
+behavior, or setup, update the matching handbook page in the same PR. Preview it with
+`cd handbook && npm ci && npm run dev`.
+
 ## Code standards
 
 - The production target is a shared Swift business/protocol core with native UI shells: SwiftUI on

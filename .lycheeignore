@@ -1,0 +1,6 @@
+# Starlight in-content links are site routes (../wifi/, ./guides/setup/), not files,
+# so they cannot resolve as source paths. The handbook CI build renders them.
+handbook/src/content/
+handbook/node_modules
+handbook/dist
+handbook/.astro
