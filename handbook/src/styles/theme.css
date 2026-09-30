@@ -1,0 +1,12 @@
+/* OpenZCine accent: the app's Nikon gold (#FFE100, ios/Runner/Branding.swift). */
+:root {
+  --sl-color-accent-low: #3a3200;
+  --sl-color-accent: #ffe100;
+  --sl-color-accent-high: #fff5a8;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #fff6b0;
+  --sl-color-accent: #8a7400;
+  --sl-color-accent-high: #3d3300;
+}

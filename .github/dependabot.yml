@@ -6,4 +6,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: ci
+  - package-ecosystem: npm
+    directory: "/handbook"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
   # Add production native ecosystems here once Swift/iOS/Android package manifests settle.

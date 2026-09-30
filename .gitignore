@@ -142,3 +142,8 @@ samples/
 .worktrees/
 Apps/Android/app/.cxx/
 feedback/
+
+# ── Handbook (Astro Starlight) dependencies, build output and generated types ──
+handbook/node_modules/
+handbook/dist/
+handbook/.astro/
