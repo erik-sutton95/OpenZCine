@@ -1,7 +1,7 @@
 <div align="center">
 
 <a href="https://opencapture.org/openzcine/">
-  <img src="ios/Runner/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" alt="OpenZCine app icon" width="96" height="96">
+  <img src="docs/assets/icon.png" alt="OpenZCine app icon" width="96" height="96">
 </a>
 
 # OpenZCine
