@@ -4,8 +4,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 <p align="center">
-  <a href="https://openzcine.app/">
-    <img alt="OpenZCine live monitor with recording status, scopes, framing guides, and camera readouts" src="site/assets/screens/hero-monitor.webp" width="820">
+  <a href="https://opencapture.org/openzcine/">
+    <img alt="OpenZCine live monitor with recording status, scopes, framing guides, and camera readouts" src="docs/assets/readme/hero-monitor.webp" width="820">
   </a>
 </p>
 
@@ -20,7 +20,7 @@
   &nbsp;·&nbsp;
   <a href="https://play.google.com/store/apps/details?id=com.opencapture.openzcine"><strong>Join the Android beta</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://openzcine.app/">Visit openzcine.app</a>
+  <a href="https://opencapture.org/openzcine/">Visit opencapture.org/openzcine</a>
   &nbsp;·&nbsp;
   <a href="https://github.com/erik-sutton95/OpenZCine/discussions/22">Explore the roadmap</a>
 </p>
@@ -51,30 +51,30 @@ and Android Google Play betas are both public today.
 ### Live monitoring and camera control
 
 <p align="center">
-  <a href="https://openzcine.app/#commander">
-    <img alt="OpenZCine camera controls with ISO, shutter, iris, white balance, codec, and autofocus" src="site/assets/screens/camera-controls.webp" width="820">
+  <a href="https://opencapture.org/openzcine/#commander">
+    <img alt="OpenZCine camera controls with ISO, shutter, iris, white balance, codec, and autofocus" src="docs/assets/readme/camera-controls.webp" width="820">
   </a>
 </p>
 
 ### Scopes and on-set assists
 
 <p align="center">
-  <a href="https://openzcine.app/#scopes">
-    <img alt="OpenZCine histogram and RGB parade scopes over a live camera view" src="site/assets/screens/scopes.webp" width="820">
+  <a href="https://opencapture.org/openzcine/#scopes">
+    <img alt="OpenZCine histogram and RGB parade scopes over a live camera view" src="docs/assets/readme/scopes.webp" width="820">
   </a>
 </p>
 
 ### Playback review and Camera-to-Cloud
 
 <p align="center">
-  <a href="https://openzcine.app/#export">
-    <img alt="OpenZCine clip playback with monitoring assists" src="site/assets/screens/playback-assists.webp" width="820">
+  <a href="https://opencapture.org/openzcine/#export">
+    <img alt="OpenZCine clip playback with monitoring assists" src="docs/assets/readme/playback-assists.webp" width="820">
   </a>
 </p>
 
 <p align="center">
-  <a href="https://openzcine.app/#export">
-    <img alt="OpenZCine uploading a reviewed clip to Frame.io" src="site/assets/screens/frameio-upload.webp" width="820">
+  <a href="https://opencapture.org/openzcine/#export">
+    <img alt="OpenZCine uploading a reviewed clip to Frame.io" src="docs/assets/readme/frameio-upload.webp" width="820">
   </a>
 </p>
 
@@ -196,7 +196,7 @@ Please also read our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). For security is
 
 [Apache 2.0](LICENSE). Third-party licenses are listed in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The app's privacy policy lives at
-[openzcine.app/privacy](https://openzcine.app/privacy/).
+[opencapture.org/openzcine/privacy](https://opencapture.org/openzcine/privacy/).
 
 "Nikon", "Nikon Z", "ZR", and "Z Cinema" are trademarks of Nikon Corporation, used here for
 identification only.

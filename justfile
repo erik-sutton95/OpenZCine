@@ -15,15 +15,11 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
+check: hygiene testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
     ./scripts/check-repository-hygiene.sh
-
-# Validate the deploy-ready landing-page tree and all local asset references.
-site-check:
-    ./scripts/check-site.sh
 
 # Validate the reviewed TestFlight copy and its regression guardrails.
 testflight-notes-check:
@@ -43,11 +39,9 @@ lint-md:
     markdownlint-cli2 "**/*.md"
 
 # Check that on-disk links resolve (offline; no network flakiness).
-# Excludes proprietary dirs, internal planning artifacts (which embed sample docs),
-# and the GitHub Pages landing page. `site-check` validates that static tree without
-# following its external product links.
+# Excludes proprietary dirs and internal planning artifacts (which embed sample docs).
 check-links:
-    lychee --no-progress --offline --exclude-path vendor --exclude-path ref --exclude-path docs/design --exclude-path site .
+    lychee --no-progress --offline --exclude-path vendor --exclude-path ref --exclude-path docs/design .
 
 # Verify files obey .editorconfig.
 check-editorconfig:

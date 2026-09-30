@@ -13,6 +13,7 @@ Fixes
 - USB-C reconnects after the cable is knocked loose, or after a few seconds in the background, without force-quitting the app.
 - Original Z 6, Z 5, and Z 7 no longer get pairing steps they do not support. A Z 6III is no longer treated as an original Z 6. iPad USB-C copy says this device, not iPhone. Settings → Share Diagnostics now keeps a connect-attempt trace on the phone until you send it.
 - Share and Save to Photos work on clips from the camera, including proxies whose media is shorter than the header. They used to fail with "Invalid sample cursor".
+- Support, Privacy, and Terms in Settings now open at opencapture.org/openzcine, the project's new home. Old links keep working.
 
 What to test
 

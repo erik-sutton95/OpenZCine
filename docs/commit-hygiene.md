@@ -23,7 +23,7 @@ If any check fails, unstage the offending content (`git restore --staged <path>`
 - **Non-redistributable assets.** RED IPP2 LUTs (`*.cube`) and any asset whose terms forbid redistribution. The app imports these at runtime into app storage; they are never bundled in the repo. (Tiny synthetic test fixtures under `Tests/` are the only allowed `.cube` exception.)
 - **Raw working media.** Layered design files, unreviewed simulator captures, private demo feeds,
   and full-resolution marketing sources stay under `.local/`. Only reviewed, optimized runtime
-  exports belong in `site/` or an app asset catalog.
+  exports belong in `docs/assets/readme/`, the website repo, or an app asset catalog.
 - **Reference-app expression.** Do not copy another app's source, marketing copy, layout, or icons. Factual interface naming derived from the protocol is fine; copied creative expression is not.
 
 ## Why a gitignore entry is not enough
