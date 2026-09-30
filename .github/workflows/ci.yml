@@ -30,9 +30,6 @@ jobs:
       - name: Repository hygiene
         run: ./scripts/check-repository-hygiene.sh
 
-      - name: Landing-page assets
-        run: ./scripts/check-site.sh
-
       - name: TestFlight notes
         run: |
           ./scripts/ios-release-notes-check.sh
@@ -78,7 +75,7 @@ jobs:
       - name: Link check
         uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2
         with:
-          args: "--no-progress --offline --exclude-path vendor --exclude-path ref --exclude-path docs/design --exclude-path site ."
+          args: "--no-progress --offline --exclude-path vendor --exclude-path ref --exclude-path docs/design ."
           fail: true
 
       - name: EditorConfig check

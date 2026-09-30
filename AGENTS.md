@@ -40,7 +40,8 @@ Install local tooling with `just setup` (macOS / Homebrew).
   native accept), `PROJECT-MANAGEMENT.md` (Kaneo board conventions + agent sync contract).
 - `docs/design/` — design specs, implementation plans, and archived browser prototypes.
 - `docs/investigations/` — resolved or pending engineering investigations and debugging records.
-- `site/` — deploy-ready GitHub Pages landing page; no raw design sources.
+- The website (opencapture.org/openzcine) lives in the private repo `erik-sutton95/opencapture-site`
+  and deploys to Vercel. README images live in `docs/assets/readme/`.
 - `.local/` — **gitignored** demo feeds, raw marketing sources, and local tooling migrations.
 - `.github/` — CI workflows, issue/PR templates.
 
