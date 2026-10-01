@@ -50,6 +50,7 @@ jobs:
               - 'Tests/**'
               - 'Apps/Android/**'
               - 'Package.swift'
+              - 'opencine-pins.txt'
               - '.swift-format'
               - 'scripts/android-*.sh'
               - 'scripts/verify-android-*.sh'
@@ -86,6 +87,12 @@ jobs:
 
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      # Candidate (OpenCineCore MEDIA-01): Package.swift and the Runner project take OpenCineMedia
+      # from a sibling checkout at ../OpenCineCore, pinned by SHA in opencine-pins.txt. Works only
+      # once that repository is published. Delete when the app pins OpenCineCore by url + version.
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
 
       # Keep the Play artifact on the exact Swift Android SDK/toolchain that
       # CI uses. Gradle stages the arm64-v8a core into build output itself.

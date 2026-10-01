@@ -45,6 +45,7 @@ jobs:
               - 'Tests/**'
               - 'ios/**'
               - 'Package.swift'
+              - 'opencine-pins.txt'
               - '.swift-format'
               - 'scripts/add-*.rb'
               - 'scripts/ios-*.sh'
@@ -70,6 +71,11 @@ jobs:
 
       - name: Install tooling
         run: brew install just swift-format
+
+      # Candidate (OpenCineCore MEDIA-01): OpenCineMedia comes from ../OpenCineCore, pinned by
+      # SHA in opencine-pins.txt. Works only once that repository is published.
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
 
       - name: Run native checks
         run: just native-check
