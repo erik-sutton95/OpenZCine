@@ -283,6 +283,8 @@ afterEvaluate {
 
 dependencies {
     implementation(project(":core-api"))
+    // OpenCine common camera contracts (CORE-02 candidate, composite build; see settings).
+    implementation(libs.opencine.core)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))

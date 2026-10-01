@@ -398,6 +398,9 @@ class SwiftCoreCameraSession internal constructor(
     private val _recordingState = MutableStateFlow(CameraRecordingState.STANDBY)
     override val recordingState: StateFlow<CameraRecordingState> = _recordingState.asStateFlow()
 
+    private val _reportedRecording = MutableStateFlow<Boolean?>(null)
+    override val reportedRecording: StateFlow<Boolean?> = _reportedRecording.asStateFlow()
+
     private val _cameraProperties = MutableStateFlow(CameraPropertySnapshot())
     override val cameraProperties: StateFlow<CameraPropertySnapshot> = _cameraProperties.asStateFlow()
 
@@ -507,6 +510,7 @@ class SwiftCoreCameraSession internal constructor(
                             ignoreLiveRecordingStateUntilNanos = 0L
                             cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
+                            _reportedRecording.value = null
                             _cameraProperties.value = CameraPropertySnapshot()
                             _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
                             (liveFrames as? SwiftCoreLiveFrameSource)?.noteSessionConnected()
@@ -523,6 +527,7 @@ class SwiftCoreCameraSession internal constructor(
                             ignoreLiveRecordingStateUntilNanos = 0L
                             cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
+                            _reportedRecording.value = null
                             stopPropertyRefresh(clearSnapshot = true)
                             _latestCommandRoundTripMilliseconds.value = null
                             _connectionProgress.value =
@@ -965,6 +970,7 @@ class SwiftCoreCameraSession internal constructor(
                     ignoreLiveRecordingStateUntilNanos = 0L
                     cameraRecordingEventVersion = 0L
                     _recordingState.value = CameraRecordingState.STANDBY
+                    _reportedRecording.value = null
                     _cameraProperties.value = CameraPropertySnapshot()
                     _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
                     _latestCommandRoundTripMilliseconds.value = null
@@ -978,6 +984,9 @@ class SwiftCoreCameraSession internal constructor(
     /** Applies camera-authoritative record state from a decoded live-view frame. */
     private fun applyCameraRecordingState(recording: Boolean, force: Boolean = false) {
         if (_state.value !is CameraSessionState.Connected) return
+        // Kept even while [recordingState] defers to an app command below: this report is what
+        // confirms (or never confirms) that command.
+        _reportedRecording.value = recording
         if (!force && System.nanoTime() < ignoreLiveRecordingStateUntilNanos) return
         _recordingState.value =
             if (recording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
@@ -1067,6 +1076,7 @@ class SwiftCoreCameraSession internal constructor(
         ignoreLiveRecordingStateUntilNanos = 0L
         cameraRecordingEventVersion = 0L
         _recordingState.value = CameraRecordingState.STANDBY
+        _reportedRecording.value = null
         stopPropertyRefresh(clearSnapshot = true)
         _connectionProgress.value = CameraConnectionProgress(CameraConnectionPhase.FAILED, message)
         phaseLogger("eventChannelEnded", message)

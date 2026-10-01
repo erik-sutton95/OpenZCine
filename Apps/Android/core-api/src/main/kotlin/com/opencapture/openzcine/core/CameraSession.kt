@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 private val noCameraSessionEvents: SharedFlow<CameraSessionEvent> =
     MutableSharedFlow<CameraSessionEvent>()
 
+private val noReportedRecording: StateFlow<Boolean?> = MutableStateFlow<Boolean?>(null)
+
 private val noCameraProperties: StateFlow<CameraPropertySnapshot> =
     MutableStateFlow(CameraPropertySnapshot())
 
@@ -860,6 +862,14 @@ public interface CameraSession {
 
     /** Current movie-record lifecycle for this session. */
     public val recordingState: StateFlow<CameraRecordingState>
+
+    /**
+     * Recording exactly as the camera last reported it (live-view header or record events), or
+     * `null` until it has. Never the optimistic [CameraRecordingState.STARTING]/
+     * [CameraRecordingState.STOPPING] or a command's own target, so unknown stays unknown.
+     */
+    public val reportedRecording: StateFlow<Boolean?>
+        get() = noReportedRecording
 
     /**
      * The latest real camera-property readback.

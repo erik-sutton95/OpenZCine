@@ -97,9 +97,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.opencapture.opencine.core.SessionCloseReason
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
+import com.opencapture.openzcine.bridge.NikonOpenCineSession
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
@@ -641,6 +643,12 @@ internal fun MonitorScreen(
             // (`MonitorUnified` record/shutter, `relayControlSurrendered`).
             !controlsSurrendered
     val recordScope = rememberCoroutineScope()
+    // CORE-02: ISO, white balance and record go through the OpenCine camera-session seam. It
+    // admits them against camera-reported state, keeps receipts, and drives [session] itself.
+    val openCineSession = remember(session, recordScope) { NikonOpenCineSession(session, recordScope) }
+    DisposableEffect(openCineSession) {
+        onDispose { openCineSession.closeNow(SessionCloseReason.REQUESTED) }
+    }
     val guideNeedsRealFrame = liveViewGuideController?.needsRealDecodedFrame == true
     val latestGuideNeedsRealFrame = rememberUpdatedState(guideNeedsRealFrame)
     val guideFrameDispatchPending = remember(session) { AtomicBoolean(false) }
@@ -900,7 +908,11 @@ internal fun MonitorScreen(
                     try {
                         // Facade applyControl already confirms the write on the wire. Do not
                         // soft-fail from a lagging property poll (see docs/android-control-writes.md).
-                        session.applyControl(control, desiredLabel)
+                        if (control in NikonOpenCineSession.CONTROLS) {
+                            openCineSession.applyControl(control, desiredLabel)
+                        } else {
+                            session.applyControl(control, desiredLabel)
+                        }
                         // One refresh keeps tiles/bar honest; settles still enqueue while this runs.
                         session.refreshProperties()
                     } catch (error: CameraControlException) {
@@ -1232,7 +1244,7 @@ internal fun MonitorScreen(
     val sendRecordCommand: (Boolean) -> Unit = { target ->
         recordScope.launch {
             try {
-                session.setRecording(target)
+                openCineSession.setRecording(target)
             } catch (error: CameraRecordingException) {
                 Toast.makeText(appContext, error.message, Toast.LENGTH_SHORT).show()
             }
@@ -1265,7 +1277,7 @@ internal fun MonitorScreen(
                         recordConfirmationPending = pendingRecordTarget != null,
                         cameraControlPending = pendingCommandControl != null,
                     )
-                executeWearRecordCommand(safety, recording, session::setRecording)
+                executeWearRecordCommand(safety, recording, openCineSession::setRecording)
             },
         )
     DisposableEffect(wearRelay) {

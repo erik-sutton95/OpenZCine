@@ -18,12 +18,16 @@ json = "20231013"
 kyantBackdrop = "2.0.0"
 # Companion shapes module (Capsule) used by Kyant catalog liquid glass components.
 kyantShapes = "1.2.0"
+# OpenCine common camera contracts. Candidate: resolved from the sibling OpenCineCore checkout
+# through the composite build in settings.gradle.kts until the coordinate is published.
+openCineCore = "0.1.0-SNAPSHOT"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+opencine-core = { module = "com.opencapture.opencine:core", version.ref = "openCineCore" }
 # The android-application module needs the explicit JUnit variant: AGP's built-in
 # Kotlin support does not apply the framework inference the kotlin-jvm plugin does.
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

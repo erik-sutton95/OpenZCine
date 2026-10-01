@@ -38,11 +38,15 @@ public class FakeCameraSession(
             },
         )
     private val mutableRecordingState = MutableStateFlow(CameraRecordingState.STANDBY)
+    private val mutableReportedRecording = MutableStateFlow<Boolean?>(null)
     private val mutableProperties = MutableStateFlow(DEMO_PROPERTIES)
 
     override val state: StateFlow<CameraSessionState> = mutableState.asStateFlow()
     override val recordingState: StateFlow<CameraRecordingState> =
         mutableRecordingState.asStateFlow()
+
+    /** The fake camera reports its own record state as soon as it changes it. */
+    override val reportedRecording: StateFlow<Boolean?> = mutableReportedRecording.asStateFlow()
     override val cameraProperties: StateFlow<CameraPropertySnapshot> =
         mutableProperties.asStateFlow()
     override val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
@@ -63,6 +67,7 @@ public class FakeCameraSession(
             if (recording) CameraRecordingState.STARTING else CameraRecordingState.STOPPING
         mutableRecordingState.value =
             if (recording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
+        mutableReportedRecording.value = recording
     }
 
     override suspend fun applyControl(control: CameraControl, label: String) {
