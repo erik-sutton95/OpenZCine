@@ -878,6 +878,8 @@ final class NativeAppModel {
             syncScreenWakePolicy()
             publishWatchState()
             if oldValue != isMonitorPresented {
+                // Record admission follows live-view readiness.
+                controlSession?.refresh()
                 updateBluetoothShutter()
                 AppDiagnostics.shared.record(
                     isMonitorPresented ? .monitorPresented : .monitorDismissed)
@@ -3743,6 +3745,8 @@ final class NativeAppModel {
                 discoveredCameras = []
                 pendingPairingChallenge = nil
                 cameraSession = session
+                controlSession = NikonCameraSession(
+                    driver: self, serialNumber: session.identity.serialNumber)
                 // This monitor session has a camera behind it, and stays that way across reconnect
                 // gaps — see `isCameraControlSession`.
                 isCameraControlSession = true
@@ -4471,6 +4475,17 @@ final class NativeAppModel {
     /// Target record state for a queued app record command (`true` = start, `false` = stop). Kept
     /// separately from `isRecording` so the optimistic UI flip isn't undone before the safe point runs.
     private var pendingRecordStart: Bool?
+    /// The seam operation the queued record command belongs to.
+    @ObservationIgnored private var pendingRecordOperation: NikonCameraSession.Operation?
+    /// CORE-02 common camera-session seam over this link (ISO, white balance, record). Created
+    /// with `cameraSession` and closed with it. Those three commands run through it and only it.
+    @ObservationIgnored private var controlSession: NikonCameraSession?
+    /// Recording as the CAMERA last reported it (live-view header or record events), apart from
+    /// the optimistic `isRecording` the button shows. `nil` until the body says.
+    @ObservationIgnored private var reportedRecording: Bool?
+    /// Property values exactly as read from the camera. `cameraPropertySnapshot` also carries the
+    /// pickers' optimistic bytes; the seam reports only these.
+    @ObservationIgnored private var reportedPropertySnapshot = PTPCameraPropertySnapshot()
     /// Consecutive live-view-start failures (no first frame), across reconnects. A first-frame
     /// framing desync needs a fresh command channel, so `.neverStarted` full-reconnects; this counter
     /// (reset on a good first frame) bounds that so a body that genuinely can't stream doesn't loop.
@@ -4511,6 +4526,8 @@ final class NativeAppModel {
         let picker: CameraPicker
         let value: String
         let write: PTPCameraPropertyWrite
+        /// The seam operation this write confirms, when it came through `controlSession`.
+        var operation: NikonCameraSession.Operation? = nil
     }
 
     /// Keeps only the last queued value for each concrete PTP property. Rapid drags or taps can
@@ -4518,8 +4535,18 @@ final class NativeAppModel {
     /// states the operator has already left. Coalescing by property preserves dependent writes such
     /// as white-balance mode followed by Kelvin temperature.
     private func enqueueCameraWrite(_ pending: PendingCameraWrite) {
-        pendingCameraWrites.removeAll { $0.write.property == pending.write.property }
+        dropPendingCameraWrites { $0.write.property == pending.write.property }
         pendingCameraWrites.append(pending)
+    }
+
+    /// Removes queued writes, telling the seam their operations will never be sent.
+    private func dropPendingCameraWrites(
+        where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
+    ) {
+        for dropped in pendingCameraWrites where shouldDrop(dropped) {
+            if let operation = dropped.operation { controlSession?.operationDropped(operation) }
+        }
+        pendingCameraWrites.removeAll(where: shouldDrop)
     }
 
     private struct FocusResetContext: Equatable {
@@ -4545,10 +4572,11 @@ final class NativeAppModel {
 
     private func resetCameraPropertyState() {
         cameraPropertySnapshot = PTPCameraPropertySnapshot()
+        reportedPropertySnapshot = PTPCameraPropertySnapshot()
         propertyPollIndex = 0
         cameraAnnouncedPropertyChanges.removeAll()
         lastRecordingPropertyPollAt = nil
-        pendingCameraWrites.removeAll()
+        dropPendingCameraWrites()
         pendingShutterMode = nil
         pendingShutterLockState = nil
         pendingBaseISOHigh = nil
@@ -6534,6 +6562,10 @@ final class NativeAppModel {
         eventDrainTask?.cancel()
         eventDrainTask = nil
         cameraSession = nil
+        // Closing reports unfinished seam operations honestly and never sends a camera command.
+        controlSession?.close(preserveMonitorSurface ? .linkLost : .requested)
+        controlSession = nil
+        reportedRecording = nil
         connectedIdentity = nil
         // Auto-reconnects keep the monitor shell up with the last frame frozen (RECOV state, same
         // as stall recovery) instead of dismissing and re-presenting the whole surface — on a
@@ -7868,20 +7900,27 @@ final class NativeAppModel {
         // Record start/stop is interactive too — service it before property polls. The button was
         // flipped optimistically; revert it if the camera rejects the op.
         if let start = pendingRecordStart {
+            let operation = pendingRecordOperation
             pendingRecordStart = nil
+            pendingRecordOperation = nil
             pendingRecordToggle = false
             appRecordCommandAt = Date()
+            if let operation { controlSession?.operationSent(operation) }
             do {
                 if start {
                     try await session.startRecording()
                 } else {
                     try await session.stopRecording()
                 }
+                // Accepted is not confirmed: the seam waits for the camera to report the target.
+                if let operation { controlSession?.recordAccepted(operation) }
                 // `isRecording` was flipped optimistically before this safe point. Only after the
                 // camera accepts the command do we restart the preview at its recording-aware size.
                 applyThermalStreamStepDownIfNeeded()
             } catch {
-                isRecording = !start
+                if let operation { controlSession?.commandFailed(operation, error) }
+                // Back to what the camera last reported, not an assumed opposite of the target.
+                isRecording = reportedRecording ?? !start
                 cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
                 connectionMessage =
                     "Record \(start ? "start" : "stop") failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
@@ -8365,6 +8404,12 @@ final class NativeAppModel {
 
     /// Applies camera-authoritative record state from the live-view header or async PTP events.
     private func applyCameraRecordState(isRecording recording: Bool, force: Bool = false) {
+        // The camera's report is recorded even while the button defers to an app command below:
+        // that report is exactly what confirms (or never confirms) the command.
+        if reportedRecording != recording {
+            reportedRecording = recording
+            controlSession?.refresh()
+        }
         guard force || !shouldSuppressCameraRecordStateSync() else { return }
         guard isRecording != recording else { return }
         isRecording = recording
@@ -8381,6 +8426,8 @@ final class NativeAppModel {
     }
 
     private func resetPendingRecordCommand() {
+        if let operation = pendingRecordOperation { controlSession?.operationDropped(operation) }
+        pendingRecordOperation = nil
         pendingRecordToggle = false
         pendingRecordStart = nil
         appRecordCommandAt = nil
@@ -8404,6 +8451,7 @@ final class NativeAppModel {
     private func performNextPendingCameraWrite(session: NativeCameraSession) async -> Bool {
         guard !pendingCameraWrites.isEmpty else { return false }
         let pending = pendingCameraWrites.removeFirst()
+        if let operation = pending.operation { controlSession?.operationSent(operation) }
         let isShutterModeWrite = pending.write.property == .movieShutterMode
         let isBaseISOWrite = pending.write.property == .movieBaseISO
         let isISOAutoWrite =
@@ -8430,14 +8478,19 @@ final class NativeAppModel {
             // one for seconds) clobber a newer body-originated value the poll already picked up,
             // and hides a value the body silently clamped or refused in part. Android confirms
             // every control write by readback (`confirmAndroidControlWrites`); this is parity.
-            if let actual = try? await session.readCameraProperty(pending.write.property) {
-                cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                    property: pending.write.property, data: actual)
+            // A failed read keeps the requested bytes on screen, but never in the reported
+            // snapshot: the seam calls that outcome unknown, not success.
+            let readback = try? await session.readCameraProperty(pending.write.property)
+            if let readback {
+                applyCameraRead(pending.write.property, readback)
             } else {
                 cameraPropertySnapshot = cameraPropertySnapshot.applying(
                     property: pending.write.property,
                     data: pending.write.data
                 )
+            }
+            if let operation = pending.operation {
+                controlSession?.writeLanded(operation, write: pending.write, readback: readback)
             }
             // A confirmed write supersedes any queued re-read of the same property.
             cameraAnnouncedPropertyChanges.cancel(pending.write.property)
@@ -8495,6 +8548,7 @@ final class NativeAppModel {
                 connectionMessage = "\(pending.picker.title) set to \(pending.value)."
             }
         } catch {
+            if let operation = pending.operation { controlSession?.commandFailed(operation, error) }
             // The camera refused the write — the body's "Control lock" has this control locked
             // (it can lock shutter / aperture / focus). Flag it so the bar shows a lock, and
             // revert the optimistic value to what the camera actually reports.
@@ -8510,8 +8564,7 @@ final class NativeAppModel {
             if isShutterLockWrite {
                 pendingShutterLockState = nil
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: pending.write.property, data: actual)
+                    applyCameraRead(pending.write.property, actual)
                     publishCameraDisplayState()
                 }
                 syncFocusFromSnapshot()
@@ -8523,8 +8576,7 @@ final class NativeAppModel {
                     : "Could not unlock shutter control on camera."
             } else if isShutterModeWrite || isBaseISOWrite {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: pending.write.property, data: actual)
+                    applyCameraRead(pending.write.property, actual)
                     publishCameraDisplayState()
                     syncFocusFromSnapshot()
                 }
@@ -8538,8 +8590,7 @@ final class NativeAppModel {
             } else {
                 lockedControls.insert(pending.picker)
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: pending.write.property, data: actual)
+                    applyCameraRead(pending.write.property, actual)
                     publishCameraDisplayState()
                     syncFocusFromSnapshot()
                 }
@@ -8792,6 +8843,12 @@ final class NativeAppModel {
         await refreshCameraMaintenanceIfDue(session: session)
     }
 
+    /// A value the camera returned, applied to the display snapshot and the reported one.
+    private func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(property: property, data: data)
+        reportedPropertySnapshot = reportedPropertySnapshot.applying(property: property, data: data)
+    }
+
     /// One property read applied into the snapshot and derived monitor state.
     private func readAndApplyCameraProperty(
         session: NativeCameraSession,
@@ -8806,8 +8863,7 @@ final class NativeAppModel {
                 logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
             }
             let previousSelector = cameraPropertySnapshot.captureSelector
-            cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                property: property, data: data)
+            applyCameraRead(property, data)
             publishCameraDisplayState()
             syncFocusFromSnapshot()
             syncShutterLockFromSnapshot()
@@ -9249,6 +9305,8 @@ final class NativeAppModel {
         }
         cameraState = next
         broadcastRelayState()
+        // Every camera property read lands here, so the seam's snapshot follows the camera.
+        controlSession?.refresh()
     }
 
     func cycleDisplayMode() {
@@ -11096,24 +11154,23 @@ final class NativeAppModel {
             cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
             return
         }
-        guard cameraSession != nil, isMonitorPresented else {
+        // One command path: the seam admits the command (live view must run, the existing
+        // preflight), confirms it without sending when the camera already reports the target, and
+        // otherwise queues it through `queueRecord` for the next safe point.
+        let receipt = controlSession?.request(start ? .startRecording : .stopRecording)
+        guard let receipt else {
             // The refusal reaches the operator, not just the log — the monitor never renders
             // `connectionMessage` (see `showMonitorNotice`), so the remote-shutter and watch
             // presses that land here were refused in silence.
             showMonitorNotice("Start live view before recording.")
             return
         }
-        // Already there (the camera changed state while the prompt was up): nothing to send.
-        guard start != isRecording else { return }
-        // Optimistically flip the button now (snappy), then queue the actual record op for the next
-        // live-view safe point; if the camera rejects it, the safe point reverts the state.
-        let targetRecording = start
-        isRecording = targetRecording
-        cameraState = cameraState.updating(recordState: targetRecording ? .recording : .standby)
-        pendingRecordStart = targetRecording
-        pendingRecordToggle = true
-        appRecordCommandAt = Date()
-        publishWatchState()
+        if case .rejected(let reason) = receipt.stage {
+            showMonitorNotice(
+                reason == .unavailable(.notReady)
+                    ? "Start live view before recording."
+                    : "Record \(start ? "start" : "stop") was not sent (\(reason)).")
+        }
     }
 
     // MARK: Apple Watch relay
@@ -12567,10 +12624,30 @@ final class NativeAppModel {
         }
         if picker == .shutter, lockedControls.contains(.shutter) { return }
         if picker == .iso, isISORecordingLocked { return }
+        // CORE-02: ISO and white balance go through the common camera-session seam, which admits
+        // the value against the camera-reported domain and tracks it to readback. What it admits
+        // comes back through `queuePickerWrites`; there is no second path for these two.
+        if let controlSession,
+            let setting = NikonCameraSession.setting(picker: picker, label: value)
+        {
+            if case .rejected(let reason) = controlSession.request(.set(setting)).stage {
+                connectionMessage = "\(picker.title) \(value) was not sent (\(reason))."
+            }
+            return
+        }
+        queuePickerWrites(value, for: picker, operation: nil)
+    }
+
+    /// Encodes a picker value onto the coalescing write queue (optimistic bar update, safe-point
+    /// write, readback). Returns the number of property writes queued.
+    @discardableResult
+    func queuePickerWrites(
+        _ value: String, for picker: CameraPicker, operation: NikonCameraSession.Operation?
+    ) -> Int {
         guard let cameraControl = picker.cameraControl else {
             connectionMessage =
                 "\(picker.title) is not wired to a verified Nikon property write yet."
-            return
+            return 0
         }
         // All writes go through the safe-point queue. Resolution/frame-rate writes the *exact*
         // camera-advertised mode for the picked label — never a hand-packed value; a wrong
@@ -12593,14 +12670,14 @@ final class NativeAppModel {
             else {
                 connectionMessage =
                     "\(value) isn't a recording mode the camera reported — pick a listed one."
-                return
+                return 0
             }
             writes = [PTPCameraPropertyWrite.screenSize(raw: cameraScreenModes[index].raw)]
         } else if cameraControl == .codec {
             guard let mode = codecMode(forPickedLabel: value) else {
                 connectionMessage =
                     "\(value) isn't a codec the camera reported — pick a listed one."
-                return
+                return 0
             }
             writes = [PTPCameraPropertyWrite.fileType(raw: mode.raw)]
         } else {
@@ -12610,10 +12687,12 @@ final class NativeAppModel {
         guard !writes.isEmpty else {
             connectionMessage =
                 "\(picker.title) value \(value) could not be encoded for \(cameraControl)."
-            return
+            return 0
         }
         for write in writes {
-            enqueueCameraWrite(PendingCameraWrite(picker: picker, value: value, write: write))
+            enqueueCameraWrite(
+                PendingCameraWrite(picker: picker, value: value, write: write, operation: operation)
+            )
             // Optimistic UI: reflect the selection in the bar immediately; the poll confirms it.
             cameraPropertySnapshot = cameraPropertySnapshot.applying(
                 property: write.property, data: write.data)
@@ -12625,6 +12704,7 @@ final class NativeAppModel {
             ? "Queued \(picker.title) \(value) for the next live-view safe point."
             : "Queued \(picker.title) \(value)."
         drainPendingWritesIfIdle()
+        return writes.count
     }
 
     private func applyLocalPickerValue(_ value: String, for picker: CameraPicker) {
@@ -12660,6 +12740,44 @@ final class NativeAppModel {
             codec: picker == .codec ? value : nil,
             values: updated
         )
+    }
+}
+
+// CORE-02: the app's command service as the Nikon seam drives it. Same queue, same safe point,
+// same optimistic bar and button as before; only the bookkeeping moved into the seam.
+extension NativeAppModel: NikonControlDriver {
+    var nikonControlFacts: NikonControlFacts {
+        let photography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: reportedPropertySnapshot.captureSelector)
+        // The same preset list the WB picker offers (`PickerPanel`): the body's advertised enum
+        // for the active chrome, else the picker's own list, R3D-filtered in movie chrome.
+        let fallback = CameraPicker.whiteBalance.modes.first { $0.title == "Preset" }?.options ?? []
+        let presets =
+            photography
+            ? (cameraControlOptions[.whiteBalance] ?? fallback)
+            : PTPCameraPropertyDecoders.whiteBalanceOptions(
+                advertised: cameraControlOptions[.movieWhiteBalance] ?? fallback,
+                codec: cameraState.codec)
+        return NikonControlFacts(
+            holdsControl: !relayControlSurrendered,
+            liveViewReady: isMonitorPresented,
+            reported: reportedPropertySnapshot,
+            recording: reportedRecording,
+            whiteBalancePresets: presets)
+    }
+
+    func queueRecord(start: Bool, operation: NikonCameraSession.Operation) {
+        // A press the safe point has not serviced yet is replaced, never sent twice.
+        if let superseded = pendingRecordOperation { controlSession?.operationDropped(superseded) }
+        pendingRecordOperation = operation
+        // Optimistically flip the button now (snappy), then queue the actual record op for the next
+        // live-view safe point; if the camera rejects it, the safe point reverts the state.
+        isRecording = start
+        cameraState = cameraState.updating(recordState: start ? .recording : .standby)
+        pendingRecordStart = start
+        pendingRecordToggle = true
+        appRecordCommandAt = Date()
+        publishWatchState()
     }
 }
 

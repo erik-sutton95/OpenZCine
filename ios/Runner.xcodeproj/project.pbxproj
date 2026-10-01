@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		OCC000000000000000000003 /* OpenCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OCC000000000000000000002 /* OpenCineCore */; };
+		OCC000000000000000000005 /* NikonCameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = OCC000000000000000000004 /* NikonCameraSession.swift */; };
+		OCC000000000000000000007 /* NikonCameraSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OCC000000000000000000006 /* NikonCameraSessionTests.swift */; };
 		C0DE000000000000000000F5 /* ZCameraCapabilityProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F6 /* ZCameraCapabilityProfile.swift */; };
 		C0DE00000000000000000111 /* ConnectAttemptDiagnostic.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000112 /* ConnectAttemptDiagnostic.swift */; };
 		C0DE000000000000000000F3 /* StillCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F4 /* StillCapture.swift */; };
@@ -216,6 +219,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		OCC000000000000000000004 /* NikonCameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCameraSession.swift; sourceTree = "<group>"; };
+		OCC000000000000000000006 /* NikonCameraSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCameraSessionTests.swift; sourceTree = "<group>"; };
 		0205F75CD14D96A1E9B884E9 /* FalseColor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FalseColor.swift; path = ../Sources/OpenZCineCore/FalseColor.swift; sourceTree = SOURCE_ROOT; };
 		B0757000000000000000FE01 /* BurstSeriesGrouping.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BurstSeriesGrouping.swift; path = ../Sources/OpenZCineCore/BurstSeriesGrouping.swift; sourceTree = SOURCE_ROOT; };
 		B0757000000000000000FE11 /* ConformPreview.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ConformPreview.swift; path = ../Sources/OpenZCineCore/ConformPreview.swift; sourceTree = SOURCE_ROOT; };
@@ -395,6 +400,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */,
+				OCC000000000000000000003 /* OpenCineCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -417,6 +423,7 @@
 				TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */,
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
 				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
+				OCC000000000000000000006 /* NikonCameraSessionTests.swift */,
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
 				TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */,
 				TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */,
@@ -458,6 +465,7 @@
 				DIAG00000000000000000001 /* AppDiagnostics.swift */,
 				C0DE00000000000000000002 /* NativeAppRoot.swift */,
 				C0DE00000000000000000017 /* NativeCameraSession.swift */,
+				OCC000000000000000000004 /* NikonCameraSession.swift */,
 				C0DE00000000000000000019 /* NativeCameraDiscovery.swift */,
 				INFR00000000000000000001 /* InfrastructureCameraFinder.swift */,
 				PTPT00000000000000000001 /* PTPIPTransport.swift */,
@@ -656,6 +664,7 @@
 			name = Runner;
 			packageProductDependencies = (
 				9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */,
+				OCC000000000000000000002 /* OpenCineCore */,
 			);
 			productName = Runner;
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
@@ -711,6 +720,7 @@
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
 				C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+				OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
@@ -769,6 +779,7 @@
 				TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */,
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
 				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
+				OCC000000000000000000007 /* NikonCameraSessionTests.swift in Sources */,
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
 				TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */,
 				TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */,
@@ -785,6 +796,7 @@
 				C0DE00000000000000000009 /* CameraDisplayState.swift in Sources */,
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,
 				C0DE00000000000000000016 /* NativeCameraSession.swift in Sources */,
+				OCC000000000000000000005 /* NikonCameraSession.swift in Sources */,
 				C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */,
 				PTPT00000000000000000002 /* PTPIPTransport.swift in Sources */,
 				USBT00000000000000000002 /* USBCameraTransport.swift in Sources */,
@@ -1364,6 +1376,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../OpenCineCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -1376,6 +1395,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		OCC000000000000000000002 /* OpenCineCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
+			productName = OpenCineCore;
+		};
 		9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
