@@ -22,6 +22,10 @@ let package = Package(
         // Portable media math (OpenCineMedia: CubeLUT, FrameRateSampler). Sibling checkout
         // until OpenCineCore is published.
         .package(path: "../OpenCineCore"),
+        // Nikon PTP wire, properties, discovery and session policy (VENDOR-02). Re-exported from
+        // OpenZCineCore (Sources/OpenZCineCore/OpenCineNikon.swift). Sibling checkout pinned in
+        // opencine-pins.txt until it is published.
+        .package(path: "../OpenCineNikon"),
     ],
     targets: [
         .target(
@@ -31,6 +35,7 @@ let package = Package(
                     name: "Crypto", package: "swift-crypto",
                     condition: .when(platforms: [.linux, .android])),
                 .product(name: "OpenCineMedia", package: "OpenCineCore"),
+                .product(name: "OpenCineNikon", package: "OpenCineNikon"),
             ]
         ),
         .testTarget(

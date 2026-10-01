@@ -10,8 +10,6 @@
 		OZC000000000000000000003 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000002 /* OpenZCineCore */; };
 		OZC000000000000000000013 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000012 /* OpenZCineCore */; };
 		OCC000000000000000000003 /* OpenCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OCC000000000000000000002 /* OpenCineCore */; };
-		OCC000000000000000000005 /* NikonCameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = OCC000000000000000000004 /* NikonCameraSession.swift */; };
-		OCC000000000000000000007 /* NikonCameraSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OCC000000000000000000006 /* NikonCameraSessionTests.swift */; };
 		C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F2 /* PhotographyChrome.swift */; };
 		079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */; };
 		0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */; };
@@ -141,8 +139,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		OCC000000000000000000004 /* NikonCameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCameraSession.swift; sourceTree = "<group>"; };
-		OCC000000000000000000006 /* NikonCameraSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCameraSessionTests.swift; sourceTree = "<group>"; };
 		0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InternetReachability.swift; sourceTree = "<group>"; };
 		1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackAssists.swift; sourceTree = "<group>"; };
 		2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDelivery.swift; sourceTree = "<group>"; };
@@ -276,7 +272,6 @@
 				TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */,
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
 				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
-				OCC000000000000000000006 /* NikonCameraSessionTests.swift */,
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
 				TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */,
 				TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */,
@@ -317,7 +312,6 @@
 				DIAG00000000000000000001 /* AppDiagnostics.swift */,
 				C0DE00000000000000000002 /* NativeAppRoot.swift */,
 				C0DE00000000000000000017 /* NativeCameraSession.swift */,
-				OCC000000000000000000004 /* NikonCameraSession.swift */,
 				C0DE00000000000000000019 /* NativeCameraDiscovery.swift */,
 				INFR00000000000000000001 /* InfrastructureCameraFinder.swift */,
 				PTPT00000000000000000001 /* PTPIPTransport.swift */,
@@ -552,7 +546,6 @@
 				TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */,
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
 				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
-				OCC000000000000000000007 /* NikonCameraSessionTests.swift in Sources */,
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
 				TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */,
 				TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */,
@@ -567,7 +560,6 @@
 				DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */,
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,
 				C0DE00000000000000000016 /* NativeCameraSession.swift in Sources */,
-				OCC000000000000000000005 /* NikonCameraSession.swift in Sources */,
 				C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */,
 				PTPT00000000000000000002 /* PTPIPTransport.swift in Sources */,
 				USBT00000000000000000002 /* USBCameraTransport.swift in Sources */,

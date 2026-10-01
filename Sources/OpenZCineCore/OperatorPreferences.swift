@@ -425,60 +425,9 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
 
 /// Persistable operator settings for monitor controls and local view assists.
 public struct OperatorPreferences: Codable, Equatable, Sendable {
-    public enum StreamPreset: String, CaseIterable, Codable, Equatable, Sendable {
-        case fast = "Fast"
-        case balanced = "Balanced"
-        case quality = "Quality"
-
-        /// `LiveViewImageSize` byte: 1 ≈ QVGA (≤320×240), 2 ≈ VGA (≤640×480), 3 ≈ XGA (≤1024×768).
-        /// These bound the frame; a wide sensor readout fills the box, it does not match it.
-        public var liveViewImageSize: UInt8 {
-            switch self {
-            case .fast: 1
-            case .balanced: 2
-            case .quality: 3
-            }
-        }
-    }
-
-    public enum QualityBias: String, CaseIterable, Codable, Equatable, Sendable {
-        case latency = "Latency"
-        case balanced = "Balanced"
-        case detail = "Detail"
-
-        /// Operator-facing name. Deliberately the same Fast / Balanced / Quality vocabulary as
-        /// ``StreamPreset``: both controls step the same latency-against-detail axis — one by
-        /// frame size, one by compression grade — so naming them differently only invited the
-        /// operator to work out which scale they were on.
-        ///
-        /// Both shells read this, so a label can never mean one compression byte on iPhone and a
-        /// different one on Android — which is what happened while the control had two positions
-        /// and "Size" stood for both `latency` and `balanced`.
-        public var settingsLabel: String {
-            switch self {
-            case .latency: "Fast"
-            case .balanced: "Balanced"
-            case .detail: "Quality"
-            }
-        }
-
-        /// `LiveViewImageCompression` byte. The property is a 6-value enum folding two axes —
-        /// a grade (Basic / Normal / **Fine**) and a tie-break (size priority vs quality
-        /// priority) — so the operator's three steps walk the grades and take the quality-priority
-        /// side wherever detail is what was asked for.
-        ///
-        /// Previously mapped to 1/2/3 on the assumption of a 3-value property, which meant the
-        /// **Fine** grade was unreachable: the top setting was only Normal, and the "steps" landed
-        /// mid-grade. Every assist that reads fine detail — peaking most of all — was capped by it.
-        /// [verify-on-HW: 5 accepted, and visibly finer than 3]
-        public var liveViewImageCompression: UInt8 {
-            switch self {
-            case .latency: 0  // Basic, size priority — smallest frames, lowest latency
-            case .balanced: 3  // Normal, quality priority
-            case .detail: 5  // Fine, quality priority
-            }
-        }
-    }
+    /// Live-view frame size and compression are Nikon property bytes (OpenCineNikon).
+    public typealias StreamPreset = LiveViewStreamPreset
+    public typealias QualityBias = LiveViewQualityBias
 
     public init(
         dispOrder: [DispMode],
@@ -2052,5 +2001,30 @@ public enum CommandGridOrder {
         let clamped = min(max(index, 0), result.count)
         result.insert(kind, at: clamped)
         return result
+    }
+}
+
+extension MonitorAssistTool {
+    /// Assist tools that apply to still photography: the exposure aids (peaking, false
+    /// color, zebra, histogram) plus the composition aids photographers actually use
+    /// (grid, level, de-squeeze). Everything else is cinema-only, which keeps the photo toolbar
+    /// deliberately shorter so the stills strip gets the bar width.
+    ///
+    /// De-squeeze is here because anamorphic lenses are used for stills too, and a squeezed
+    /// preview makes faces, framing and edge behaviour impossible to judge on a tethered shoot.
+    /// It is a display transform in every surface it reaches; the camera original is never
+    /// touched.
+    public var appliesToPhotography: Bool {
+        switch self {
+        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
+            .desqueeze, .mirror, .magnification:
+            // Mirror joins de-squeeze for the same reason: a body turned back at the subject is
+            // just as common on a stills shoot, and both are display transforms that never reach
+            // the camera original.
+            true
+        case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
+            .guides, .crosshair:
+            false
+        }
     }
 }

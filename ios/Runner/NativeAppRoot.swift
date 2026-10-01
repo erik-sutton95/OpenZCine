@@ -7922,7 +7922,10 @@ final class NativeAppModel {
                 // camera accepts the command do we restart the preview at its recording-aware size.
                 applyThermalStreamStepDownIfNeeded()
             } catch {
-                if let operation { controlSession?.commandFailed(operation, error) }
+                if let operation {
+                    controlSession?.commandFailed(
+                        operation, cameraRefused: NativeCameraSessionError.isCameraRefusal(error))
+                }
                 // Back to what the camera last reported, not an assumed opposite of the target.
                 isRecording = reportedRecording ?? !start
                 cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
@@ -8552,7 +8555,10 @@ final class NativeAppModel {
                 connectionMessage = "\(pending.picker.title) set to \(pending.value)."
             }
         } catch {
-            if let operation = pending.operation { controlSession?.commandFailed(operation, error) }
+            if let operation = pending.operation {
+                controlSession?.commandFailed(
+                    operation, cameraRefused: NativeCameraSessionError.isCameraRefusal(error))
+            }
             // The camera refused the write — the body's "Control lock" has this control locked
             // (it can lock shutter / aperture / focus). Flag it so the bar shows a lock, and
             // revert the optimistic value to what the camera actually reports.
@@ -12631,8 +12637,8 @@ final class NativeAppModel {
         // CORE-02: ISO and white balance go through the common camera-session seam, which admits
         // the value against the camera-reported domain and tracks it to readback. What it admits
         // comes back through `queuePickerWrites`; there is no second path for these two.
-        if let controlSession,
-            let setting = NikonCameraSession.setting(picker: picker, label: value)
+        if let controlSession, let nikon = picker.nikonControlSetting,
+            let setting = NikonCameraSession.setting(nikon, label: value)
         {
             if case .rejected(let reason) = controlSession.request(.set(setting)).stage {
                 connectionMessage = "\(picker.title) \(value) was not sent (\(reason))."
@@ -12750,6 +12756,12 @@ final class NativeAppModel {
 // CORE-02: the app's command service as the Nikon seam drives it. Same queue, same safe point,
 // same optimistic bar and button as before; only the bookkeeping moved into the seam.
 extension NativeAppModel: NikonControlDriver {
+    func queueSettingWrites(
+        _ label: String, for setting: NikonControlSetting, operation: OperationID?
+    ) -> Int {
+        queuePickerWrites(label, for: CameraPicker(setting), operation: operation)
+    }
+
     var nikonControlFacts: NikonControlFacts {
         let photography = StillCapturePolicy.prefersPhotographyChrome(
             selector: reportedPropertySnapshot.captureSelector)
@@ -14701,5 +14713,31 @@ extension NativeAppModel {
             $0.exportStatus = status
         }
         refreshMediaClips()
+    }
+}
+
+// The two pickers the Nikon session seam (OpenCineNikon `NikonCameraSession`) owns.
+extension CameraPicker {
+    init(_ setting: NikonControlSetting) {
+        switch setting {
+        case .iso: self = .iso
+        case .whiteBalance: self = .whiteBalance
+        }
+    }
+
+    var nikonControlSetting: NikonControlSetting? {
+        switch self {
+        case .iso: .iso
+        case .whiteBalance: .whiteBalance
+        default: nil
+        }
+    }
+}
+
+extension NativeCameraSessionError {
+    /// True when the body answered the command with a PTP refusal (not a lost transaction).
+    static func isCameraRefusal(_ error: any Error) -> Bool {
+        if case NativeCameraSessionError.operationRejected = error { return true }
+        return false
     }
 }

@@ -10,6 +10,7 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | CORE-02 (Nikon adapter on OpenCineCore) + CORE-01b update | `opencine/core-02-nikon` | 6bce2301 |
 | STATE-01 (Nikon session ownership) | `opencine/state-01-nikon` (on core-02) | 8de98639 |
 | MEDIA-01 (CubeLUT, FrameRateSampler from OpenCineMedia) | `opencine/media-01` | ba1e340b |
+| VENDOR-02 (Runner links OpenZCineCore; Nikon code in OpenCineNikon) | `opencine/vendor-02-nikon` (on integration) | see branch |
 
 Shared package: `../OpenCineCore`, pinned in `opencine-pins.txt` (one line, OpenCineCore
 28a0196, which contains the MEDIA-01 commit 4d001e4) and fetched in CI by
@@ -17,6 +18,14 @@ Shared package: `../OpenCineCore`, pinned in `opencine-pins.txt` (one line, Open
 `../../OpenCineCore`, that provides both the OpenCineCore and OpenCineMedia products. The root
 `Package.swift` links OpenCineMedia only, and the Gradle `stageSwiftCore` inputs fingerprint
 `../OpenCineCore/Package.swift` and `Sources/OpenCineMedia/**`.
+
+VENDOR-02: the Runner and Watch targets link the `OpenZCineCore` product of the local package
+`..` instead of compiling its sources (each implementation is compiled once). The PTP wire,
+Nikon properties/profiles/media naming, discovery/connect/session policy and `NikonCameraSession`
+live in `../OpenCineNikon` (pinned in `opencine-pins.txt`), which `OpenZCineCore` depends on and
+re-exports (`Sources/OpenZCineCore/OpenCineNikon.swift`). `stageSwiftCore` also fingerprints
+`../OpenCineNikon/Package.swift` and `Sources/**`. The Android JNI facade and its
+`AndroidSessionOwnerRegistry` stay here and link the package through `OpenZCineCore`.
 
 Not included: the engine-port UI candidate `opencine/ui-03-engine-port-candidate` (OpenCineUI on
 the unmerged `feat/monitor-engine-port`). It stays separate until the engine-port decision is made.
@@ -56,6 +65,11 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
    still render on the feed; the demo shell feed still works.
 8. Media: an imported `.cube` LUT renders on the live feed as before (iOS and Android), and the
    iOS FPS readout stays steady across a Wi-Fi hiccup.
+
+9. VENDOR-02 packaging (no intended behavior change): connect over Wi-Fi (camera access point
+   and router) and USB, pairing and saved-camera reconnect, passive discovery still lists the
+   body without probing it, ISO/WB with an HDMI picture and with no picture, record with live
+   view, media browse. iOS, Watch app and Android.
 
 ## Before this can ship
 

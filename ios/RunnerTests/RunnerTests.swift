@@ -2284,3 +2284,28 @@ extension RunnerTests {
         XCTAssertEqual(noRoute, RedLUTDownloadAvailability.blockedNoInternet.blockedReason)
     }
 }
+
+/// The app side of the OpenCineNikon session port: picker routing and the refusal mapping.
+final class NikonSessionPortMappingTests: XCTestCase {
+    @MainActor
+    func testOnlyISOAndWhiteBalanceRouteThroughTheSessionSeam() {
+        for picker in CameraPicker.allCases {
+            let setting = picker.nikonControlSetting
+            XCTAssertEqual(setting != nil, picker == .iso || picker == .whiteBalance, "\(picker)")
+            if let setting {
+                XCTAssertEqual(CameraPicker(setting), picker)
+                XCTAssertEqual(picker.cameraControl, setting.cameraControl)
+            }
+        }
+    }
+
+    func testOnlyAPTPRefusalCountsAsCameraRefused() {
+        XCTAssertTrue(
+            NativeCameraSessionError.isCameraRefusal(
+                NativeCameraSessionError.operationRejected(.setDevicePropValue, .deviceBusy)))
+        XCTAssertFalse(
+            NativeCameraSessionError.isCameraRefusal(
+                NativeCameraSessionError.timeout("SetDevicePropValue")))
+        XCTAssertFalse(NativeCameraSessionError.isCameraRefusal(CancellationError()))
+    }
+}

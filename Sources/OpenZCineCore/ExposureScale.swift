@@ -32,9 +32,7 @@ public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifi
     /// REDWideGamutRGB/Log3G10. The fallback is N-Log for the ZR log-monitoring path; callers that
     /// can report SDR explicitly must gate log assists before using this helper.
     public static func forCameraCodec(_ codec: String) -> ExposureToneCurve {
-        let upper = codec.uppercased()
-        if upper.contains("R3D") || upper.contains("LOG3G10") { return .redLog3G10 }
-        return .nikonNLog
+        PTPCameraPropertyDecoders.isRedLog3G10Codec(codec) ? .redLog3G10 : .nikonNLog
     }
 
     /// Returns a curve only when the supplied signal label positively identifies its transfer

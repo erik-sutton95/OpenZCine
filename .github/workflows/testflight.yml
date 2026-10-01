@@ -73,7 +73,8 @@ jobs:
         run: brew install just swift-format
 
       # Candidate (OpenCine CORE-02 + MEDIA-01): OpenCineCore and OpenCineMedia from
-      # ../OpenCineCore, pinned in opencine-pins.txt. Delete when the app pins OpenCineCore by url + version.
+      # ../OpenCineCore, plus ../OpenCineNikon (VENDOR-02), pinned in opencine-pins.txt.
+      # Delete when the app pins them by url + version.
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
 

@@ -6,8 +6,9 @@
 set -eu
 
 # Candidate (OpenCine CORE-02 + MEDIA-01): the Runner project takes OpenCineCore and OpenCineMedia
-# from ../OpenCineCore, pinned by SHA in opencine-pins.txt. Works only once that repository is
-# published and Xcode Cloud may read it. Delete when the app pins it by url + version.
+# from ../OpenCineCore and OpenCineNikon from ../OpenCineNikon (VENDOR-02), pinned by SHA in
+# opencine-pins.txt. Works only once those repositories are published and Xcode Cloud may
+# read them. Delete when the app pins them by url + version.
 "$CI_PRIMARY_REPOSITORY_PATH/scripts/checkout-opencine.sh"
 
 cat > "$CI_PRIMARY_REPOSITORY_PATH/ios/Runner/Frameio.local.xcconfig" <<EOF

@@ -3,3 +3,4 @@
 # and verify the SHA, so a moved branch upstream cannot change what ships.
 # Temporary: replaced by SwiftPM url + version and Maven coordinates once published.
 OpenCineCore d9f6afc86d81493b2dee4e4d9a1bce15ed438cdc
+OpenCineNikon 46ca4f7abe185e795357710f8cdc66ec6732ee44

@@ -88,7 +88,8 @@ jobs:
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
       # Candidate (OpenCine CORE-02 + MEDIA-01): OpenCineCore (Gradle) and OpenCineMedia (Swift
-      # Android core) from ../OpenCineCore, pinned in opencine-pins.txt. Delete when the app takes
+      # Android core) from ../OpenCineCore, plus ../OpenCineNikon (VENDOR-02), pinned in
+      # opencine-pins.txt. Delete when the app takes
       # the published Maven coordinate and SwiftPM url + version.
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh

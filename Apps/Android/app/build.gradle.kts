@@ -224,6 +224,11 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
         fileTree(repositoryRoot.resolve("../OpenCineCore")) {
             include("Package.swift", "Sources/OpenCineMedia/**", "Sources/OpenCineCore/**")
         },
+        // OpenCineNikon (PTP wire, properties, session policy): OpenZCineCore depends on and
+        // re-exports it from the sibling checkout, so a package edit must restage the core.
+        fileTree(repositoryRoot.resolve("../OpenCineNikon")) {
+            include("Package.swift", "Sources/**")
+        },
         stageSwiftCoreScript,
     )
     inputs.property("swiftExecutable", providers.environmentVariable("SWIFT_EXECUTABLE").orElse("auto"))

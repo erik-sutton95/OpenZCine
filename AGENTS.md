@@ -31,6 +31,11 @@ Install local tooling with `just setup` (macOS / Homebrew).
   The iOS Runner and Watch targets link it as the `OpenZCineCore` product of the local package
   at the repository root (`ios/Runner.xcodeproj` references `..`), so a new core file needs no
   Xcode registration; app files that use core types `import OpenZCineCore`.
+- `../OpenCineNikon` (sibling, pinned in `opencine-pins.txt`): the Nikon PTP/IP and USB wire,
+  property codes and decoders, profiles, media naming, discovery/connect/session policy and
+  `NikonCameraSession`. `OpenZCineCore` re-exports it (`Sources/OpenZCineCore/OpenCineNikon.swift`),
+  so app, Watch and JNI facade code keeps importing `OpenZCineCore`. Edit Nikon protocol code and
+  its tests there, then bump the pin.
 - `../OpenCineCore` (sibling, pinned in `opencine-pins.txt`, `scripts/checkout-opencine.sh`):
   `OpenCineMedia` supplies `CubeLUT` and `FrameRateSampler` (scoped re-exports in
   `Sources/OpenZCineCore/CubeLUT.swift`; the Runner project links the product).
