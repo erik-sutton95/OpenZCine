@@ -215,8 +215,11 @@ struct NikonCameraSessionTests {
         let movie = Driver(Self.movieFacts())
         let session = NikonCameraSession(driver: movie, serialNumber: "1")
         let coalesced = session.request(.set(.iso(.manual(500)))).operation
-        session.operationDropped(coalesced)
-        #expect(stage(session, coalesced) == .failed(.notSent))
+        session.operationDropped(coalesced, superseded: true)
+        #expect(stage(session, coalesced) == .failed(.superseded))
+        let reset = session.request(.set(.iso(.manual(500)))).operation
+        session.operationDropped(reset)
+        #expect(stage(session, reset) == .failed(.notSent))
 
         let inFlight = session.request(.set(.iso(.manual(640)))).operation
         session.operationSent(inFlight)
@@ -232,13 +235,6 @@ struct NikonCameraSessionTests {
     }
 
     private func stage(_ session: NikonCameraSession, _ operation: OperationID) -> CommandStage? {
-        session.submit(
-            CameraCommand(
-                .stopRecording,
-                preconditions: CommandPreconditions(
-                    session: session.id, epoch: ControlEpoch(1),
-                    capabilityRevision: CapabilityRevision()),
-                operation: operation)
-        ).stage
+        session.receipt(of: operation)?.stage
     }
 }

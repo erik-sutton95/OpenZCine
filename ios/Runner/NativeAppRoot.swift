@@ -1,5 +1,6 @@
 import AVFAudio
 import Network
+import OpenCineCore
 import SwiftUI
 import UIKit
 import ZIPFoundation
@@ -4476,7 +4477,7 @@ final class NativeAppModel {
     /// separately from `isRecording` so the optimistic UI flip isn't undone before the safe point runs.
     private var pendingRecordStart: Bool?
     /// The seam operation the queued record command belongs to.
-    @ObservationIgnored private var pendingRecordOperation: NikonCameraSession.Operation?
+    @ObservationIgnored private var pendingRecordOperation: OperationID?
     /// CORE-02 common camera-session seam over this link (ISO, white balance, record). Created
     /// with `cameraSession` and closed with it. Those three commands run through it and only it.
     @ObservationIgnored private var controlSession: NikonCameraSession?
@@ -4527,7 +4528,7 @@ final class NativeAppModel {
         let value: String
         let write: PTPCameraPropertyWrite
         /// The seam operation this write confirms, when it came through `controlSession`.
-        var operation: NikonCameraSession.Operation? = nil
+        var operation: OperationID? = nil
     }
 
     /// Keeps only the last queued value for each concrete PTP property. Rapid drags or taps can
@@ -4535,16 +4536,18 @@ final class NativeAppModel {
     /// states the operator has already left. Coalescing by property preserves dependent writes such
     /// as white-balance mode followed by Kelvin temperature.
     private func enqueueCameraWrite(_ pending: PendingCameraWrite) {
-        dropPendingCameraWrites { $0.write.property == pending.write.property }
+        dropPendingCameraWrites(superseded: true) { $0.write.property == pending.write.property }
         pendingCameraWrites.append(pending)
     }
 
     /// Removes queued writes, telling the seam their operations will never be sent.
     private func dropPendingCameraWrites(
-        where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
+        superseded: Bool = false, where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
     ) {
         for dropped in pendingCameraWrites where shouldDrop(dropped) {
-            if let operation = dropped.operation { controlSession?.operationDropped(operation) }
+            if let operation = dropped.operation {
+                controlSession?.operationDropped(operation, superseded: superseded)
+            }
         }
         pendingCameraWrites.removeAll(where: shouldDrop)
     }
@@ -12642,7 +12645,7 @@ final class NativeAppModel {
     /// write, readback). Returns the number of property writes queued.
     @discardableResult
     func queuePickerWrites(
-        _ value: String, for picker: CameraPicker, operation: NikonCameraSession.Operation?
+        _ value: String, for picker: CameraPicker, operation: OperationID?
     ) -> Int {
         guard let cameraControl = picker.cameraControl else {
             connectionMessage =
@@ -12766,9 +12769,11 @@ extension NativeAppModel: NikonControlDriver {
             whiteBalancePresets: presets)
     }
 
-    func queueRecord(start: Bool, operation: NikonCameraSession.Operation) {
+    func queueRecord(start: Bool, operation: OperationID) {
         // A press the safe point has not serviced yet is replaced, never sent twice.
-        if let superseded = pendingRecordOperation { controlSession?.operationDropped(superseded) }
+        if let superseded = pendingRecordOperation {
+            controlSession?.operationDropped(superseded, superseded: true)
+        }
         pendingRecordOperation = operation
         // Optimistically flip the button now (snappy), then queue the actual record op for the next
         // live-view safe point; if the camera rejects it, the safe point reverts the state.

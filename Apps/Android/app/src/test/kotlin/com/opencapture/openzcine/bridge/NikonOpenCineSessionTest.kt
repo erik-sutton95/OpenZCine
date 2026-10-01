@@ -226,6 +226,8 @@ class NikonOpenCineSessionTest {
             assertEquals(RecordingState.RECORDING, seam.snapshots.value.recording.value)
 
             val stop = seam.request(CameraCommandIntent.StopRecording)
+            assertEquals(CommandStage.AwaitingObservation, seam.receipt(stop.operation)?.stage, "read without waiting")
+            assertNull(seam.receipt(OperationID()))
             advanceTimeBy(6.seconds)
             runCurrent()
             assertEquals(CommandStage.TimedOut, seam.outcome(stop.operation)?.stage)

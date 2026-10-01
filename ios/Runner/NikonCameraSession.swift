@@ -9,9 +9,6 @@ import OpenCineCore
 // control pump, readback) and reports each step back through the hooks below. Picture
 // presentation is not a precondition: ISO and white balance are admitted with no live picture,
 // while record keeps its existing live-view preflight as `.unavailable(.notReady)`.
-//
-// Never use `@Observable` in this file, and never import OpenCineCore into a file that does:
-// OpenCineCore's `Observation` type shadows the Observation module and breaks the macro.
 
 /// Camera facts the adapter maps, read from the app model on demand.
 struct NikonControlFacts {
@@ -44,9 +41,6 @@ protocol NikonControlDriver: AnyObject {
 /// closed with it, so a reconnect is a new session ID.
 @MainActor
 final class NikonCameraSession: CameraSession {
-    /// For files that cannot import OpenCineCore (see the note at the top).
-    typealias Operation = OperationID
-
     static let integration = IntegrationID("org.opencapture.nikon-ptp")
 
     nonisolated let id: CameraSessionID
@@ -140,6 +134,8 @@ final class NikonCameraSession: CameraSession {
         }
     }
 
+    func receipt(of operation: OperationID) -> CommandReceipt? { receipts[operation] }
+
     func outcome(of operation: OperationID) async -> CommandReceipt? {
         guard let receipt = receipts[operation] else { return nil }
         if receipt.isFinished || Task.isCancelled { return receipt }
@@ -184,13 +180,17 @@ final class NikonCameraSession: CameraSession {
         transition(operation, .sent)
     }
 
-    /// A queued command of this operation will never be sent: a newer value coalesced it away,
-    /// a newer press replaced it, or the queue was reset.
-    func operationDropped(_ operation: OperationID) {
+    /// A queued command of this operation will never be sent: a newer value coalesced it away or
+    /// a newer press replaced it (`superseded`), or the queue was reset.
+    func operationDropped(_ operation: OperationID, superseded: Bool = false) {
         guard let receipt = receipts[operation], !receipt.isFinished else { return }
         owedWrites[operation] = nil
         recordTargets[operation] = nil
-        transition(operation, receipt.stage == .admitted ? .failed(.notSent) : .outcomeUnknown)
+        transition(
+            operation,
+            superseded
+                ? .failed(.superseded)
+                : receipt.stage == .admitted ? .failed(.notSent) : .outcomeUnknown)
     }
 
     /// The camera accepted one property write of a setting operation. `readback` is what it
@@ -394,13 +394,13 @@ final class NikonCameraSession: CameraSession {
     /// Keeps an unchanged observation and its timestamp; a new value is camera-reported now, and
     /// no value is unknown.
     private static func observe<Value: Equatable>(
-        _ observation: inout Observation<Value>, _ value: Value?, at instant: MonotonicInstant,
+        _ observation: inout ObservedValue<Value>, _ value: Value?, at instant: MonotonicInstant,
         precision: ObservationPrecision? = nil
     ) {
         guard observation.value != value else { return }
         observation =
             value.map {
-                Observation($0, origin: .cameraReported, at: instant, precision: precision)
+                ObservedValue($0, origin: .cameraReported, at: instant, precision: precision)
             }
             ?? .unknown
     }

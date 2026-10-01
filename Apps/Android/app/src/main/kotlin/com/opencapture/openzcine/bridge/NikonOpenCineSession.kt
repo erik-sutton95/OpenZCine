@@ -21,7 +21,7 @@ import com.opencapture.opencine.core.ControlEpoch
 import com.opencapture.opencine.core.ISOValue
 import com.opencapture.opencine.core.IntegrationID
 import com.opencapture.opencine.core.MonotonicInstant
-import com.opencapture.opencine.core.Observation
+import com.opencapture.opencine.core.ObservedValue
 import com.opencapture.opencine.core.ObservationOrigin
 import com.opencapture.opencine.core.ObservationPrecision
 import com.opencapture.opencine.core.OperationID
@@ -167,10 +167,12 @@ internal class NikonOpenCineSession(
         return receipt.first { it.isFinished }
     }
 
+    override fun receipt(operation: OperationID): CommandReceipt? = synchronized(lock) { receipts[operation]?.value }
+
     override suspend fun close(reason: SessionCloseReason): Unit = closeNow(reason)
 
-    /** [close] for callers that cannot suspend (a Compose dispose). Never sends a command. */
-    fun closeNow(reason: SessionCloseReason) {
+    /** Never sends a command. */
+    override fun closeNow(reason: SessionCloseReason) {
         synchronized(lock) {
             if (closed) return
             closed = true
@@ -461,15 +463,15 @@ internal class NikonOpenCineSession(
             }
 
         /** Keeps an unchanged observation and its timestamp; a new value is camera-reported now. */
-        private fun <T : Any> Observation<T>.observe(
+        private fun <T : Any> ObservedValue<T>.observe(
             value: T?,
             at: MonotonicInstant,
             precision: ObservationPrecision? = null,
-        ): Observation<T> =
+        ): ObservedValue<T> =
             when {
                 this.value == value -> this
-                value == null -> Observation.unknown
-                else -> Observation(value, ObservationOrigin.CAMERA_REPORTED, at, precision = precision)
+                value == null -> ObservedValue.unknown
+                else -> ObservedValue(value, ObservationOrigin.CAMERA_REPORTED, at, precision = precision)
             }
 
         private fun CameraControlException.toStage(): CommandStage =
