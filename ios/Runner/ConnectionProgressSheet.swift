@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenZCineCore
 
 /// Connection progress sheet: one centered light card for every flow (scanned camera-AP join,
 /// saved-camera reconnect, USB) and every phase — confirm → join → discover → pair → connect →

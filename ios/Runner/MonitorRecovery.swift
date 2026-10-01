@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenZCineCore
 
 /// Recovery affordance shown over a **held** live-view frame after an established session dropped.
 ///

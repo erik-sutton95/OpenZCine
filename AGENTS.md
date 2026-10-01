@@ -28,6 +28,9 @@ Install local tooling with `just setup` (macOS / Homebrew).
 ## Where things live
 
 - `Sources/OpenZCineCore/` — production Swift shared core.
+  The iOS Runner and Watch targets link it as the `OpenZCineCore` product of the local package
+  at the repository root (`ios/Runner.xcodeproj` references `..`), so a new core file needs no
+  Xcode registration; app files that use core types `import OpenZCineCore`.
 - `../OpenCineCore` (sibling, pinned in `opencine-pins.txt`, `scripts/checkout-opencine.sh`):
   `OpenCineMedia` supplies `CubeLUT` and `FrameRateSampler` (scoped re-exports in
   `Sources/OpenZCineCore/CubeLUT.swift`; the Runner project links the product).

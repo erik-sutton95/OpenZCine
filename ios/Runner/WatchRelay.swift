@@ -3,6 +3,7 @@ import ImageIO
 import UIKit
 import UniformTypeIdentifiers
 import WatchConnectivity
+import OpenZCineCore
 
 /// A minimal `@unchecked Sendable` box for handing a non-`Sendable` value across an isolation hop.
 /// Used only to carry a `WCSession` reply handler onto the main actor; the underlying closure is

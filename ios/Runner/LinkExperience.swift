@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenZCineCore
 
 struct LinkExperience: View {
     @Environment(NativeAppModel.self) private var model

@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import OpenZCineCore
 import XCTest
 
 @testable import Runner

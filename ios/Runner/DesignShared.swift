@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenZCineCore
 
 /// Shared visual constants used by the startup and live-monitor design systems.
 enum DesignTokens {

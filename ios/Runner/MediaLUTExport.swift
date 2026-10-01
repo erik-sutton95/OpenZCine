@@ -5,6 +5,7 @@ import CoreVideo
 import Foundation
 import UIKit
 import os
+import OpenZCineCore
 
 /// LUT baking for media playback preview and export. Builds the same `CIColorCube` pipeline the live
 /// view uses (`cube.rgbaComponents` + `inputCubeDimension`, display-encoded sRGB working space,

@@ -1,5 +1,6 @@
 import Foundation
 import os
+import OpenZCineCore
 
 private let frameioLogger = Logger(subsystem: "OpenZCine", category: "frameio")
 

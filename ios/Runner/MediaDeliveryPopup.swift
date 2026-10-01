@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import OpenZCineCore
 
 /// Drives delivery popup presentation from playback transport buttons.
 struct MediaDeliveryPresentation: Identifiable {

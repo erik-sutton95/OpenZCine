@@ -2,6 +2,7 @@ import Foundation
 import ImageIO
 import Testing
 import UniformTypeIdentifiers
+import OpenZCineCore
 
 @testable import Runner
 

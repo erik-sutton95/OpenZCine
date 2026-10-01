@@ -5,6 +5,7 @@ import SwiftUI
 import UIKit
 import ZIPFoundation
 import os
+import OpenZCineCore
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",

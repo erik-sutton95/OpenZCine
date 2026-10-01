@@ -1,4 +1,5 @@
 import Foundation
+import OpenZCineCore
 
 /// Bundled scope sample plus derived assist readings — published once per throttle tick so SwiftUI
 /// invalidates one property instead of separate histogram / traffic-light updates.

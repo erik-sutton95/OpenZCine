@@ -4,6 +4,7 @@ import MetricKit
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import OpenZCineCore
 
 /// Privacy-safe, high-value application transitions retained across launches for tester support.
 ///

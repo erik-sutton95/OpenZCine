@@ -1,5 +1,6 @@
 import Foundation
 import OpenCineCore
+import OpenZCineCore
 
 // CORE-02 (OpenCine platform plan, section 13): the Nikon PTP control slice behind the common
 // camera-session seam. Connect/status, movie ISO, white balance and explicit record start/stop.

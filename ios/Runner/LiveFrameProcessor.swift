@@ -1,6 +1,7 @@
 import CoreImage
 import UIKit
 import os
+import OpenZCineCore
 
 /// Process-wide memo of generated/parsed LUT cubes, keyed by `LUTSelection.cacheKey` (or a
 /// false-colour scale key). The log-look cubes run ~10⁵ `pow`/`exp` calls to build, so generating

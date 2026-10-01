@@ -2,6 +2,7 @@ import MetalKit
 import MetalPerformanceShaders
 import SwiftUI
 import UIKit
+import OpenZCineCore
 
 /// GPU rasterizer for the waveform and parade point traces — the pinned-look replacement for the
 /// Canvas point-fill loops, which issued tens of thousands of individual `Path` fills per redraw

@@ -3,6 +3,7 @@ import Network
 import SwiftUI
 import UIKit
 import XCTest
+@testable import OpenZCineCore
 
 @testable import Runner
 

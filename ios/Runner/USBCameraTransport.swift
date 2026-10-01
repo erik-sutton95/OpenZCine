@@ -1,6 +1,7 @@
 import Foundation
 import ImageCaptureCore
 import os
+import OpenZCineCore
 
 private let usbLogger = Logger(
     subsystem: "OpenZCine",

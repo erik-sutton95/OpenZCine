@@ -187,6 +187,8 @@ recognises returning clients without operator intervention.
 Business logic and protocol state live in `Sources/OpenZCineCore`. Platform shells (`ios/Runner`,
 `Apps/Android`) own rendering, UI state, and platform lifecycle. Android reuses the core through
 the Swift SDK for Android and `Sources/OpenZCineAndroidFacade` without duplicating protocol logic.
+The iOS app and Watch app link the `OpenZCineCore` package product (they do not compile core
+sources directly), so each implementation is compiled exactly once.
 
 ### ADR-004 — Flutter Prototype Archived
 

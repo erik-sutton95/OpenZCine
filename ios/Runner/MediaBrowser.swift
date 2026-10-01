@@ -2,6 +2,7 @@ import AVFoundation
 import ImageIO
 import SwiftUI
 import UIKit
+import OpenZCineCore
 
 /// Decodes cell images downsampled to a bounded pixel size, off the main actor (same pattern as
 /// `FrameDecoder`). Cells must never decode a full-resolution still — a 45 MP HEIF is ~180 MB

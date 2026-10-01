@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import OpenZCineCore
 
 @testable import Runner
 

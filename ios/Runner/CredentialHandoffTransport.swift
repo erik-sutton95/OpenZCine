@@ -3,6 +3,7 @@ import Foundation
 import Network
 import SwiftUI
 import os
+import OpenZCineCore
 
 /// Peer-to-peer transport for ``CameraCredentialHandoff`` on Apple devices.
 ///

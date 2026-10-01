@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import NetworkExtension
 import os
+import OpenZCineCore
 
 // SAFETY: `@unchecked Sendable` — holds no mutable stored state; all work runs in local async scopes.
 final class NativeCameraDiscoveryService: @unchecked Sendable {

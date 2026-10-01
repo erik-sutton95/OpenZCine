@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenZCineCore
 
 /// DISP mode toggle for the portrait system bar — a compact twin of the landscape rail's
 /// `displayButton` (which is private to its module). Cycles live → clean → command via the same

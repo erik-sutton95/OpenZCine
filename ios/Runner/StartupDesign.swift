@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import OpenZCineCore
 
 /// Maps technical connection/discovery status strings to operator-friendly copy for startup screens.
 enum StartupConnectionCopy {

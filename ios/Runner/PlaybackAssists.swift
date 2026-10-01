@@ -3,6 +3,7 @@ import Accelerate
 import MediaToolbox
 import OSLog
 import os
+import OpenZCineCore
 
 private let playbackAudioLogger = Logger(subsystem: "OpenZCine", category: "media-playback-audio")
 

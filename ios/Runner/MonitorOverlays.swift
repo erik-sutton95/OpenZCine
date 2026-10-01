@@ -1,5 +1,6 @@
 import CoreMotion
 import SwiftUI
+import OpenZCineCore
 
 struct FeedAssistOverlayModule: View {
     @Environment(NativeAppModel.self) private var model

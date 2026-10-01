@@ -1,4 +1,5 @@
 import Foundation
+import OpenZCineCore
 
 /// Projects available in a Frame.io workspace for the delivery-sheet picker.
 struct FrameioProjectListing: Equatable, Sendable {

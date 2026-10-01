@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import os
+import OpenZCineCore
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",

@@ -3,6 +3,7 @@ import Foundation
 import UIKit
 import VideoToolbox
 import os
+import OpenZCineCore
 
 private let videoLogger = Logger(subsystem: "com.opencapture.openzcine", category: "relay-video")
 

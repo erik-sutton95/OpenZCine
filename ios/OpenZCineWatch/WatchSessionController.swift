@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import UIKit
 import WatchConnectivity
+import OpenZCineCore
 
 /// watchOS-side WatchConnectivity client. Decodes the relay envelopes from the iPhone into an
 /// observable model the UI renders, and sends the Record toggle command back with a reply handler.

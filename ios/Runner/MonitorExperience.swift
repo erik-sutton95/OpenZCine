@@ -1,6 +1,7 @@
 import CoreImage
 import SwiftUI
 import UIKit
+import OpenZCineCore
 
 enum LiveDesign {
     static let background = Color(red: 0.072, green: 0.064, blue: 0.053)

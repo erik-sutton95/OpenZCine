@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenZCineCore
 
 /// Unified top information bar for both monitor shells, selected by `MonitorZoneStyle`.
 ///

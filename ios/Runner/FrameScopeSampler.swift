@@ -1,4 +1,5 @@
 import UIKit
+import OpenZCineCore
 
 /// Samples a live-view JPEG frame into scope data (per-channel histograms + waveform/parade points)
 /// **off the main actor**.

@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import OpenZCineCore
 
 /// Presents RED's real IPP2 Output Presets page so the operator accepts RED's terms and triggers
 /// RED's own download. We **present, we do not bypass**: the bytes come from RED, terms are

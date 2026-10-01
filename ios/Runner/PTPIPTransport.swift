@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import os
+import OpenZCineCore
 
 private let transportLogger = Logger(
     subsystem: "OpenZCine",

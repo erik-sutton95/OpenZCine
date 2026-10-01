@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenZCineCore
 
 /// Stacked scope panels for the portrait v2 shell. Renders the first ≤2 enabled scope tools in
 /// canonical order (`[.waveform, .parade, .histogram, .trafficLights]` ∩ visible), each panel

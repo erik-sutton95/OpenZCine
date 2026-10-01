@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenZCineCore
 
 /// Isolated infrastructure (same-LAN Wi‑Fi) camera search.
 ///

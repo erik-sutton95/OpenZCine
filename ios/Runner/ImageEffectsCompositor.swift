@@ -1,6 +1,7 @@
 import CoreImage
 import Foundation
 import os
+import OpenZCineCore
 
 /// Shared Core Image pipeline for monitor analysis effects (false colour, LUT, peaking, zebra).
 /// Used by the live-view renderer and media-playback `AVVideoComposition` so both paths share the

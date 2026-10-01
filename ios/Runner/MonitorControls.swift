@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import OpenZCineCore
 
 /// Light selection tap for operator-setup controls; respects the Controls-tab haptics preference.
 enum OperatorSettingsHaptics {

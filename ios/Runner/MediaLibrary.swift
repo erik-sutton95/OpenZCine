@@ -1,5 +1,6 @@
 import Foundation
 import os
+import OpenZCineCore
 
 /// Media library diagnostics (Media page cache). Filter Console for subsystem `OpenZCine`, category
 /// `media-store`.

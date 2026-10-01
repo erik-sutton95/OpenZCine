@@ -2,6 +2,7 @@ import AVFoundation
 import CoreImage
 import UIKit
 import os
+import OpenZCineCore
 
 private let uvcLogger = Logger(subsystem: "com.opencapture.openzcine", category: "uvc-capture")
 

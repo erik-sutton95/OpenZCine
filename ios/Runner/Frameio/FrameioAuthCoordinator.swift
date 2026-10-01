@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import UIKit
+import OpenZCineCore
 
 /// Drives the Adobe IMS OAuth (PKCE) sign-in via `ASWebAuthenticationSession`, exchanges the
 /// authorization code for a token, and persists it to the Keychain. `@MainActor` — it presents UI.

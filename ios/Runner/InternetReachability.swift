@@ -2,6 +2,7 @@ import Foundation
 import Network
 import NetworkExtension
 import Observation
+import OpenZCineCore
 
 /// Observable wrapper over `NWPathMonitor` that publishes whether the OS reports a usable network
 /// path and whether the phone is joined to the camera's local-only Wi‑Fi AP.

@@ -2,6 +2,7 @@ import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import OpenZCineCore
 
 struct CommandMonitor: View {
     @Environment(NativeAppModel.self) private var model
