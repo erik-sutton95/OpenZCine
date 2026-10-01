@@ -96,21 +96,19 @@ class AssistStateTest {
         val state = AssistState(FeedEffects.NONE, null)
         state.toggle(AssistTool.PEAK)
         state.toggle(AssistTool.ZEBRA)
-        assertEquals(state.effects, FeedEffectsState.current)
-        assertTrue(FeedEffectsState.current.peaking)
-        assertTrue(FeedEffectsState.current.zebra)
+        assertTrue(state.effects.peaking)
+        assertTrue(state.effects.zebra)
     }
 
     @Test
-    fun `initial effects mirror activates explicitly after construction`() {
-        FeedEffectsState.current = FeedEffects.NONE
-        val expected = FeedEffects(peaking = true, zebra = true)
-        val state = AssistState(expected, null)
+    fun `two assist states keep independent effects`() {
+        val first = AssistState(FeedEffects.NONE, null)
+        val second = AssistState(FeedEffects(zebra = true), null)
+        first.toggle(AssistTool.PEAK)
 
-        assertEquals(FeedEffects.NONE, FeedEffectsState.current)
-        state.activateEffectsMirror()
-
-        assertEquals(expected, FeedEffectsState.current)
+        assertTrue(first.effects.peaking)
+        assertFalse(second.effects.peaking)
+        assertTrue(second.effects.zebra)
     }
 
     @Test
@@ -284,7 +282,7 @@ class AssistStateTest {
             .apply()
         val firstSession = AssistState.restore(preferences, null, null)
         firstSession.toggle(AssistTool.PEAK)
-        assertTrue(FeedEffectsState.current.peaking)
+        assertTrue(firstSession.effects.peaking)
 
         val reconnected = AssistState.restore(preferences, null, null)
 

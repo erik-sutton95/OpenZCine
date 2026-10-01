@@ -8,7 +8,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
-import com.opencapture.openzcine.FeedEffectsState
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.lut.StoredLutSelection
@@ -136,14 +135,12 @@ class PlaybackAssistState internal constructor(
             sharedConfiguration: AssistState? = null,
             availableStoredLut: (StoredLutSelection) -> Boolean = { true },
         ): PlaybackAssistState {
-            val liveMirrorBeforeRestore = FeedEffectsState.current
             val effects =
                 AssistState.restore(
                     preferences = preferences,
                     intentEffects = null,
                     intentScope = null,
                     availableStoredLut = availableStoredLut,
-                    mirrorFeedEffectsState = false,
                     persistConfigurationSelections = false,
                 )
             sharedConfiguration?.let { configuration ->
@@ -151,9 +148,6 @@ class PlaybackAssistState internal constructor(
                     configuration.selectedLut,
                     configuration.selectedFalseColorScale,
                 )
-            }
-            check(FeedEffectsState.current == liveMirrorBeforeRestore) {
-                "playback restore must not replace live effect state"
             }
             val framing =
                 preferences.getStringSet(FRAMING_TOOLS_KEY, emptySet()).orEmpty()

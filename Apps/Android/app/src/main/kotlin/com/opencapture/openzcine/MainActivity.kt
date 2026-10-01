@@ -614,7 +614,6 @@ class MainActivity : ComponentActivity() {
                                 availableStoredLut = lutLibrary::contains,
                             )
                         }
-                    LaunchedEffect(watchAssist) { watchAssist.activateEffectsMirror() }
                     val leaveWatch: () -> Unit = {
                         val leaving = watching
                         watchController = null
@@ -707,7 +706,6 @@ class MainActivity : ComponentActivity() {
                                 availableStoredLut = lutLibrary::contains,
                             )
                         }
-                    LaunchedEffect(offlineAssist) { offlineAssist.activateEffectsMirror() }
                     MediaBrowseScreen(
                         cameraID = primary?.cameraID ?: "offline-all-cameras",
                         cameraConnected = false,
@@ -927,9 +925,6 @@ class MainActivity : ComponentActivity() {
                                         availableStoredLut = lutLibrary::contains,
                                     )
                                 }
-                            LaunchedEffect(standaloneAssist) {
-                                standaloneAssist.activateEffectsMirror()
-                            }
                             OperatorSettingsScreen(
                                 session = null,
                                 assistState = standaloneAssist,
@@ -992,7 +987,6 @@ class MainActivity : ComponentActivity() {
                                 availableStoredLut = lutLibrary::contains,
                             )
                         }
-                        LaunchedEffect(assist) { assist.activateEffectsMirror() }
                         val currentSessionState by active.state.collectAsState()
                         val currentCameraProperties by active.cameraProperties.collectAsState()
                         LaunchedEffect(currentSessionState) {
@@ -1517,7 +1511,8 @@ fun MonitorShell(
         when (val current = state) {
             is CameraSessionState.Connected ->
                 if (frameSource != null) {
-                    LiveFeedView(frameSource, modifier = Modifier.fillMaxSize())
+                    // No native core here, so no assist state: the shell feed is unprocessed.
+                    LiveFeedView(frameSource, modifier = Modifier.fillMaxSize(), effects = FeedEffects.NONE)
                 } else {
                     Text(
                         text = current.identity.name,

@@ -14,9 +14,6 @@ import android.graphics.Shader
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import androidx.annotation.RequiresApi
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import java.nio.ByteBuffer
 
@@ -24,15 +21,6 @@ import java.nio.ByteBuffer
 public fun interface LiveFramePreviewBaker {
     /** Returns an owned display-baked bitmap, or null when rendering failed. */
     public fun bakePreview(frame: Bitmap, maximumWidth: Int): Bitmap?
-}
-
-/**
- * Process-local compatibility mirror for callers that have not yet adopted an
- * explicit [AssistState]. Normal monitor construction passes restored effects
- * directly and must never use this mutable value as persistence input.
- */
-object FeedEffectsState {
-    var current: FeedEffects by mutableStateOf(FeedEffects.NONE)
 }
 
 /**

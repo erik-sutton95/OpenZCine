@@ -275,8 +275,8 @@ internal fun AssistTool.titleResource(): Int =
 /**
  * Assist toggle state behind the toolbar: the feed-effect set (LUT / false
  * colour / peaking / zebra, baked by [FeedEffectsRenderer]) and independently
- * selected scope panels. Every change is mirrored into [FeedEffectsState.current]
- * (the engine input `LiveFeedView` reads) and handed to [persist].
+ * selected scope panels. Callers pass [effects] to `LiveFeedView` explicitly (no
+ * process-wide mirror, STATE-01) and every change is handed to [persist].
  *
  * Debug intents still win a session: when the launch intent carried any
  * `zc.assist`/`zc.scopes` selection, [restore] seeds from it verbatim instead
@@ -295,7 +295,6 @@ class AssistState(
     private val persistSelections: (FeedLutSelection, FeedFalseColorScale) -> Unit = { _, _ -> },
     private val persistScopeSelections: (Set<ScopeKind>, List<ScopeKind>) -> Unit = { _, _ -> },
     private val persistAudioMeters: (Boolean) -> Unit = {},
-    private val mirrorFeedEffectsState: Boolean = true,
     private val persist: (FeedEffects, ScopeKind?) -> Unit = { _, _ -> },
 ) {
     var effects: FeedEffects by mutableStateOf(initialEffects)
@@ -339,16 +338,6 @@ class AssistState(
      */
     var instantReviewEnabled: Boolean by mutableStateOf(false)
         private set
-
-    /**
-     * Activates the process-local compatibility mirror after composition has
-     * committed. Constructing this state often happens inside `remember`, so
-     * writing another Compose state from the initializer can race an activity
-     * configuration change's initial composition.
-     */
-    fun activateEffectsMirror() {
-        if (mirrorFeedEffectsState) FeedEffectsState.current = effects
-    }
 
     /** Whether [tool]'s pill renders lit. */
     fun isOn(tool: AssistTool): Boolean =
@@ -477,9 +466,6 @@ class AssistState(
         lut: FeedLutSelection,
         falseColorScale: FeedFalseColorScale,
     ) {
-        check(!mirrorFeedEffectsState) {
-            "shared selections are only valid for a context-local assist state"
-        }
         selectedLut = lut
         selectedFalseColorScale = falseColorScale
         effects =
@@ -515,7 +501,6 @@ class AssistState(
 
     private fun update(next: FeedEffects) {
         effects = next
-        if (mirrorFeedEffectsState) FeedEffectsState.current = next
         persistState()
     }
 
@@ -572,7 +557,6 @@ class AssistState(
             intentScope: ScopeKind?,
             intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
             availableStoredLut: (StoredLutSelection) -> Boolean = { true },
-            mirrorFeedEffectsState: Boolean = true,
             persistConfigurationSelections: Boolean = true,
         ): AssistState {
             val fromIntent = intentEffects != null || intentScopes != null
@@ -644,7 +628,6 @@ class AssistState(
                 initialLut = effects.lut ?: storedLut,
                 initialFalseColorScale = effects.falseColor ?: storedFalseColorScale,
                 initialAudioMetersEnabled = preferences.getBoolean(AUDIO_METERS_KEY, false),
-                mirrorFeedEffectsState = mirrorFeedEffectsState,
                 persistSelections = { lut, falseColorScale ->
                     if (persistConfigurationSelections) {
                         val editor = preferences.edit().putString("fcScale", falseColorScale.id)

@@ -469,7 +469,7 @@ fun LiveFeedView(
     onFrame: ((Bitmap) -> Unit)? = null,
     onPresentedFrame: ((LiveFrame, Bitmap, LiveFramePreviewBaker?) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
-    effects: FeedEffects = FeedEffectsState.current,
+    effects: FeedEffects,
     configuration: FeedEffectsConfiguration = FeedEffectsConfiguration(),
     cameraInput: ExposureAssistCameraInput = ExposureAssistCameraInput(),
     lutLibrary: AndroidLutLibrary? = null,

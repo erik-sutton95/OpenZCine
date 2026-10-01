@@ -3,7 +3,6 @@ package com.opencapture.openzcine.media
 import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.FeedEffects
-import com.opencapture.openzcine.FeedEffectsState
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
@@ -22,7 +21,6 @@ class PlaybackAssistStateTest {
     @Test
     fun `playback visibility persists without replacing live effect state`() {
         val preferences = TestSharedPreferences()
-        FeedEffectsState.current = FeedEffects(peaking = true)
 
         val state = PlaybackAssistState.restore(preferences)
         assertFalse(state.hasAnyVisibleAssist)
@@ -31,7 +29,6 @@ class PlaybackAssistStateTest {
         state.toggle(AssistTool.AUDIO)
         state.toggle(AssistTool.GUIDES)
 
-        assertEquals(FeedEffects(peaking = true), FeedEffectsState.current)
         val restored = PlaybackAssistState.restore(preferences)
         assertTrue(restored.isOn(AssistTool.LUT))
         assertTrue(restored.isOn(AssistTool.WAVE))
