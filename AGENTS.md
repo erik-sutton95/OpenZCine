@@ -28,6 +28,9 @@ Install local tooling with `just setup` (macOS / Homebrew).
 ## Where things live
 
 - `Sources/OpenZCineCore/` — production Swift shared core.
+- `../OpenCineCore` (sibling, pinned in `opencine-pins.txt`, `scripts/checkout-opencine.sh`):
+  `OpenCineMedia` supplies `CubeLUT` and `FrameRateSampler` (scoped re-exports in
+  `Sources/OpenZCineCore/CubeLUT.swift`; the Runner project links the product).
 - `Tests/OpenZCineCoreTests/` — Swift shared-core tests.
 - `ios/Runner/` — production SwiftUI iOS app shell.
 - `Apps/Android/` — production Jetpack Compose app, platform adapters, and Wear OS companion.

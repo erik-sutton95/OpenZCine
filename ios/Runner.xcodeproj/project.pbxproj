@@ -92,7 +92,6 @@
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
 		C0DE00000000000000000030 /* DesignShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000031 /* DesignShared.swift */; };
 		C0DE00000000000000000032 /* MonitorTextFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000033 /* MonitorTextFormat.swift */; };
-		C0DE0000000000000000003A /* FrameRateSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003B /* FrameRateSampler.swift */; };
 		C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003D /* LiveViewWatchdog.swift */; };
 		C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003F /* RecordDurationEstimator.swift */; };
 		C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000041 /* CameraLinkHealth.swift */; };
@@ -120,6 +119,7 @@
 		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
 		C0DE000000000000000000CA /* LinkSignalBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000CB /* LinkSignalBars.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
+		C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000000ED1A02 /* OpenCineMedia */; };
 		CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */; };
 		CEBC16AE05672B92F74F3A8E /* RedLUTDownloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB04C097A96A69686057CDC6 /* RedLUTDownloadPolicy.swift */; };
 		CTRN00000000000000000002 /* CameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTRN00000000000000000001 /* CameraTransport.swift */; };
@@ -307,7 +307,6 @@
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000031 /* DesignShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignShared.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000033 /* MonitorTextFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorTextFormat.swift; path = ../Sources/OpenZCineCore/MonitorTextFormat.swift; sourceTree = SOURCE_ROOT; };
-		C0DE0000000000000000003B /* FrameRateSampler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FrameRateSampler.swift; path = ../Sources/OpenZCineCore/FrameRateSampler.swift; sourceTree = SOURCE_ROOT; };
 		C0DE0000000000000000003D /* LiveViewWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveViewWatchdog.swift; path = ../Sources/OpenZCineCore/LiveViewWatchdog.swift; sourceTree = SOURCE_ROOT; };
 		C0DE0000000000000000003F /* RecordDurationEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecordDurationEstimator.swift; path = ../Sources/OpenZCineCore/RecordDurationEstimator.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000041 /* CameraLinkHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraLinkHealth.swift; path = ../Sources/OpenZCineCore/CameraLinkHealth.swift; sourceTree = SOURCE_ROOT; };
@@ -401,6 +400,7 @@
 			files = (
 				C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */,
 				OCC000000000000000000003 /* OpenCineCore in Frameworks */,
+				C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -568,7 +568,6 @@
 				C0DE000000000000000000C3 /* MonitorZoneLayout.swift */,
 				C0DE00000000000000000013 /* OperatorPreferences.swift */,
 				C0DE00000000000000000033 /* MonitorTextFormat.swift */,
-				C0DE0000000000000000003B /* FrameRateSampler.swift */,
 				C0DE0000000000000000003D /* LiveViewWatchdog.swift */,
 				C0DE00000000000000000041 /* CameraLinkHealth.swift */,
 				C0DE00000000000000000102 /* CameraClockSync.swift */,
@@ -665,6 +664,7 @@
 			packageProductDependencies = (
 				9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */,
 				OCC000000000000000000002 /* OpenCineCore */,
+				C0DE00000000000000ED1A02 /* OpenCineMedia */,
 			);
 			productName = Runner;
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
@@ -859,7 +859,6 @@
 				C0DE000000000000000000F3 /* StillCapture.swift in Sources */,
 				C0DE00000000000000000012 /* OperatorPreferences.swift in Sources */,
 				C0DE00000000000000000032 /* MonitorTextFormat.swift in Sources */,
-				C0DE0000000000000000003A /* FrameRateSampler.swift in Sources */,
 				C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */,
 				C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */,
 				C0DE00000000000000000101 /* CameraClockSync.swift in Sources */,
@@ -1404,6 +1403,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
 			productName = ZIPFoundation;
+		};
+		C0DE00000000000000ED1A02 /* OpenCineMedia */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
+			productName = OpenCineMedia;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

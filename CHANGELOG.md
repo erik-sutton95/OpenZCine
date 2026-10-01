@@ -92,6 +92,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **FPS readout after a stale frame** (iOS): an out-of-order or repeated frame timestamp no
+  longer rewinds the frame-rate window, so the next frame cannot report a bogus interval (the
+  sampler is now the shared OpenCineMedia one).
 - **Android USB reconnect no longer fails the attempt that unwedged the pipe.** A
   dead first bulk-out (`USB wrote -1 of 12 bytes`, the GetDeviceInfo command) already
   issued a PTP Device Reset, but still returned failure so every reconnect showed
