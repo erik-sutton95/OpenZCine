@@ -155,6 +155,17 @@ struct NikonCameraSessionTests {
         #expect(driver.records == [true, false])
     }
 
+    @Test("Leaving Auto ISO can write back the off-ladder value the camera parked on")
+    func autoParkedISOIsWritable() {
+        var facts = Self.movieFacts()
+        facts.reported = facts.reported.applying(
+            property: .isoControlSensitivity, data: Data(ByteCoding.uint32LE(51_200)))
+        let driver = Driver(facts)
+        let session = NikonCameraSession(driver: driver, serialNumber: "3000123")
+        #expect(session.request(.set(.iso(.manual(51_200)))).stage == .admitted)
+        #expect(session.request(.set(.iso(.manual(40_000)))).stage == .rejected(.outOfDomain))
+    }
+
     @Test("Settings need no picture; record keeps its live-view preflight")
     func commandsWithoutPicture() {
         var facts = Self.movieFacts()

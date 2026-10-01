@@ -277,8 +277,9 @@ final class NikonCameraSession: CameraSession {
 
     // MARK: PTP to common mapping
 
-    /// Movie ISO (enumerated ladder), white balance (advertised presets plus the documented Kelvin
-    /// range) and record. All readback-confirmed and not yet hardware-qualified.
+    /// Movie ISO (the picker's enumerated ladder plus the camera's current value), white balance
+    /// (advertised presets plus the documented Kelvin range) and record. All readback-confirmed
+    /// and not yet hardware-qualified.
     static func descriptors(_ facts: NikonControlFacts) -> [SettingDescriptor] {
         let reported = facts.reported
         let codec = reported.fileType ?? ""
@@ -301,13 +302,15 @@ final class NikonCameraSession: CameraSession {
         let presets = facts.whiteBalancePresets
             .filter { PTPCameraPropertyDecoders.wbModeCode(for: $0) != nil && $0 != "Color temp" }
             .map(whiteBalance(preset:))
+        // The ladder the picker offers, plus the camera's own current value: Auto can park ISO
+        // off the ladder (51200), and leaving Auto writes that value back.
+        var isoLadder = ISOPickerPolicy.unifiedOptions.compactMap { Int($0) }
+        if let live = reported.iso.map({ Int($0) }), !isoLadder.contains(live) {
+            isoLadder.append(live)
+        }
         return [
             SettingDescriptor(
-                .iso,
-                domain: SettingDomain(
-                    choices: ISOPickerPolicy.unifiedOptions.compactMap(Int.init).map {
-                        .iso(.manual($0))
-                    }),
+                .iso, domain: SettingDomain(choices: isoLadder.map { .iso(.manual($0)) }),
                 availability: iso),
             SettingDescriptor(
                 .whiteBalance,
