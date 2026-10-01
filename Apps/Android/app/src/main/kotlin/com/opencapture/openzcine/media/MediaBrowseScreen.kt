@@ -450,6 +450,11 @@ internal fun MediaBrowseScreen(
     cameraID: String,
     cameraConnected: Boolean,
     cameraSessionAvailable: Boolean = true,
+    /**
+     * Native connection owner of the camera session this library browses. Every camera-media
+     * facade call is addressed to it; null (offline or demo) reaches no camera at all.
+     */
+    connectionOwner: Long?,
     savedCameraID: String? = null,
     cameraDisplayName: String? = null,
     /**
@@ -665,6 +670,7 @@ internal fun MediaBrowseScreen(
                             val clips =
                                 loadCameraMediaPages(
                                     pageSize = MEDIA_BROWSE_PAGE_SIZE,
+                                    gateway = SwiftMediaBrowseGateway(connectionOwner),
                                     onStart = { slots -> browseStorageSlots = slots },
                                     onPage = { snapshot ->
                                         listingCheckpoint.applyPage(
@@ -761,14 +767,18 @@ internal fun MediaBrowseScreen(
         // object. The grid holds steady (the listing stays cancelled) — one progress bar covers
         // the run and it refreshes once at the end.
         withContext(Dispatchers.IO) {
-            if (SwiftCore.isAvailable) SwiftCore.sessionStopMediaTransfer()
+            if (SwiftCore.isAvailable) connectionOwner?.let(SwiftCore::sessionStopMediaTransfer)
         }
         deletionProgress = 0 to targets.size
         targets.forEachIndexed { index, clip ->
             withContext(Dispatchers.IO) {
                 // Protected objects are refused by the body and stay listed; their caches stay
                 // too so the row remains fully backed.
-                if (SwiftCore.isAvailable && SwiftCore.sessionDeleteObject(clip.handle.toInt())) {
+                if (
+                    SwiftCore.isAvailable &&
+                        connectionOwner != null &&
+                        SwiftCore.sessionDeleteObject(connectionOwner, clip.handle.toInt())
+                ) {
                     val owner = ownerCameraID(clip)
                     runCatching {
                         cacheStore.purgeEntry(owner, MediaCacheObjectIdentity(clip))
@@ -974,10 +984,17 @@ internal fun MediaBrowseScreen(
         // agree the body's rating with the heart when connected. Best-effort — an offline clip
         // keeps only the local flag. [verify-on-HW]
         val nowFavorite = clip.libraryKey(owner) in updated
-        if (effectiveCameraConnected && SwiftCore.isAvailable && clip.handle != 0L) {
+        val ratingOwner = connectionOwner
+        if (
+            effectiveCameraConnected && SwiftCore.isAvailable && clip.handle != 0L && ratingOwner != null
+        ) {
             scope.launch {
                 withContext(Dispatchers.IO) {
-                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), if (nowFavorite) 1 else 0)
+                    SwiftCore.sessionSetObjectRating(
+                        ratingOwner,
+                        clip.handle.toInt(),
+                        if (nowFavorite) 1 else 0,
+                    )
                 }
             }
         }
@@ -1029,7 +1046,7 @@ internal fun MediaBrowseScreen(
             coordinator.beginNativeShare(
                 selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
                 configuration = configuration,
-                cameraTransferAvailable = effectiveCameraConnected,
+                cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
             ) { published, metadata ->
                 context.startActivity(
                     AndroidMediaShareIntent.chooserIntent(context, published, metadata),
@@ -1172,7 +1189,7 @@ internal fun MediaBrowseScreen(
             coordinator.beginSaveToPhotos(
                 selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
                 configuration = configuration,
-                cameraTransferAvailable = effectiveCameraConnected,
+                cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
             )
             exitSelection()
             return
@@ -1296,8 +1313,10 @@ internal fun MediaBrowseScreen(
                         destination = MediaDeliveryKind.FRAMEIO,
                         selection =
                             selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                        cameraTransferAvailable =
-                            effectiveCameraConnected && !frameioController.isInternetHopActive,
+                        cameraConnectionOwner =
+                            connectionOwner.takeIf {
+                                effectiveCameraConnected && !frameioController.isInternetHopActive
+                            },
                     )
                     val result =
                         withContext(Dispatchers.IO) {
@@ -1377,8 +1396,8 @@ internal fun MediaBrowseScreen(
         if (frameioController.isInternetHopActive) {
             withContext(NonCancellable) { frameioController.endInternetHop() }
         }
-        if (effectiveCameraConnected) {
-            withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode() }
+        if (effectiveCameraConnected && connectionOwner != null) {
+            withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode(connectionOwner) }
         }
         onClose()
     }
@@ -1479,6 +1498,7 @@ internal fun MediaBrowseScreen(
                             hasRawSibling = ::hasRawSibling,
                             burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
                             cameraConnected = cameraConnected,
+                            connectionOwner = connectionOwner,
                             cacheStore = cacheStore,
                             favorites = favorites,
                             isSelecting = isSelecting,
@@ -1573,6 +1593,7 @@ internal fun MediaBrowseScreen(
                             hasRawSibling = ::hasRawSibling,
                             burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
                             cameraConnected = cameraConnected,
+                            connectionOwner = connectionOwner,
                             cacheStore = cacheStore,
                             favorites = favorites,
                             isSelecting = isSelecting,
@@ -1628,7 +1649,7 @@ internal fun MediaBrowseScreen(
                         destination = MediaDeliveryKind.FRAMEIO,
                         selection =
                             selectedSeriesClips.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                        cameraTransferAvailable = effectiveCameraConnected,
+                        cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
                     )
                 },
                 onDismiss = {
@@ -1685,6 +1706,7 @@ internal fun MediaBrowseScreen(
                     desqueeze = operatorSettings.localFramingAssistConfiguration,
                     cameraID = owner,
                     cameraTransferAvailable = cameraConnected,
+                    connectionOwner = connectionOwner,
                     rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
                     deleteAvailable =
                         librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
@@ -1713,6 +1735,7 @@ internal fun MediaBrowseScreen(
                                     source = librarySource,
                                     cameraID = ownerCameraID(member),
                                     cameraConnected = effectiveCameraConnected,
+                                    connectionOwner = connectionOwner,
                                     cacheStore = cacheStore,
                                     modifier = thumbModifier,
                                 )
@@ -1741,6 +1764,7 @@ internal fun MediaBrowseScreen(
                 filteredClips = displayedClips,
                 cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
+                connectionOwner = connectionOwner,
                 favoriteIDs = favorites,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
                 galleryFailureInjection = galleryFailureInjection,
@@ -1774,6 +1798,7 @@ internal fun MediaBrowseScreen(
                 desqueeze = operatorSettings.localFramingAssistConfiguration,
                 cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
+                connectionOwner = connectionOwner,
                 rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
                 deleteAvailable =
                     librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
@@ -2787,6 +2812,7 @@ private fun MediaLibraryBody(
     /** Frame count when a clip represents a burst series (null for an ordinary clip). */
     burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
+    connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
     isSelecting: Boolean,
@@ -2819,6 +2845,7 @@ private fun MediaLibraryBody(
                         hasRawSibling = hasRawSibling,
                         burstCountOf = burstCountOf,
                         cameraConnected = cameraConnected,
+                        connectionOwner = connectionOwner,
                         cacheStore = cacheStore,
                         favorites = favorites,
                         isSelecting = isSelecting,
@@ -2838,6 +2865,7 @@ private fun MediaLibraryBody(
                         hasRawSibling = hasRawSibling,
                         burstCountOf = burstCountOf,
                         cameraConnected = cameraConnected,
+                        connectionOwner = connectionOwner,
                         cacheStore = cacheStore,
                         favorites = favorites,
                         isSelecting = isSelecting,
@@ -2871,6 +2899,7 @@ private fun MediaClipGrid(
     hasRawSibling: (MediaClipRecord) -> Boolean,
     burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
+    connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
     isSelecting: Boolean,
@@ -2928,6 +2957,7 @@ private fun MediaClipGrid(
                     hasRawSibling = hasRawSibling(clip),
                     burstCount = burstCountOf(clip),
                     cameraConnected = cameraConnected,
+                    connectionOwner = connectionOwner,
                     cacheStore = cacheStore,
                     favorite = identity in favorites,
                     selected = identity in selectedIDs,
@@ -2987,6 +3017,7 @@ private fun MediaClipList(
     hasRawSibling: (MediaClipRecord) -> Boolean,
     burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
+    connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
     isSelecting: Boolean,
@@ -3034,6 +3065,7 @@ private fun MediaClipList(
                     cameraID = cameraIDFor(clip),
                     hasRawSibling = hasRawSibling(clip),
                     cameraConnected = cameraConnected,
+                    connectionOwner = connectionOwner,
                     cacheStore = cacheStore,
                     favorite = identity in favorites,
                     selected = identity in selectedIDs,
@@ -3239,6 +3271,7 @@ private fun MediaClipCell(
     hasRawSibling: Boolean,
     burstCount: Int? = null,
     cameraConnected: Boolean,
+    connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     favorite: Boolean,
     selected: Boolean,
@@ -3282,6 +3315,7 @@ private fun MediaClipCell(
                 source = source,
                 cameraID = cameraID,
                 cameraConnected = cameraConnected,
+                connectionOwner = connectionOwner,
                 cacheStore = cacheStore,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -3349,6 +3383,7 @@ private fun MediaClipListRow(
     cameraID: String,
     hasRawSibling: Boolean,
     cameraConnected: Boolean,
+    connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     favorite: Boolean,
     selected: Boolean,
@@ -3396,6 +3431,7 @@ private fun MediaClipListRow(
                 source = source,
                 cameraID = cameraID,
                 cameraConnected = cameraConnected,
+                connectionOwner = connectionOwner,
                 cacheStore = cacheStore,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -3524,6 +3560,7 @@ private fun ClipArtwork(
     source: MediaLibrarySource,
     cameraID: String,
     cameraConnected: Boolean,
+    connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     modifier: Modifier = Modifier,
 ) {
@@ -3532,8 +3569,13 @@ private fun ClipArtwork(
         thumbnail =
             withContext(Dispatchers.IO) {
                 val cameraThumbnail =
-                    if (source == MediaLibrarySource.CAMERA && cameraConnected && SwiftCore.isAvailable) {
-                        SwiftCore.sessionThumbnail(clip.handle.toInt())?.let { jpeg ->
+                    if (
+                        source == MediaLibrarySource.CAMERA &&
+                            cameraConnected &&
+                            SwiftCore.isAvailable &&
+                            connectionOwner != null
+                    ) {
+                        SwiftCore.sessionThumbnail(connectionOwner, clip.handle.toInt())?.let { jpeg ->
                             // The body's thumb bytes may be EXIF-stripped — fall back to the
                             // orientation this session learned from the object's full file.
                             val key = clip.libraryKey(cameraID)

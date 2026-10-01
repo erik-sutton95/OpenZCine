@@ -105,6 +105,8 @@ internal fun MediaStillViewer(
     clip: MediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
+    /** Native connection owner every camera call is addressed to; null reaches no camera. */
+    connectionOwner: Long?,
     /** The grid item hides this same-stem RAW behind the JPEG (delete removes both). */
     rawSibling: MediaClipRecord? = null,
     /** Camera-card deletion offered only while the camera source is live. */
@@ -146,7 +148,7 @@ internal fun MediaStillViewer(
         }
     val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
     val coordinator =
-        remember(cacheStore, cameraID, displayClip, cameraTransferAvailable) {
+        remember(cacheStore, cameraID, displayClip, cameraTransferAvailable, connectionOwner) {
             MediaTransferCoordinator(
                 prepareTransfer = {
                     withContext(Dispatchers.IO) {
@@ -155,6 +157,7 @@ internal fun MediaStillViewer(
                             cameraID = cameraID,
                             clip = displayClip,
                             objectLabel = "image",
+                            bridge = SwiftCoreMediaObjectTransferBridge(connectionOwner),
                             cameraTransferAvailable = cameraTransferAvailable,
                             onResolvedSize = { resolvedSize ->
                                 currentOnResolvedObjectSize(displayClip, resolvedSize)
@@ -163,8 +166,10 @@ internal fun MediaStillViewer(
                     }
                 },
                 stopTransfer = {
-                    if (cameraTransferAvailable) {
-                        withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+                    if (cameraTransferAvailable && connectionOwner != null) {
+                        withContext(Dispatchers.IO) {
+                            SwiftCore.sessionStopMediaTransfer(connectionOwner)
+                        }
                     }
                 },
             )
@@ -188,10 +193,11 @@ internal fun MediaStillViewer(
     // The camera stays source of truth: seeded by read, every write confirmed
     // by the entry point's built-in readback (the body rounds off-step down).
     var ratingStars by remember(clip.handle) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(clip.handle, cameraTransferAvailable) {
+    LaunchedEffect(clip.handle, cameraTransferAvailable, connectionOwner) {
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
+        val owner = connectionOwner ?: return@LaunchedEffect
         val read =
-            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
+            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(owner, clip.handle.toInt()) }
         if (read >= 0) {
             ratingStars = read
             // Self-correct the local favorite cache against the body (truth) on open — this is
@@ -205,8 +211,8 @@ internal fun MediaStillViewer(
         val requestGeneration = loadGate.begin()
         val cameraThumbnail =
             withContext(Dispatchers.IO) {
-                if (cameraTransferAvailable && SwiftCore.isAvailable) {
-                    SwiftCore.sessionThumbnail(displayClip.handle.toInt())?.let { jpeg ->
+                if (cameraTransferAvailable && SwiftCore.isAvailable && connectionOwner != null) {
+                    SwiftCore.sessionThumbnail(connectionOwner, displayClip.handle.toInt())?.let { jpeg ->
                         // Stripped thumb bytes fall back to the session-learned orientation.
                         val key = displayClip.libraryKey(cameraID)
                         val orientation =
@@ -391,13 +397,16 @@ internal fun MediaStillViewer(
                     viewerScope.launch {
                         val written =
                             withContext(Dispatchers.IO) {
+                                // -1 = "could not be attempted"; never another camera's card.
+                                val owner = connectionOwner ?: return@withContext -1
                                 val result =
-                                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                                    SwiftCore.sessionSetObjectRating(owner, clip.handle.toInt(), target)
                                 if (result >= 0 && rawSibling != null) {
                                     // iOS parity: a pair writes both sides, tolerating
                                     // the RAW side's refusal; the JPEG handle stays the
                                     // confirming identity. [verify-on-HW]
                                     SwiftCore.sessionSetObjectRating(
+                                        owner,
                                         rawSibling.handle.toInt(),
                                         target,
                                     )

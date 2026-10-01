@@ -136,7 +136,7 @@ internal sealed interface SwiftLiveViewPreviewState {
 
 /**
  * [LiveFrameSource] over the Swift core's live-view pump. The first [frames]
- * collector starts live view on the facade's active session; all collectors
+ * collector starts live view on the owning camera session; all collectors
  * share that one pump and receive the latest frame, and removing the final
  * collector stops it. This lets the monitor feed and scopes consume the same
  * stream without issuing duplicate `StartLiveView` commands. The buffer is
@@ -144,24 +144,16 @@ internal sealed interface SwiftLiveViewPreviewState {
  * restarts the native stream while a consumer still exists; this prevents a
  * transient transport end from leaving feed and scopes frozen forever.
  *
- * The constructor parameters exist for JVM tests only — production code uses
- * the defaults, which bind to the JNI facade.
+ * [SwiftCoreCameraSession] binds [start], [stop], and [configurePreview] to
+ * its own connection owner; JVM tests inject fakes.
  */
 class SwiftCoreLiveFrameSource(
     private val available: () -> Boolean = { SwiftCore.isAvailable },
-    private val start: (SwiftCore.LiveFrameListener) -> Unit = SwiftCore::sessionStartLiveView,
-    private val stop: () -> Unit = SwiftCore::sessionStopLiveView,
-    private val configurePreview: (SwiftLiveViewRequest) -> Boolean = { request ->
-        if (!SwiftCore.isAvailable) {
-            false
-        } else {
-            SwiftCore.sessionConfigureLiveView(
-                imageSize = request.imageSize,
-                compression = request.compression,
-                frameIntervalNanoseconds = request.frameIntervalNanoseconds,
-            )
-        }
-    },
+    // No JNI defaults: the owning session binds these to its own connection
+    // owner, so a pump can never start/stop/configure another camera's feed.
+    private val start: (SwiftCore.LiveFrameListener) -> Unit,
+    private val stop: () -> Unit,
+    private val configurePreview: (SwiftLiveViewRequest) -> Boolean,
     private val sharingScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val restartDelayMillis: Long = 250L,

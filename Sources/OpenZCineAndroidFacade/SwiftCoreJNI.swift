@@ -712,7 +712,7 @@
     /// distinct from a fabricated zero.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_linkHealthSnapshot")
     public func swiftCoreLinkHealthSnapshot(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, phase: jint,
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, phase: jint,
         roundTripMilliseconds: jdouble, hasRoundTrip: jboolean, liveViewFPS: jdouble,
         hasLiveViewFPS: jboolean, targetLiveViewFPS: jdouble,
         secondsSinceLastGoodFrame: jdouble, hasLastGoodFrame: jboolean,
@@ -741,7 +741,7 @@
                 // permanent 0 and the scorer's -50 penalty could never fire; and the shell's
                 // freshness is an ARRIVAL clock where iOS measures at decode. Same active-session
                 // slot the RTT reader uses; `nil` whenever no pump is running.
-                liveViewStreamHealth: ActiveSessionSlot.shared.current()?
+                liveViewStreamHealth: facadeSessions.session(for: Int64(owner))?
                     .latestLiveViewStreamHealth()),
             let encoded = AndroidLinkHealthWire.encode(snapshot)
         else { return nil }
@@ -863,116 +863,11 @@
         let onEnded: jmethodID
     }
 
-    /// Process-wide active session slot behind the coarse JNI facade: one
-    /// camera at a time, matching the app's single-camera model. Every native
-    /// connect attempt carries a Kotlin-generated owner token, so a delayed
-    /// cancellation can release only its own pending/active resources.
-    private final class ActiveSessionSlot: @unchecked Sendable {
-        private struct ActiveConnection {
-            let owner: Int64
-            let session: PTPIPClientSession
-        }
-
-        private struct PendingUSBConnection {
-            let owner: Int64
-            let transport: AndroidUSBPTPTransport
-        }
-
-        static let shared = ActiveSessionSlot()
-        private let lock = NSLock()
-        private var active: ActiveConnection?
-        /// The newest request allowed to publish a session. A stale Wi-Fi
-        /// connect can finish its socket handshake, but it cannot displace a
-        /// newer request after this owner changes or is cancelled.
-        private var pendingOwner: Int64?
-        /// A claimed USB interface while its Swift connection thread is still
-        /// handshaking. It is owned by [pendingOwner], not by a process-global
-        /// cancellation call.
-        private var pendingUSB: PendingUSBConnection?
-
-        /// Begins a connection attempt and returns only a superseded pending
-        /// USB transport. The current active session remains usable until a
-        /// newer attempt succeeds, matching the prior reconnect behavior.
-        func beginConnection(
-            owner: Int64,
-            usbTransport: AndroidUSBPTPTransport? = nil
-        ) -> AndroidUSBPTPTransport? {
-            lock.lock()
-            defer { lock.unlock() }
-            let supersededUSB = pendingUSB?.transport
-            pendingOwner = owner
-            pendingUSB = usbTransport.map { PendingUSBConnection(owner: owner, transport: $0) }
-            return supersededUSB
-        }
-
-        func current() -> PTPIPClientSession? {
-            lock.lock()
-            defer { lock.unlock() }
-            return active?.session
-        }
-
-        /// Promotes exactly the still-current connection request into the
-        /// active slot. A rejected completion must disconnect its local session
-        /// without publishing a late Kotlin success callback.
-        func completeConnection(
-            owner: Int64,
-            session new: PTPIPClientSession
-        ) -> (accepted: Bool, displacedSession: PTPIPClientSession?) {
-            lock.lock()
-            defer { lock.unlock() }
-            guard pendingOwner == owner else { return (false, nil) }
-            pendingOwner = nil
-            if pendingUSB?.owner == owner {
-                pendingUSB = nil
-            }
-            let displaced = active?.session
-            active = ActiveConnection(owner: owner, session: new)
-            return (true, displaced)
-        }
-
-        /// Clears one failed/cancelled pending request and returns its claimed
-        /// USB interface, if any, for teardown outside the slot lock.
-        func clearPendingConnection(owner: Int64) -> AndroidUSBPTPTransport? {
-            lock.lock()
-            defer { lock.unlock() }
-            guard pendingOwner == owner else { return nil }
-            pendingOwner = nil
-            guard pendingUSB?.owner == owner else { return nil }
-            let transport = pendingUSB?.transport
-            pendingUSB = nil
-            return transport
-        }
-
-        /// Atomically takes only [owner]'s resources. This is the key boundary
-        /// that prevents cleanup for a cancelled attempt A from closing retry
-        /// B when Kotlin exposes an immediate retry affordance.
-        func takeOwnedConnection(owner: Int64) -> (
-            session: PTPIPClientSession?, pendingUSBTransport: AndroidUSBPTPTransport?
-        ) {
-            lock.lock()
-            defer { lock.unlock() }
-            let removedSession: PTPIPClientSession?
-            if active?.owner == owner {
-                removedSession = active?.session
-                active = nil
-            } else {
-                removedSession = nil
-            }
-            let removedUSB: AndroidUSBPTPTransport?
-            if pendingOwner == owner {
-                pendingOwner = nil
-                if pendingUSB?.owner == owner {
-                    removedUSB = pendingUSB?.transport
-                    pendingUSB = nil
-                } else {
-                    removedUSB = nil
-                }
-            } else {
-                removedUSB = nil
-            }
-            return (removedSession, removedUSB)
-        }
-    }
+    /// Every live facade session, keyed by the Kotlin connection owner. There
+    /// is no "current" session: each session-scoped entry point names its
+    /// owner, so multicam commands can never reach another camera's body.
+    private let facadeSessions =
+        AndroidSessionOwnerRegistry<PTPIPClientSession, AndroidUSBPTPTransport>()
 
     /// Decodes the stable Kotlin strategy ordinal at the JNI boundary.
     ///
@@ -996,7 +891,7 @@
     /// `SwiftCore.sessionConnect(host, connectionOwner, strategy, guid, listener)` — async
     /// connect: PTP-IP Init handshake + the selected Nikon establish sequence on a Swift
     /// background thread, with phases pushed to the listener (`onPhase`), ending in
-    /// `onConnected` or `onFailed`. The established session parks in the process-wide slot for
+    /// `onConnected` or `onFailed`. The established session is registered under `owner` for
     /// `sessionReadProperty` / `sessionDisconnect`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConnect")
     public func swiftCoreSessionConnect(
@@ -1037,7 +932,7 @@
             fns.DeleteGlobalRef!(env, global)
             return
         }
-        ActiveSessionSlot.shared.beginConnection(owner: connectionOwner)?.close()
+        facadeSessions.beginConnection(owner: connectionOwner)?.close()
         Thread.detachNewThread {
             runSessionConnect(
                 handle,
@@ -1113,9 +1008,9 @@
         let cameraName = swiftString(env, cameraNameHint) ?? ""
         let facadeTransport = AndroidUSBPTPTransport(rawIO: transportHandle)
         let connectionOwner = Int64(owner)
-        ActiveSessionSlot.shared.beginConnection(
+        facadeSessions.beginConnection(
             owner: connectionOwner,
-            usbTransport: facadeTransport
+            pendingTransport: facadeTransport
         )?.close()
         Thread.detachNewThread {
             runUSBSessionConnect(
@@ -1144,7 +1039,7 @@
         guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
             let env = envOut
         else {
-            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            facadeSessions.clearPendingConnection(owner: owner)?.close()
             return
         }
         defer { _ = invoke.DetachCurrentThread!(handle.vm) }
@@ -1172,7 +1067,7 @@
                     callStrings(handle.onPhase, ["connect.gate", line])
                 }
             )
-            let completion = ActiveSessionSlot.shared.completeConnection(
+            let completion = facadeSessions.completeConnection(
                 owner: owner,
                 session: session
             )
@@ -1193,7 +1088,7 @@
                     session.identity.serialNumber,
                 ])
         } catch {
-            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            facadeSessions.clearPendingConnection(owner: owner)?.close()
             callStrings(handle.onFailed, [error.localizedDescription])
         }
     }
@@ -1215,7 +1110,7 @@
         guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
             let env = envOut
         else {
-            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            facadeSessions.clearPendingConnection(owner: owner)?.close()
             transport.close()
             return
         }
@@ -1245,7 +1140,7 @@
                     callStrings(handle.onPhase, ["connect.gate", line])
                 }
             )
-            let completion = ActiveSessionSlot.shared.completeConnection(
+            let completion = facadeSessions.completeConnection(
                 owner: owner,
                 session: session
             )
@@ -1266,26 +1161,26 @@
                     session.identity.serialNumber,
                 ])
         } catch let error as USBHandshakeError {
-            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            facadeSessions.clearPendingConnection(owner: owner)?.close()
             transport.close()
             callStrings(handle.onPhase, [error.diagnosticPhase, ""])
             callStrings(handle.onFailed, [error.localizedDescription ?? "USB handshake failed."])
         } catch {
-            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            facadeSessions.clearPendingConnection(owner: owner)?.close()
             transport.close()
             callStrings(handle.onFailed, [error.localizedDescription])
         }
     }
 
     /// `SwiftCore.sessionReadProperty(code): String?` — reads one camera
-    /// property through the active session, decoded by the core (battery →
+    /// property through the owner's session, decoded by the core (battery →
     /// percent, others → raw hex). Null when disconnected or rejected.
     /// Blocking; Kotlin calls it from `Dispatchers.IO`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionReadProperty")
     public func swiftCoreSessionReadProperty(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, code: jint
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, code: jint
     ) -> jstring? {
-        guard let session = ActiveSessionSlot.shared.current(),
+        guard let session = facadeSessions.session(for: Int64(owner)),
             let value = try? session.readPropertyDisplayValue(code: UInt32(bitPattern: code))
         else { return nil }
         return javaString(env, value)
@@ -1296,10 +1191,10 @@
     /// sentinel before a transaction and after session teardown.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionLatestRoundTripMilliseconds")
     public func swiftCoreSessionLatestRoundTripMilliseconds(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) -> jdouble {
         guard
-            let value = ActiveSessionSlot.shared.current()?
+            let value = facadeSessions.session(for: Int64(owner))?
                 .latestCommandRoundTripMilliseconds(),
             value.isFinite, value > 0
         else { return Double.nan }
@@ -1314,10 +1209,10 @@
     /// Blocking; Kotlin invokes it from `Dispatchers.IO`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionRefreshPropertySnapshot")
     public func swiftCoreSessionRefreshPropertySnapshot(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, request: jint,
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, request: jint,
         recording: jboolean, propertyCode: jlong
     ) -> jstring? {
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             return javaString(
                 env,
                 AndroidCameraPropertyReadbackWire.encode(
@@ -1368,7 +1263,7 @@
     /// pulls, so no recording setting can change through this entry point.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConfigureLiveView")
     public func swiftCoreSessionConfigureLiveView(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, imageSize: jint,
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, imageSize: jint,
         compression: jint, frameIntervalNanoseconds: jlong
     ) -> jboolean {
         guard
@@ -1377,7 +1272,7 @@
             frameIntervalNanoseconds >= 0
         else { return 0 }
         let applied =
-            ActiveSessionSlot.shared.current()?.configureLiveView(
+            facadeSessions.session(for: Int64(owner))?.configureLiveView(
                 imageSize: size,
                 compression: compression,
                 frameIntervalNanoseconds: UInt64(frameIntervalNanoseconds)) ?? false
@@ -1391,7 +1286,7 @@
     /// owns the global listener reference until `onEnded` fires exactly once.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartEventStream")
     public func swiftCoreSessionStartEventStream(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, listener: jobject?
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, listener: jobject?
     ) {
         let fns = table(env)
         var vm: UnsafeMutablePointer<JavaVM?>?
@@ -1419,7 +1314,7 @@
             fns.DeleteGlobalRef!(env, global)
         }
 
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             endOnCallerThread("Not connected to a camera.")
             return
         }
@@ -1512,47 +1407,16 @@
         case transportFailed = 5
     }
 
-    /// `SwiftCore.sessionSetRecording(recording): Int` — sends Nikon's
-    /// `StartMovieRecInCard` / `EndMovieRec` through the active facade
-    /// session. The session transaction lock serializes this with live view;
-    /// Kotlin invokes the blocking JNI call from `Dispatchers.IO`.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetRecording")
-    public func swiftCoreSessionSetRecording(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, recording: jboolean
-    ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else {
-            return RecordingCommandResult.noSession.rawValue
-        }
-        do {
-            if recording != 0 {
-                try session.startRecording()
-            } else {
-                try session.stopRecording()
-            }
-            return RecordingCommandResult.accepted.rawValue
-        } catch let error as PTPIPClientSessionError {
-            switch error {
-            case .mediaModeActive, .mediaModeRequired:
-                return RecordingCommandResult.mediaBusy.rawValue
-            case .operationRejected:
-                return RecordingCommandResult.rejected.rawValue
-            default:
-                return RecordingCommandResult.transportFailed.rawValue
-            }
-        } catch {
-            return RecordingCommandResult.transportFailed.rawValue
-        }
-    }
-
     /// `SwiftCore.sessionInitiateStillCapture(preserveFocus: Boolean): Int` — fires one still
     /// release to the card. 0 = the release started; poll `sessionPollStillRelease` between
     /// frames for completion. `preserveFocus` skips the AF-driving step so a focus set with
     /// the dial survives the shutter.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionInitiateStillCapture")
     public func swiftCoreSessionInitiateStillCapture(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, preserveFocus: jboolean
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong,
+        preserveFocus: jboolean
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             return RecordingCommandResult.noSession.rawValue
         }
         do {
@@ -1577,9 +1441,9 @@
     /// open shutter, 3 failed, negatives for session/transport faults.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionPollStillRelease")
     public func swiftCoreSessionPollStillRelease(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        guard let session = facadeSessions.session(for: Int64(owner)) else { return -1 }
         do {
             switch try session.pollStillReleaseReadiness() {
             case .complete: return 0
@@ -1596,9 +1460,9 @@
     /// exposure or stops a running burst; frames captured so far are kept.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionTerminateStillCapture")
     public func swiftCoreSessionTerminateStillCapture(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             return RecordingCommandResult.noSession.rawValue
         }
         do {
@@ -1623,9 +1487,9 @@
     /// remote mode is held). [verify-on-HW]
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetStillBurstBracket")
     public func swiftCoreSessionSetStillBurstBracket(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, active: jboolean
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, active: jboolean
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             return RecordingCommandResult.noSession.rawValue
         }
         do {
@@ -1647,15 +1511,16 @@
 
     /// `SwiftCore.sessionApplyControl(control, label): Int` — validates the
     /// semantic Kotlin selector, then applies its human-readable selection on
-    /// the active facade session. Swift resolves every Nikon property ID and
+    /// the owner's facade session. Swift resolves every Nikon property ID and
     /// data payload through `PTPCameraPropertyWrite`, including Kelvin's
     /// mode-then-temperature sequence. Kotlin invokes this blocking call from
     /// `Dispatchers.IO`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionApplyControl")
     public func swiftCoreSessionApplyControl(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, control: jint, label: jstring?
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, control: jint,
+        label: jstring?
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             return ControlCommandResult.noSession.rawValue
         }
         guard let cameraControl = AndroidCameraControlWire.control(selector: Int(control)) else {
@@ -1691,10 +1556,10 @@
     /// `Dispatchers.IO`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionMFDrive")
     public func swiftCoreSessionMFDrive(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong,
         towardNear: jboolean, pulses: jint
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        guard let session = facadeSessions.session(for: Int64(owner)) else { return -1 }
         let bounded = UInt32(min(max(Int(pulses), 1), 32767))
         switch session.mfDrive(towardNear: towardNear != 0, pulses: bounded) {
         case .complete: return 0
@@ -1708,9 +1573,9 @@
     /// coordinates into the Swift-owned Nikon transaction layer.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionChangeAfArea")
     public func swiftCoreSessionChangeAfArea(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, x: jint, y: jint
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, x: jint, y: jint
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             return FocusCommandResult.noSession.rawValue
         }
         guard x >= 0, y >= 0 else { return FocusCommandResult.unavailable.rawValue }
@@ -1726,9 +1591,9 @@
     /// using camera-owned focus metadata and properties only.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResetFocusPoint")
     public func swiftCoreSessionResetFocusPoint(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             return FocusCommandResult.noSession.rawValue
         }
         do {
@@ -1769,8 +1634,8 @@
     public func swiftCoreSessionDisconnect(
         env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) {
-        let removed = ActiveSessionSlot.shared.takeOwnedConnection(owner: Int64(owner))
-        removed.pendingUSBTransport?.close()
+        let removed = facadeSessions.takeOwnedConnection(owner: Int64(owner))
+        removed.pendingTransport?.close()
         if let session = removed.session {
             MediaBrowseCursorRegistry.shared.cancel(session: session)
             session.disconnect()
@@ -1803,18 +1668,18 @@
     }
 
     /// `SwiftCore.sessionStartLiveView(listener)` — starts live view on the
-    /// active session (blocking `StartLiveView` + readiness poll on the caller
+    /// owner's session (blocking `StartLiveView` + readiness poll on the caller
     /// thread) and pumps JPEG frames to
     /// `listener.onFrameWithFullMetadata(jpeg, timestampNanos, isRecording,
     /// audio, focus, level, timecode...)` from the facade's pump thread. The
     /// focus/level and audio-only descriptors remain fallbacks for listeners
     /// that have not adopted the newest additive callback. `onEnded` fires
     /// exactly once when the stream ends — stop, disconnect, a transport error, or
-    /// (immediately, on the calling thread) when there is no active session or
+    /// (immediately, on the calling thread) when the owner has no session or
     /// the start fails.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartLiveView")
     public func swiftCoreSessionStartLiveView(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, listener: jobject?
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, listener: jobject?
     ) {
         let fns = table(env)
         var vm: UnsafeMutablePointer<JavaVM?>?
@@ -1870,7 +1735,7 @@
             fns.DeleteGlobalRef!(env, global)
         }
 
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             endOnCallerThread()
             return
         }
@@ -1894,13 +1759,46 @@
         }
     }
 
-    /// `SwiftCore.sessionStopLiveView()` — stops the pump and blocks until it
-    /// has exited (the camera got its `EndLiveView`). No-op when idle.
+    /// `SwiftCore.sessionStopLiveView(connectionOwner)`: stops that owner's
+    /// pump and blocks until it has exited (the camera got its `EndLiveView`).
+    /// No-op when idle or when the owner has no session.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStopLiveView")
     public func swiftCoreSessionStopLiveView(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) {
-        ActiveSessionSlot.shared.current()?.stopLiveView()
+        facadeSessions.session(for: Int64(owner))?.stopLiveView()
+    }
+
+    /// `SwiftCore.sessionSetRecording(connectionOwner, recording): Int`: sends
+    /// Nikon's `StartMovieRecInCard` / `EndMovieRec` through that owner's
+    /// session. The session transaction lock serializes this with live view;
+    /// Kotlin invokes the blocking JNI call from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetRecording")
+    public func swiftCoreSessionSetRecording(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, recording: jboolean
+    ) -> jint {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            if recording != 0 {
+                try session.startRecording()
+            } else {
+                try session.stopRecording()
+            }
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
     }
 
     /// Delivers one JPEG frame to the Kotlin listener from the pump thread.
@@ -2019,9 +1917,9 @@
     /// session is disconnected or the snapshot failed. Blocking; call from IO.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionBeginMediaBrowse")
     public func swiftCoreSessionBeginMediaBrowse(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) -> jstring? {
-        guard let session = ActiveSessionSlot.shared.current() else { return nil }
+        guard let session = facadeSessions.session(for: Int64(owner)) else { return nil }
         let preparation = session.enterMediaModeForBrowse()
         let cursor: Int64
         do {
@@ -2070,9 +1968,9 @@
     /// success.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSeedStillReviewBaseline")
     public func swiftCoreSessionSeedStillReviewBaseline(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        guard let session = facadeSessions.session(for: Int64(owner)) else { return -1 }
         do {
             try session.seedStillReviewBaseline()
             return 0
@@ -2086,9 +1984,9 @@
     /// card hasn't listed it yet (caller retries).
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResolveNewestStillHandle")
     public func swiftCoreSessionResolveNewestStillHandle(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current(),
+        guard let session = facadeSessions.session(for: Int64(owner)),
             let handle = try? session.resolveNewestStillHandle()
         else { return 0 }
         return jint(bitPattern: UInt32(handle))
@@ -2100,9 +1998,9 @@
     /// `Dispatchers.IO`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStillImage")
     public func swiftCoreSessionStillImage(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, handle: jint
     ) -> jbyteArray? {
-        guard let session = ActiveSessionSlot.shared.current(),
+        guard let session = facadeSessions.session(for: Int64(owner)),
             let image = session.stillReviewImage(handle: UInt32(bitPattern: handle))
         else { return nil }
         let fns = table(env)
@@ -2120,9 +2018,9 @@
     /// fetch at its next chunk boundary.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionCancelStillImage")
     public func swiftCoreSessionCancelStillImage(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) {
-        ActiveSessionSlot.shared.current()?.cancelStillReviewFetch()
+        facadeSessions.session(for: Int64(owner))?.cancelStillReviewFetch()
     }
 
     /// `SwiftCore.sessionThumbnail(handle): ByteArray?` — the camera's
@@ -2131,9 +2029,9 @@
     /// Kotlin calls it from `Dispatchers.IO`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionThumbnail")
     public func swiftCoreSessionThumbnail(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, handle: jint
     ) -> jbyteArray? {
-        guard let session = ActiveSessionSlot.shared.current(),
+        guard let session = facadeSessions.session(for: Int64(owner)),
             let jpeg = try? session.thumbnail(handle: UInt32(bitPattern: handle))
         else { return nil }
         let fns = table(env)
@@ -2152,9 +2050,9 @@
     /// Blocking; Kotlin calls it from `Dispatchers.IO`. [verify-on-HW]
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionDeleteObject")
     public func swiftCoreSessionDeleteObject(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, handle: jint
     ) -> jboolean {
-        guard let session = ActiveSessionSlot.shared.current(),
+        guard let session = facadeSessions.session(for: Int64(owner)),
             (try? session.deleteObject(handle: UInt32(bitPattern: handle))) != nil
         else { return 0 }
         return 1
@@ -2165,9 +2063,9 @@
     /// property). Blocking; Kotlin calls it from `Dispatchers.IO`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionObjectRating")
     public func swiftCoreSessionObjectRating(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, handle: jint
     ) -> jint {
-        guard let session = ActiveSessionSlot.shared.current(),
+        guard let session = facadeSessions.session(for: Int64(owner)),
             let value = try? session.objectRating(handle: UInt32(bitPattern: handle))
         else { return -1 }
         return jint(StillCapturePolicy.stars(fromRatingValue: value))
@@ -2183,10 +2081,11 @@
     /// Blocking; Kotlin calls it from `Dispatchers.IO`. [verify-on-HW]
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetObjectRating")
     public func swiftCoreSessionSetObjectRating(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint, stars: jint
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong, handle: jint,
+        stars: jint
     ) -> jint {
         guard (0...5).contains(stars),
-            let session = ActiveSessionSlot.shared.current()
+            let session = facadeSessions.session(for: Int64(owner))
         else { return -1 }
         let objectHandle = UInt32(bitPattern: handle)
         do {
@@ -2209,9 +2108,9 @@
     /// releases media ownership so the monitor may restart live view.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionExitMediaMode")
     public func swiftCoreSessionExitMediaMode(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) {
-        guard let session = ActiveSessionSlot.shared.current() else { return }
+        guard let session = facadeSessions.session(for: Int64(owner)) else { return }
         MediaBrowseCursorRegistry.shared.cancel(session: session)
         session.exitMediaMode()
     }
@@ -2221,10 +2120,10 @@
     /// 64-bit query when ObjectInfo carried the UINT32 sentinel.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResolveMediaSize")
     public func swiftCoreSessionResolveMediaSize(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong,
         handle: jint, reportedSize: jlong
     ) -> jlong {
-        guard reportedSize >= 0, let session = ActiveSessionSlot.shared.current(),
+        guard reportedSize >= 0, let session = facadeSessions.session(for: Int64(owner)),
             let size = try? session.resolvedObjectSize(
                 handle: UInt32(bitPattern: handle), reportedSize: UInt64(reportedSize)),
             size <= UInt64(Int64.max)
@@ -2251,7 +2150,7 @@
     /// cache chunks from one Swift-owned thread.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartMediaTransfer")
     public func swiftCoreSessionStartMediaTransfer(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong,
         handle: jint, reportedSize: jlong, resumeOffset: jlong, listener: jobject?
     ) {
         let fns = table(env)
@@ -2286,7 +2185,7 @@
             failOnCallerThread("Camera-media offsets must not be negative.")
             return
         }
-        guard let session = ActiveSessionSlot.shared.current() else {
+        guard let session = facadeSessions.session(for: Int64(owner)) else {
             failOnCallerThread("Not connected to a camera.")
             return
         }
@@ -2316,9 +2215,9 @@
     /// pump after its terminal callback.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStopMediaTransfer")
     public func swiftCoreSessionStopMediaTransfer(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) {
-        ActiveSessionSlot.shared.current()?.stopMediaTransfer()
+        facadeSessions.session(for: Int64(owner))?.stopMediaTransfer()
     }
 
     private func mediaTransferEnvironment(

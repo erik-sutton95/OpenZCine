@@ -38,6 +38,7 @@ class SwiftCoreLiveFrameSourceTest {
                 available = { false },
                 start = { fail("must not start live view without the native library") },
                 stop = { fail("must not stop live view without the native library") },
+                configurePreview = { fail("must not configure live view without the native library") },
                 sharingScope = backgroundScope,
             )
 

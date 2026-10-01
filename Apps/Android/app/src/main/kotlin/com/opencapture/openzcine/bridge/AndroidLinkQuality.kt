@@ -184,6 +184,11 @@ internal data class LinkHealthInput(
      * the score cannot say whether a healthy-latency link is simply too narrow for the preset.
      */
     val throughputMegabitsPerSecond: Double? = null,
+    /**
+     * The scored session's native connection owner. Swift reads that owner's pump watchdog
+     * only; null (no real session) never borrows another camera's stream health.
+     */
+    val connectionOwner: Long? = null,
 )
 
 /** Injectable coarse JNI seam that prevents Kotlin from duplicating health rules. */
@@ -197,6 +202,7 @@ internal object ProductionLinkHealthBridge : LinkHealthBridge {
         if (!SwiftCore.isAvailable) return null
         val payload =
             SwiftCore.linkHealthSnapshot(
+                connectionOwner = input.connectionOwner ?: NO_CONNECTION_OWNER,
                 phase = input.phase,
                 roundTripMilliseconds = input.roundTripMilliseconds ?: 0.0,
                 hasRoundTrip = input.roundTripMilliseconds != null,
@@ -216,6 +222,9 @@ internal object ProductionLinkHealthBridge : LinkHealthBridge {
         return parseLinkHealthPresentation(payload)
     }
 }
+
+/** Never issued by `SwiftCoreCameraSession` (owners start at 1), so Swift finds no session. */
+private const val NO_CONNECTION_OWNER: Long = 0L
 
 /** Parses the fixed Swift-owned `score<TAB>bars<TAB>detail` record. */
 internal fun parseLinkHealthPresentation(payload: String): LinkHealthPresentation? {
@@ -266,6 +275,7 @@ public class AndroidLinkHealthMonitor internal constructor(
     private var recentCommandFailures = 0
     private var roundTripMilliseconds: Double? = null
     private var resetBars = true
+    private var connectionOwner: Long? = null
     /** Last JNI health score time — throttles score() off the per-frame hot path. */
     private var lastScoreNanos: Long = 0L
 
@@ -283,7 +293,9 @@ public class AndroidLinkHealthMonitor internal constructor(
         transportIsUsb: Boolean,
         targetFramesPerSecond: Double,
         isDemoSession: Boolean,
+        connectionOwner: Long? = null,
     ) {
+        this.connectionOwner = connectionOwner
         val wasConnected = connected
         val wasStreamingRequested = streamingRequested
         val nowNanos = clockNanos()
@@ -395,6 +407,7 @@ public class AndroidLinkHealthMonitor internal constructor(
                     isRecoveringStream = phase == AndroidLinkPhase.RECOVERING,
                     isUsbTransport = isUsbTransport,
                     resetSignalBars = resetBars,
+                    connectionOwner = connectionOwner,
                 ),
             )
         resetBars = false

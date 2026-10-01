@@ -106,31 +106,67 @@ internal interface SwiftCoreSessionBridge {
         connectUsb(transport, host, cameraNameHint, connectionOwner, listener)
     }
 
-    fun startEventStream(listener: SwiftCore.SessionEventListener)
+    // Every session-scoped call names its connection owner: multicam holds one
+    // native session per owner, and an unknown owner fails as NoSession. There
+    // is deliberately no unowned "current session" entry point.
 
-    fun readProperty(code: Int): String?
+    fun startEventStream(connectionOwner: Long, listener: SwiftCore.SessionEventListener)
 
-    fun refreshPropertySnapshot(request: Int, recording: Boolean, propertyCode: Long): String?
+    fun readProperty(connectionOwner: Long, code: Int): String?
 
-    /** Latest real native command RTT, or null when the active session has none. */
-    fun latestRoundTripMilliseconds(): Double? = null
+    fun refreshPropertySnapshot(
+        connectionOwner: Long,
+        request: Int,
+        recording: Boolean,
+        propertyCode: Long,
+    ): String?
 
-    fun setRecording(recording: Boolean): Int
+    /** Latest real native command RTT, or null when the owner's session has none. */
+    fun latestRoundTripMilliseconds(connectionOwner: Long): Double? = null
 
-    fun applyControl(control: CameraControl, label: String): Int
+    fun setRecording(connectionOwner: Long, recording: Boolean): Int
 
-    fun initiateStillCapture(preserveFocus: Boolean): Int =
+    fun applyControl(connectionOwner: Long, control: CameraControl, label: String): Int
+
+    fun initiateStillCapture(connectionOwner: Long, preserveFocus: Boolean): Int =
         SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
 
-    fun pollStillRelease(): Int = -2
+    fun pollStillRelease(connectionOwner: Long): Int = -2
 
-    fun terminateStillCapture(): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+    fun terminateStillCapture(connectionOwner: Long): Int =
+        SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
 
-    fun setStillBurstBracket(active: Boolean): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+    fun setStillBurstBracket(connectionOwner: Long, active: Boolean): Int =
+        SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
 
-    fun changeAfArea(point: CameraFocusPoint): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
+    /** Raw `sessionMFDrive` outcome; -1 is the native no-session sentinel. */
+    fun mfDrive(connectionOwner: Long, towardNear: Boolean, pulses: Int): Int = -1
 
-    fun resetFocusPoint(): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
+    fun changeAfArea(connectionOwner: Long, point: CameraFocusPoint): Int =
+        SwiftCore.FOCUS_COMMAND_UNAVAILABLE
+
+    fun resetFocusPoint(connectionOwner: Long): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
+
+    fun seedStillReviewBaseline(connectionOwner: Long): Int = -1
+
+    fun resolveNewestStillHandle(connectionOwner: Long): Int = 0
+
+    fun stillThumbnail(connectionOwner: Long, handle: Int): ByteArray? = null
+
+    fun stillImage(connectionOwner: Long, handle: Int): ByteArray? = null
+
+    fun cancelStillImage(connectionOwner: Long) = Unit
+
+    fun setObjectRating(connectionOwner: Long, handle: Int, stars: Int): Int = -1
+
+    /** Starts [connectionOwner]'s pump; a fake without one ends the stream at once. */
+    fun startLiveView(connectionOwner: Long, listener: SwiftCore.LiveFrameListener) {
+        listener.onEnded()
+    }
+
+    fun stopLiveView(connectionOwner: Long) = Unit
+
+    fun configureLiveView(connectionOwner: Long, request: SwiftLiveViewRequest): Boolean = false
 
     fun disconnect(connectionOwner: Long)
 
@@ -203,41 +239,101 @@ internal interface SwiftCoreSessionBridge {
             )
         }
 
-        override fun startEventStream(listener: SwiftCore.SessionEventListener) {
-            SwiftCore.sessionStartEventStream(listener)
+        override fun startEventStream(
+            connectionOwner: Long,
+            listener: SwiftCore.SessionEventListener,
+        ) {
+            SwiftCore.sessionStartEventStream(connectionOwner, listener)
         }
 
-        override fun readProperty(code: Int): String? = SwiftCore.sessionReadProperty(code)
+        override fun readProperty(connectionOwner: Long, code: Int): String? =
+            SwiftCore.sessionReadProperty(connectionOwner, code)
 
         override fun refreshPropertySnapshot(
+            connectionOwner: Long,
             request: Int,
             recording: Boolean,
             propertyCode: Long,
-        ): String? = SwiftCore.sessionRefreshPropertySnapshot(request, recording, propertyCode)
+        ): String? =
+            SwiftCore.sessionRefreshPropertySnapshot(
+                connectionOwner,
+                request,
+                recording,
+                propertyCode,
+            )
 
-        override fun latestRoundTripMilliseconds(): Double? =
-            SwiftCore.sessionLatestRoundTripMilliseconds().takeIf { it.isFinite() && it > 0.0 }
+        override fun latestRoundTripMilliseconds(connectionOwner: Long): Double? =
+            SwiftCore.sessionLatestRoundTripMilliseconds(connectionOwner)
+                .takeIf { it.isFinite() && it > 0.0 }
 
-        override fun setRecording(recording: Boolean): Int =
-            SwiftCore.sessionSetRecording(recording)
+        override fun setRecording(connectionOwner: Long, recording: Boolean): Int =
+            SwiftCore.sessionSetRecording(connectionOwner, recording)
 
-        override fun applyControl(control: CameraControl, label: String): Int =
-            SwiftCore.sessionApplyControl(control.nativeSelector, label)
+        override fun applyControl(
+            connectionOwner: Long,
+            control: CameraControl,
+            label: String,
+        ): Int = SwiftCore.sessionApplyControl(connectionOwner, control.nativeSelector, label)
 
-        override fun initiateStillCapture(preserveFocus: Boolean): Int =
-            SwiftCore.sessionInitiateStillCapture(preserveFocus)
+        override fun initiateStillCapture(connectionOwner: Long, preserveFocus: Boolean): Int =
+            SwiftCore.sessionInitiateStillCapture(connectionOwner, preserveFocus)
 
-        override fun pollStillRelease(): Int = SwiftCore.sessionPollStillRelease()
+        override fun pollStillRelease(connectionOwner: Long): Int =
+            SwiftCore.sessionPollStillRelease(connectionOwner)
 
-        override fun terminateStillCapture(): Int = SwiftCore.sessionTerminateStillCapture()
+        override fun terminateStillCapture(connectionOwner: Long): Int =
+            SwiftCore.sessionTerminateStillCapture(connectionOwner)
 
-        override fun setStillBurstBracket(active: Boolean): Int =
-            SwiftCore.sessionSetStillBurstBracket(active)
+        override fun setStillBurstBracket(connectionOwner: Long, active: Boolean): Int =
+            SwiftCore.sessionSetStillBurstBracket(connectionOwner, active)
 
-        override fun changeAfArea(point: CameraFocusPoint): Int =
-            SwiftCore.sessionChangeAfArea(point.x, point.y)
+        override fun mfDrive(connectionOwner: Long, towardNear: Boolean, pulses: Int): Int =
+            SwiftCore.sessionMFDrive(connectionOwner, towardNear, pulses)
 
-        override fun resetFocusPoint(): Int = SwiftCore.sessionResetFocusPoint()
+        override fun changeAfArea(connectionOwner: Long, point: CameraFocusPoint): Int =
+            SwiftCore.sessionChangeAfArea(connectionOwner, point.x, point.y)
+
+        override fun resetFocusPoint(connectionOwner: Long): Int =
+            SwiftCore.sessionResetFocusPoint(connectionOwner)
+
+        override fun seedStillReviewBaseline(connectionOwner: Long): Int =
+            SwiftCore.sessionSeedStillReviewBaseline(connectionOwner)
+
+        override fun resolveNewestStillHandle(connectionOwner: Long): Int =
+            SwiftCore.sessionResolveNewestStillHandle(connectionOwner)
+
+        override fun stillThumbnail(connectionOwner: Long, handle: Int): ByteArray? =
+            SwiftCore.sessionThumbnail(connectionOwner, handle)
+
+        override fun stillImage(connectionOwner: Long, handle: Int): ByteArray? =
+            SwiftCore.sessionStillImage(connectionOwner, handle)
+
+        override fun cancelStillImage(connectionOwner: Long) {
+            SwiftCore.sessionCancelStillImage(connectionOwner)
+        }
+
+        override fun setObjectRating(connectionOwner: Long, handle: Int, stars: Int): Int =
+            SwiftCore.sessionSetObjectRating(connectionOwner, handle, stars)
+
+        override fun startLiveView(connectionOwner: Long, listener: SwiftCore.LiveFrameListener) {
+            SwiftCore.sessionStartLiveView(connectionOwner, listener)
+        }
+
+        override fun stopLiveView(connectionOwner: Long) {
+            SwiftCore.sessionStopLiveView(connectionOwner)
+        }
+
+        override fun configureLiveView(
+            connectionOwner: Long,
+            request: SwiftLiveViewRequest,
+        ): Boolean =
+            SwiftCore.isAvailable &&
+                SwiftCore.sessionConfigureLiveView(
+                    connectionOwner = connectionOwner,
+                    imageSize = request.imageSize,
+                    compression = request.compression,
+                    frameIntervalNanoseconds = request.frameIntervalNanoseconds,
+                )
 
         override fun disconnect(connectionOwner: Long) {
             SwiftCore.sessionDisconnect(connectionOwner)
@@ -395,6 +491,14 @@ class SwiftCoreCameraSession internal constructor(
     /** Opaque native owner for [activeAttempt], unique across session instances. */
     private var activeConnectionOwner: Long? = null
 
+    /**
+     * The native connection owner every facade call from this session is
+     * addressed to, or null with no attempt. Media surfaces that talk to the
+     * facade directly pass this too; nothing falls back to another camera.
+     */
+    internal val connectionOwner: Long?
+        get() = synchronized(attemptLock) { activeConnectionOwner }
+
     private val _recordingState = MutableStateFlow(CameraRecordingState.STANDBY)
     override val recordingState: StateFlow<CameraRecordingState> = _recordingState.asStateFlow()
 
@@ -471,6 +575,16 @@ class SwiftCoreCameraSession internal constructor(
      */
     val liveFrames: LiveFrameSource =
         SwiftCoreLiveFrameSource(
+            available = { core.isAvailable },
+            start = { listener ->
+                // No owner = no session: end at once, exactly as Swift does
+                // for an unknown owner, instead of reaching another camera.
+                connectionOwner?.let { core.startLiveView(it, listener) } ?: listener.onEnded()
+            },
+            stop = { connectionOwner?.let(core::stopLiveView) },
+            configurePreview = { request ->
+                connectionOwner?.let { core.configureLiveView(it, request) } ?: false
+            },
             onRecordingState = ::applyCameraRecordingState,
             onCommandRoundTrip = { updateRoundTripMeasurement() },
             onStreamExhausted = ::markLiveViewStreamExhausted,
@@ -620,7 +734,9 @@ class SwiftCoreCameraSession internal constructor(
      */
     suspend fun readProperty(code: Int): String? =
         if (_state.value is CameraSessionState.Connected) {
-            withContext(Dispatchers.IO) { core.readProperty(code) }
+            connectionOwner?.let { owner ->
+                withContext(Dispatchers.IO) { core.readProperty(owner, code) }
+            }
         } else {
             null
         }
@@ -674,7 +790,8 @@ class SwiftCoreCameraSession internal constructor(
             try {
                 val nativeResult =
                     withContext(Dispatchers.IO + NonCancellable) {
-                        core.setRecording(recording)
+                        connectionOwner?.let { core.setRecording(it, recording) }
+                            ?: SwiftCore.RECORDING_COMMAND_NO_SESSION
                     }
                 updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfRecordingCommandFailed()
@@ -744,7 +861,8 @@ class SwiftCoreCameraSession internal constructor(
                 val writeStartedNanos = System.nanoTime()
                 val nativeResult =
                     withContext(Dispatchers.IO + NonCancellable) {
-                        core.applyControl(control, label)
+                        connectionOwner?.let { core.applyControl(it, control, label) }
+                            ?: SwiftCore.CONTROL_COMMAND_NO_SESSION
                     }
                 // A body can sit on a property write for seconds (e.g. a focus-mode
                 // motor handoff) while it holds the transaction gate — and with it
@@ -774,7 +892,7 @@ class SwiftCoreCameraSession internal constructor(
      * [pollStillRelease] for completion.
      */
     override suspend fun initiateStillCapture(preserveFocus: Boolean) {
-        runStillCommand { core.initiateStillCapture(preserveFocus) }
+        runStillCommand { owner -> core.initiateStillCapture(owner, preserveFocus) }
     }
 
     override suspend fun pollStillRelease(): StillReleasePoll {
@@ -784,7 +902,9 @@ class SwiftCoreCameraSession internal constructor(
             }
             val raw =
                 try {
-                    withContext(Dispatchers.IO + NonCancellable) { core.pollStillRelease() }
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        connectionOwner?.let(core::pollStillRelease) ?: -1
+                    }
                 } catch (_: Throwable) {
                     return StillReleasePoll.FAILED
                 }
@@ -798,11 +918,11 @@ class SwiftCoreCameraSession internal constructor(
     }
 
     override suspend fun terminateStillCapture() {
-        runStillCommand { core.terminateStillCapture() }
+        runStillCommand(core::terminateStillCapture)
     }
 
     override suspend fun setStillBurstBracket(active: Boolean) {
-        runStillCommand { core.setStillBurstBracket(active) }
+        runStillCommand { owner -> core.setStillBurstBracket(owner, active) }
     }
 
     override suspend fun mfDrive(towardNear: Boolean, pulses: Int): MFDriveOutcome {
@@ -813,7 +933,7 @@ class SwiftCoreCameraSession internal constructor(
             val raw =
                 try {
                     withContext(Dispatchers.IO + NonCancellable) {
-                        SwiftCore.sessionMFDrive(towardNear, pulses)
+                        connectionOwner?.let { core.mfDrive(it, towardNear, pulses) } ?: -1
                     }
                 } catch (_: Throwable) {
                     return MFDriveOutcome.Refused(rawResponseCode = 0)
@@ -831,19 +951,21 @@ class SwiftCoreCameraSession internal constructor(
 
     override suspend fun seedInstantReviewBaseline() {
         if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return
-        withContext(Dispatchers.IO) { SwiftCore.sessionSeedStillReviewBaseline() }
+        val owner = connectionOwner ?: return
+        withContext(Dispatchers.IO) { core.seedStillReviewBaseline(owner) }
     }
 
     override suspend fun resolveNewestStillHandle(): Int? {
         if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
-        val handle =
-            withContext(Dispatchers.IO) { SwiftCore.sessionResolveNewestStillHandle() }
+        val owner = connectionOwner ?: return null
+        val handle = withContext(Dispatchers.IO) { core.resolveNewestStillHandle(owner) }
         return handle.takeIf { it != 0 }
     }
 
     override suspend fun stillThumbnail(handle: Int): ByteArray? {
         if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
-        return withContext(Dispatchers.IO) { SwiftCore.sessionThumbnail(handle) }
+        val owner = connectionOwner ?: return null
+        return withContext(Dispatchers.IO) { core.stillThumbnail(owner, handle) }
     }
 
     // The chunked fetch serializes per-transaction inside the native session,
@@ -852,23 +974,24 @@ class SwiftCoreCameraSession internal constructor(
     // multi-second duration.
     override suspend fun stillFullImage(handle: Int): ByteArray? {
         if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
-        return withContext(Dispatchers.IO) { SwiftCore.sessionStillImage(handle) }
+        val owner = connectionOwner ?: return null
+        return withContext(Dispatchers.IO) { core.stillImage(owner, handle) }
     }
 
     override fun cancelStillImageFetch() {
         if (!core.isAvailable) return
-        SwiftCore.sessionCancelStillImage()
+        connectionOwner?.let(core::cancelStillImage)
     }
 
     override suspend fun setStillRating(handle: Int, stars: Int): Int? {
         if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
-        val confirmed =
-            withContext(Dispatchers.IO) { SwiftCore.sessionSetObjectRating(handle, stars) }
+        val owner = connectionOwner ?: return null
+        val confirmed = withContext(Dispatchers.IO) { core.setObjectRating(owner, handle, stars) }
         return confirmed.takeIf { it >= 0 }
     }
 
     /** Shared gate for the still-release command family. */
-    private suspend fun runStillCommand(command: () -> Int) {
+    private suspend fun runStillCommand(command: (connectionOwner: Long) -> Int) {
         cameraCommandMutex.withLock {
             if (_state.value !is CameraSessionState.Connected) {
                 throw CameraControlException.NotConnected
@@ -878,7 +1001,9 @@ class SwiftCoreCameraSession internal constructor(
             }
             val nativeResult =
                 try {
-                    withContext(Dispatchers.IO + NonCancellable) { command() }
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        connectionOwner?.let(command) ?: SwiftCore.RECORDING_COMMAND_NO_SESSION
+                    }
                 } catch (_: Throwable) {
                     throw CameraControlException.TransportFailed
                 }
@@ -914,7 +1039,8 @@ class SwiftCoreCameraSession internal constructor(
             try {
                 val nativeResult =
                     withContext(Dispatchers.IO + NonCancellable) {
-                        core.changeAfArea(point)
+                        connectionOwner?.let { core.changeAfArea(it, point) }
+                            ?: SwiftCore.FOCUS_COMMAND_NO_SESSION
                     }
                 updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfFocusCommandFailed()
@@ -941,7 +1067,8 @@ class SwiftCoreCameraSession internal constructor(
             try {
                 val nativeResult =
                     withContext(Dispatchers.IO + NonCancellable) {
-                        core.resetFocusPoint()
+                        connectionOwner?.let(core::resetFocusPoint)
+                            ?: SwiftCore.FOCUS_COMMAND_NO_SESSION
                     }
                 updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfFocusCommandFailed()
@@ -994,8 +1121,10 @@ class SwiftCoreCameraSession internal constructor(
 
     /** Starts the native event drain after the current connection is established. */
     private fun startEventStream(attempt: Long) {
+        val owner = connectionOwnerFor(attempt) ?: return
         try {
             core.startEventStream(
+                owner,
                 object : SwiftCore.SessionEventListener {
                     override fun onEvent(
                         rawEventCode: Int,
@@ -1445,10 +1574,12 @@ class SwiftCoreCameraSession internal constructor(
         request: Int,
         propertyCode: Long,
     ): CameraPropertyRefreshWireResult {
+        val owner = connectionOwner ?: return CameraPropertySnapshotWire.decode(null)
         val payload =
             try {
                 withContext(propertyRefreshDispatcher) {
                     core.refreshPropertySnapshot(
+                        connectionOwner = owner,
                         request = request,
                         recording = _recordingState.value == CameraRecordingState.RECORDING,
                         propertyCode = propertyCode,
@@ -1530,7 +1661,8 @@ class SwiftCoreCameraSession internal constructor(
             return
         }
         lastRoundTripPublishNanos = now
-        _latestCommandRoundTripMilliseconds.value = core.latestRoundTripMilliseconds()
+        _latestCommandRoundTripMilliseconds.value =
+            connectionOwner?.let(core::latestRoundTripMilliseconds)
     }
 
     private fun Int.throwIfFocusCommandFailed() {

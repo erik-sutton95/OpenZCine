@@ -116,8 +116,12 @@ internal interface MediaBrowseGateway {
     fun cancel(cursor: Long)
 }
 
-private object SwiftMediaBrowseGateway : MediaBrowseGateway {
-    override fun begin(): String? = SwiftCore.sessionBeginMediaBrowse()
+/**
+ * Production gateway for one camera's [connectionOwner]. Only [begin] names the owner: Swift
+ * binds the returned cursor to that session, so next/cancel are already camera-addressed.
+ */
+internal class SwiftMediaBrowseGateway(private val connectionOwner: Long?) : MediaBrowseGateway {
+    override fun begin(): String? = connectionOwner?.let(SwiftCore::sessionBeginMediaBrowse)
 
     override fun next(cursor: Long, maxObjects: Int): String? =
         SwiftCore.sessionNextMediaBrowsePage(cursor, maxObjects)
@@ -135,7 +139,7 @@ internal class MediaBrowsePagingException(message: String) : IllegalStateExcepti
  */
 internal suspend fun loadCameraMediaPages(
     pageSize: Int,
-    gateway: MediaBrowseGateway = SwiftMediaBrowseGateway,
+    gateway: MediaBrowseGateway,
     ioContext: CoroutineContext = Dispatchers.IO,
     onStart: suspend (List<CameraStorageSlotStatus>) -> Unit = {},
     onPage: suspend (MediaBrowseSnapshot) -> Unit,

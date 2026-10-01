@@ -164,8 +164,8 @@ internal class MediaDeliveryCoordinator(
     suspend fun cacheFromCamera(
         destination: MediaDeliveryKind,
         selection: List<MediaDeliverySelection>,
-        cameraTransferAvailable: Boolean,
-    ): MediaDeliveryCachePass = runCachePass(destination, selection, cameraTransferAvailable)
+        cameraConnectionOwner: Long?,
+    ): MediaDeliveryCachePass = runCachePass(destination, selection, cameraConnectionOwner)
 
     /**
      * Stages complete cache entries, optionally bakes a LUT, then opens the
@@ -174,7 +174,7 @@ internal class MediaDeliveryCoordinator(
     fun beginNativeShare(
         selection: List<MediaDeliverySelection>,
         configuration: MediaDeliveryConfiguration,
-        cameraTransferAvailable: Boolean,
+        cameraConnectionOwner: Long?,
         onShareReady: (List<StagedMediaShare>, String?) -> Unit,
     ) {
         if (selection.isEmpty()) return
@@ -182,7 +182,7 @@ internal class MediaDeliveryCoordinator(
             destination = MediaDeliveryKind.NATIVE_SHARE,
             selection = selection,
             configuration = configuration,
-            cameraTransferAvailable = cameraTransferAvailable,
+            cameraConnectionOwner = cameraConnectionOwner,
         ) { prepared, items, uncachedCount, gen ->
             if (generation.get() != gen) return@start
             publish(
@@ -237,7 +237,7 @@ internal class MediaDeliveryCoordinator(
     fun beginSaveToPhotos(
         selection: List<MediaDeliverySelection>,
         configuration: MediaDeliveryConfiguration,
-        cameraTransferAvailable: Boolean,
+        cameraConnectionOwner: Long?,
     ) {
         if (selection.isEmpty()) return
         val savableSelection =
@@ -253,7 +253,7 @@ internal class MediaDeliveryCoordinator(
             destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
             selection = savableSelection,
             configuration = configuration,
-            cameraTransferAvailable = cameraTransferAvailable,
+            cameraConnectionOwner = cameraConnectionOwner,
         ) { prepared, items, uncachedCount, gen ->
             if (generation.get() != gen) return@start
             publish(
@@ -351,12 +351,13 @@ internal class MediaDeliveryCoordinator(
     private suspend fun runCachePass(
         destination: MediaDeliveryKind,
         selection: List<MediaDeliverySelection>,
-        cameraTransferAvailable: Boolean,
+        cameraConnectionOwner: Long?,
     ): MediaDeliveryCachePass =
         cacheSelectionForDelivery(
             selection = selection,
             cacheStore = cacheStore,
-            cameraTransferAvailable = cameraTransferAvailable,
+            cameraTransferAvailable = cameraConnectionOwner != null,
+            bridge = SwiftCoreMediaObjectTransferBridge(cameraConnectionOwner),
         ) { index, count, item, fraction ->
             publish(
                 MediaDeliveryOverlayState(
@@ -374,7 +375,7 @@ internal class MediaDeliveryCoordinator(
         destination: MediaDeliveryKind,
         selection: List<MediaDeliverySelection>,
         configuration: MediaDeliveryConfiguration,
-        cameraTransferAvailable: Boolean,
+        cameraConnectionOwner: Long?,
         afterPrepare: suspend (List<PreparedClip>, List<MediaDeliveryWorkItem>, Int, Long) -> Unit,
     ) {
         val gen = generation.incrementAndGet()
@@ -396,7 +397,7 @@ internal class MediaDeliveryCoordinator(
                 val prepared = ArrayList<PreparedClip>(selection.size)
                 try {
                     // One job spans cache → export → hand-off, so Cancel stops the whole run.
-                    val pass = runCachePass(destination, selection, cameraTransferAvailable)
+                    val pass = runCachePass(destination, selection, cameraConnectionOwner)
                     val items = pass.items
                     if (generation.get() != gen) return@launch
                     if (items.isEmpty()) {

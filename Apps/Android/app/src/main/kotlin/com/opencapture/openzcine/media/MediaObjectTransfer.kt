@@ -31,13 +31,19 @@ internal interface MediaObjectTransferBridge {
     fun stopMediaTransfer() = Unit
 }
 
-/** Production bridge that leaves all camera protocol work in the Swift core. */
-private object SwiftCoreMediaObjectTransferBridge : MediaObjectTransferBridge {
+/**
+ * Production bridge that leaves all camera protocol work in the Swift core, addressed to one
+ * camera's [connectionOwner]. Null (no real session) resolves nothing and fails every start, the
+ * same answer Swift gives an unknown owner, so a transfer never reaches another camera.
+ */
+internal class SwiftCoreMediaObjectTransferBridge(
+    private val connectionOwner: Long?,
+) : MediaObjectTransferBridge {
     override val isAvailable: Boolean
         get() = SwiftCore.isAvailable
 
     override fun resolveMediaSize(handle: Int, reportedSize: Long): Long =
-        SwiftCore.sessionResolveMediaSize(handle, reportedSize)
+        connectionOwner?.let { SwiftCore.sessionResolveMediaSize(it, handle, reportedSize) } ?: -1L
 
     override fun startMediaTransfer(
         handle: Int,
@@ -45,11 +51,12 @@ private object SwiftCoreMediaObjectTransferBridge : MediaObjectTransferBridge {
         resumeOffset: Long,
         listener: SwiftCore.MediaTransferListener,
     ) {
-        SwiftCore.sessionStartMediaTransfer(handle, reportedSize, resumeOffset, listener)
+        val owner = connectionOwner ?: return listener.onFailed("Not connected to a camera.")
+        SwiftCore.sessionStartMediaTransfer(owner, handle, reportedSize, resumeOffset, listener)
     }
 
     override fun stopMediaTransfer() {
-        if (SwiftCore.isAvailable) SwiftCore.sessionStopMediaTransfer()
+        if (SwiftCore.isAvailable) connectionOwner?.let(SwiftCore::sessionStopMediaTransfer)
     }
 }
 
@@ -114,7 +121,7 @@ internal fun prepareMediaObjectTransfer(
     cameraID: String,
     clip: MediaClipRecord,
     objectLabel: String,
-    bridge: MediaObjectTransferBridge = SwiftCoreMediaObjectTransferBridge,
+    bridge: MediaObjectTransferBridge,
     cameraTransferAvailable: Boolean = true,
     onResolvedSize: (Long) -> Unit = {},
 ): MediaTransferPreparation {
@@ -194,7 +201,7 @@ internal suspend fun cacheSelectionForDelivery(
     selection: List<MediaDeliverySelection>,
     cacheStore: MediaCacheStore,
     cameraTransferAvailable: Boolean,
-    bridge: MediaObjectTransferBridge = SwiftCoreMediaObjectTransferBridge,
+    bridge: MediaObjectTransferBridge,
     ioContext: CoroutineContext = Dispatchers.IO,
     pollIntervalMillis: Long = CACHE_PASS_POLL_MILLIS,
     /** `(1-based index among clips being cached, count being cached, clip, 0…1)`. */

@@ -29,6 +29,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -297,8 +298,101 @@ class SwiftCoreCameraSessionTest {
 
         session.setRecording(true)
 
-        assertEquals(listOf(true), bridge.recordingRequests)
+        assertEquals(
+            listOf(bridge.ptpIpConnects.single().connectionOwner to true),
+            bridge.recordingRequests,
+        )
         assertEquals(CameraRecordingState.RECORDING, session.recordingState.value)
+    }
+
+    @Test
+    fun `every session-scoped facade call is addressed to this session's own owner`() = runTest {
+        val bridge = FakeBridge()
+        val session = quietSession(bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        val owner = bridge.ptpIpConnects.single().connectionOwner
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        session.refreshProperties()
+        session.readProperty(SwiftCore.PROP_BATTERY_LEVEL)
+        session.setRecording(true)
+        session.applyControl(CameraControl.ISO, "800")
+        session.initiateStillCapture(preserveFocus = false)
+        session.pollStillRelease()
+        session.terminateStillCapture()
+        session.setStillBurstBracket(true)
+        session.mfDrive(towardNear = true, pulses = 4)
+        session.changeAfArea(CameraFocusPoint(10, 20))
+        session.resetFocusPoint()
+        session.seedInstantReviewBaseline()
+        session.resolveNewestStillHandle()
+        session.stillThumbnail(7)
+        session.stillFullImage(7)
+        session.cancelStillImageFetch()
+        session.setStillRating(7, 3)
+        val feed = launch(Dispatchers.Default) { session.liveFrames.frames.collect {} }
+        assertTrue(bridge.liveViewStarted.await(5, TimeUnit.SECONDS))
+        feed.cancel()
+        assertTrue(bridge.liveViewStopped.await(5, TimeUnit.SECONDS))
+
+        assertEquals(
+            setOf(
+                "startEventStream", "latestRoundTripMilliseconds", "refreshPropertySnapshot",
+                "readProperty", "setRecording", "applyControl", "initiateStillCapture",
+                "pollStillRelease", "terminateStillCapture", "setStillBurstBracket", "mfDrive",
+                "changeAfArea", "resetFocusPoint", "seedStillReviewBaseline",
+                "resolveNewestStillHandle", "stillThumbnail", "stillImage", "cancelStillImage",
+                "setObjectRating", "configureLiveView", "startLiveView", "stopLiveView",
+            ),
+            bridge.ownedCalls().map { it.first }.toSet(),
+        )
+        assertEquals(setOf(owner), bridge.ownedCalls().map { it.second }.toSet())
+    }
+
+    @Test
+    fun `two cameras on one facade never receive each other's commands`() = runTest {
+        // Production shares one process-wide facade between every multicam tile.
+        val bridge = FakeBridge()
+        val cameraA = quietSession(bridge)
+        val cameraB = quietSession(bridge)
+        val connectingA = async { cameraA.connect() }
+        runCurrent()
+        val ownerA = bridge.ptpIpConnects.last().connectionOwner
+        bridge.listeners.last().onConnected("A CAM", "NIKON ZR", "1")
+        connectingA.await()
+        // B connects last, which is exactly what the old "current session" routing favored.
+        val connectingB = async { cameraB.connect() }
+        runCurrent()
+        val ownerB = bridge.ptpIpConnects.last().connectionOwner
+        bridge.listeners.last().onConnected("B CAM", "NIKON ZR", "2")
+        connectingB.await()
+        assertTrue(ownerA != ownerB)
+
+        cameraA.refreshProperties()
+        cameraA.applyControl(CameraControl.WHITE_BALANCE, "5600K")
+        cameraB.applyControl(CameraControl.ISO, "1600")
+        cameraB.setRecording(true)
+
+        assertEquals(setOf(ownerA, ownerB), bridge.ownersOf("applyControl"))
+        assertEquals(
+            listOf(CameraControl.WHITE_BALANCE to "5600K", CameraControl.ISO to "1600"),
+            bridge.controlRequests,
+        )
+        assertEquals(setOf(ownerA), bridge.ownersOf("refreshPropertySnapshot"))
+        assertEquals(listOf(ownerB to true), bridge.recordingRequests)
+        assertEquals(setOf(ownerA, ownerB), bridge.ownersOf("startEventStream"))
+
+        // A leaves; B's next write still addresses B only, never A's stale owner.
+        cameraA.disconnect()
+        val beforeB = bridge.ownedCalls().size
+        cameraB.applyControl(CameraControl.ISO, "3200")
+        assertEquals(
+            setOf(ownerB),
+            bridge.ownedCalls().drop(beforeB).map { it.second }.toSet(),
+        )
+        assertEquals(listOf(ownerA), bridge.disconnectOwners)
     }
 
     @Test
@@ -1324,7 +1418,7 @@ class SwiftCoreCameraSessionTest {
         val ptpIpConnects = mutableListOf<PtpIpConnect>()
         val usbConnects = mutableListOf<UsbConnect>()
         val eventListeners = mutableListOf<SwiftCore.SessionEventListener>()
-        val recordingRequests = mutableListOf<Boolean>()
+        val recordingRequests = mutableListOf<Pair<Long, Boolean>>()
         val controlRequests = mutableListOf<Pair<CameraControl, String>>()
         val focusRequests = mutableListOf<CameraFocusPoint>()
         var focusResetRequests = 0
@@ -1382,17 +1476,41 @@ class SwiftCoreCameraSessionTest {
             listeners += listener
         }
 
-        override fun startEventStream(listener: SwiftCore.SessionEventListener) {
+        /** Every session-scoped call as (entry point, connection owner), in order. */
+        private val ownedCalls = mutableListOf<Pair<String, Long>>()
+
+        fun ownedCalls(): List<Pair<String, Long>> = synchronized(ownedCalls) { ownedCalls.toList() }
+
+        fun ownersOf(entryPoint: String): Set<Long> =
+            ownedCalls().filter { it.first == entryPoint }.map { it.second }.toSet()
+
+        private fun owned(entryPoint: String, connectionOwner: Long) {
+            synchronized(ownedCalls) { ownedCalls += entryPoint to connectionOwner }
+        }
+
+        val liveViewStarted = CountDownLatch(1)
+        val liveViewStopped = CountDownLatch(1)
+
+        override fun startEventStream(
+            connectionOwner: Long,
+            listener: SwiftCore.SessionEventListener,
+        ) {
+            owned("startEventStream", connectionOwner)
             eventListeners += listener
         }
 
-        override fun readProperty(code: Int): String? = null
+        override fun readProperty(connectionOwner: Long, code: Int): String? {
+            owned("readProperty", connectionOwner)
+            return null
+        }
 
         override fun refreshPropertySnapshot(
+            connectionOwner: Long,
             request: Int,
             recording: Boolean,
             propertyCode: Long,
         ): String? {
+            owned("refreshPropertySnapshot", connectionOwner)
             val entry = PropertyRefreshRequest(request, recording, propertyCode)
             synchronized(refreshLock) {
                 propertyRefreshRequests += entry
@@ -1417,26 +1535,109 @@ class SwiftCoreCameraSessionTest {
 
         fun maximumRefreshConcurrency(): Int = synchronized(refreshLock) { maximumRefreshes }
 
-        override fun setRecording(recording: Boolean): Int {
-            recordingRequests += recording
+        override fun setRecording(connectionOwner: Long, recording: Boolean): Int {
+            owned("setRecording", connectionOwner)
+            recordingRequests += connectionOwner to recording
             return SwiftCore.RECORDING_COMMAND_ACCEPTED
         }
 
-        override fun latestRoundTripMilliseconds(): Double? = roundTripMilliseconds
+        override fun latestRoundTripMilliseconds(connectionOwner: Long): Double? {
+            owned("latestRoundTripMilliseconds", connectionOwner)
+            return roundTripMilliseconds
+        }
 
-        override fun applyControl(control: CameraControl, label: String): Int {
+        override fun applyControl(
+            connectionOwner: Long,
+            control: CameraControl,
+            label: String,
+        ): Int {
+            owned("applyControl", connectionOwner)
             controlRequests += control to label
             return controlHandler?.invoke(control, label) ?: controlResult
         }
 
-        override fun changeAfArea(point: CameraFocusPoint): Int {
+        override fun initiateStillCapture(connectionOwner: Long, preserveFocus: Boolean): Int {
+            owned("initiateStillCapture", connectionOwner)
+            return SwiftCore.RECORDING_COMMAND_ACCEPTED
+        }
+
+        override fun pollStillRelease(connectionOwner: Long): Int {
+            owned("pollStillRelease", connectionOwner)
+            return 0
+        }
+
+        override fun terminateStillCapture(connectionOwner: Long): Int {
+            owned("terminateStillCapture", connectionOwner)
+            return SwiftCore.RECORDING_COMMAND_ACCEPTED
+        }
+
+        override fun setStillBurstBracket(connectionOwner: Long, active: Boolean): Int {
+            owned("setStillBurstBracket", connectionOwner)
+            return SwiftCore.RECORDING_COMMAND_ACCEPTED
+        }
+
+        override fun mfDrive(connectionOwner: Long, towardNear: Boolean, pulses: Int): Int {
+            owned("mfDrive", connectionOwner)
+            return 0
+        }
+
+        override fun changeAfArea(connectionOwner: Long, point: CameraFocusPoint): Int {
+            owned("changeAfArea", connectionOwner)
             synchronized(focusRequests) { focusRequests += point }
             return focusHandler?.invoke(point) ?: focusResult
         }
 
-        override fun resetFocusPoint(): Int {
+        override fun resetFocusPoint(connectionOwner: Long): Int {
+            owned("resetFocusPoint", connectionOwner)
             focusResetRequests += 1
             return focusResetResult
+        }
+
+        override fun seedStillReviewBaseline(connectionOwner: Long): Int {
+            owned("seedStillReviewBaseline", connectionOwner)
+            return 0
+        }
+
+        override fun resolveNewestStillHandle(connectionOwner: Long): Int {
+            owned("resolveNewestStillHandle", connectionOwner)
+            return 7
+        }
+
+        override fun stillThumbnail(connectionOwner: Long, handle: Int): ByteArray? {
+            owned("stillThumbnail", connectionOwner)
+            return byteArrayOf(1)
+        }
+
+        override fun stillImage(connectionOwner: Long, handle: Int): ByteArray? {
+            owned("stillImage", connectionOwner)
+            return byteArrayOf(2)
+        }
+
+        override fun cancelStillImage(connectionOwner: Long) {
+            owned("cancelStillImage", connectionOwner)
+        }
+
+        override fun setObjectRating(connectionOwner: Long, handle: Int, stars: Int): Int {
+            owned("setObjectRating", connectionOwner)
+            return stars
+        }
+
+        override fun configureLiveView(
+            connectionOwner: Long,
+            request: SwiftLiveViewRequest,
+        ): Boolean {
+            owned("configureLiveView", connectionOwner)
+            return true
+        }
+
+        override fun startLiveView(connectionOwner: Long, listener: SwiftCore.LiveFrameListener) {
+            owned("startLiveView", connectionOwner)
+            liveViewStarted.countDown()
+        }
+
+        override fun stopLiveView(connectionOwner: Long) {
+            owned("stopLiveView", connectionOwner)
+            liveViewStopped.countDown()
         }
 
         override fun disconnect(connectionOwner: Long) {
@@ -1487,6 +1688,16 @@ class SwiftCoreCameraSessionTest {
             assertEquals(expected, actual)
         }
     }
+
+    /** No background poll loop, so owner assertions see only the calls a test makes. */
+    private fun TestScope.quietSession(bridge: FakeBridge): SwiftCoreCameraSession =
+        SwiftCoreCameraSession(
+            host = "192.168.1.1",
+            phaseLogger = { _, _ -> },
+            core = bridge,
+            propertyRefreshScope = backgroundScope,
+            automaticallyRefreshProperties = false,
+        )
 
     private suspend fun TestScope.connectedSession(bridge: FakeBridge): SwiftCoreCameraSession {
         val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)

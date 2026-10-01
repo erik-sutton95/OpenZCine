@@ -1819,6 +1819,7 @@ internal fun MonitorScreen(
                 transportIsUsb = activeTransportIsUsb,
                 targetFramesPerSecond = healthTargetFramesPerSecond,
                 isDemoSession = isDemoSession || frameSource != null,
+                connectionOwner = (session as? SwiftCoreCameraSession)?.connectionOwner,
             )
         }
         // Link health must use generation-filtered frames so a restart does not

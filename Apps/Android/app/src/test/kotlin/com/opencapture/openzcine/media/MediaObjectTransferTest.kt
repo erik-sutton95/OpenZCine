@@ -11,6 +11,38 @@ import kotlin.test.assertTrue
 /** Regression coverage for the one generic cache listener used by clips and stills. */
 class MediaObjectTransferTest {
     @Test
+    fun `production media bridges without a connection owner never reach any camera`() {
+        // No owner means no camera session: nothing may fall through to another body's card.
+        val bridge = SwiftCoreMediaObjectTransferBridge(connectionOwner = null)
+        var failure: String? = null
+        bridge.startMediaTransfer(
+            handle = 1,
+            reportedSize = 4,
+            resumeOffset = 0,
+            listener =
+                object : SwiftCore.MediaTransferListener {
+                    override fun onStarted(totalBytes: Long) = error("unowned transfer started")
+
+                    override fun onChunk(offset: Long, bytes: ByteArray): Boolean =
+                        error("unowned transfer delivered a chunk")
+
+                    override fun onCompleted(totalBytes: Long) = error("unowned transfer completed")
+
+                    override fun onStopped(cachedBytes: Long) = error("unowned transfer stopped")
+
+                    override fun onFailed(message: String) {
+                        failure = message
+                    }
+                },
+        )
+
+        assertEquals(-1L, bridge.resolveMediaSize(handle = 1, reportedSize = 4))
+        assertEquals("Not connected to a camera.", failure)
+        bridge.stopMediaTransfer()
+        assertEquals(null, SwiftMediaBrowseGateway(connectionOwner = null).begin())
+    }
+
+    @Test
     fun `proxy and still share one generic transfer bridge and validated cache listener`() {
         val root = createTempDirectory("openzcine-object-transfer")
         try {

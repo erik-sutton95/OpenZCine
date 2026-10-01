@@ -453,6 +453,7 @@ object SwiftCore {
      * `score<TAB>bars<TAB>detail`, or null for an invalid phase.
      */
     external fun linkHealthSnapshot(
+        connectionOwner: Long,
         phase: Int,
         roundTripMilliseconds: Double,
         hasRoundTrip: Boolean,
@@ -498,6 +499,11 @@ object SwiftCore {
 
 
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
+    //
+    // Every session-scoped entry point takes the `connectionOwner` its
+    // `SwiftCoreCameraSession` passed to [sessionConnect]. Multicam holds one
+    // native session per owner; an unknown owner answers NoSession and never
+    // falls back to another camera. There is no unowned "current session" call.
 
     /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */
     interface SessionListener {
@@ -572,7 +578,7 @@ object SwiftCore {
     /** `sessionSetRecording` completed and the camera accepted the command. */
     const val RECORDING_COMMAND_ACCEPTED: Int = 0
 
-    /** No active facade session existed when `sessionSetRecording` ran. */
+    /** No facade session existed for the owner when `sessionSetRecording` ran. */
     const val RECORDING_COMMAND_NO_SESSION: Int = 1
 
     /** Camera media owns the command channel, so recording cannot change. */
@@ -587,7 +593,7 @@ object SwiftCore {
     /** `sessionApplyControl` completed and the camera accepted every write. */
     const val CONTROL_COMMAND_ACCEPTED: Int = 0
 
-    /** No active facade session existed when `sessionApplyControl` ran. */
+    /** No facade session existed for the owner when `sessionApplyControl` ran. */
     const val CONTROL_COMMAND_NO_SESSION: Int = 1
 
     /** Camera media owns the command channel, so a control cannot change. */
@@ -608,7 +614,7 @@ object SwiftCore {
     /** A focus command completed and the camera accepted its operation sequence. */
     const val FOCUS_COMMAND_ACCEPTED: Int = 0
 
-    /** No active facade session existed when the focus command ran. */
+    /** No facade session existed for the owner when the focus command ran. */
     const val FOCUS_COMMAND_NO_SESSION: Int = 1
 
     /** Camera media owns the command channel, so the focus point cannot change. */
@@ -666,22 +672,22 @@ object SwiftCore {
      * background thread until disconnect or an event-channel failure. Call
      * once for each successful [sessionConnect].
      */
-    external fun sessionStartEventStream(listener: SessionEventListener)
+    external fun sessionStartEventStream(connectionOwner: Long, listener: SessionEventListener)
 
     /**
-     * Reads one camera property through the active session, decoded by the
+     * Reads one camera property through the owner's session, decoded by the
      * Swift core (battery → percent string, others → raw hex). Null when no
      * session is active or the camera rejected the read. Blocking — call from
      * a background dispatcher.
      */
-    external fun sessionReadProperty(code: Int): String?
+    external fun sessionReadProperty(connectionOwner: Long, code: Int): String?
 
     /**
      * Latest successful serialized PTP command round-trip duration. Native
      * returns NaN before a transaction and after disconnect; callers expose
      * that sentinel as null rather than fabricating latency.
      */
-    external fun sessionLatestRoundTripMilliseconds(): Double
+    external fun sessionLatestRoundTripMilliseconds(connectionOwner: Long): Double
 
     /**
      * Refreshes semantic Android camera state through the Swift core and
@@ -698,6 +704,7 @@ object SwiftCore {
      * Blocking — call from a background dispatcher.
      */
     external fun sessionRefreshPropertySnapshot(
+        connectionOwner: Long,
         request: Int,
         recording: Boolean,
         propertyCode: Long,
@@ -711,14 +718,15 @@ object SwiftCore {
      * session accepts the request.
      */
     external fun sessionConfigureLiveView(
+        connectionOwner: Long,
         imageSize: Int,
         compression: Int,
         frameIntervalNanoseconds: Long,
     ): Boolean
 
     /**
-     * Starts (`true`) or stops (`false`) movie recording on the active camera
-     * session. The Swift facade sends Nikon `StartMovieRecInCard` / `EndMovieRec`
+     * Starts (`true`) or stops (`false`) movie recording on [connectionOwner]'s
+     * session only. The Swift facade sends Nikon `StartMovieRecInCard` / `EndMovieRec`
      * through its transaction serializer, so a live-view frame read cannot race
      * the command. Blocking — call from a background dispatcher.
      *
@@ -726,55 +734,55 @@ object SwiftCore {
      * [RECORDING_COMMAND_NO_SESSION], [RECORDING_COMMAND_MEDIA_BUSY],
      * [RECORDING_COMMAND_REJECTED], or [RECORDING_COMMAND_TRANSPORT_FAILED].
      */
-    external fun sessionSetRecording(recording: Boolean): Int
+    external fun sessionSetRecording(connectionOwner: Long, recording: Boolean): Int
 
     /**
-     * Fires one still release on the active session (photo mode). Returns a
+     * Fires one still release on the owner's session (photo mode). Returns a
      * `RECORDING_COMMAND_*` result; completion lands via [sessionPollStillRelease].
      */
-    external fun sessionInitiateStillCapture(preserveFocus: Boolean): Int
+    external fun sessionInitiateStillCapture(connectionOwner: Long, preserveFocus: Boolean): Int
 
     /**
      * One readiness poll while a still release is in flight: 0 complete,
      * 1 in progress, 2 bulb/time open shutter, 3 failed, negatives for
      * session/transport faults.
      */
-    external fun sessionPollStillRelease(): Int
+    external fun sessionPollStillRelease(connectionOwner: Long): Int
 
     /** Ends a bulb/time exposure or stops a running burst (frames kept). */
-    external fun sessionTerminateStillCapture(): Int
+    external fun sessionTerminateStillCapture(connectionOwner: Long): Int
 
     /** Opens/closes the continuous-burst remote-mode bracket. */
-    external fun sessionSetStillBurstBracket(active: Boolean): Int
+    external fun sessionSetStillBurstBracket(connectionOwner: Long, active: Boolean): Int
 
     /**
      * One relative manual-focus drive with its classified outcome: 0 complete,
      * 1 end of travel, 2 amount too small, -1 no session, or
      * `0x10000 or responseCode` for a body refusal. Blocking — call from IO.
      */
-    external fun sessionMFDrive(towardNear: Boolean, pulses: Int): Int
+    external fun sessionMFDrive(connectionOwner: Long, towardNear: Boolean, pulses: Int): Int
 
     /** Snapshots the card's handle sets as the instant-review diff baseline. */
-    external fun sessionSeedStillReviewBaseline(): Int
+    external fun sessionSeedStillReviewBaseline(connectionOwner: Long): Int
 
     /**
      * The just-captured JPEG/HEIF handle from the post-capture baseline diff,
      * or 0 while the card hasn't listed it yet (caller retries).
      */
-    external fun sessionResolveNewestStillHandle(): Int
+    external fun sessionResolveNewestStillHandle(connectionOwner: Long): Int
 
     /**
      * The full captured image, streamed in chunks between live-view frames.
      * Long-running and blocking — call from IO; cancel via
      * [sessionCancelStillImage].
      */
-    external fun sessionStillImage(handle: Int): ByteArray?
+    external fun sessionStillImage(connectionOwner: Long, handle: Int): ByteArray?
 
     /** Aborts an in-flight [sessionStillImage] at its next chunk boundary. */
-    external fun sessionCancelStillImage()
+    external fun sessionCancelStillImage(connectionOwner: Long)
 
     /**
-     * Applies one typed camera control selection on the active session. [control]
+     * Applies one typed camera control selection on the owner's session. [control]
      * is a stable semantic selector owned by [CameraControl]; [label] is the
      * operator-facing selection such as `"5600K"` or `"AF-C"`. Swift owns all
      * Nikon property identifiers, payload bytes, Kelvin multi-write behavior,
@@ -786,24 +794,24 @@ object SwiftCore {
      * [CONTROL_COMMAND_UNSUPPORTED], [CONTROL_COMMAND_REJECTED], or
      * [CONTROL_COMMAND_TRANSPORT_FAILED].
      */
-    external fun sessionApplyControl(control: Int, label: String): Int
+    external fun sessionApplyControl(connectionOwner: Long, control: Int, label: String): Int
 
     /**
      * Moves the AF area to semantic camera-space [x]/[y] coordinates. Swift
      * owns the Nikon operation, its two UINT32 parameters, transaction ID, and
      * PTP-IP/USB framing. Blocking; call from an IO dispatcher.
      */
-    external fun sessionChangeAfArea(x: Int, y: Int): Int
+    external fun sessionChangeAfArea(connectionOwner: Long, x: Int, y: Int): Int
 
     /**
      * Recentres the AF area from current camera headers and focus properties,
      * including the shared subject-tracking release/restore policy. Blocking;
      * call from an IO dispatcher.
      */
-    external fun sessionResetFocusPoint(): Int
+    external fun sessionResetFocusPoint(connectionOwner: Long): Int
 
     /**
-     * Gracefully tears down the active session: best-effort `CloseSession` so
+     * Gracefully tears down the owner's session: best-effort `CloseSession` so
      * the camera frees its connection slot, then both sockets. Blocking
      * (bounded ~2 s) — call from a background dispatcher. A running live-view
      * pump is stopped first (`EndLiveView` before `CloseSession`). The opaque
@@ -1007,20 +1015,20 @@ object SwiftCore {
     }
 
     /**
-     * Starts live view on the active session (blocking `StartLiveView` +
+     * Starts live view on the owner's session (blocking `StartLiveView` +
      * readiness poll — call from a background dispatcher) and pumps JPEG
      * frames to [listener] from a Swift background thread. Backpressure is
      * latest-wins: frames are pulled one at a time, so a slow consumer skips
      * camera frames instead of queueing latency.
      */
-    external fun sessionStartLiveView(listener: LiveFrameListener)
+    external fun sessionStartLiveView(connectionOwner: Long, listener: LiveFrameListener)
 
     /**
      * Stops the live-view pump and blocks until the camera got its
      * `EndLiveView` (never leave the body streaming — the heat-audit rule).
      * Call from a background dispatcher. Safe when idle.
      */
-    external fun sessionStopLiveView()
+    external fun sessionStopLiveView(connectionOwner: Long)
 
     // ── Media browse (OPE-34) ──
 
@@ -1031,7 +1039,7 @@ object SwiftCore {
      * taking its snapshot. Null means no session is active or the snapshot
      * failed. Blocking; call from a background dispatcher.
      */
-    external fun sessionBeginMediaBrowse(): String?
+    external fun sessionBeginMediaBrowse(connectionOwner: Long): String?
 
     /**
      * Advances [cursor] by at most [maxObjects] ObjectInfo transactions and
@@ -1048,19 +1056,19 @@ object SwiftCore {
      * when disconnected or the object has no thumbnail. Blocking — call from
      * a background dispatcher.
      */
-    external fun sessionThumbnail(handle: Int): ByteArray?
+    external fun sessionThumbnail(connectionOwner: Long, handle: Int): ByteArray?
 
     /**
      * Deletes one object from the camera card; false when disconnected or the
      * body refuses (protected objects). Blocking — call from IO.
      */
-    external fun sessionDeleteObject(handle: Int): Boolean
+    external fun sessionDeleteObject(connectionOwner: Long, handle: Int): Boolean
 
     /**
      * One object's camera star rating as 0–5, or -1 when unreadable (RAW
      * stills don't carry the property). Blocking — call from IO.
      */
-    external fun sessionObjectRating(handle: Int): Int
+    external fun sessionObjectRating(connectionOwner: Long, handle: Int): Int
 
     /**
      * Writes a 0–5 star rating and returns the camera-confirmed star count
@@ -1069,20 +1077,24 @@ object SwiftCore {
      * for a state-based Access Denied) when the body refuses, so the caller can
      * name the refusal. See `ratingWriteResult`. Blocking — call from IO.
      */
-    external fun sessionSetObjectRating(handle: Int, stars: Int): Int
+    external fun sessionSetObjectRating(connectionOwner: Long, handle: Int, stars: Int): Int
 
     /**
      * Releases exclusive camera-media ownership. This stops any progressive
      * transfer first, then allows monitor live view to resume. Blocking and
      * safe when idle; call from a background dispatcher.
      */
-    external fun sessionExitMediaMode()
+    external fun sessionExitMediaMode(connectionOwner: Long)
 
     /**
      * Resolves the authoritative 64-bit object size through the shared core,
      * or -1 when disconnected/rejected. Blocking; call from IO.
      */
-    external fun sessionResolveMediaSize(handle: Int, reportedSize: Long): Long
+    external fun sessionResolveMediaSize(
+        connectionOwner: Long,
+        handle: Int,
+        reportedSize: Long,
+    ): Long
 
     /** Receives one progressive camera-object transfer from Swift. */
     interface MediaTransferListener {
@@ -1109,6 +1121,7 @@ object SwiftCore {
      * one Swift-owned thread.
      */
     external fun sessionStartMediaTransfer(
+        connectionOwner: Long,
         handle: Int,
         reportedSize: Long,
         resumeOffset: Long,
@@ -1116,5 +1129,5 @@ object SwiftCore {
     )
 
     /** Stops and joins the active transfer. Blocking and safe when idle. */
-    external fun sessionStopMediaTransfer()
+    external fun sessionStopMediaTransfer(connectionOwner: Long)
 }

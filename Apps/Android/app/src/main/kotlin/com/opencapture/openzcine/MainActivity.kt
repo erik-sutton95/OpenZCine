@@ -712,6 +712,7 @@ class MainActivity : ComponentActivity() {
                         cameraID = primary?.cameraID ?: "offline-all-cameras",
                         cameraConnected = false,
                         cameraSessionAvailable = false,
+                        connectionOwner = null,
                         cacheRevision = mediaCacheRevision,
                         savedCameraID = primary?.savedCameraID,
                         cameraDisplayName =
@@ -1334,6 +1335,8 @@ class MainActivity : ComponentActivity() {
                                         cameraID = cameraID,
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
+                                        connectionOwner =
+                                            (active as? SwiftCoreCameraSession)?.connectionOwner,
                                         cacheRevision = mediaCacheRevision,
                                         savedCameraID = activeSavedCamera?.id,
                                         cameraDisplayName = activeSavedCamera?.displayTitle,

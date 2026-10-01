@@ -211,6 +211,8 @@ internal fun MediaPlaybackScreen(
     filteredClips: List<MediaClipRecord>,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
+    /** Native connection owner every camera call is addressed to; null reaches no camera. */
+    connectionOwner: Long?,
     favoriteIDs: Set<String>,
     framingConfiguration: LocalFramingAssistConfiguration,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
@@ -242,6 +244,7 @@ internal fun MediaPlaybackScreen(
             clip = activeClip,
             cameraID = cameraID,
             cameraTransferAvailable = cameraTransferAvailable,
+            connectionOwner = connectionOwner,
             favorite = favorite,
             previous = previous,
             next = next,
@@ -269,6 +272,7 @@ private fun PlaybackClipSession(
     clip: MediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean,
+    connectionOwner: Long?,
     favorite: Boolean,
     previous: MediaClipRecord?,
     next: MediaClipRecord?,
@@ -301,7 +305,7 @@ private fun PlaybackClipSession(
         }
     val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
     val coordinator =
-        remember(cacheStore, cameraID, clip, cameraTransferAvailable) {
+        remember(cacheStore, cameraID, clip, cameraTransferAvailable, connectionOwner) {
             MediaTransferCoordinator(
                 prepareTransfer = {
                     withContext(Dispatchers.IO) {
@@ -310,6 +314,7 @@ private fun PlaybackClipSession(
                             cameraID = cameraID,
                             clip = clip,
                             objectLabel = "clip",
+                            bridge = SwiftCoreMediaObjectTransferBridge(connectionOwner),
                             cameraTransferAvailable = cameraTransferAvailable,
                             onResolvedSize = { resolvedSize ->
                                 currentOnResolvedObjectSize(clip, resolvedSize)
@@ -318,8 +323,10 @@ private fun PlaybackClipSession(
                     }
                 },
                 stopTransfer = {
-                    if (cameraTransferAvailable) {
-                        withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+                    if (cameraTransferAvailable && connectionOwner != null) {
+                        withContext(Dispatchers.IO) {
+                            SwiftCore.sessionStopMediaTransfer(connectionOwner)
+                        }
                     }
                 },
             )
@@ -349,10 +356,11 @@ private fun PlaybackClipSession(
     // row, never a silent rollback; auto-cleared so it doesn't linger over playback.
     var ratingMessage by remember(clip.handle) { mutableStateOf<String?>(null) }
     val ratingScope = rememberCoroutineScope()
-    LaunchedEffect(clip.handle, cameraTransferAvailable) {
+    LaunchedEffect(clip.handle, cameraTransferAvailable, connectionOwner) {
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
+        val owner = connectionOwner ?: return@LaunchedEffect
         val read =
-            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
+            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(owner, clip.handle.toInt()) }
         if (read >= 0) {
             ratingStars = read
             // Self-correct the local favorite cache against the body (truth) on open.
@@ -372,7 +380,9 @@ private fun PlaybackClipSession(
         ratingScope.launch {
             val written =
                 withContext(Dispatchers.IO) {
-                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                    // -1 = "could not be attempted"; never another camera's card.
+                    val owner = connectionOwner ?: return@withContext -1
+                    SwiftCore.sessionSetObjectRating(owner, clip.handle.toInt(), target)
                 }
             when (val outcome = ratingWriteResult(written)) {
                 is RatingWriteResult.Confirmed -> {
@@ -420,7 +430,7 @@ private fun PlaybackClipSession(
             coordinator.beginNativeShare(
                 selection = listOf(MediaDeliverySelection(cameraID, clip)),
                 configuration = configuration,
-                cameraTransferAvailable = cameraTransferAvailable,
+                cameraConnectionOwner = connectionOwner.takeIf { cameraTransferAvailable },
             ) { published, metadata ->
                 context.startActivity(
                     AndroidMediaShareIntent.chooserIntent(context, published, metadata),
@@ -440,7 +450,7 @@ private fun PlaybackClipSession(
             coordinator.beginSaveToPhotos(
                 selection = listOf(MediaDeliverySelection(cameraID, clip)),
                 configuration = configuration,
-                cameraTransferAvailable = cameraTransferAvailable,
+                cameraConnectionOwner = connectionOwner.takeIf { cameraTransferAvailable },
             )
             return
         }
@@ -462,7 +472,8 @@ private fun PlaybackClipSession(
                                 ?.cacheFromCamera(
                                     destination = MediaDeliveryKind.FRAMEIO,
                                     selection = listOf(MediaDeliverySelection(cameraID, clip)),
-                                    cameraTransferAvailable = cameraTransferAvailable,
+                                    cameraConnectionOwner =
+                                        connectionOwner.takeIf { cameraTransferAvailable },
                                 )
                                 ?.items
                                 ?.firstOrNull()
