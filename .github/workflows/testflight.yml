@@ -71,6 +71,11 @@ jobs:
       - name: Install tooling
         run: brew install just swift-format
 
+      # Candidate (OpenCine CORE-02): OpenCineCore from ../OpenCineCore, pinned in
+      # opencine-pins.txt. Delete when the app pins OpenCineCore by url + version.
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
+
       - name: Run native checks
         run: just native-check
 

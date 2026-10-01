@@ -171,6 +171,11 @@ jobs:
           xcode-version: latest-stable
       - name: Install native tooling
         run: brew install just swift-format || true
+      # Candidate (OpenCine CORE-02): ios/Runner.xcodeproj takes OpenCineCore from a sibling
+      # checkout at ../OpenCineCore, pinned by SHA in opencine-pins.txt. Works only once that
+      # repository is published. Delete when the app pins OpenCineCore by url + version.
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
       - name: Run native checks
         run: just native-check
 

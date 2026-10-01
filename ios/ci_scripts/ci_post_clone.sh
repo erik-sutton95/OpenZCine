@@ -14,3 +14,8 @@ EOF
 if [ -z "${FRAMEIO_CLIENT_ID:-}" ]; then
   echo "warning: FRAMEIO_CLIENT_ID not set — Frame.io login will be disabled in this build."
 fi
+
+# Candidate (OpenCine CORE-02): ios/Runner.xcodeproj takes OpenCineCore from ../OpenCineCore,
+# pinned by SHA in opencine-pins.txt. Works only once that repository is published and Xcode
+# Cloud may read it. Delete when the app pins OpenCineCore by url + version.
+"$CI_PRIMARY_REPOSITORY_PATH/scripts/checkout-opencine.sh"
