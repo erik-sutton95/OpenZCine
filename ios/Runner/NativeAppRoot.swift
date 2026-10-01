@@ -9795,10 +9795,12 @@ final class NativeAppModel {
             isRelayedCommand: applyingRelayCommand,
             liveViewReady: isDemoSession || (cameraSession != nil && isMonitorPresented))
         {
+        // The press resolves to an explicit start or stop from what the operator sees now; that
+        // target is what runs, confirmed or not.
         case .confirm:
             pendingRecordConfirmation = !isRecording
         case .run:
-            executeRecordToggle()
+            executeRecord(start: !isRecording)
         case .needsLiveView:
             showMonitorNotice("Start live view before recording.")
         }
@@ -11062,27 +11064,33 @@ final class NativeAppModel {
         return preferences.displayedFitScopes.filter { rendered.contains($0) }
     }
 
+    /// Runs the target the operator confirmed. It used to recompute `!isRecording` here, so a take
+    /// the camera started (or stopped) while the prompt was up was inverted by "Start" (or "Stop").
     func confirmRecordToggle() {
-        guard pendingRecordConfirmation != nil else { return }
+        guard let start = pendingRecordConfirmation else { return }
         pendingRecordConfirmation = nil
-        executeRecordToggle()
+        executeRecord(start: start)
     }
 
     func cancelRecordToggle() {
         pendingRecordConfirmation = nil
     }
 
-    private func executeRecordToggle() {
+    /// Runs an explicit record start (`true`) or stop. The target is resolved once by the caller and
+    /// never re-derived here, so it cannot invert a take the camera changed in the meantime.
+    private func executeRecord(start: Bool) {
         if videoSource == .relay {
             // A viewer has no session; the host runs it. The guard is belt-and-braces — the host
             // ignores commands from a non-holder too — but it keeps a revoked device from firing
             // a command it will never see rejected.
             guard relayHoldsControl else { return }
+            // The relay wire is a toggle, so never send one the relayed state already satisfies.
+            guard start != isRecording else { return }
             relayClient?.send(command: .toggleRecording)
             return
         }
         if isDemoSession {
-            isRecording.toggle()
+            isRecording = start
             // `updating` preserves every other field — crucially `mediaStatus`, so the top-bar MEDIA
             // cell keeps toggling capacity ↔ duration after a record start/stop.
             cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
@@ -11095,9 +11103,11 @@ final class NativeAppModel {
             showMonitorNotice("Start live view before recording.")
             return
         }
+        // Already there (the camera changed state while the prompt was up): nothing to send.
+        guard start != isRecording else { return }
         // Optimistically flip the button now (snappy), then queue the actual record op for the next
         // live-view safe point; if the camera rejects it, the safe point reverts the state.
-        let targetRecording = !isRecording
+        let targetRecording = start
         isRecording = targetRecording
         cameraState = cameraState.updating(recordState: targetRecording ? .recording : .standby)
         pendingRecordStart = targetRecording
@@ -11177,7 +11187,7 @@ final class NativeAppModel {
     private func remoteShutterToggleRecord() {
         let wasRecording = isRecording
         let hasSession = cameraSession != nil || isDemoSession
-        executeRecordToggle()
+        executeRecord(start: !wasRecording)
         bluetoothShutterLogger.info(
             "BT-SHUTTER record callback session=\(hasSession, privacy: .public) monitor=\(self.isMonitorPresented, privacy: .public) before=\(wasRecording, privacy: .public) after=\(self.isRecording, privacy: .public) queued=\(self.pendingRecordToggle, privacy: .public)"
         )
@@ -11205,7 +11215,7 @@ final class NativeAppModel {
 
     func watchToggleRecord() -> WatchCommandResult {
         let wasRecording = isRecording
-        executeRecordToggle()
+        executeRecord(start: !wasRecording)
         let accepted = isRecording != wasRecording
         let result = WatchCommandResult(
             accepted: accepted,
