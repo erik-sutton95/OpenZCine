@@ -55,8 +55,8 @@ flowchart TD
 - **Screen:** Settings → Storage → Frame.io row: **Sign in** / **Log out** / **Not set up in this
   build** / **Sign in over internet** (when on the camera AP).
 - **Code:** `MonitorPanels.swift` (`storageRows`, `signInFrameioOverInternet`),
-  `Frameio/FrameioAuthCoordinator.swift`, `Frameio/FrameioClient.swift` (`FrameioTokenStore`),
-  core `FrameioOAuth.swift`.
+  `Frameio/FrameioAuthCoordinator.swift`, `Frameio/FrameioCredentials.swift` (`FrameioTokenStore`),
+  OpenCineFrameIO `FrameioOAuth.swift` (OpenCineCore package).
 - **Detail:** Adobe IMS OAuth 2.0 (PKCE) via `ASWebAuthenticationSession` (iOS 17.4+). Token +
   refresh stored in Keychain (`OpenZCine.frameio` / `oauth-token`); auto-refreshed 60s before
   expiry. Requires `Frameio.local.xcconfig` → `Info.plist` (`FrameioClientID`, `FrameioRedirectURI`).
@@ -245,8 +245,8 @@ flowchart TD
   5. **PUT chunks** — sequential S3 upload with `Content-Type` from response.
   6. **Poll status** — `GET …/files/{id}/status` until `upload_complete` (45 attempts × 2s).
   7. **Metadata sidecar** — optional `.meta.json` written next to source (local only, not uploaded).
-- **Code:** `Frameio/FrameioClient.swift` (`FrameioService.upload`), `Frameio/FrameioModel.swift`
-  (`uploadClipToFrameio`), core `FrameioModels.swift`.
+- **Code:** OpenCineFrameIO `FrameioClient.upload` (OpenCineCore package), `Frameio/FrameioModel.swift`
+  (`uploadClipToFrameio`), OpenCineFrameIO `FrameioModels.swift`.
 - 📝 Notes:
 
 ### FRAME-O1 — Adobe IMS sign-in during upload
@@ -256,7 +256,7 @@ flowchart TD
   token — presents `ASWebAuthenticationSession`, exchanges code via PKCE, stores `StoredFrameioToken`.
   Not used from the delivery popup directly (Settings sign-in is the expected path); still works if
   token expired and refresh fails.
-- **Code:** `FrameioAuthCoordinator.swift`, core `FrameioOAuth.swift`, `FrameioTokenStore`.
+- **Code:** `FrameioAuthCoordinator.swift`, OpenCineFrameIO `FrameioOAuth.swift`, `FrameioTokenStore`.
 - 📝 Notes:
 
 ### FRAME-08 — Rejoin camera

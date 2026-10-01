@@ -102,7 +102,8 @@ public enum AndroidFrameioWire {
         switch kind {
         case "exchange":
             guard let code, !code.isEmpty, let verifier, !verifier.isEmpty else { return nil }
-            request = FrameioOAuth.tokenExchangeRequest(config: config, code: code, verifier: verifier)
+            request = FrameioOAuth.tokenExchangeRequest(
+                config: config, code: code, verifier: verifier)
         case "refresh":
             guard let refreshToken, !refreshToken.isEmpty else { return nil }
             request = FrameioOAuth.refreshRequest(config: config, refreshToken: refreshToken)
