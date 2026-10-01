@@ -84,3 +84,12 @@ final class CameraWiFiCredentialStoreTests: XCTestCase {
         XCTAssertEqual(CameraWiFiCredentialStore.password(forPrefix: testSSID), "as-prefix")
     }
 }
+
+/// OPTIONAL-01: Frame.io logic comes from OpenCineFrameIO, but the sign-in stays in OpenZCine's
+/// own keychain item. Changing either value signs every operator out.
+final class FrameioCredentialsTests: XCTestCase {
+    func testTokenStaysInOpenZCineKeychainNamespace() {
+        XCTAssertEqual(FrameioTokenStore.service, "OpenZCine.frameio")
+        XCTAssertEqual(FrameioTokenStore.account, "oauth-token")
+    }
+}

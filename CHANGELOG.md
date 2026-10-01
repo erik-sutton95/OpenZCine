@@ -92,6 +92,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Frame.io stays signed in across token refreshes** (iOS): when Adobe IMS refreshes an access
+  token without returning a new refresh token, the app keeps the one it has instead of dropping
+  it and asking for a new sign-in at the next expiry. A Frame.io account, folder or file ID with
+  a path or query character is now refused before any request is sent. The Frame.io workflow is
+  now the shared OpenCineFrameIO one; the saved sign-in (keychain item `OpenZCine.frameio`) is
+  unchanged, so nobody has to log in again.
 - **FPS readout after a stale frame** (iOS): an out-of-order or repeated frame timestamp no
   longer rewinds the frame-rate window, so the next frame cannot report a bogus interval (the
   sampler is now the shared OpenCineMedia one).

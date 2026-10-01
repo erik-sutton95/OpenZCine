@@ -17,10 +17,11 @@ let package = Package(
             name: "OpenZCineAndroid", type: .dynamic, targets: ["OpenZCineAndroidFacade"]),
     ],
     dependencies: [
-        // Non-Darwin SHA256 for PKCE (FrameioOAuth); Darwin builds keep using CryptoKit.
+        // Non-Darwin SHA-256 the Android facade injects into OpenCineFrameIO's PKCE; Darwin
+        // builds use CryptoKit.
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
-        // Portable media math (OpenCineMedia: CubeLUT, FrameRateSampler). Sibling checkout
-        // until OpenCineCore is published.
+        // Portable media math (OpenCineMedia: CubeLUT, FrameRateSampler) and the optional
+        // Frame.io product (OpenCineFrameIO). Sibling checkout until OpenCineCore is published.
         .package(path: "../OpenCineCore"),
         // Nikon PTP wire, properties, discovery and session policy (VENDOR-02). Re-exported from
         // OpenZCineCore (Sources/OpenZCineCore/OpenCineNikon.swift). Sibling checkout pinned in
@@ -31,9 +32,6 @@ let package = Package(
         .target(
             name: "OpenZCineCore",
             dependencies: [
-                .product(
-                    name: "Crypto", package: "swift-crypto",
-                    condition: .when(platforms: [.linux, .android])),
                 .product(name: "OpenCineMedia", package: "OpenCineCore"),
                 .product(name: "OpenCineNikon", package: "OpenCineNikon"),
             ]
@@ -48,9 +46,17 @@ let package = Package(
         ),
         // Header-only shim exposing the NDK's <jni.h> to Swift; empty on Darwin.
         .target(name: "CJNI"),
+        // Frame.io comes from OpenCineFrameIO here, not through OpenZCineCore, so the Watch
+        // (links OpenZCineCore) carries no delivery code.
         .target(
             name: "OpenZCineAndroidFacade",
-            dependencies: ["OpenZCineCore", "CJNI"]
+            dependencies: [
+                "OpenZCineCore", "CJNI",
+                .product(name: "OpenCineFrameIO", package: "OpenCineCore"),
+                .product(
+                    name: "Crypto", package: "swift-crypto",
+                    condition: .when(platforms: [.linux, .android])),
+            ]
         ),
         // Runs on Darwin (and on Android via the cross-compile test path):
         // the PTP-IP session layer against a scripted fake camera server, and
@@ -58,7 +64,10 @@ let package = Package(
         // The JNI shims themselves stay Android-only.
         .testTarget(
             name: "OpenZCineAndroidFacadeTests",
-            dependencies: ["OpenZCineAndroidFacade", "OpenZCineCore"]
+            dependencies: [
+                "OpenZCineAndroidFacade", "OpenZCineCore",
+                .product(name: "OpenCineFrameIO", package: "OpenCineCore"),
+            ]
         ),
     ]
 )

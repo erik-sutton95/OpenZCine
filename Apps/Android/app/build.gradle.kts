@@ -219,10 +219,16 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
         fileTree(repositoryRoot) {
             include("Package.swift", "Package.resolved", "Sources/**")
         },
-        // OpenCineMedia (and OpenCineCore, which it depends on): the root Package.swift takes
-        // them from the sibling OpenCineCore checkout.
+        // OpenCineMedia (and OpenCineCore, which it depends on) and OpenCineFrameIO (the
+        // Frame.io facade): the root Package.swift takes them from the sibling OpenCineCore
+        // checkout.
         fileTree(repositoryRoot.resolve("../OpenCineCore")) {
-            include("Package.swift", "Sources/OpenCineMedia/**", "Sources/OpenCineCore/**")
+            include(
+                "Package.swift",
+                "Sources/OpenCineMedia/**",
+                "Sources/OpenCineCore/**",
+                "Sources/OpenCineFrameIO/**",
+            )
         },
         // OpenCineNikon (PTP wire, properties, session policy): OpenZCineCore depends on and
         // re-exports it from the sibling checkout, so a package edit must restage the core.

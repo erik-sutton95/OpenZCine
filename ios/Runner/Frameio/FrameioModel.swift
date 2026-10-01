@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineFrameIO
 import OpenZCineCore
 
 /// Projects available in a Frame.io workspace for the delivery-sheet picker.
@@ -47,13 +48,13 @@ extension NativeAppModel {
         frameioConnecting = true
         defer { frameioConnecting = false }
         _ = try await FrameioAuthCoordinator(config: config).signIn()
-        frameioUser = try? await FrameioService(config: config).currentUser()
+        frameioUser = try? await FrameioClient.nikon(config).currentUser()
     }
 
     func disconnectFrameio() {
         // Clearing the stored token needs no OAuth config — never gate log-out on it, or an
         // unconfigured build can't shed a keychain session left by a previous install.
-        FrameioTokenStore.clear()
+        FrameioTokenStore().clear()
         frameioUser = nil
         FrameioDestination.persist(nil)
     }
@@ -142,7 +143,7 @@ extension NativeAppModel {
 
         do {
             if !isFrameioConnected { try await connectFrameio() }
-            let service = FrameioService(config: config)
+            let service = FrameioClient.nikon(config)
             if frameioUser == nil { frameioUser = try? await service.currentUser() }
             let destination = try await resolveDestination(using: service)
 
@@ -158,10 +159,13 @@ extension NativeAppModel {
             let fileID = try await service.upload(
                 fileURL: sourceURL, name: name, mediaType: mediaType,
                 fileSize: size, accountID: destination.accountID, folderID: destination.folderID
-            ) { [self] fraction in
+            ) { @MainActor [self] fraction in
                 frameioUploadProgress[clip.id] = fraction
                 onProgress?(fraction)
             }
+            frameioLogger.info(
+                "uploaded \(name, privacy: .private(mask: .hash)) → file \(fileID, privacy: .private(mask: .hash))"
+            )
             frameioUploadProgress[clip.id] = nil
             if metadata != nil {
                 try? writeFrameioMetadataSidecar(metadata, nextTo: sourceURL)
@@ -190,7 +194,7 @@ extension NativeAppModel {
     }
 
     /// The saved destination, or the first account's first project (auto-picked + saved).
-    private func resolveDestination(using service: FrameioService) async throws
+    private func resolveDestination(using service: FrameioClient) async throws
         -> FrameioDestination
     {
         if let saved = FrameioDestination.loaded { return saved }
@@ -215,7 +219,7 @@ extension NativeAppModel {
     func loadFrameioProjectListing() async throws -> FrameioProjectListing {
         guard let config = frameioConfiguration else { throw FrameioError.notConfigured }
         if !isFrameioConnected { try await connectFrameio() }
-        let service = FrameioService(config: config)
+        let service = FrameioClient.nikon(config)
         if frameioUser == nil { frameioUser = try? await service.currentUser() }
         guard let account = try await service.accounts().first else { throw FrameioError.noProject }
         guard let workspace = try await service.workspaces(accountID: account.id).first else {
@@ -236,7 +240,7 @@ extension NativeAppModel {
     ) async throws -> FrameioProject {
         guard let config = frameioConfiguration else { throw FrameioError.notConfigured }
         if !isFrameioConnected { try await connectFrameio() }
-        let service = FrameioService(config: config)
+        let service = FrameioClient.nikon(config)
         return try await service.createProject(
             accountID: accountID, workspaceID: workspaceID, name: name)
     }

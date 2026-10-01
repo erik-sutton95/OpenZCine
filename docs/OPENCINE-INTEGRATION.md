@@ -11,6 +11,7 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | STATE-01 (Nikon session ownership) | `opencine/state-01-nikon` (on core-02) | 8de98639 |
 | MEDIA-01 (CubeLUT, FrameRateSampler from OpenCineMedia) | `opencine/media-01` | ba1e340b |
 | VENDOR-02 (Runner links OpenZCineCore; Nikon code in OpenCineNikon) | `opencine/vendor-02-nikon` (on integration) | see branch |
+| OPTIONAL-01 (Frame.io from OpenCineFrameIO) | `opencine/frameio` (on integration) | see branch |
 
 Shared package: `../OpenCineCore`, pinned in `opencine-pins.txt` (one line, OpenCineCore
 28a0196, which contains the MEDIA-01 commit 4d001e4) and fetched in CI by
@@ -26,6 +27,16 @@ live in `../OpenCineNikon` (pinned in `opencine-pins.txt`), which `OpenZCineCore
 re-exports (`Sources/OpenZCineCore/OpenCineNikon.swift`). `stageSwiftCore` also fingerprints
 `../OpenCineNikon/Package.swift` and `Sources/**`. The Android JNI facade and its
 `AndroidSessionOwnerRegistry` stay here and link the package through `OpenZCineCore`.
+
+OPTIONAL-01: Frame.io request planning, OAuth PKCE, response models and the iOS upload client
+come from the optional `OpenCineFrameIO` product of `../OpenCineCore`. The Runner links it
+(Watch does not; `OpenZCineCore` stays free of Frame.io), and the Android facade's
+`FrameioWire` uses it through the root `Package.swift`, injecting swift-crypto's SHA-256 for
+PKCE (CryptoKit on Darwin). The app keeps OAuth presentation, the callback scheme and client ID
+(`Frameio.xcconfig`, Android build config), the destination preference and its keychain item
+(service `OpenZCine.frameio`, account `oauth-token`, asserted by `FrameioCredentialsTests`). The
+Kotlin delivery controller, upload history, keystore storage and camera access point hop are
+unchanged. `stageSwiftCore` also fingerprints `Sources/OpenCineFrameIO/**`.
 
 Not included: the engine-port UI candidate `opencine/ui-03-engine-port-candidate` (OpenCineUI on
 the unmerged `feat/monitor-engine-port`). It stays separate until the engine-port decision is made.
@@ -70,6 +81,10 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
    and router) and USB, pairing and saved-camera reconnect, passive discovery still lists the
    body without probing it, ISO/WB with an HDMI picture and with no picture, record with live
    view, media browse. iOS, Watch app and Android.
+
+10. Frame.io (OPTIONAL-01): on an iOS build that was signed in to Frame.io before this update,
+    install over it and upload a clip without signing in again. Sign out and in, list and create
+    a project, upload with LUT bake. Android: sign in, upload, refresh after expiry.
 
 ## Before this can ship
 
