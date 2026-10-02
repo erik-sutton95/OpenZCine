@@ -9,8 +9,8 @@
 "area:protocol":
   - changed-files:
       - any-glob-to-any-file:
-          # The Nikon PTP wire, properties and session policy live in the OpenCineNikon package
-          # (pinned in opencine-pins.txt); these are the app-side transports and facades.
+          # The Nikon PTP wire, properties and session policy live in the OpenCineNikon product
+          # of the OpenCine package (pinned in opencine-pins.txt); these are the app-side transports and facades.
           - "opencine-pins.txt"
           - "Sources/OpenZCineCore/OpenCineNikon.swift"
           - "Sources/OpenZCineAndroidFacade/*PTP*.swift"

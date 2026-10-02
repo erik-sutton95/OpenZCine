@@ -317,8 +317,8 @@ All notable changes to this project are documented here. The format is based on
 - **HDMI capture on iPad** renders a frame only when the monitor takes it, off the main thread,
   and drops frames from a capture device that was unplugged or swapped. No visible change
   intended.
-- The Nikon PTP wire, properties and session policy now come from the OpenCineNikon package, and
-  LUT parsing, the frame-rate sampler and the HDMI capture source from OpenCineCore. The Runner
+- The Nikon PTP wire, properties and session policy (OpenCineNikon), LUT parsing, the frame-rate
+  sampler and the HDMI capture source now come from the shared OpenCine package. The Runner
   and Watch link the `OpenZCineCore` product instead of compiling its sources.
 - A weak or congested wireless link now degrades the picture instead of dropping the session,
   on both platforms; the Android live path also sheds several per-frame costs (GPU re-uploads,

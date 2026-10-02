@@ -20,20 +20,19 @@ let package = Package(
         // Non-Darwin SHA-256 the Android facade injects into OpenCineFrameIO's PKCE; Darwin
         // builds use CryptoKit.
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
-        // Portable media math (OpenCineMedia: CubeLUT, FrameRateSampler) and the optional
-        // Frame.io product (OpenCineFrameIO). Sibling checkout until OpenCineCore is published.
-        .package(path: "../OpenCineCore"),
-        // Nikon PTP wire, properties, discovery and session policy (VENDOR-02). Re-exported from
-        // OpenZCineCore (Sources/OpenZCineCore/OpenCineNikon.swift). Sibling checkout pinned in
+        // The OpenCine platform package: portable media math (OpenCineMedia: CubeLUT,
+        // FrameRateSampler), the optional Frame.io product (OpenCineFrameIO) and the Nikon PTP
+        // wire, properties, discovery and session policy (OpenCineNikon, re-exported from
+        // OpenZCineCore in Sources/OpenZCineCore/OpenCineNikon.swift). Sibling checkout pinned in
         // opencine-pins.txt until it is published.
-        .package(path: "../OpenCineNikon"),
+        .package(path: "../OpenCine"),
     ],
     targets: [
         .target(
             name: "OpenZCineCore",
             dependencies: [
-                .product(name: "OpenCineMedia", package: "OpenCineCore"),
-                .product(name: "OpenCineNikon", package: "OpenCineNikon"),
+                .product(name: "OpenCineMedia", package: "OpenCine"),
+                .product(name: "OpenCineNikon", package: "OpenCine"),
             ]
         ),
         .testTarget(
@@ -52,7 +51,7 @@ let package = Package(
             name: "OpenZCineAndroidFacade",
             dependencies: [
                 "OpenZCineCore", "CJNI",
-                .product(name: "OpenCineFrameIO", package: "OpenCineCore"),
+                .product(name: "OpenCineFrameIO", package: "OpenCine"),
                 .product(
                     name: "Crypto", package: "swift-crypto",
                     condition: .when(platforms: [.linux, .android])),
@@ -66,7 +65,7 @@ let package = Package(
             name: "OpenZCineAndroidFacadeTests",
             dependencies: [
                 "OpenZCineAndroidFacade", "OpenZCineCore",
-                .product(name: "OpenCineFrameIO", package: "OpenCineCore"),
+                .product(name: "OpenCineFrameIO", package: "OpenCine"),
             ]
         ),
     ]

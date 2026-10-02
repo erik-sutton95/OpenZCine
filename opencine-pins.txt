@@ -1,6 +1,6 @@
-# Exact revisions of shared OpenCine packages this candidate builds against.
-# CI and Xcode Cloud check out these commits as siblings (scripts/checkout-opencine.sh)
-# and verify the SHA, so a moved branch upstream cannot change what ships.
+# Exact revision of the OpenCine platform repository this candidate builds against (every
+# shared Swift product and Android module lives there). CI and Xcode Cloud check it out as the
+# sibling ../OpenCine (scripts/checkout-opencine.sh) and verify the SHA, so a moved branch
+# upstream cannot change what ships.
 # Temporary: replaced by SwiftPM url + version and Maven coordinates once published.
-OpenCineCore 3e60644d7ab20e1ef64662ada06deffbf8aa8c04
-OpenCineNikon ea4bbcd8a47727e7b313c626cc10bff9c0d5f31c
+OpenCine e29bbcf333f85bc9994426cc5acb7bc4d435d346

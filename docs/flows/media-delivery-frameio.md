@@ -56,7 +56,7 @@ flowchart TD
   build** / **Sign in over internet** (when on the camera AP).
 - **Code:** `MonitorPanels.swift` (`storageRows`, `signInFrameioOverInternet`),
   `Frameio/FrameioAuthCoordinator.swift`, `Frameio/FrameioCredentials.swift` (`FrameioTokenStore`),
-  OpenCineFrameIO `FrameioOAuth.swift` (OpenCineCore package).
+  OpenCineFrameIO `FrameioOAuth.swift` (OpenCine package).
 - **Detail:** Adobe IMS OAuth 2.0 (PKCE) via `ASWebAuthenticationSession` (iOS 17.4+). Token +
   refresh stored in Keychain (`OpenZCine.frameio` / `oauth-token`); auto-refreshed 60s before
   expiry. Requires `Frameio.local.xcconfig` → `Info.plist` (`FrameioClientID`, `FrameioRedirectURI`).
@@ -245,7 +245,7 @@ flowchart TD
   5. **PUT chunks** — sequential S3 upload with `Content-Type` from response.
   6. **Poll status** — `GET …/files/{id}/status` until `upload_complete` (45 attempts × 2s).
   7. **Metadata sidecar** — optional `.meta.json` written next to source (local only, not uploaded).
-- **Code:** OpenCineFrameIO `FrameioClient.upload` (OpenCineCore package), `Frameio/FrameioModel.swift`
+- **Code:** OpenCineFrameIO `FrameioClient.upload` (OpenCine package), `Frameio/FrameioModel.swift`
   (`uploadClipToFrameio`), OpenCineFrameIO `FrameioModels.swift`.
 - 📝 Notes:
 

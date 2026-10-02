@@ -492,7 +492,7 @@
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
 				C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
-				OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */,
+				OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */,
 				OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
@@ -1067,9 +1067,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */ = {
+		OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../../OpenCineCore;
+			relativePath = ../../OpenCine;
 		};
 		OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -1091,7 +1091,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		OCC000000000000000000002 /* OpenCineCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineCore;
 		};
 		9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */ = {
@@ -1101,7 +1101,7 @@
 		};
 		C0DE00000000000000ED1A02 /* OpenCineMedia */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineMedia;
 		};
 		OZC000000000000000000002 /* OpenZCineCore */ = {
@@ -1116,12 +1116,12 @@
 		};
 		F10000000000000000000A02 /* OpenCineFrameIO */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineFrameIO;
 		};
 		APL000000000000000000002 /* OpenCineApple */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineApple;
 		};
 /* End XCSwiftPackageProductDependency section */

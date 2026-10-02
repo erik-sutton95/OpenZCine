@@ -14,23 +14,25 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | OPTIONAL-01 (Frame.io from OpenCineFrameIO) | `opencine/frameio` (on integration) | see branch |
 | MEDIA-02 step 4 (HDMI/UVC capture source from OpenCineApple) | `opencine/apple` (on integration) | see branch |
 
-Shared package: `../OpenCineCore`, pinned in `opencine-pins.txt` (one line, OpenCineCore
-8c2415c, which contains the MEDIA-01 commit 248b858) and fetched in CI by
+Shared package: the OpenCine platform repository `../OpenCine` (every shared Swift product and
+Android module), pinned in `opencine-pins.txt` (one line, `OpenCine <sha>`) and fetched in CI by
 `scripts/checkout-opencine.sh`. The Runner project has one local package reference,
-`../../OpenCineCore`, that provides both the OpenCineCore and OpenCineMedia products. The root
-`Package.swift` links OpenCineMedia only, and the Gradle `stageSwiftCore` inputs fingerprint
-`../OpenCineCore/Package.swift` and `Sources/OpenCineMedia/**`.
+`../../OpenCine`, that provides the OpenCineCore, OpenCineMedia, OpenCineFrameIO and
+OpenCineApple products. The root `Package.swift` takes OpenCineMedia, OpenCineNikon and
+OpenCineFrameIO from the same `../OpenCine`, Android includes `../../../OpenCine/Android` once
+(build name `opencine`), and the Gradle `stageSwiftCore` inputs fingerprint
+`../OpenCine/Package.swift` and the `Sources/<Target>/**` the Swift Android core links.
 
 VENDOR-02: the Runner and Watch targets link the `OpenZCineCore` product of the local package
 `..` instead of compiling its sources (each implementation is compiled once). The PTP wire,
 Nikon properties/profiles/media naming, discovery/connect/session policy and `NikonCameraSession`
-live in `../OpenCineNikon` (pinned in `opencine-pins.txt`), which `OpenZCineCore` depends on and
-re-exports (`Sources/OpenZCineCore/OpenCineNikon.swift`). `stageSwiftCore` also fingerprints
-`../OpenCineNikon/Package.swift` and `Sources/**`. The Android JNI facade and its
+live in the `OpenCineNikon` product of `../OpenCine` (pinned in `opencine-pins.txt`), which
+`OpenZCineCore` depends on and re-exports (`Sources/OpenZCineCore/OpenCineNikon.swift`).
+`stageSwiftCore` also fingerprints `../OpenCine/Sources/OpenCineNikon/**`. The Android JNI facade and its
 `AndroidSessionOwnerRegistry` stay here and link the package through `OpenZCineCore`.
 
 OPTIONAL-01: Frame.io request planning, OAuth PKCE, response models and the iOS upload client
-come from the optional `OpenCineFrameIO` product of `../OpenCineCore`. The Runner links it
+come from the optional `OpenCineFrameIO` product of `../OpenCine`. The Runner links it
 (Watch does not; `OpenZCineCore` stays free of Frame.io), and the Android facade's
 `FrameioWire` uses it through the root `Package.swift`, injecting swift-crypto's SHA-256 for
 PKCE (CryptoKit on Darwin). The app keeps OAuth presentation, the callback scheme and client ID
@@ -40,7 +42,7 @@ Kotlin delivery controller, upload history, keystore storage and camera access p
 unchanged. `stageSwiftCore` also fingerprints `Sources/OpenCineFrameIO/**`.
 
 MEDIA-02 step 4: the iPad HDMI/UVC capture source (`UVCVideoSource`, its states and the format
-choice) comes from the `OpenCineApple` product of `../OpenCineCore` (the Runner links it; Watch and
+choice) comes from the `OpenCineApple` product of `../OpenCine` (the Runner links it; Watch and
 the root `Package.swift` do not). It lends each frame as a `DecodedFrameLease` stamped with a
 generation that advances when the capture device goes away or changes. The app keeps the operator
 copy for each state and renders leases to `UIImage` in `UVCFrameRenderer` (an actor, off the main
@@ -107,5 +109,5 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
 
 ## Before this can ship
 
-The OpenCine packages must be published first (sibling paths become SwiftPM url + version and
-Maven coordinates). The steps are in `opencapture-atlas/docs/PUBLISH.md`.
+The OpenCine platform repository must be published first (the sibling path becomes SwiftPM url +
+version and Maven coordinates). The steps are in `OpenCine/atlas/docs/PUBLISH.md`.

@@ -18,7 +18,7 @@ json = "20231013"
 kyantBackdrop = "2.0.0"
 # Companion shapes module (Capsule) used by Kyant catalog liquid glass components.
 kyantShapes = "1.2.0"
-# OpenCine common camera contracts. Candidate: resolved from the sibling OpenCineCore checkout
+# OpenCine common camera contracts. Candidate: resolved from the sibling OpenCine checkout
 # through the composite build in settings.gradle.kts until the coordinate is published.
 openCineCore = "0.1.0-SNAPSHOT"
 

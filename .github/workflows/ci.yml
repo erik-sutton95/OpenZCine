@@ -173,11 +173,10 @@ jobs:
           xcode-version: latest-stable
       - name: Install native tooling
         run: brew install just swift-format || true
-      # Candidate (OpenCine CORE-02 + MEDIA-01): Package.swift (OpenCineMedia) and
-      # ios/Runner.xcodeproj (OpenCineCore + OpenCineMedia) take a sibling checkout at
-      # ../OpenCineCore, pinned by SHA in opencine-pins.txt; OpenZCineCore also links
-      # ../OpenCineNikon (VENDOR-02), pinned the same way. Works only once those repositories are
-      # published. Delete when the app pins them by url + version.
+      # Candidate (OpenCine CORE-02 + MEDIA-01): Package.swift (OpenCineMedia, OpenCineNikon) and
+      # ios/Runner.xcodeproj (OpenCineCore + OpenCineMedia) take the OpenCine checkout at
+      # ../OpenCine, pinned by SHA in opencine-pins.txt. Works only once that repository is
+      # published. Delete when the app pins it by url + version.
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
       - name: Run native checks
@@ -228,9 +227,9 @@ jobs:
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
       # Candidate (OpenCine CORE-02 + MEDIA-01): Apps/Android/settings.gradle.kts includes
-      # ../../../OpenCineCore/Android and the Swift Android core stages OpenCineMedia from
-      # ../OpenCineCore, a sibling checkout pinned by SHA in opencine-pins.txt, plus
-      # ../OpenCineNikon (VENDOR-02), which the Swift core links.
+      # ../../../OpenCine/Android and the Swift Android core stages OpenCineMedia and
+      # OpenCineNikon (VENDOR-02) from ../OpenCine, a sibling checkout pinned by SHA in
+      # opencine-pins.txt.
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
 
