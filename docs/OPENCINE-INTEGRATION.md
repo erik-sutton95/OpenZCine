@@ -15,7 +15,7 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | MEDIA-02 step 4 (HDMI/UVC capture source from OpenCineApple) | `opencine/apple` (on integration) | see branch |
 
 Shared package: `../OpenCineCore`, pinned in `opencine-pins.txt` (one line, OpenCineCore
-28a0196, which contains the MEDIA-01 commit 4d001e4) and fetched in CI by
+8c2415c, which contains the MEDIA-01 commit 248b858) and fetched in CI by
 `scripts/checkout-opencine.sh`. The Runner project has one local package reference,
 `../../OpenCineCore`, that provides both the OpenCineCore and OpenCineMedia products. The root
 `Package.swift` links OpenCineMedia only, and the Gradle `stageSwiftCore` inputs fingerprint
