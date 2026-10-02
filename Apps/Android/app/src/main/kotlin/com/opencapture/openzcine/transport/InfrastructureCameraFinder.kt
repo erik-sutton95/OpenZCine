@@ -1,23 +1,14 @@
 package com.opencapture.openzcine.transport
 
 import android.util.Log
-import java.io.IOException
-import java.net.ConnectException
+import com.opencapture.opencine.core.DiscoveryMode
+import com.opencapture.opencine.nikon.NikonDialer
+import com.opencapture.opencine.nikon.NikonDiscovery
+import com.opencapture.opencine.nikon.NikonLocalInterface
+import com.opencapture.opencine.nikon.NikonPresence
 import java.net.Inet4Address
-import java.net.InetSocketAddress
 import java.net.NetworkInterface
-import java.net.NoRouteToHostException
-import java.net.PortUnreachableException
-import java.net.Socket
-import java.net.SocketException
-import java.net.SocketTimeoutException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.HostProbeVerdict as DialVerdict
 
 /**
  * Isolated infrastructure (same-LAN Wi‑Fi) camera search — the Android twin of iOS
@@ -46,7 +37,9 @@ public class InfrastructureCameraFinder(
      * without anyone being able to say why it found nothing.
      */
     private val log: (String) -> Unit = { Log.i(TAG, it) },
-    private val scanner: PortScanner = SocketPortScanner,
+    private val scanner: PortScanner = PortScanner { host, timeoutMillis ->
+        HostProbeVerdict.valueOf(SocketNikonDialer.scanControlPort(host, timeoutMillis).name)
+    },
 ) {
     /** The seam that dials a host, so the sweep is testable without a network. */
     public fun interface PortScanner {
@@ -54,7 +47,10 @@ public class InfrastructureCameraFinder(
     }
 
     /**
-     * One complete infrastructure search pass.
+     * One complete infrastructure search pass: OpenCine's `NikonDiscovery` active search (patient
+     * directed dials, then an occupancy sweep stopping at the first open host), with this app's
+     * miss diagnosis over what the sweep dials heard. No presence sweep runs here, so no presence
+     * shield applies (SHELL-02 D12: the pairing sweep shield is a separate, device-qualified change).
      *
      * @param directedCandidates saved / dialling hosts; filtered to the current local subnets.
      * @param knownNames host → camera name from mDNS, when the browse has already resolved one.
@@ -76,164 +72,60 @@ public class InfrastructureCameraFinder(
         if (localSubnets.isEmpty()) {
             return InfrastructureSearchReport(miss = InfrastructureMissReason.NoScannableInterface)
         }
-        val localAddresses = interfaces.map(LocalIPv4Interface::address).toSet()
         val directed =
             InfrastructureDiscovery.directedHosts(
                 candidates = directedCandidates,
                 localSubnets = localSubnets,
-                excluded = excludedHosts + localAddresses,
+                excluded = excludedHosts + interfaces.map(LocalIPv4Interface::address),
             )
+        // What the occupancy sweep heard, per host; an answer in any pass outranks silence.
+        val swept = java.util.concurrent.ConcurrentHashMap<String, HostProbeVerdict>()
+        val dialer =
+            object : NikonDialer {
+                override suspend fun presence(host: String): NikonPresence? = null
 
-        log(
-            "infra-search preflight=ready subnets=[${localSubnets.joinToString(" ")}] " +
-                "directed=[${directed.joinToString(" ")}] " +
-                "attempts=${InfrastructureDiscovery.DIRECTED_ATTEMPT_COUNT} " +
-                "budgetMs=${InfrastructureDiscovery.DIRECTED_TIMEOUT_MILLIS}",
-        )
+                override suspend fun isAlive(host: String): Boolean = false
 
-        // Directed first: the reconnect case answers in one round rather than waiting out a sweep.
-        patientDirectedSearch(directed, knownNames)?.let { return it }
-
-        return occupancySweep(
-            localSubnets = localSubnets,
-            localAddresses = localAddresses,
-            excluded = excludedHosts,
-            directed = directed,
-            knownNames = knownNames,
-        )
-    }
-
-    private suspend fun patientDirectedSearch(
-        hosts: List<String>,
-        knownNames: Map<String, String>,
-    ): InfrastructureSearchReport? {
-        if (hosts.isEmpty()) return null
-        val found =
-            coroutineScope {
-                hosts
-                    .map { host -> async(Dispatchers.IO) { patientProbe(host, knownNames) } }
-                    .awaitAll()
-                    .filterNotNull()
-            }
-        if (found.isEmpty()) return null
-        return InfrastructureSearchReport(cameras = found)
-    }
-
-    private suspend fun patientProbe(
-        host: String,
-        knownNames: Map<String, String>,
-    ): DiscoveredCamera? {
-        // Attempts, not one long wait. A body whose radio was asleep for the first dial is awake
-        // for the second, and three short waits find it where one long one only sits there.
-        repeat(InfrastructureDiscovery.DIRECTED_ATTEMPT_COUNT) { attempt ->
-            if (!currentCoroutineContext().isActive) return null
-            val verdict =
-                scanner.probe(host, InfrastructureDiscovery.DIRECTED_TIMEOUT_MILLIS)
-            if (verdict == HostProbeVerdict.OPEN) {
-                log("infra-search directed hit host=$host attempt=${attempt + 1}")
-                return camera(host, knownNames)
-            }
-            log("infra-search directed host=$host attempt=${attempt + 1} verdict=$verdict")
-        }
-        return null
-    }
-
-    private suspend fun occupancySweep(
-        localSubnets: List<String>,
-        localAddresses: Set<String>,
-        excluded: Set<String>,
-        directed: List<String>,
-        knownNames: Map<String, String>,
-    ): InfrastructureSearchReport {
-        var merged = InfrastructureSweepTally()
-        val allOccupied = sortedSetOf<String>()
-        val allOpen = sortedSetOf<String>()
-
-        repeat(InfrastructureDiscovery.LOCAL_SWEEP_PASSES) { pass ->
-            for (subnet in localSubnets) {
-                if (!currentCoroutineContext().isActive) break
-                val hosts =
-                    (1..254)
-                        .map { "$subnet.$it" }
-                        .filterNot { it in excluded || it in localAddresses }
-                val scan = InfrastructureSweepTally.from(muteScan(hosts))
-                merged = merged.merging(scan)
-                allOccupied.addAll(scan.occupiedHosts)
-                allOpen.addAll(scan.openHosts)
-
-                log(
-                    "infra-search sweep pass=${pass + 1} subnet=$subnet " +
-                        "open=[${scan.openHosts.joinToString(" ")}] " +
-                        "occupied=[${scan.occupiedHosts.take(24).joinToString(" ")}]",
-                )
-
-                if (scan.openHosts.isNotEmpty()) {
-                    return InfrastructureSearchReport(
-                        cameras = scan.openHosts.map { camera(it, knownNames) },
-                        occupiedHosts = allOccupied.toList(),
-                        openPtpHosts = allOpen.toList(),
-                        localSubnets = localSubnets,
-                        directedHosts = directed,
-                    )
-                }
-                // Hosts that refuse :15740 are on-link and not serving PTP. Naming them is what
-                // separates "we reached the camera's address and it said closed" from a network
-                // that never carried us anywhere at all.
-                val closed = scan.occupiedHosts.filterNot { it in scan.openHosts }
-                if (closed.isNotEmpty()) {
-                    log(
-                        "infra-search reachable-not-ptp=[${closed.take(16).joinToString(" ")}]",
-                    )
+                override suspend fun scanControlPort(host: String, timeoutMillis: Int): DialVerdict {
+                    val verdict = scanner.probe(host, timeoutMillis)
+                    if (timeoutMillis == InfrastructureDiscovery.DIRECTED_TIMEOUT_MILLIS) {
+                        log("infra-search directed host=$host verdict=$verdict")
+                    } else {
+                        swept.merge(host, verdict) { old, new -> if (old.isOccupied) old else new }
+                    }
+                    return DialVerdict.valueOf(verdict.name)
                 }
             }
+        val result =
+            NikonDiscovery(dialer, { interfaces.map { NikonLocalInterface(it.name, it.address) } }, log)
+                .search(DiscoveryMode.ACTIVE, directed, excludedHosts)
+        val tally = InfrastructureSweepTally.from(swept)
+        if (result.openHosts.isNotEmpty()) {
+            return InfrastructureSearchReport(
+                cameras = result.openHosts.map { camera(it, knownNames) },
+                occupiedHosts = tally.occupiedHosts,
+                openPtpHosts = tally.openHosts,
+                localSubnets = localSubnets,
+                directedHosts = directed,
+            )
         }
-
         val miss =
             InfrastructureDiscovery.classifyMiss(
                 preflight = InfrastructurePreflight.Ready(localSubnets),
                 onCameraAccessPoint = false,
-                tally = merged,
+                tally = tally,
             )
         log(
-            "infra-search miss=$miss open=[${allOpen.joinToString(" ")}] " +
-                "occupied=[${allOccupied.take(24).joinToString(" ")}]",
+            "infra-search miss=$miss open=[${tally.openHosts.joinToString(" ")}] " +
+                "occupied=[${tally.occupiedHosts.take(24).joinToString(" ")}]",
         )
         return InfrastructureSearchReport(
             miss = miss,
-            occupiedHosts = allOccupied.toList(),
-            openPtpHosts = allOpen.toList(),
+            occupiedHosts = tally.occupiedHosts,
+            openPtpHosts = tally.openHosts,
             localSubnets = localSubnets,
             directedHosts = directed,
         )
-    }
-
-    /**
-     * Dials [hosts] on the PTP port, a bounded number at a time, and reports what each one did.
-     *
-     * The window is bounded rather than firing a whole /24 at once: 254 simultaneous connects are
-     * 254 blocked sockets and an ARP request for every address nobody holds.
-     */
-    private suspend fun muteScan(hosts: List<String>): Map<String, HostProbeVerdict> {
-        val verdicts = mutableMapOf<String, HostProbeVerdict>()
-        for (window in hosts.chunked(InfrastructureDiscovery.SWEEP_CONCURRENCY)) {
-            if (!currentCoroutineContext().isActive) break
-            val results =
-                coroutineScope {
-                    window
-                        .map { host ->
-                            async(Dispatchers.IO) {
-                                host to
-                                    scanner.probe(
-                                        host,
-                                        InfrastructureDiscovery.BLIND_SWEEP_TIMEOUT_MILLIS,
-                                    )
-                            }
-                        }
-                        .awaitAll()
-                }
-            verdicts.putAll(results)
-        }
-        return verdicts
     }
 
     private fun camera(host: String, knownNames: Map<String, String>): DiscoveredCamera =
@@ -271,39 +163,3 @@ public fun localIPv4Interfaces(): List<LocalIPv4Interface> =
             }
     }
         .getOrDefault(emptyList())
-
-/**
- * A dial at the PTP port that sends no PTP bytes, keeping WHY it failed.
- *
- * Mute on purpose: a real `Init` aimed at a body sitting in pairing mode knocks it out of pairing,
- * which is exactly what a wide sweep must never do. A bare connect-and-close cannot.
- */
-internal object SocketPortScanner : InfrastructureCameraFinder.PortScanner {
-    override suspend fun probe(host: String, timeoutMillis: Int): HostProbeVerdict =
-        withContext(Dispatchers.IO) {
-            try {
-                Socket().use { socket ->
-                    socket.connect(
-                        InetSocketAddress(host, CameraDiscovery.PTP_IP_PORT),
-                        timeoutMillis,
-                    )
-                }
-                HostProbeVerdict.OPEN
-            } catch (_: SocketTimeoutException) {
-                HostProbeVerdict.TIMEOUT
-            } catch (_: NoRouteToHostException) {
-                HostProbeVerdict.NO_ROUTE
-            } catch (_: PortUnreachableException) {
-                HostProbeVerdict.REFUSED
-            } catch (_: ConnectException) {
-                // Refused: only a live host's kernel sends the RST. Java folds "connection
-                // refused" and some unreachables into this one type, so the message decides.
-                HostProbeVerdict.REFUSED
-            } catch (_: SocketException) {
-                HostProbeVerdict.NO_NETWORK
-            } catch (_: IOException) {
-                // Never evidence about the host — this is something about THIS device.
-                HostProbeVerdict.UNREACHABLE_OTHER
-            }
-        }
-}

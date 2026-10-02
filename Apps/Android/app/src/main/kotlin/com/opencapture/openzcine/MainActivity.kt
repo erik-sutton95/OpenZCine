@@ -108,7 +108,7 @@ import com.opencapture.openzcine.transport.WifiLowLatencyLock
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
 import com.opencapture.openzcine.relay.RelayPresence
-import com.opencapture.openzcine.relay.RelayPresenceScanner
+import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.relay.mergedNearbyBroadcasts
 import com.opencapture.openzcine.relay.presenceProvesFiltering
 import com.opencapture.openzcine.relay.updatedPresenceHiddenSince
@@ -782,7 +782,8 @@ class MainActivity : ComponentActivity() {
                         remember { mutableStateOf(emptySet<String>()) }
                     var networkFiltersDiscovery by remember { mutableStateOf(false) }
                     LaunchedEffect(Unit) {
-                        val scanner = RelayPresenceScanner()
+                        // The cameras list's discovery: passive only (presence sweep).
+                        val scanner = CameraListDiscovery()
                         var hiddenSince = emptyMap<String, Long>()
                         while (true) {
                             // The scanner's own 30 s limiter makes most ticks no-ops. Each
@@ -790,7 +791,7 @@ class MainActivity : ComponentActivity() {
                             // stopped answering leaves no ghost row — and the verdict
                             // re-evaluates every tick so the 10 s hidden threshold trips
                             // between sweeps.
-                            scanner.sweep()?.let { hits ->
+                            scanner.presences()?.let { hits ->
                                 relayPresences = hits
                                 // A browsed name with no unicast answer is a stale NSD
                                 // record — the goodbye packet is multicast too, and this

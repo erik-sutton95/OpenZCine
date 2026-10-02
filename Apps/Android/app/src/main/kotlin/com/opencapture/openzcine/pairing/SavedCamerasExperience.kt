@@ -64,8 +64,8 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.CameraConnectionPhase
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.openzcine.relay.probeHostAlive
 import com.opencapture.openzcine.transport.CameraDiscovery
+import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
@@ -284,8 +284,9 @@ public fun SavedCamerasExperience(
             .map(SavedCameraRecord::host)
             .filter(String::isNotBlank)
             .toSet()
-    suspend fun probeSavedHosts(): Set<String> =
-        wirelessSavedHosts.filter { probeHostAlive(it) }.toSet()
+    // Passive: liveness reaches the presence port only, never the camera's control service.
+    val listDiscovery = remember { CameraListDiscovery() }
+    suspend fun probeSavedHosts(): Set<String> = listDiscovery.alive(wirelessSavedHosts)
     LaunchedEffect(wirelessSavedHosts) {
         if (wirelessSavedHosts.isEmpty()) {
             aliveHosts = emptySet()
