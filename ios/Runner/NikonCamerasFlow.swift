@@ -81,8 +81,16 @@ final class NativeNikonPort: NikonConnectPort {
     /// Screenshot staging (`ZC_DEMO_NEARBY`): sightings no simulator network produces.
     var demoSightings: [DiscoveredCamera] = []
 
-    /// Every discovery pass, from `applyDiscoveryResults`.
-    func found(_ cameras: [DiscoveredCamera]) { onSightings?(cameras + demoSightings) }
+    /// Every discovery pass, from `applyDiscoveryResults`. A liveness answer at a camera
+    /// access point's address (192.168.1.1 by convention, also the commonest home router) says
+    /// nothing about the camera unless this phone is on that access point, as the old list ruled.
+    func found(_ cameras: [DiscoveredCamera]) {
+        let accessPoints = model.isOnCameraAccessPointNetwork ? [] : model.savedCameraAccessPointHosts
+        let visible = cameras.filter { camera in
+            camera.source != .liveness || !accessPoints.contains(PTPIPPairedHosts.normalizedHost(camera.ip) ?? camera.ip)
+        }
+        onSightings?(visible + demoSightings)
+    }
 
     func connect(_ request: NikonConnectRequest) async throws -> NikonConnection {
         finish(.failure(CancellationError()))
