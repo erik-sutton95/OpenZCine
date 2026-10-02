@@ -87,6 +87,7 @@ struct MetalLiveView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: context.coordinator.device)
+        view.accessibilityIdentifier = "monitor.native.picture"
         view.delegate = context.coordinator
         // CI never writes the layer drawable directly — we blit from an intermediate texture — but
         // both upscalers in `draw(in:)` do, from a compute kernel, so the drawable texture needs

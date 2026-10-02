@@ -1,138 +1,11 @@
+import OpenCineApple
+import OpenCineAppKit
+import OpenCineNikon
+import OpenZCineCore
 import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
-import OpenCineApple
-import OpenZCineCore
-
-struct CommandMonitor: View {
-    @Environment(NativeAppModel.self) private var model
-    /// Full-screen viewport width and its horizontal shift — the dashboard renders in the same
-    /// coordinate space as the shared side rails so it lines up with them exactly.
-    let viewportWidth: Double
-    var canvasOffsetX: Double = 0
-    /// Real device safe area — the dashboard fills the screen, so it must clear the Dynamic Island
-    /// lane and the landscape home-indicator band.
-    var feedSafeArea: MonitorEdgeInsets = .zero
-    let chromeInsets: MonitorEdgeInsets
-    let horizontalDirection: MonitorHorizontalLayoutDirection
-
-    var body: some View {
-        ZStack {
-            LiveDesign.background.ignoresSafeArea()
-
-            GeometryReader { proxy in
-                // The rails own the leading and trailing lanes; the dashboard fills the gap between
-                // them, derived from the same `MonitorLiveViewModuleLayout.fit` the rails use.
-                let layout = MonitorLiveViewModuleLayout.fit(
-                    viewportWidth: viewportWidth,
-                    viewportHeight: Double(proxy.size.height),
-                    feedSafeArea: feedSafeArea,
-                    chromeInsets: chromeInsets,
-                    bottomBarHeight: 0,
-                    horizontalDirection: horizontalDirection
-                )
-                // Match the live-mode deck's span so the dashboard lines up with the live HUD
-                // and clears both rails the same way.
-                // The live deck's x aligns content with the FEED — which command mode does
-                // not have. On a wide canvas (iPad) that alignment donates the whole feed
-                // offset to an empty left margin, so clamp both insets to rail clearance
-                // there; phones keep the deck-aligned insets exactly.
-                // Leading clears the lock/battery cluster; trailing must clear the WIDER
-                // system rail (media + settings buttons top-right).
-                let isWideCanvas = viewportWidth > 1000
-                let leading =
-                    isWideCanvas
-                    ? min(layout.topInfoDeck.x, max(feedSafeArea.leading, 20) + 112)
-                    : layout.topInfoDeck.x
-                let trailingRaw =
-                    viewportWidth - (layout.topInfoDeck.x + layout.topInfoDeck.width)
-                let trailing =
-                    isWideCanvas
-                    ? min(trailingRaw, max(feedSafeArea.trailing, 20) + 176)
-                    : trailingRaw
-
-                content
-                    // Same stand-down as the capture strip: a watcher holds control, the
-                    // dashboard's writes wait until it's revoked or returned.
-                    .opacity(model.relayControlSurrendered ? 0.4 : 1)
-                    .allowsHitTesting(!model.relayControlSurrendered)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(
-                        EdgeInsets(
-                            top: max(14, CGFloat(feedSafeArea.top)),
-                            leading: CGFloat(leading),
-                            bottom: CGFloat(feedSafeArea.bottom) + 16,
-                            trailing: CGFloat(trailing))
-                    )
-                    .frame(
-                        width: CGFloat(viewportWidth), height: proxy.size.height,
-                        alignment: .topLeading
-                    )
-                    .offset(x: CGFloat(canvasOffsetX))
-            }
-            .ignoresSafeArea()
-        }
-    }
-
-    private var content: some View {
-        // Top-level 2.35fr : 0.85fr split (prototype `.cmd-body`): the left two-thirds stack the
-        // timecode, status strip and primary grid; the right third (Image/Focus/Audio) runs full
-        // height alongside them, so the status strip spans only the left columns — not the whole bar.
-        GeometryReader { proxy in
-            let sideWidth = max(160, proxy.size.width * 0.27)
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 11) {
-                        RecordChip(state: model.cameraState.recordState)
-                        // Bodies that run no timecode head the dashboard with the record chip
-                        // alone — a frozen 00:00:00:00 hero is worse than none.
-                        if model.cameraReportsTimecode { CommandTimecodeReadout() }
-                        Spacer(minLength: 0)
-                    }
-
-                    CommandHealthStrip()
-                        .environment(model)
-
-                    GeometryReader { gridProxy in
-                        CommandPrimaryGrid(availableHeight: gridProxy.size.height)
-                            .environment(model)
-                            // Lock dims the tiles into a read-only look (CommandMonitor only ever
-                            // renders in command mode, so no display-mode guard needed).
-                            .opacity(model.interfaceLocked ? 0.4 : 1)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                CommandSideColumn()
-                    .environment(model)
-                    .frame(width: sideWidth)
-                    // Dim the side-column setting tiles too, so lock reads as read-only across the
-                    // whole command dashboard (the status strip + system rail stay live).
-                    .opacity(model.interfaceLocked ? 0.4 : 1)
-            }
-        }
-    }
-
-}
-
-/// Hero timecode with the frame field tinted accent (prototype `.tc .fr`). Its own view so the
-/// per-frame `model.liveTimecode` updates invalidate just this text, not the whole dashboard.
-private struct CommandTimecodeReadout: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        let tc = model.liveTimecode
-        return
-            (Text(String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second))
-            .foregroundStyle(LiveDesign.text)
-            + Text(String(format: ":%02d", tc.frame))
-            .foregroundStyle(LiveDesign.accent))
-            .font(.system(size: 60, weight: .regular, design: .monospaced))
-            .lineLimit(1)
-            .minimumScaleFactor(0.78)
-    }
-}
 
 /// The command-monitor primary grid (DISP 3): eight ride-along controls the operator can reorder by
 /// long-press-dragging a tile. Tiles are absolutely positioned so a dragged tile follows the finger
@@ -1044,6 +917,17 @@ struct PickerPanel: View {
         OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
 
+    /// Common movie values use the opened descriptor token. Nikon mode tabs and fine-tune
+    /// controls remain typed adapters; a changed camera circuit retires the common drum.
+    private var commonCaptureField: MonitorCaptureField? {
+        guard let setting = picker.nikonControlSetting,
+            !isTintMode, !isKelvinMode, !isISOAutoValueLocked, !isStillISOAutoLocked,
+            !model.isDemoSession, model.videoSource != .relay,
+            !model.pickerModeDisabled(picker, mode: selectedMode)
+        else { return nil }
+        return model.shell.control.captureField(setting.key)
+    }
+
     var body: some View {
         GlassPanel(
             padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)
@@ -1063,6 +947,17 @@ struct PickerPanel: View {
                     // The WB Tint tab swaps the drum for the fine-tune pad.
                     WhiteBalanceTintPad()
                         .frame(maxWidth: .infinity, alignment: .leading)
+                } else if let field = commonCaptureField {
+                    let offered = currentOptions.compactMap { label in
+                        picker.nikonControlSetting.flatMap { NikonCameraSession.setting($0, label: label) }
+                    }
+                    MonitorCaptureDrum(
+                        control: model.shell.control, field: field,
+                        enabled: !isDrumInteractionLocked,
+                        haptics: model.preferences.hapticsEnabled,
+                        choices: field.choices.filter { offered.contains($0.value) },
+                        marked: markedValues)
+                        .id(selectedMode)
                 } else {
                     AccentDrumWheel(
                         options: currentOptions,

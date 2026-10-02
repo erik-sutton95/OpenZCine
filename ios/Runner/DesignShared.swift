@@ -7,7 +7,7 @@ enum DesignTokens {
     ///
     /// **Exceptions (intentionally not this value):**
     /// - `Capsule()` / `Circle()` — fully round pills and icon buttons
-    /// - `RecordingBorderModule.displayCornerRadius` — physical display bezel (~52 pt)
+    /// - `MonitorRecordingBorder` — physical display bezel (~52 pt)
     /// - Micro radii (≤5 pt) on histogram dashes, waveform ticks, and duration badges
     /// - Record-button stop square — distinct rounded-square stop icon
     static let cornerRadius: CGFloat = 16

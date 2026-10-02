@@ -18,6 +18,7 @@ import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.FakeCameraSession
 import com.opencapture.openzcine.settings.OperatorSettings
+import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,6 +42,11 @@ class RecordCameraFlowComposeTest {
             FakeCameraSession(
                 CameraIdentity(name = "Test ZR", model = "NIKON ZR", serialNumber = "TEST-001"),
             )
+        // This SIMULATED body must report idle before common capture can offer Start.
+        runBlocking {
+            session.connect()
+            session.setRecording(false)
+        }
         // The monitor deliberately has continuously scheduled frame/timecode work.
         // Keeping the test clock fixed lets semantics actions observe each state transition.
         composeRule.mainClock.autoAdvance = false

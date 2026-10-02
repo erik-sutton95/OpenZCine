@@ -1,6 +1,10 @@
 package com.opencapture.openzcine
 
 import androidx.activity.compose.BackHandler
+import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.appkit.MonitorCaptureField
+import com.opencapture.opencine.appkit.MonitorCaptureDrum
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateDpAsState
@@ -1431,6 +1435,8 @@ private fun CaptureStripCells(
 internal fun MonitorControlPickerPanel(
     picker: MonitorPickerPresentation,
     frame: ZoneFrame,
+    commonControl: MonitorControlModel? = null,
+    commonField: MonitorCaptureField? = null,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     feedback: CommandControlFeedback?,
@@ -1521,6 +1527,8 @@ internal fun MonitorControlPickerPanel(
                 } else {
                     PickerPanelBody(
                         picker = currentPicker,
+                        commonControl = commonControl,
+                        commonField = commonField,
                         frame = frame,
                         controlsEnabled = controlsEnabled,
                         pendingControl = pendingControl,
@@ -1544,6 +1552,8 @@ internal fun MonitorControlPickerPanel(
 private fun PickerPanelBody(
     picker: MonitorPickerPresentation,
     frame: ZoneFrame,
+    commonControl: MonitorControlModel? = null,
+    commonField: MonitorCaptureField? = null,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     feedback: CommandControlFeedback?,
@@ -1775,6 +1785,15 @@ private fun PickerPanelBody(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+            } else if (commonControl != null && commonField != null && !isKelvinMode && !mode.drumLocked) {
+                val offered = drumLabels.mapNotNull { NikonOpenCineSession.settingValue(mode.request.control, it) }
+                key(modeIndex) {
+                    MonitorCaptureDrum(commonControl, commonField, enabled = drumInteractive,
+                        modifier = Modifier.fillMaxWidth(),
+                        choices = commonField.choices.filter { it.value in offered },
+                        marked = mode.markedValues,
+                        onDetent = {})
+                }
             } else {
                 val optionDescription =
                     stringResource(R.string.camera_picker_options_description, mode.label)

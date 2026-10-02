@@ -180,7 +180,7 @@ class FocusFeedComposeTest {
     }
 
     @Test
-    fun secondPointerCancelsDispSwipeAndHandsGestureToPortraitPinch() {
+    fun secondPointerCancelsDispSwipeWithoutChangingPortraitFitPreference() {
         setDeviceRotation(ROTATION_PORTRAIT)
         val session = FocusSession()
         val settings =
@@ -205,9 +205,9 @@ class FocusFeedComposeTest {
             up(0)
         }
 
-        composeRule.waitUntil(5_000) {
-            settings.portraitFeedAspect == PortraitFeedAspect.FILL
-        }
+        // Pinch magnifies the current feed; FIT/FILL remains an explicit operator preference.
+        composeRule.waitForIdle()
+        assertEquals(PortraitFeedAspect.FIT_16_9, settings.portraitFeedAspect)
         assertDisplayMode("Live")
         assertEquals(null, session.lastFocusPoint)
     }

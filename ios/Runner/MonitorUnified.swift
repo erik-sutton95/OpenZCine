@@ -1,719 +1,559 @@
-import SwiftUI
+import MonitorPresentation
+import MonitorUI
+import OpenCineAppKit
+import OpenCineCore
 import OpenZCineCore
+import SwiftUI
 
-/// Unified top information bar for both monitor shells, selected by `MonitorZoneStyle`.
-///
-/// `.infoPill` is the landscape deck (readout cells incl. `topBarPickerFrames` anchor publishing
-/// and its reset semantics — a regression re-opens the rotation stale-frame bug class). `.infoBar`
-/// is the portrait overlay (accent-framed timecode, centered storage, inline battery). Any other
-/// style renders nothing.
-struct MonitorInfoBar: View {
-    var style: MonitorZoneStyle
+/// Nikon fills bounded property, photography and native renderer slots in the common monitor.
+/// Shared AppKit owns the screen tree and shared presentation owns every common chrome frame.
+struct NikonMonitorShell: View {
+    @Environment(NativeAppModel.self) private var model
+    let context: LiveViewLayoutContext
+    @State private var railExpanded = false
+
+    private var sourceAspect: Double {
+        let raw: Double
+        if model.videoSource == .hdmiCapture, let image = model.liveFrameImage, image.size.height > 0 {
+            raw = Double(image.size.width / image.size.height)
+        } else {
+            raw =
+                model.isPhotographyMode
+                ? model.cameraPropertySnapshot.photographyFeedAspect : 16 / 9
+        }
+        return model.displayedFeedRotation.isVertical ? 1 / raw : raw
+    }
+
+    private var layout: FieldMonitorLayout {
+        FieldMonitorLayout(
+            width: context.viewportWidth, height: context.viewportHeight,
+            safeArea: MonitorSafeArea(
+                top: context.feedSafeArea.top, leading: context.feedSafeArea.leading,
+                bottom: context.feedSafeArea.bottom, trailing: context.feedSafeArea.trailing),
+            sourceAspect: sourceAspect, fill: model.preferences.portraitFeedAspect != .fit16x9,
+            showsValues: model.chromeSectionMounts(.cameraValues))
+    }
 
     var body: some View {
-        switch style {
-        case .infoPill:
-            InfoPillContent()
-        case .infoBar:
-            InfoBarContent()
-        default:
+        let layout = layout
+        let editing = model.chromeEditorMode
+        MonitorScreen(
+            control: model.shell.control, layout: layout, sourceAspect: sourceAspect,
+            presentation: MonitorScreenPresentation(
+                interactive: editing == nil,
+                statusMounted: model.chromeSectionMounts(.statusBar),
+                powerMounted: model.railControlMounts(
+                    .batteryIndicators, plan: model.monitorSideRailPlan),
+                captureMounted: model.chromeSectionMounts(.cameraValues)
+                    && model.displayMode != .command,
+                captureInteractive: model.activePanel == nil,
+                locked: model.interfaceLocked, popupInteractive: editing == nil,
+                capturePresented: model.activePanel?.coversFullScreen == false,
+                recovering: model.sessionRecovery.isRecovering)
+        ) {
+            // Geometry supplied by MonitorCanvas is already fitted/cropped. The native adapter
+            // has no viewport placement authority and stays mounted even in command display.
+            GeometryReader { picture in
+                LiveFeedModule(
+                    safeArea: .zero, viewportWidth: picture.size.width, canvasOffsetX: 0,
+                    fixedContentHeight: picture.size.height, sharedPictureGeometry: true
+                )
+                .opacity(model.displayMode == .command ? 0 : 1)
+                .allowsHitTesting(
+                    editing == nil && !model.interfaceLocked && model.displayMode != .command)
+            }
+            .transaction { $0.animation = nil }
+        } assists: {
             EmptyView()
+        } signal: {
+            EmptyView()
+        } status: {
+            NikonMonitorStatus(layout: layout)
+                .chromeEditable(.statusBar, editing: editing)
+                .liveViewGuideAnchor(.infoBar)
+        } power: {
+            NikonMonitorPower(horizontal: layout.portrait && !layout.tablet)
+                .chromeEditable(.batteryIndicators, editing: editing)
+        } capture: {
+            NikonCaptureControls(
+                columns: layout.portrait && !layout.tablet ? (model.isPhotographyMode ? 5 : 3) : 12
+            )
+            .chromeEditable(.cameraValues, editing: editing)
+            .liveViewGuideAnchor(.cameraControls)
+        } system: {
+            NikonMonitorSystem(layout: layout)
+        } tools: {
+            nativeTools(layout)
+        } panels: {
+            if let panel = model.activePanel, !panel.coversFullScreen {
+                PanelHost(
+                    panel: panel, chromeInsets: context.chromeInsets,
+                    feedSafeArea: context.feedSafeArea, isPortrait: context.isPortrait)
+            }
+        } cover: {
+            MonitorFullScreenPanelOverlay(context: context)
+        } recovery: {
+            MonitorRecoveryOverlay()
+        }
+        .coordinateSpace(name: ChromeEditSpace.name)
+        .overlayPreferenceValue(ChromeEditBoundsKey.self) { boxes in
+            if let mode = editing {
+                ChromeEditBadgeLayer(
+                    mode: mode, boxes: boxes,
+                    viewport: CGSize(width: layout.viewport.width, height: layout.viewport.height))
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let mode = editing {
+                ChromeEditBanner(mode: mode).padding(.bottom, max(16, context.feedSafeArea.bottom))
+            } else if !model.monitorNotice.isEmpty {
+                MonitorToast(text: model.monitorNotice, trigger: model.monitorNoticeTrigger)
+                    .padding(.bottom, layout.viewport.height - layout.picture.maxY + 16)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
+        .offset(x: context.canvasOffsetX)
+        .onChange(of: layout.portrait, initial: true) { _, portrait in
+            model.monitorIsPortrait = portrait
         }
     }
 
-    // MARK: - .infoPill (former `TopInfoDeckModule`)
-
-    private struct InfoPillContent: View {
-        @Environment(NativeAppModel.self) private var model
-
-        /// Photography swaps the movie readouts for stills ones in the same pill: the shots
-        /// counter takes the timecode slot, image size and quality take resolution and codec.
-        private var isPhotography: Bool {
-            StillCapturePolicy.prefersPhotographyChrome(
-                selector: model.cameraPropertySnapshot.captureSelector)
-        }
-
-        // Every cell is the operator's to hide, in every DISP mode. Clean used to strip the deck
-        // to timecode + FPS with a hard-coded `compact` flag, which is why the Edit view's badges
-        // did nothing there: the cells the operator switched on were dropped anyway the moment the
-        // editor closed. The configuration IS the compact deck now.
-        var body: some View {
-            GlassPanel(
-                padding: EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
-            ) {
-                HStack(spacing: 10) {
-                    let editing = model.chromeEditorMode
-                    if isPhotography {
-                        if model.chromeSectionMounts(.timecodeReadout) {
-                            ShotsRemainingReadout()
-                                .chromeEditable(.timecodeReadout, editing: editing)
-                        }
-                        if model.chromeSectionMounts(.resolutionReadout) {
-                            imageAreaButton
-                                .chromeEditable(.resolutionReadout, editing: editing)
-                        }
-                        if model.chromeSectionMounts(.codecReadout) {
-                            readoutButton(
-                                .stillQuality, icon: "camera.aperture",
-                                value: model.cameraPropertySnapshot.stillQualityCompactLabel
-                                    ?? "—"
-                            )
-                            .accessibilityLabel("Image quality")
-                            .chromeEditable(.codecReadout, editing: editing)
-                        }
-                        // No MEDIA cell in photo mode — the SHOTS readout tap-toggles to the
-                        // storage form instead.
-                    } else {
-                        if model.chromeSectionMounts(.recReadout) {
-                            RecordChip(state: model.cameraState.recordState)
-                                .chromeEditable(.recReadout, editing: editing)
-                        }
-                        if model.chromeSectionMounts(.timecodeReadout) {
-                            TimecodeReadout()
-                                .chromeEditable(.timecodeReadout, editing: editing)
-                        }
-                        if model.chromeSectionMounts(.resolutionReadout) {
-                            readoutButton(
-                                .resolution, icon: "video",
-                                value: model.cameraState.resolutionFrameRate
-                            )
-                            .chromeEditable(.resolutionReadout, editing: editing)
-                        }
-                        if model.chromeSectionMounts(.codecReadout) {
-                            readoutButton(
-                                .codec, icon: "film",
-                                value: MonitorTextFormat.codecCompactLabel(
-                                    model.cameraState.codec)
-                            )
-                            .chromeEditable(.codecReadout, editing: editing)
-                        }
-                        if model.chromeSectionMounts(.mediaReadout) {
-                            mediaCell
-                                .chromeEditable(.mediaReadout, editing: editing)
-                        }
-                    }
-                    if model.chromeSectionMounts(.fpsReadout) {
-                        FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
-                            .chromeEditable(.fpsReadout, editing: editing)
-                    }
-                }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        }
-
-        /// The size pill in photo mode: shows "FX · L" and drops the SIZE drum picker down
-        /// (Area / Size tabs) exactly like the cinema resolution/codec pills — same anchoring,
-        /// same blend/dismiss semantics. The feed frame reshapes with the area selection.
-        private var imageAreaButton: some View {
-            readoutButton(
-                .stillSize, icon: "photo",
-                value: model.stillSizeAreaDisplay ?? "—"
+    /// Native scopes, focus and unique camera tools remain adapters until the runtime slice.
+    /// Their bounds come from the shared layout, independently of common status/capture/system.
+    @ViewBuilder private func nativeTools(_ layout: FieldMonitorLayout) -> some View {
+        // Relay/demo still supply their actual legacy state until Z3 adopts a common binding.
+        // Keep the shared lamp/border below covers, without inventing a camera observation.
+        if model.shell.control.session == nil && model.isRecording { MonitorRecordingBorder() }
+        if model.displayMode == .command {
+            NikonCommandControls(layout: layout)
+        } else {
+            FeedAssistOverlayModule(
+                safeArea: context.feedSafeArea, viewportWidth: context.viewportWidth,
+                canvasOffsetX: 0, horizontalDirection: context.horizontalDirection,
+                suppressFloatingScopes: layout.portrait && !layout.fillsPicture
             )
-            .accessibilityLabel("Image area and size")
+            .allowsHitTesting(!model.interfaceLocked)
+            if layout.portrait && !layout.fillsPicture, !model.renderedFitScopes.isEmpty {
+                let room = max(0, layout.values.y - layout.picture.maxY - 32)
+                PortraitScopesStack()
+                    .frame(width: layout.picture.width - 28, height: min(184, room))
+                    .position(
+                        x: layout.picture.midX, y: layout.picture.maxY + 16 + min(184, room) / 2)
+            }
+            if model.chromeSectionMounts(.assistToolbar) {
+                let railHeight = railExpanded ? min(280, layout.viewport.height * 0.5) : 44
+                MonitorAssistStrip(
+                    axis: .vertical, collapsible: true,
+                    feedHeight: min(280, layout.viewport.height * 0.5), expanded: $railExpanded
+                )
+                .frame(
+                    width: MonitorAssistStrip.expandedWidth,
+                    height: railHeight, alignment: .bottom
+                )
+                .position(x: layout.assists.midX, y: layout.assists.maxY - railHeight / 2)
+                .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
+                .liveViewGuideAnchor(.viewAssist)
+                .opacity(model.interfaceLocked ? 0.4 : 1)
+                .allowsHitTesting(!model.interfaceLocked)
+            }
+            if model.showsMFDriveScrub {
+                MFDriveVerticalScrub().frame(height: min(280, layout.viewport.height * 0.55))
+                    .position(
+                        x: max(layout.picture.x + 30, layout.record.x - 34), y: layout.picture.midY
+                    )
+                    .allowsHitTesting(!model.interfaceLocked)
+            }
+            if model.chromeSectionMounts(.focusBox), model.isFocusResetAvailable,
+                !model.interfaceLocked, model.chromeEditorMode == nil
+            {
+                MonitorChromeButton(
+                    "Reset focus point", size: CGSize(width: 40, height: 40),
+                    action: model.resetFocusPoint
+                ) {
+                    Image(systemName: "dot.viewfinder")
+                }.position(x: layout.focusReset.midX, y: layout.focusReset.midY)
+            }
+            if LUTResolution.showsSplitComparisonKey(
+                visibleTools: model.renderedLiveAssistTools, preferences: model.preferences),
+                !model.interfaceLocked, model.chromeEditorMode == nil
+            {
+                SplitComparisonKey().position(
+                    x: layout.focusReset.midX, y: layout.focusReset.midY - 50)
+            }
         }
+        if !model.interfaceLocked, model.chromeEditorMode == nil {
+            if model.videoSource == .relay,
+                model.relayHoldsControl || model.relayAllowsControlRequests
+            {
+                WatcherControlKey().position(x: layout.picture.midX, y: layout.values.y - 28)
+            } else if model.relayControlSurrendered {
+                BroadcasterControlKey().position(x: layout.picture.midX, y: layout.values.y - 28)
+            }
+        }
+    }
+}
 
-        /// Frames left on the card, in the timecode slot's typography — a tap flips it to the
-        /// remaining-storage readout (GB + percent), standing in for the MEDIA cell photo mode
-        /// drops. Counts above four digits compact to "12.3k" the way camera bodies do.
-        private struct ShotsRemainingReadout: View {
-            @Environment(NativeAppModel.self) private var model
-            var body: some View {
+/// Format/storage and photography telemetry are Nikon-specific values, not a second status bar.
+private struct NikonMonitorStatus: View {
+    @Environment(NativeAppModel.self) private var model
+    let layout: FieldMonitorLayout
+
+    private var status: MonitorStatusPresentation {
+        let recording =
+            model.shell.control.session == nil
+            ? (model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil)
+            : model.shell.control.isRecording
+        let tc = model.liveTimecode
+        return MonitorStatusPresentation(
+            recording: recording,
+            timecode: model.cameraReportsTimecode
+                ? String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second) : nil)
+    }
+
+    var body: some View {
+        MonitorStatusChrome(
+            layout: layout, status: status,
+            showsTimecode: !model.isPhotographyMode && model.chromeSectionMounts(.timecodeReadout),
+            showsRecording: !model.isPhotographyMode && model.chromeSectionMounts(.recReadout)
+        ) {
+            if model.isPhotographyMode, model.chromeSectionMounts(.timecodeReadout) {
                 Button {
                     model.photoPillShowsStorage.toggle()
                 } label: {
-                    readout
-                        .font(.system(size: 20, weight: .medium, design: .monospaced))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .contentShape(Rectangle())
+                    Text(
+                        model.photoPillShowsStorage
+                            ? model.mediaReadout
+                            : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" }
+                                ?? "--")
+                }.font(MonitorTheme.font(12, weight: .medium)).buttonStyle(.plain)
+                    .chromeEditable(.timecodeReadout, editing: model.chromeEditorMode)
+            } else if model.chromeSectionMounts(.mediaReadout) {
+                Button(action: model.toggleMediaReadout) { Text(model.mediaReadout) }
+                    .font(MonitorTheme.font(12, weight: .medium)).buttonStyle(.plain)
+                    .chromeEditable(.mediaReadout, editing: model.chromeEditorMode)
+            }
+        } format: {
+            HStack(spacing: 8) {
+                if model.chromeSectionMounts(.resolutionReadout) {
+                    readout(
+                        model.isPhotographyMode ? .stillSize : .resolution,
+                        value: model.isPhotographyMode
+                            ? model.stillSizeAreaDisplay ?? "--"
+                            : model.cameraState.resolutionFrameRate
+                    )
+                    .chromeEditable(.resolutionReadout, editing: model.chromeEditorMode)
                 }
-                .buttonStyle(.zcTapTarget)
-                // Pin the cell's geometry so the width change when the readout flips can't
-                // relayout the cell out from under an in-flight tap (same trap as the MEDIA cell).
-                .geometryGroup()
-            }
-
-            private var readout: Text {
-                if model.photoPillShowsStorage, let status = model.cameraState.mediaStatus {
-                    return Text("\(status.gigabytesFree) GB").foregroundStyle(LiveDesign.text)
-                        + Text(" \(status.percentFree)%")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(LiveDesign.muted)
+                if model.chromeSectionMounts(.codecReadout) {
+                    readout(
+                        model.isPhotographyMode ? .stillQuality : .codec,
+                        value: model.isPhotographyMode
+                            ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--"
+                            : MonitorTextFormat.codecCompactLabel(model.cameraState.codec)
+                    )
+                    .chromeEditable(.codecReadout, editing: model.chromeEditorMode)
                 }
-                let remaining = model.cameraPropertySnapshot.shotsRemaining
-                return Text(remaining.map(Self.compactCount) ?? "—")
-                    .foregroundStyle(LiveDesign.text)
-                    + Text(" SHOTS").font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(LiveDesign.muted)
             }
-
-            private static func compactCount(_ count: Int) -> String {
-                guard count > 9999 else { return String(count) }
-                return String(format: "%.1fk", Double(count) / 1000)
+        } color: {
+            EmptyView()
+        } mode: {
+            EmptyView()
+        } link: {
+            if model.chromeSectionMounts(.fpsReadout) {
+                FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
+                    .chromeEditable(.fpsReadout, editing: model.chromeEditorMode)
             }
-        }
-
-        /// Timecode with the frame field tinted, isolated into its own leaf `View` so the ~30 Hz
-        /// tick invalidates only this text, not the whole pill body. The leaf must read the model
-        /// from `@Environment` (not a passed-in snapshot) or it stops observing timecode updates.
-        private struct TimecodeReadout: View {
-            @Environment(NativeAppModel.self) private var model
-            var body: some View {
-                let tc = model.liveTimecode
-                let main = String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second)
-                let frames = String(format: ":%02d", tc.frame)
-                return
-                    (Text(main).foregroundStyle(LiveDesign.text)
-                    + Text(frames).foregroundStyle(LiveDesign.accent))
-                    .font(.system(size: 20, weight: .medium, design: .monospaced))
-                    .lineLimit(1)
-                    // Timecode is the one readout that must survive a squeezed deck intact — on
-                    // set a truncated TC is worse than no TC. It takes its full width first and
-                    // the softer cells beside it (codec, media, resolution) give way instead.
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-            }
-        }
-
-        /// A glyph followed inline by its value in its own glass pill. When its popdown is open the
-        /// pill takes the *same* active treatment as a bottom-bar setting (dim-accent fill, hairline
-        /// border, gold text) so the two bars highlight identically.
-        @ViewBuilder
-        private func inlineReadout(icon: String, value: String, isActive: Bool = false) -> some View
-        {
-            let content =
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
-                    Text(value.replacingOccurrences(of: " · ", with: "·"))
-                        .font(.system(size: 15, weight: .medium, design: .monospaced))
-                        .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                // Top-bar readout pills stay one line; deck compression must
-                // shrink type, never stack characters.
-                .fixedSize(horizontal: true, vertical: false)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-
-            if isActive {
-                content
-                    .background(Capsule().fill(LiveDesign.accentDim))
-                    .overlay(Capsule().strokeBorder(LiveDesign.accentDim, lineWidth: 1))
-            } else {
-                content.liquidGlass(in: Capsule())
-            }
-        }
-
-        /// A top-deck readout that drops its drum picker down when tapped. Mirrors the bottom-bar
-        /// `CaptureSettingButton`: open, dismiss, or blend depending on which picker is up.
-        @ViewBuilder
-        private func readoutButton(
-            _ picker: CameraPicker, icon: String, value: String
-        ) -> some View {
-            let isActive = model.activePanel == .picker(picker)
-            Button {
-                if model.activePanel == nil {
-                    model.showPicker(picker)
-                } else if model.activePanel == .picker(picker) {
-                    model.dismissActivePanel()
-                } else {
-                    model.switchPicker(to: picker)
-                }
-            } label: {
-                inlineReadout(icon: icon, value: value, isActive: isActive)
-            }
-            .buttonStyle(.zcTapTarget)
-            .geometryGroup()
-            // Publish the cell's global frame continuously so its drop-down picker anchors just
-            // beneath it and a backdrop tap on the cell can blend/dismiss like the bottom bar.
-            .background(
-                GeometryReader { proxy in
-                    let frame = proxy.frame(in: .global)
-                    Color.clear
-                        .onAppear { model.topBarPickerFrames[picker] = frame }
-                        .onChange(of: frame) { _, newFrame in
-                            model.topBarPickerFrames[picker] = newFrame
-                        }
-                        // Rotation to portrait unmounts this cell; drop its entry so a stale
-                        // landscape frame can't satisfy topPickerBody's hasCell check or
-                        // handleBackdropTap's hit-test.
-                        .onDisappear { model.topBarPickerFrames[picker] = nil }
-                }
-            )
-        }
-
-        /// The MEDIA cell: tap cycles capacity ↔ duration. No popover. `.contentShape` makes the
-        /// whole pill a hit target; `.geometryGroup()` pins the cell's geometry so the width change
-        /// when the readout flips (`521 GB·47%` → `47 Min`) can't relayout the cell out from under
-        /// an in-flight tap and swallow it.
-        private var mediaCell: some View {
-            Button {
-                model.toggleMediaReadout()
-            } label: {
-                inlineReadout(icon: "sdcard", value: model.mediaReadout)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.zcTapTarget)
-            .geometryGroup()
         }
     }
 
-    // MARK: - .infoBar (former `PortraitTopBar`)
-
-    private struct InfoBarContent: View {
-        @Environment(NativeAppModel.self) private var model
-
-        private var isPhotography: Bool {
-            StillCapturePolicy.prefersPhotographyChrome(
-                selector: model.cameraPropertySnapshot.captureSelector)
-        }
-
-        // The portrait bar honours the same per-cell switches as the landscape deck. It used to
-        // honour none of them — hiding MEDIA or the timecode in Settings changed nothing here,
-        // and the battery read the policy directly so the Edit view could not force-mount it.
-        var body: some View {
-            let editing = model.chromeEditorMode
-            ZStack {
-                // Storage/minutes centered on the SCREEN, not the leftover space (spec §1): a bare
-                // Text in the ZStack centers within the full bar width regardless of siblings.
-                //
-                // Cinema only, and photography carries no MEDIA cell at all — the same call the
-                // landscape deck makes. Shots remaining is the number a stills operator is
-                // actually counting down, and it is measured from the space this would report, so
-                // the two side by side are one fact twice. Storage stays a tap away on the SHOTS
-                // readout for whoever wants the gigabytes.
-                if model.chromeSectionMounts(.mediaReadout), !isPhotography {
-                    Text(model.mediaReadout)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(LiveDesign.muted)
-                        .lineLimit(1)
-                        .chromeEditable(.mediaReadout, editing: editing)
-                }
-
-                HStack(spacing: 10) {
-                    // Must read `liveTimecode` (not `cameraState.timecode`) — per-frame telemetry
-                    // is held separately so the HUD struct is not invalidated every tick.
-                    // A nested leaf observes that property so only this text re-renders.
-                    //
-                    // Photography makes the same swap the landscape deck already makes: the shots
-                    // counter takes the timecode slot, and size and quality follow it. A stills
-                    // body runs no timecode, so the slot was reading a frozen 00:00:00:00 — and
-                    // the two readouts that do matter between frames lived only in landscape.
-                    if model.chromeSectionMounts(.timecodeReadout) {
-                        if isPhotography {
-                            PortraitInfoBarShots()
-                                .chromeEditable(.timecodeReadout, editing: editing)
-                        } else {
-                            PortraitInfoBarTimecode()
-                                .chromeEditable(.timecodeReadout, editing: editing)
-                        }
-                    }
-                    if isPhotography {
-                        // Same pickers the landscape cells open, so the drop-down anchors to
-                        // whichever cell published its frame last — one mechanism, both shells.
-                        if model.chromeSectionMounts(.resolutionReadout) {
-                            PortraitInfoBarPickerCell(
-                                picker: .stillSize,
-                                value: model.stillSizeAreaDisplay ?? "—"
-                            )
-                            .accessibilityLabel("Image area and size")
-                            .chromeEditable(.resolutionReadout, editing: editing)
-                        }
-                        if model.chromeSectionMounts(.codecReadout) {
-                            PortraitInfoBarPickerCell(
-                                picker: .stillQuality,
-                                value: model.cameraPropertySnapshot.stillQualityCompactLabel ?? "—"
-                            )
-                            .accessibilityLabel("Image quality")
-                            .chromeEditable(.codecReadout, editing: editing)
-                        }
-                    }
-
-                    Spacer(minLength: 8)
-
-                    if model.chromeSectionMounts(.batteryIndicators) {
-                        cameraBattery
-                            .chromeEditable(.batteryIndicators, editing: editing)
-                    }
+    private func readout(_ picker: CameraPicker, value: String) -> some View {
+        Button {
+            model.activePanel == .picker(picker)
+                ? model.dismissActivePanel() : model.showPicker(picker)
+        } label: {
+            Text(value.replacingOccurrences(of: " · ", with: "·"))
+                .font(MonitorTheme.font(12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
+        }.buttonStyle(.plain).geometryGroup()
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, frame in
+                        model.topBarPickerFrames[picker] = frame
+                    }.onDisappear { model.topBarPickerFrames[picker] = nil }
                 }
             }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 16)
-            .frame(maxHeight: .infinity)
-            .background(LiveDesign.glass)
-        }
+    }
+}
 
-        // The landscape rail's `BatteryIndicator` in its `.inline` layout (R2): same
-        // symbol/readout/charging logic, one row, sized for the 44pt top bar natively.
-        private var cameraBattery: some View {
+private struct NikonMonitorPower: View {
+    @Environment(NativeAppModel.self) private var model
+    let horizontal: Bool
+    var body: some View {
+        AnyLayout(
+            horizontal
+                ? AnyLayout(HStackLayout(spacing: 5))
+                : AnyLayout(VStackLayout(alignment: .leading, spacing: 5))
+        ) {
+            BatteryIndicator(
+                percent: model.cameraState.phoneBatteryPercent,
+                deviceSystemName: "iphone", isCamera: false, isCharging: model.phoneBatteryCharging,
+                layout: .pillRow)
             BatteryIndicator(
                 percent: model.cameraState.cameraBatteryPercent,
-                deviceSystemName: "camera",
-                isCamera: true,
-                isCharging: model.cameraBatteryCharging,
-                layout: .inline
-            )
+                deviceSystemName: "camera", isCamera: true, isCharging: model.cameraBatteryCharging,
+                layout: .pillRow)
         }
     }
+}
 
-    /// Portrait top-bar shots counter — the photography twin of ``PortraitInfoBarTimecode``, in
-    /// the same 15pt monospaced face so the two swap without the bar's rhythm changing.
-    ///
-    /// Tap-toggles to the storage form, exactly as the landscape deck's version does, and for the
-    /// same reason: photography carries no separate MEDIA cell, so this is where the gigabytes
-    /// live. One `photoPillShowsStorage` drives both, so the choice follows a rotation.
-    private struct PortraitInfoBarShots: View {
-        @Environment(NativeAppModel.self) private var model
-
-        var body: some View {
-            Button {
-                model.photoPillShowsStorage.toggle()
-            } label: {
-                readout
-                    .font(.system(size: 15, weight: .regular, design: .monospaced))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.zcTapTarget)
-            // Pin the cell's geometry so the width change when the readout flips cannot relayout
-            // it out from under an in-flight tap (the same trap as the landscape MEDIA cell).
-            .geometryGroup()
-            .layoutPriority(1)
-        }
-
-        private var readout: Text {
-            if model.photoPillShowsStorage, let status = model.cameraState.mediaStatus {
-                return Text("\(status.gigabytesFree) GB").foregroundStyle(LiveDesign.text)
-                    + Text(" \(status.percentFree)%")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(LiveDesign.muted)
-            }
-            let remaining = model.cameraPropertySnapshot.shotsRemaining
-            return Text(remaining.map(Self.compactCount) ?? "—")
-                .foregroundStyle(LiveDesign.text)
-                + Text(" SHOTS")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-        }
-
-        /// Four digits is the most a card ever shows before this reads as a wall of numerals.
-        private static func compactCount(_ count: Int) -> String {
-            guard count > 9999 else { return String(count) }
-            return String(format: "%.1fk", Double(count) / 1000)
-        }
+private struct NikonCaptureControls: View {
+    @Environment(NativeAppModel.self) private var model
+    let columns: Int
+    @State private var ownership = MonitorReadoutOwnership()
+    @State private var preview: MonitorReadoutValue<MonitorCaptureField>?
+    private var values: [CameraValue] {
+        model.isPhotographyMode
+            ? model.cameraPropertySnapshot.photographyCaptureValues : model.cameraState.values
     }
-
-    /// A tappable stills readout in the portrait bar: the value in the bar's own type, the label
-    /// under it, opening the same picker as its landscape twin.
-    ///
-    /// It publishes its frame to `topBarPickerFrames` for exactly the reason the landscape cell
-    /// does — `topPickerBody` anchors the drop-down beneath whichever cell is on screen, and a
-    /// portrait cell that published nothing would drop its picker into the top-left corner.
-    private struct PortraitInfoBarPickerCell: View {
-        @Environment(NativeAppModel.self) private var model
-        let picker: CameraPicker
-        let value: String
-
-        var body: some View {
-            let isActive = model.activePanel == .picker(picker)
-            Button {
-                if model.activePanel == nil {
-                    model.showPicker(picker)
-                } else if isActive {
-                    model.dismissActivePanel()
+    var body: some View {
+        MonitorControlGrid(columns: columns, spacing: 6, equalColumns: columns < values.count) {
+            ForEach(values) { value in
+                if !model.isPhotographyMode, value.label != "SHUTTER",
+                    let picker = CameraPicker.forValueLabel(value.label, photography: false),
+                    let setting = picker.nikonControlSetting,
+                    let field = model.shell.control.captureField(setting.key)
+                {
+                    common(field, picker: picker, label: value.label)
                 } else {
-                    model.switchPicker(to: picker)
+                    CaptureSettingButton(value: value)
                 }
-            } label: {
-                Text(value)
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.text)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.zcTapTarget)
-            .geometryGroup()
-            .background(
-                GeometryReader { proxy in
-                    let frame = proxy.frame(in: .global)
-                    Color.clear
-                        .onAppear { model.topBarPickerFrames[picker] = frame }
-                        .onChange(of: frame) { _, newFrame in
-                            model.topBarPickerFrames[picker] = newFrame
-                        }
-                        .onDisappear { model.topBarPickerFrames[picker] = nil }
-                }
-            )
-        }
-    }
-
-    /// Portrait top-bar timecode leaf — same source as landscape (`liveTimecode`), isolated so
-    /// the ~30 Hz tick does not invalidate the whole info bar.
-    private struct PortraitInfoBarTimecode: View {
-        @Environment(NativeAppModel.self) private var model
-
-        var body: some View {
-            let tc = model.liveTimecode
-            return
-                (Text(String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second))
-                .foregroundStyle(LiveDesign.text)
-                + Text(String(format: ":%02d", tc.frame))
-                .foregroundStyle(LiveDesign.accent))
-                .font(.system(size: 15, weight: .regular, design: .monospaced))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(1)
-        }
-    }
-}
-
-/// Portrait command-mode (DISP 3) hero timecode above the tile grid, frame field tinted accent.
-/// Its own leaf view reading `liveTimecode` from `@Environment` so the ~30 Hz tick invalidates
-/// only this text, not the tile grid. Oversized nominal font + `minimumScaleFactor` fits the width.
-private struct PortraitCommandTimecode: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        let tc = model.liveTimecode
-        return
-            (Text(String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second))
-            .foregroundStyle(LiveDesign.text)
-            + Text(String(format: ":%02d", tc.frame))
-            .foregroundStyle(LiveDesign.accent))
-            .font(.system(size: 96, weight: .regular, design: .monospaced))
-            .lineLimit(1)
-            .minimumScaleFactor(0.2)
-            .frame(maxWidth: .infinity, alignment: .center)
-    }
-}
-
-/// Unified capture-settings strip for both monitor shells: a row of `CaptureSettingButton`s
-/// (ISO / SHUTTER / IRIS / FOCUS / WB).
-///
-/// Landscape (`fitsWidth: true`) content-hugs — the wide rail always has room for all five
-/// readouts. Portrait fill mode (`fitsWidth: false`) scales the same cells to span the bar width.
-/// Both publish `captureBarFrame` (the exposure picker anchors to it) with identical
-/// onAppear/onChange/onDisappear reset semantics; regressing that reopens the rotation
-/// stale-frame bug class (the bar unmounts on rotation and a lingering frame would mislead
-/// `bottomPickerBody`'s hasBar / `handleBackdropTap`'s hit-test in the now-hidden shell).
-struct MonitorCaptureStrip: View {
-    @Environment(NativeAppModel.self) private var model
-    /// True for the landscape rail (content-hugging, room for every readout); false for the
-    /// portrait fill-mode bar (fits all five to the width by scaling the cells).
-    var fitsWidth: Bool
-    /// Portrait-only: the row's natural (scale-1) width, measured off-screen so the fitted row
-    /// can derive its scale on any device width.
-    @State private var naturalRowWidth: CGFloat = 0
-    /// Which edges of the scrolled row still have cells beyond them.
-    @State private var scrollEdges = ScrollEdgeFades(leading: false, trailing: true)
-
-    var body: some View {
-        Group {
-            if fitsWidth {
-                landscapeBody
-            } else {
-                portraitBody
             }
         }
-        // A watcher holds the control token: the tiles read on, grayed, and taps stand down
-        // until control is revoked (the pill over the feed) or given back.
         .opacity(model.relayControlSurrendered ? 0.4 : 1)
         .allowsHitTesting(!model.relayControlSurrendered)
-    }
-
-    /// The stills tiles own the whole band (assist lives on the left rail), so they run
-    /// at the cinema scale; the fitted GeometryReader row stays portrait-only because the
-    /// shell sizes this side with `fixedSize`.
-    private var landscapeTileScale: CGFloat { 1 }
-
-    /// True while the body reports photo mode — the strip then renders the stills readouts
-    /// through the exact same bar, tiles and typography as the cinema settings.
-    private var isPhotography: Bool {
-        StillCapturePolicy.prefersPhotographyChrome(
-            selector: model.cameraPropertySnapshot.captureSelector)
-    }
-
-    private var stripValues: [CameraValue] {
-        isPhotography
-            ? model.cameraPropertySnapshot.photographyCaptureValues
-            : model.cameraState.values
-    }
-
-    // MARK: - fitsWidth: true (former `BottomCaptureSettingsModule`)
-
-    private var landscapeBody: some View {
-        GlassPanel(
-            padding: EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
-        ) {
-            HStack(spacing: 8) {
-                ForEach(stripValues) { item in
-                    CaptureSettingButton(value: item, scale: landscapeTileScale)
-                }
-            }
-            // Fill the bar height so both bottom bars render at the same height (GlassPanel
-            // otherwise hugs its content, leaving this pill shorter or taller than the toolbar).
-            .frame(maxHeight: .infinity)
-        }
-        // Report the whole bar's global frame; the exposure picker right-aligns to it.
-        .background(
+        .contentShape(Rectangle()).onTapGesture {}
+        .background {
             GeometryReader { proxy in
-                Color.clear
-                    .onAppear { model.captureBarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        model.captureBarFrame = frame
-                    }
-                    // Rotating to portrait unmounts this whole landscape-chrome branch. Without
-                    // this the bar's last landscape frame lingers and every portrait consumer that
-                    // trusts "width > 1" as "the bar exists" anchors off-screen. Clearing here heals
-                    // all of them (bottomPickerBody's hasBar, handleBackdropTap's hit-test) at once.
-                    .onDisappear { model.captureBarFrame = .zero }
+                Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, frame in
+                    model.captureBarFrame = frame
+                }
+                .onDisappear { model.captureBarFrame = .zero }
             }
-        )
-        // Make the whole bar (gaps and glass padding included) swallow taps so they don't fall
-        // through to the live feed's display-mode toggle behind it. The setting buttons are nested
-        // children, so they still receive their own taps.
-        .contentShape(Rectangle())
-        .onTapGesture {}
+        }
+        .overlay(alignment: .top) {
+            if let preview {
+                MonitorCaptureDrum(
+                    control: model.shell.control, field: preview.sourceIdentity,
+                    enabled: false, haptics: false, previewPosition: preview.position,
+                    previewSelection: preview.selection
+                )
+                .frame(width: min(360, model.captureBarFrame.width), height: 120)
+                .background(MonitorTheme.canvas, in: RoundedRectangle(cornerRadius: 16))
+                .offset(y: -130).allowsHitTesting(false)
+            }
+        }
+        .onChange(of: model.interfaceLocked) { _, locked in if locked { preview = nil } }
+        .onChange(of: columns) { _, _ in preview = nil }
     }
 
-    // MARK: - fitsWidth: false (portrait fill bar — fits the width by scaling, never scrolls)
-
-    /// Base inter-cell spacing at scale 1 (matches the landscape row).
-    private static let baseSpacing: CGFloat = 8
-    /// Smallest inter-cell gap the fitted row may compress to.
-    private static let minSpacing: CGFloat = 4
-    /// Cells never render above their landscape (scale-1) size — the vertical cap. On wide
-    /// screens (Pro Max, iPad) the leftover width grows the spacing instead.
-    private static let maxScale: CGFloat = 1
-    /// Legibility floor; below this the tail cells may clip (unreachable on supported phones).
-    private static let minScale: CGFloat = 0.5
-
-    private var portraitBody: some View {
-        GlassPanel(
-            padding: EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
-        ) {
-            fittedRow
-                .frame(maxHeight: .infinity)
+    private func common(_ field: MonitorCaptureField, picker: CameraPicker, label: String)
+        -> some View
+    {
+        MonitorCaptureReadout(
+            control: model.shell.control, field: field,
+            enabled: !model.interfaceLocked && !model.relayControlSurrendered
+                && model.activePanel == nil,
+            active: model.activePanel == .picker(picker), ownership: $ownership,
+            presentationOwner: { preview?.id },
+            admission: {
+                !model.interfaceLocked && !model.relayControlSurrendered && model.activePanel == nil
+            }
+        ) { event in
+            switch event {
+            case .open:
+                model.showPicker(picker)
+            case .preview(let value):
+                if ownership.owns(value.id) { preview = value }
+            case .commit, .cancel: break
+            }
+            switch event {
+            case .commit(let value, _): if preview?.id == value.id { preview = nil }
+            case .cancel(let id): if preview?.id == id { preview = nil }
+            default: break
+            }
         }
-        // Report the bar's global frame; the exposure picker right-aligns to it (same as landscape).
-        .background(
+        .accessibilityIdentifier("monitor.capture.\(picker.rawValue)")
+        .background {
             GeometryReader { proxy in
-                Color.clear
-                    .onAppear { model.captureBarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        model.captureBarFrame = frame
-                    }
-                    .onDisappear { model.captureBarFrame = .zero }
-            }
-        )
-        // Swallow taps in the gaps so they don't fall through to the feed's tap-to-focus behind.
-        .contentShape(Rectangle())
-        .onTapGesture {}
-    }
-
-    /// The settings row, spread across the bar when they fit and scrolled at full size when they
-    /// do not. The natural scale-1 row is measured hidden so the maths holds for any cell set or
-    /// future widths.
-    ///
-    /// Five cinema readouts fit any phone, so they spread edge-to-edge and the leftover width
-    /// becomes spacing (Pro Max, iPad). Photography brings NINE — mode, ISO, shutter, iris, drive,
-    /// focus, white balance, meter, profile — and shrinking those to fit turned every value into
-    /// something an operator has to lean in to read. A shorter row of full-size cells that scrolls
-    /// beats a complete row nobody can read at arm's length, so past the point where they fit, the
-    /// cells stay their own size and the bar scrolls, with the same edge fades and gold chevrons
-    /// the assist toolbar uses for exactly the same "there is more this way" job.
-    private var fittedRow: some View {
-        GeometryReader { proxy in
-            let values = stripValues
-            let n = CGFloat(max(1, values.count))
-            let gaps = n - 1
-            let cellsNatural = max(1, naturalRowWidth - Self.baseSpacing * gaps)
-            let fitScale = (proxy.size.width - Self.minSpacing * gaps) / cellsNatural
-            Group {
-                if fitScale >= Self.maxScale {
-                    let spacing =
-                        gaps > 0
-                        ? max(Self.minSpacing, (proxy.size.width - cellsNatural) / gaps)
-                        : 0
-                    HStack(spacing: spacing) {
-                        ForEach(values) { item in
-                            CaptureSettingButton(value: item)
-                        }
-                    }
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                } else {
-                    scrolledRow(values: values)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
+                Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, frame in
+                    model.captureSettingFrames[label] = frame
                 }
+                .onDisappear { model.captureSettingFrames[label] = nil }
             }
-            .opacity(naturalRowWidth > 0 ? 1 : 0)  // one measurement pass before first paint
-        }
-        .background(naturalRowMeasurer)
-    }
-
-    /// Full-size cells in a horizontal scroller, edges faded and chevroned while there is more
-    /// that way. Transcribed from `MonitorAssistStrip.horizontalBody` — same treatment, same
-    /// tolerances, because it answers the same question about the same kind of overflowing row.
-    private func scrolledRow(values: [CameraValue]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Self.baseSpacing) {
-                ForEach(values) { item in
-                    CaptureSettingButton(value: item)
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(maxHeight: .infinity)
-        }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .mask(scrollEdges.gradient)
-        .overlay(alignment: .leading) { scrollChevron(.leading) }
-        .overlay(alignment: .trailing) { scrollChevron(.trailing) }
-        .animation(.easeInOut(duration: 0.18), value: scrollEdges)
-        .modifier(ScrollEdgeReporter(edges: $scrollEdges))
-    }
-
-    private func scrollChevron(_ edge: HorizontalEdge) -> some View {
-        Image(systemName: edge == .leading ? "chevron.left" : "chevron.right")
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(LiveDesign.accent)
-            .shadow(color: .black.opacity(0.65), radius: 4)
-            // Breathing room, as on the assist strip: without it the glyph sits on top of the
-            // last visible value rather than beside it.
-            .padding(.horizontal, 5)
-            .opacity((edge == .leading ? scrollEdges.leading : scrollEdges.trailing) ? 1 : 0)
-            .allowsHitTesting(false)
-    }
-
-    /// Off-screen scale-1 row whose width feeds `fittedRow`'s math. Hidden and non-interactive.
-    private var naturalRowMeasurer: some View {
-        HStack(spacing: Self.baseSpacing) {
-            ForEach(stripValues) { item in
-                CaptureSettingButton(value: item)
-            }
-        }
-        .fixedSize()
-        .hidden()
-        .onGeometryChange(for: CGFloat.self) {
-            $0.size.width
-        } action: { width in
-            naturalRowWidth = width
         }
     }
 }
 
-/// Unified assist-tools strip for both monitor shells: a sequence of `AssistToolButtonRow`s.
-///
-/// `axis: .horizontal, collapsible: false` is the landscape bottom toolbar — a horizontal scroller
-/// with gold edge chevrons, grouped into threes by a divider, publishing `assistToolbarFrame` so
-/// assist popups right-align to it. `axis: .vertical, collapsible: true` is the portrait rail — a
-/// collapsed circular pill expanding into a full-feed-height vertical scroller with a bottom fade.
-/// `AssistToolButtonRow` is shared unforked; it owns the tap/long-press gestures and haptics.
+private struct NikonMonitorSystem: View {
+    @Environment(NativeAppModel.self) private var model
+    let layout: FieldMonitorLayout
+    var body: some View {
+        let plan = model.monitorSideRailPlan
+        let editing = model.chromeEditorMode
+        MonitorSystemControls(
+            layout: layout,
+            visibility: MonitorSystemControlsVisibility(
+                lock: model.railControlMounts(.lockButton, plan: plan),
+                settings: model.railControlMounts(.railSettings, plan: plan),
+                media: model.railControlMounts(.railMedia, plan: plan),
+                record: model.railControlMounts(.railRecord, plan: plan),
+                display: model.railControlMounts(.railDisp, plan: plan)),
+            interactive: editing == nil, navigationHidden: false
+        ) {
+            if model.isMulticamLiveView {
+                MonitorChromeButton(
+                    "Return to Multicam",
+                    size: CGSize(width: layout.lock.width, height: layout.lock.height),
+                    action: model.returnToMulticam
+                ) {
+                    Image(systemName: "square.grid.2x2")
+                }.accessibilityIdentifier("monitor.system.multicamReturn")
+            } else {
+                MonitorLockButton(
+                    locked: Binding(
+                        get: { model.interfaceLocked }, set: { _ in model.toggleInterfaceLock() }),
+                    side: layout.lock.width
+                )
+                .liveViewGuideAnchor(.lock)
+            }
+        } settings: {
+            MonitorChromeButton(
+                "Open Operator Setup",
+                size: CGSize(width: layout.settings.width, height: layout.settings.height)
+            ) {
+                model.activePanel = .settings
+            } label: {
+                MonitorIcon.settings
+            }
+            .accessibilityIdentifier("monitor.system.settings").liveViewGuideAnchor(.settings)
+            .chromeEditable(.railSettings, editing: editing)
+        } media: {
+            MonitorChromeButton(
+                "Open Media", size: CGSize(width: layout.media.width, height: layout.media.height),
+                action: model.openMediaBrowser
+            ) {
+                MonitorIcon.film
+            }.accessibilityIdentifier("monitor.system.media").liveViewGuideAnchor(.media)
+                .chromeEditable(.railMedia, editing: editing)
+        } record: {
+            NikonCaptureAction(diameter: layout.record.width)
+                .chromeEditable(.railRecord, editing: editing).liveViewGuideAnchor(.record)
+        } display: {
+            MonitorChromeButton(
+                "Change display mode",
+                size: CGSize(width: layout.display.width, height: layout.display.height),
+                action: model.cycleDisplayMode
+            ) {
+                VStack(spacing: 3) {
+                    Text("DISP").font(MonitorTheme.font(12, weight: .bold))
+                    HStack(spacing: 3) {
+                        ForEach(model.displayOrder) { mode in
+                            Capsule().fill(
+                                mode == model.displayMode ? MonitorTheme.accent : MonitorTheme.faint
+                            )
+                            .frame(width: 14, height: 3)
+                        }
+                    }
+                }
+            }.accessibilityIdentifier("monitor.system.display").liveViewGuideAnchor(.display)
+                .chromeEditable(.railDisp, editing: editing)
+        }
+    }
+}
+
+/// Nikon still release keeps finger-down/finger-up, burst/timer and body-trigger feedback.
+/// A remote relay or SIMULATED demo has its own bounded command adapter during migration.
+private struct NikonCaptureAction: View {
+    @Environment(NativeAppModel.self) private var model
+    let diameter: Double
+    @GestureState private var shutterHeld = false
+    @State private var bodyShutterFlash = false
+    var body: some View {
+        Group {
+            if model.isPhotographyMode {
+                PhotographyShutterButton(
+                    isCapturing: model.isStillCapturing, countdown: model.stillTimerRemaining,
+                    timerArmed: model.photoTimerDelaySeconds > 0
+                )
+                .scaleEffect(diameter / MonitorSideRailControlLayout.recordButtonSize)
+                .scaleEffect(shutterHeld ? 0.93 : bodyShutterFlash ? 0.88 : 1)
+                .contentShape(Circle())
+                .gesture(
+                    DragGesture(minimumDistance: 0).updating($shutterHeld) { _, held, _ in
+                        held = true
+                    }
+                )
+                .onChange(of: shutterHeld) { _, held in
+                    if held { model.shutterButtonPressed() } else { model.shutterButtonReleased() }
+                }
+                .onChange(of: model.bodyShutterPulse) { _, _ in
+                    bodyShutterFlash = true
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(130))
+                        bodyShutterFlash = false
+                    }
+                }
+                .accessibilityAction { model.captureStill() }
+                .accessibilityIdentifier("monitor.system.shutter")
+            } else if model.shell.control.session != nil {
+                MonitorCaptureButton(
+                    control: model.shell.control, diameter: diameter,
+                    enabled: !model.relayControlSurrendered,
+                    confirm: model.preferences.recordConfirmationEnabled,
+                    haptics: model.preferences.hapticsEnabled, confirmationPolicy: .explicitTarget)
+            } else {
+                Button(action: model.toggleRecording) {
+                    MonitorRecordLamp(diameter: diameter, recording: model.isRecording)
+                }.buttonStyle(.plain).accessibilityIdentifier("monitor.system.record")
+                    .alert(
+                        model.pendingRecordConfirmation == true
+                            ? "Start recording?" : "Stop recording?",
+                        isPresented: Binding(
+                            get: { model.pendingRecordConfirmation != nil },
+                            set: { if !$0 { model.cancelRecordToggle() } })
+                    ) {
+                        Button("Cancel", role: .cancel, action: model.cancelRecordToggle)
+                        Button(
+                            model.pendingRecordConfirmation == true ? "Start" : "Stop",
+                            action: model.confirmRecordToggle)
+                    }
+            }
+        }.opacity(model.relayControlSurrendered ? 0.4 : 1).allowsHitTesting(
+            !model.relayControlSurrendered)
+    }
+}
+
+/// Reorderable Nikon ride-along properties in DISP 3 are a bounded integration panel.
+/// Shared status, system controls and picture ownership remain outside this panel.
+private struct NikonCommandControls: View {
+    @Environment(NativeAppModel.self) private var model
+    let layout: FieldMonitorLayout
+    var body: some View {
+        VStack(spacing: 12) {
+            CommandHealthStrip()
+            HStack(alignment: .top, spacing: 12) {
+                CommandPrimaryGrid(availableHeight: max(44, layout.picture.height - 72))
+                CommandSideColumn().frame(width: max(160, layout.picture.width * 0.27))
+            }
+        }
+        .frame(
+            width: max(1, layout.picture.width - 32), height: max(44, layout.picture.height - 100)
+        )
+        .position(x: layout.picture.midX, y: layout.picture.midY + 12)
+        .opacity(model.interfaceLocked ? 0.4 : 1)
+        .allowsHitTesting(!model.interfaceLocked && !model.relayControlSurrendered)
+    }
+}
+
 struct MonitorAssistStrip: View {
     @Environment(NativeAppModel.self) private var model
     var axis: Axis
@@ -1002,1528 +842,7 @@ struct MonitorAssistStrip: View {
 /// its `slots` frame (viewport-absolute, from the zone map). `.axisHorizontal` renders the portrait
 /// bottom bar row. Mounted once per orientation inside `canvasLayer` (landscape) or at the
 /// `systemBar` zone (portrait).
-struct MonitorSystemCluster: View {
-    @Environment(NativeAppModel.self) private var model
-    /// Absolute (landscape) or column-relative (portrait) frames for the five controls.
-    var slots: MonitorSystemSlotFrames
-    var axis: MonitorZoneStyle
-    /// Which of the six the operator's configuration leaves on screen, guarantees applied — see
-    /// ``MonitorChromePolicy/sideRailPlan(mode:preferences:capture:interfaceLocked:recordingOrPending:)``.
-    /// Every control is individually hideable; the rail is no longer one switch.
-    var plan: MonitorChromePolicy.SideRailPlan
-    /// Press tracking for the photo shutter. `@GestureState` (not `@State`): the system can
-    /// swallow a finger-up (gesture-gate timeouts), and gesture state resets even then — a
-    /// stranded latch once chained an endless burst.
-    @GestureState private var shutterHeld = false
-    /// Brief pulse when a shutter fires on the camera body (see `bodyShutterPulse`).
-    @State private var bodyShutterFlash = false
 
-    var body: some View {
-        switch axis {
-        case .axisVertical:
-            landscapeBody
-        case .axisHorizontal:
-            portraitBody
-        default:
-            EmptyView()
-        }
-    }
-
-    // MARK: - .axisVertical (former `LockButtonModule` + `RightRailControlsModule`)
-
-    /// Whether `section` mounts: the plan's answer, or force-mounted (dimmed, badged) while this
-    /// mode's chrome is being edited.
-    private func mounts(_ section: DisplayChromeVisibility.Section) -> Bool {
-        model.railControlMounts(section, plan: plan)
-    }
-
-    @ViewBuilder private var landscapeBody: some View {
-        let editing = model.chromeEditorMode
-        if mounts(.lockButton) {
-            lockButton
-                .chromeEditable(.lockButton, editing: editing)
-                .monitorModuleFrame(slots.lock)
-        }
-        if mounts(.railSettings) {
-            settingsButton
-                .chromeEditable(.railSettings, editing: editing)
-                .monitorModuleFrame(slots.settings)
-        }
-        if mounts(.railMedia) {
-            mediaButton
-                .chromeEditable(.railMedia, editing: editing)
-                .monitorModuleFrame(slots.media)
-        }
-        if mounts(.railRecord) {
-            recordButton
-                .chromeEditable(.railRecord, editing: editing)
-                .monitorModuleFrame(slots.record)
-        }
-        if mounts(.railDisp) {
-            displayButton
-                .chromeEditable(.railDisp, editing: editing)
-                .monitorModuleFrame(slots.disp)
-        }
-    }
-
-    @ViewBuilder
-    private var lockButton: some View {
-        if model.isMulticamLiveView {
-            returnToMulticamButton
-        } else {
-            interfaceLockButton
-        }
-    }
-
-    /// Lock slot while Live View borrows a multicam member: back to the stage, link kept open.
-    private var returnToMulticamButton: some View {
-        Button {
-            model.returnToMulticam()
-        } label: {
-            Image(systemName: "square.grid.2x2")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(LiveDesign.accent)
-                .frame(
-                    width: CGFloat(MonitorLiveViewModuleLayout.lockButtonSize),
-                    height: CGFloat(MonitorLiveViewModuleLayout.lockButtonSize)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                )
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Return to Multicam")
-        .accessibilityIdentifier("monitor.system.multicamReturn")
-    }
-
-    private var interfaceLockButton: some View {
-        let locked = model.interfaceLocked
-        return Button {
-            model.toggleInterfaceLock()
-        } label: {
-            Image(systemName: locked ? "lock.fill" : "lock")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(locked ? LiveDesign.accent : LiveDesign.text.opacity(0.86))
-                .frame(
-                    width: CGFloat(MonitorLiveViewModuleLayout.lockButtonSize),
-                    height: CGFloat(MonitorLiveViewModuleLayout.lockButtonSize)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                )
-                .overlay {
-                    if locked {
-                        RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                            .stroke(LiveDesign.accent.opacity(0.75), lineWidth: 1.5)
-                    }
-                }
-        }
-        .buttonStyle(.zcTapTarget)
-        .sensoryFeedback(.impact(weight: .medium), trigger: locked)
-        .accessibilityLabel(locked ? "Unlock monitor controls" : "Lock monitor controls")
-        .accessibilityHint("Prevents accidental camera and View Assist changes")
-        .accessibilityIdentifier("monitor.system.lock")
-        .liveViewGuideAnchor(.lock)
-    }
-
-    private var settingsButton: some View {
-        Button {
-            model.activePanel = .settings
-        } label: {
-            AssetCircleButton(
-                assetName: "IconSettings",
-                systemName: "gearshape",
-                size: CGFloat(MonitorSideRailControlLayout.auxiliaryButtonSize)
-            )
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Open Operator Setup")
-        .accessibilityIdentifier("monitor.system.settings")
-        .liveViewGuideAnchor(.settings)
-    }
-
-    private var mediaButton: some View {
-        let size = CGFloat(MonitorSideRailControlLayout.auxiliaryButtonSize)
-        let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
-            selector: model.cameraPropertySnapshot.captureSelector)
-        return Button {
-            model.openMediaBrowser()
-        } label: {
-            if isPhotography {
-                // The photo-stack glyph (formerly the strip's instant-playback icon) reads
-                // better as "media" on the stills side; cinema keeps the film-roll asset.
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: size * 0.36, weight: .medium))
-                    .foregroundStyle(LiveDesign.text.opacity(0.86))
-                    .frame(width: size, height: size)
-                    .liquidGlass(in: Circle())
-            } else {
-                AssetCircleButton(
-                    assetName: "IconMedia",
-                    systemName: "rectangle.stack",
-                    size: size
-                )
-            }
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Open Media")
-        .accessibilityIdentifier("monitor.system.media")
-        .liveViewGuideAnchor(.media)
-    }
-
-    private var displayButton: some View {
-        Button {
-            model.cycleDisplayMode()
-        } label: {
-            VStack(spacing: 3) {
-                Text("DISP")
-                    .font(.system(size: 12, weight: .bold, design: .default))
-                HStack(spacing: 3) {
-                    ForEach(model.displayOrder) { mode in
-                        Capsule()
-                            .fill(
-                                mode == model.displayMode
-                                    ? LiveDesign.info : LiveDesign.hairlineStrong
-                            )
-                            .frame(width: 14, height: 3)
-                    }
-                }
-            }
-            .foregroundStyle(model.displayMode == .live ? LiveDesign.info : LiveDesign.text)
-            .frame(
-                width: CGFloat(MonitorSideRailControlLayout.displayButtonWidth),
-                height: CGFloat(MonitorSideRailControlLayout.displayButtonHeight)
-            )
-            .liquidGlass(
-                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Change display mode")
-        .accessibilityIdentifier("monitor.system.display")
-        .liveViewGuideAnchor(.display)
-    }
-
-    // MARK: - .axisHorizontal (former `PortraitSystemBar`)
-
-    private var portraitBody: some View {
-        // Record anchors DEAD-CENTRE as an overlay; the side clusters spread through their own
-        // equal-flex halves with the same 14pt-breathing spacers. The old single equal-gap flow
-        // re-centred the whole row whenever a neighbour unmounted — clean view drops the lock,
-        // and record walked visibly off-centre (field report: "record should always be in the
-        // center"). With no record mounted (a watcher), the halves join into one flow again.
-        let editing = model.chromeEditorMode
-        return ZStack {
-            HStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    Spacer(minLength: 14)
-                    if mounts(.lockButton) {
-                        lockButton
-                            .chromeEditable(.lockButton, editing: editing)
-                        Spacer(minLength: 14)
-                    }
-                    if mounts(.railDisp) {
-                        PortraitDisplayButton()
-                            .accessibilityLabel("Change display mode")
-                            .accessibilityIdentifier("monitor.system.display")
-                            .liveViewGuideAnchor(.display)
-                            .chromeEditable(.railDisp, editing: editing)
-                        Spacer(minLength: 14)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                if mounts(.railRecord) {
-                    // Keeps the centre lane clear under the overlaid record button.
-                    Color.clear
-                        .frame(width: CGFloat(MonitorSideRailControlLayout.recordButtonSize))
-                }
-                HStack(spacing: 0) {
-                    Spacer(minLength: 14)
-                    if mounts(.railMedia) {
-                        mediaButton
-                            .chromeEditable(.railMedia, editing: editing)
-                        Spacer(minLength: 14)
-                    }
-                    if mounts(.railSettings) {
-                        settingsButton
-                            .chromeEditable(.railSettings, editing: editing)
-                        Spacer(minLength: 14)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            }
-            if mounts(.railRecord) {
-                recordButton
-                    .chromeEditable(.railRecord, editing: editing)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: - Record / shutter + confirmation alert (shared by both axes)
-
-    private var isPhotographyMode: Bool {
-        StillCapturePolicy.prefersPhotographyChrome(
-            selector: model.cameraPropertySnapshot.captureSelector)
-    }
-
-    @ViewBuilder private var recordButton: some View {
-        if isPhotographyMode {
-            // Press-tracked, not a Button: finger-down fires the release (or ends an open
-            // bulb/time exposure) and finger-up ends a latched continuous burst — a disabled
-            // Button would swallow exactly that finger-up. Re-press gating during an
-            // in-flight single release lives in `shutterButtonPressed`.
-            PhotographyShutterButton(
-                isCapturing: model.isStillCapturing,
-                countdown: model.stillTimerRemaining,
-                timerArmed: model.photoTimerDelaySeconds > 0
-            )
-            .scaleEffect(shutterHeld ? 0.93 : (bodyShutterFlash ? 0.88 : 1))
-            .animation(.easeOut(duration: 0.12), value: shutterHeld)
-            .animation(.easeOut(duration: 0.12), value: bodyShutterFlash)
-            // A shutter fired on the camera body pulses the button (a quick dip-and-release),
-            // so an off-app capture visibly registers — mirrors the app-fired press feedback.
-            .onChange(of: model.bodyShutterPulse) { _, _ in
-                bodyShutterFlash = true
-                Task {
-                    try? await Task.sleep(for: .milliseconds(130))
-                    bodyShutterFlash = false
-                }
-            }
-            .contentShape(Circle())
-            // Zero-distance drag, not a zero-duration long-press: the latter recognizes
-            // instantly and never reports `onPressingChanged(true)`, swallowing the press.
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($shutterHeld) { _, held, _ in held = true }
-            )
-            .onChange(of: shutterHeld) { _, held in
-                if held {
-                    model.shutterButtonPressed()
-                } else {
-                    model.shutterButtonReleased()
-                }
-            }
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { model.captureStill() }
-            .accessibilityLabel(
-                model.stillReleaseIsOpenShutter
-                    ? "End exposure" : model.isStillCapturing ? "Capturing" : "Shutter"
-            )
-            .accessibilityIdentifier("monitor.system.shutter")
-            .liveViewGuideAnchor(.record)
-            .opacity(model.relayControlSurrendered ? 0.4 : 1)
-            .allowsHitTesting(!model.relayControlSurrendered)
-        } else {
-            Button {
-                model.toggleRecording()
-            } label: {
-                RecordButton(isRecording: model.cameraState.recordState == .recording)
-            }
-            .buttonStyle(.zcTapTarget)
-            .opacity(model.relayControlSurrendered ? 0.4 : 1)
-            .allowsHitTesting(!model.relayControlSurrendered)
-            .accessibilityLabel(
-                model.cameraState.recordState == .recording ? "Stop recording" : "Start recording"
-            )
-            .accessibilityIdentifier("monitor.system.record")
-            .liveViewGuideAnchor(.record)
-            .alert(recordConfirmationTitle, isPresented: isRecordConfirmationPresented) {
-                Button("Cancel", role: .cancel) {
-                    model.cancelRecordToggle()
-                }
-                Button(recordConfirmationActionTitle, role: .destructive) {
-                    model.confirmRecordToggle()
-                }
-            } message: {
-                Text(recordConfirmationMessage)
-            }
-        }
-    }
-
-    private var recordConfirmationTitle: String {
-        model.pendingRecordConfirmation == true ? "Start recording?" : "Stop recording?"
-    }
-
-    private var recordConfirmationActionTitle: String {
-        model.pendingRecordConfirmation == true ? "Start" : "Stop"
-    }
-
-    private var recordConfirmationMessage: String {
-        if model.pendingRecordConfirmation == true {
-            return "Send the record command to the camera."
-        }
-        return "Stop the current take on the camera."
-    }
-
-    private var isRecordConfirmationPresented: Binding<Bool> {
-        Binding(
-            get: { model.pendingRecordConfirmation != nil },
-            set: { isPresented in
-                if !isPresented {
-                    model.cancelRecordToggle()
-                }
-            }
-        )
-    }
-}
-
-/// Unified scopes host for both monitor shells, selected by `MonitorZoneStyle`.
-///
-/// `.scopesFloating` (landscape) wraps `FeedAssistOverlayModule` with
-/// `suppressFloatingScopes: false` — the draggable `MovablePanel` set — and needs the overlay's
-/// feed-canvas coordinates (`safeArea`/`viewportWidth`/`canvasOffsetX`). `.scopesStacked`
-/// (portrait) mounts the self-sizing `PortraitScopesStack`. Any other style renders nothing.
-struct MonitorScopes: View {
-    @Environment(NativeAppModel.self) private var model
-    var style: MonitorZoneStyle
-    /// Floating-only feed-canvas geometry (unused by the stacked style).
-    var safeArea: MonitorEdgeInsets = .zero
-    var viewportWidth: Double = 0
-    var canvasOffsetX: Double = 0
-    var horizontalDirection: MonitorHorizontalLayoutDirection = .standard
-
-    var body: some View {
-        switch style {
-        case .scopesFloating:
-            FeedAssistOverlayModule(
-                safeArea: safeArea,
-                viewportWidth: viewportWidth,
-                canvasOffsetX: canvasOffsetX,
-                horizontalDirection: horizontalDirection,
-                suppressFloatingScopes: false
-            )
-            .environment(model)
-        case .scopesStacked:
-            PortraitScopesStack()
-                .environment(model)
-        default:
-            EmptyView()
-        }
-    }
-}
-
-/// The one monitor view tree for both orientations. Computes `MonitorZoneLayout.map(...)` once per
-/// layout pass and mounts each unified container and shared feed / command / panel view exactly at
-/// its zone frame. `LiveViewShell` mounts it directly; its `.easeInOut(value: isPortrait)` makes
-/// rotation a geometry change under stable view identity rather than a tree swap.
-///
-/// Frame source: the zone map returns absolute frames in the full-physical-viewport space.
-/// Landscape frames are placed in the feed canvas space (`viewportWidth`-wide, shifted by
-/// `canvasOffsetX`); portrait frames are viewport-absolute and placed directly.
-///
-/// **Mode gating.** The landscape map is mode-invariant, so this shell gates live/clean/command
-/// itself: `.live` = full deck + bottom strips + rails + floating scopes; `.clean` = compact deck +
-/// rails + scopes; `.command` = `CommandMonitor` + rails, feed unmounted. `displayChrome.*`
-/// preference toggles gate each region. The portrait map already encodes per-mode zones
-/// (nil / zero-height), so the portrait branch reads visibility straight off the map.
-/// Where the shared bottom band pins its content.
-///
-/// The landscape assist toolbar and camera-values strip live in ONE full-width band, so alignment
-/// is the only thing keeping each on its own side. Leading is correct while the assist strip is
-/// present to fill the space — but with it hidden, leading dragged the camera values across to the
-/// left edge, so an operator who configured DISP 2 with only the values on watched them move the
-/// moment they closed the Edit view (the editor cannot show this: it renders with both mounted).
-/// Each side now stays where the operator arranged it.
-enum MonitorBottomBandAlignment {
-    static func alignment(photography: Bool, assistVisible: Bool) -> Alignment {
-        // Photography centres its single shared strip under the centred feed.
-        if photography && !assistVisible { return .center }
-        return assistVisible ? .leading : .trailing
-    }
-}
-
-struct MonitorShell: View {
-    @Environment(NativeAppModel.self) private var model
-    let context: LiveViewLayoutContext
-    /// Portrait assist-rail expand state (owned here so the rail's own frame can size around it).
-    @State private var railExpanded = false
-    /// Photography's landscape assist rail (in the notch-side gap the 3:2 feed opens up).
-    @State private var photoRailExpanded = true
-
-    /// The photography feed frame, recomputed with the module's own inputs so the shell can
-    /// place chrome in the notch-side gap the rail-anchored 3:2/1:1 frame opens up.
-    private func photographyFeedFrame() -> MonitorFeedFrame {
-        MonitorFeedLayout.fullBleedFrame(
-            viewportWidth: context.viewportWidth,
-            viewportHeight: context.viewportHeight,
-            safeArea: context.feedSafeArea,
-            horizontalDirection: context.horizontalDirection,
-            aspect: model.cameraPropertySnapshot.photographyFeedAspect,
-            centered: true
-        )
-    }
-
-    /// Count of scopes the portrait-fit stacked zone displays — the recency-selected ≤2 (R8);
-    /// sizes the portrait scopes zone. Fit-only: fill floats all active scopes independently.
-    private var scopeCount: Int {
-        model.renderedFitScopes.count
-    }
-
-    /// The zone map the shell-level overlays (Edit banner, refusal notice) place against.
-    /// Recomputed from the same inputs the shells use — those overlays mount above
-    /// `allowsHitTesting(false)`, outside the branch that already holds `map`, and only while one
-    /// of them is actually on screen.
-    private var overlayZoneMap: MonitorZoneMap {
-        assistStripCenteredIfWatching(
-            MonitorZoneLayout.map(
-                viewportWidth: context.viewportWidth,
-                viewportHeight: context.viewportHeight,
-                safeArea: context.feedSafeArea,
-                chromeInsets: context.isPortrait ? nil : context.chromeInsets,
-                mode: model.displayMode,
-                isPortrait: context.isPortrait,
-                aspect: model.preferences.portraitFeedAspect,
-                scopeCount: scopeCount,
-                horizontalDirection: context.horizontalDirection,
-                bottomBarHeight: context.isPortrait
-                    ? (model.chromeSectionMounts(.assistToolbar)
-                        ? MonitorPortraitLayout.assistToolbarHeight : 0)
-                    : landscapeBottomBarHeight
-            ))
-    }
-
-    /// A watcher WITHOUT control centres its assist strip: it has no capture strip, so the lane
-    /// the strip normally takes — which exists to share the band with one — would leave it
-    /// hanging off to one side of an otherwise empty band.
-    ///
-    /// Keyed on capability, so control decides it live: being granted control brings the capture
-    /// strip back and returns the strip to its lane in the same moment, and giving control back
-    /// centres it again. `canDriveCamera` is computed from the current session, so it cannot be
-    /// carried over from one that has ended.
-    ///
-    /// Centring is ALL that happens here. The earlier version of this idea also relocated DISP to
-    /// the bottom-trailing corner and raised the top chrome; that breadth is what produced the
-    /// layout reports, and only the centring was ever wanted.
-    private func assistStripCenteredIfWatching(_ map: MonitorZoneMap) -> MonitorZoneMap {
-        guard !context.isPortrait,
-            model.displayMode != .command,
-            !model.monitorAvailability.canDriveCamera
-        else { return map }
-        return MonitorZoneLayout.watcherBand(map, viewportWidth: context.viewportWidth)
-    }
-
-    /// Seats a transient element on the FEED frame's bottom edge (the Edit banner, the refusal
-    /// notice).
-    ///
-    /// Centred on the FEED, not the screen: the rails, the notch lane and the portrait tile grid
-    /// all sit outside the image, and a screen-centred element reads as belonging to none of it.
-    ///
-    /// The element's BOTTOM edge is anchored (not its centre) so its own height never matters:
-    /// just clear of the bottom bars, whose top corners carry badges that straddle the edge — a
-    /// bottom-centred banner sat on the tool bar's eye and swallowed the tap.
-    private func seatedOnFeed<Content: View>(
-        _ map: MonitorZoneMap, @ViewBuilder content: () -> Content
-    ) -> some View {
-        let feed = map.feed
-        let bottom =
-            context.isPortrait
-            ? feed.y + feed.height - 12
-                // Half a badge (13pt) plus a gap above the bars' top edge.
-            : (map.assistStrip?.frame.y ?? (feed.y + feed.height)) - 18
-        return ZStack(alignment: .bottom) {
-            Color.clear
-            content()
-        }
-        .frame(width: CGFloat(feed.width), height: CGFloat(max(0, bottom - feed.y)))
-        .position(
-            x: CGFloat(feed.x + feed.width / 2),
-            y: CGFloat((feed.y + bottom) / 2)
-        )
-        .ignoresSafeArea()
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            Group {
-                if context.isPortrait {
-                    portraitShell(proxy: proxy)
-                } else {
-                    landscapeShell(proxy: proxy)
-                }
-            }
-            // Editing the layout and operating the camera are different modes. One gate makes the
-            // whole monitor inert for the duration — focus box, tap-to-focus, pinch, the MF dial,
-            // the capture pickers, record, DISP — so a stray tap while arranging chrome can never
-            // reach the camera. Only the badges and Done, mounted above this, respond.
-            .allowsHitTesting(model.chromeEditorMode == nil)
-            .coordinateSpace(name: ChromeEditSpace.name)
-            .overlayPreferenceValue(ChromeEditBoundsKey.self) { boxes in
-                if let mode = model.chromeEditorMode {
-                    ChromeEditBadgeLayer(
-                        mode: mode, boxes: boxes,
-                        viewport: CGSize(
-                            width: context.viewportWidth, height: context.viewportHeight)
-                    )
-                    .environment(model)
-                    .ignoresSafeArea()
-                }
-            }
-        }
-        // The Edit view's own banner, over everything so "Done" is never behind a dimmed element.
-        .overlay {
-            if let mode = model.chromeEditorMode {
-                seatedOnFeed(overlayZoneMap) {
-                    ChromeEditBanner(mode: mode)
-                        .environment(model)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-        }
-        // A refused camera command answers here, on the picture the operator is looking at. Same
-        // seat as the Edit banner and for the same reasons; the two are never up together (the
-        // editor makes the monitor inert, so nothing can be refused while it is open).
-        .overlay {
-            if !model.monitorNotice.isEmpty {
-                seatedOnFeed(overlayZoneMap) {
-                    MonitorToast(
-                        text: model.monitorNotice, trigger: model.monitorNoticeTrigger)
-                }
-                // The seat's own `Color.clear` spacer hit-tests, and this stays mounted (dissolved)
-                // after the first notice — without this it would eat tap-to-focus over the feed
-                // for the rest of the session.
-                .allowsHitTesting(false)
-            }
-        }
-        .animation(.easeOut(duration: 0.16), value: model.chromeEditorMode)
-        .animation(.easeInOut(duration: 0.18), value: model.displayMode)
-        .animation(.easeOut(duration: 0.10), value: model.activePanel)
-        // Scope the fit-mode 2-scope cap to the portrait tree; `initial: true` covers launch.
-        .onChange(of: context.isPortrait, initial: true) { _, isPortrait in
-            model.monitorIsPortrait = isPortrait
-        }
-        // Neither `MonitorFullScreenPanelOverlay` nor the recording tally mounts here: this
-        // `GeometryReader` reports the safe-area-inset frame (`.ignoresSafeArea` is applied by
-        // the `LiveViewShell` caller one level up), so an overlay at this level stays pinned to
-        // the safe-area frame instead of reaching the bezel. `LiveViewShell.body`
-        // (MonitorExperience.swift) is the one true extended-layer mount point; the overlay is
-        // its own top-level `View` there because reading it as a property off a sibling
-        // `MonitorShell` instance also crashed on `@Environment` resolution.
-    }
-
-    // MARK: - Landscape
-
-    @ViewBuilder private func landscapeShell(proxy: GeometryProxy) -> some View {
-        // The outer reader reports the safe-area-inset height, but `.fit` expects the FULL
-        // physical height — use the context's restored full height for both the map and the
-        // canvas frame, otherwise lock/battery/rail frames land short.
-        let fullHeight = context.viewportHeight
-        let map = assistStripCenteredIfWatching(
-            MonitorZoneLayout.map(
-                viewportWidth: context.viewportWidth,
-                viewportHeight: fullHeight,
-                safeArea: context.feedSafeArea,
-                // Carries the iPadOS 26 window-control clearance the safe area lacks (see
-                // `clearingWindowControls`), so the lock button and top deck render below the pill.
-                chromeInsets: context.chromeInsets,
-                mode: model.displayMode,
-                isPortrait: false,
-                aspect: model.preferences.portraitFeedAspect,
-                scopeCount: scopeCount,
-                horizontalDirection: context.horizontalDirection,
-                bottomBarHeight: landscapeBottomBarHeight
-            ))
-        let chrome = model.monitorChrome
-
-        ZStack(alignment: .topLeading) {
-            // Feed base. Command pauses/hides the feed behind a full-screen black base.
-            if model.displayMode == .command {
-                Color.black.ignoresSafeArea()
-            } else {
-                LiveFeedModule(
-                    safeArea: context.feedSafeArea,
-                    viewportWidth: context.viewportWidth,
-                    canvasOffsetX: context.canvasOffsetX,
-                    horizontalDirection: context.horizontalDirection
-                )
-                MonitorScopes(
-                    style: .scopesFloating,
-                    safeArea: context.feedSafeArea,
-                    viewportWidth: context.viewportWidth,
-                    canvasOffsetX: context.canvasOffsetX,
-                    horizontalDirection: context.horizontalDirection
-                )
-            }
-
-            // Chrome + rails hide entirely behind a full-screen panel (edge-to-edge), matching the
-            // legacy shell. Floating popups keep them.
-            if model.activePanel?.coversFullScreen != true {
-                switch model.displayMode {
-                case .command:
-                    // CommandMonitor owns its own full-screen canvas + offset, so it mounts
-                    // directly — NOT inside `canvasLayer`, which would double-apply the offset.
-                    CommandMonitor(
-                        viewportWidth: context.viewportWidth,
-                        canvasOffsetX: context.canvasOffsetX,
-                        feedSafeArea: context.feedSafeArea,
-                        chromeInsets: context.chromeInsets,
-                        horizontalDirection: context.horizontalDirection
-                    )
-                    .environment(model)
-                case .live, .clean:
-                    canvasLayer {
-                        landscapeChrome(map: map, chrome: chrome)
-                    }
-                }
-
-                // Side rails (batteries + system cluster). Every control is the operator's to
-                // hide, per DISP mode and capture side; the plan applies the two guarantees that
-                // keep a configuration from locking the operator inside it (record while rolling,
-                // Settings when no enabled mode carries one) — see `MonitorChromePolicy`.
-                let railPlan = model.monitorSideRailPlan
-                canvasLayer {
-                    if model.railControlMounts(.batteryIndicators, plan: railPlan),
-                        let battery = map.batteryCluster
-                    {
-                        if battery.style == .batteryInline {
-                            // Width-constrained (iPad): inline row beside the lock button.
-                            // The frame is a nominal band; content hugs its leading edge.
-                            BatteryInlineCluster()
-                                .environment(model)
-                                .chromeEditable(
-                                    .batteryIndicators, editing: model.chromeEditorMode
-                                )
-                                .monitorModuleFrame(battery.frame, alignment: .leading)
-                        } else {
-                            let phoneTopClearance =
-                                map.systemSlots.lock.y + map.systemSlots.lock.height
-                                - battery.frame.y
-                                + MonitorBatteryRailLayout.lockButtonGap
-                            BatteryRailModule(
-                                safeArea: context.feedSafeArea,
-                                phoneTopClearance: phoneTopClearance
-                            )
-                            .environment(model)
-                            // The module fills the whole tall rail zone; its gauges carry the
-                            // outline and badge themselves so the box is the drawn bounds.
-                            .monitorModuleFrame(battery.frame)
-                        }
-                    }
-                    MonitorSystemCluster(
-                        slots: map.systemSlots, axis: .axisVertical, plan: railPlan
-                    )
-                    .environment(model)
-                }
-            }
-
-            // Floating popups (exposure picker, assist options) anchor to the feed and bars.
-            if let panel = model.activePanel, !panel.coversFullScreen {
-                PanelHost(
-                    panel: panel, chromeInsets: context.chromeInsets,
-                    feedSafeArea: context.feedSafeArea
-                )
-                .environment(model)
-                .transition(panelTransition(panel))
-            }
-        }
-        .frame(width: proxy.size.width, height: proxy.size.height)
-        .ignoresSafeArea(.container, edges: .all)
-    }
-
-    /// Whether the on-feed 50/50 quick key mounts, in either orientation. The rule itself is in
-    /// shared core so both shells agree; the extra two clauses are the ones every on-feed key
-    /// carries (a locked interface takes no input, and the chrome editor owns the screen).
-    private var splitComparisonKeyMounts: Bool {
-        LUTResolution.showsSplitComparisonKey(
-            visibleTools: model.renderedLiveAssistTools, preferences: model.preferences)
-            && !model.interfaceLocked && model.chromeEditorMode == nil
-    }
-
-    /// The live/clean chrome: full-width info deck and the bottom assist/capture strips. Every
-    /// region is per-DISP-mode configuration now — no mode branches here.
-    @ViewBuilder private func landscapeChrome(
-        map: MonitorZoneMap, chrome: DisplayChromeVisibility
-    ) -> some View {
-        let deck = map.infoBar.frame
-
-        // Status deck. The zone map centers it over the native 16:9 feed; photography recenters
-        // it on the rail-anchored photo frame so the pill tracks the visible image, not the old
-        // frame's footprint.
-        if model.chromeSectionMounts(.statusBar) {
-            let isPhotographyDeck = StillCapturePolicy.prefersPhotographyChrome(
-                selector: model.cameraPropertySnapshot.captureSelector)
-            let photoFeed = isPhotographyDeck ? photographyFeedFrame() : nil
-            let deckCenterX = photoFeed.map { $0.x + $0.width / 2 } ?? deck.midX
-            let deckWidth = photoFeed.map { min(deck.width, $0.width) } ?? deck.width
-            MonitorInfoBar(style: .infoPill)
-                .environment(model)
-                .liveViewGuideAnchor(.infoBar)
-                .chromeEditable(.statusBar, editing: model.chromeEditorMode)
-                .frame(maxWidth: CGFloat(deckWidth))
-                .position(x: CGFloat(deckCenterX), y: CGFloat(deck.midY))
-        }
-
-        // Bottom bars (assist + capture). In photography the assist tools always move to the
-        // lock-side vertical rail (below), handing the whole band to the capture strip.
-        //
-        // Everything below is per-element configuration, so there is no mode gate any more. The
-        // old `!isClean` wrapper is exactly what made clean's Edit view lie: the badges appeared,
-        // the operator switched a bar on, and closing the editor dropped it again.
-        if model.displayMode != .command {
-            let isPhotographyBand = StillCapturePolicy.prefersPhotographyChrome(
-                selector: model.cameraPropertySnapshot.captureSelector)
-            let assistVisible = model.chromeSectionMounts(.assistToolbar) && !isPhotographyBand
-            let captureVisible = model.chromeSectionMounts(.cameraValues)
-            if let assist = map.assistStrip, let capture = map.captureStrip,
-                assistVisible || captureVisible
-            {
-                // The union exists to span BOTH strips; an unmounted capture strip must not
-                // drag the container back to its empty lane (that pinned the freed-band
-                // recentered assist zone at the capture strip's old leading edge).
-                let leftX =
-                    captureVisible ? min(assist.frame.x, capture.frame.x) : assist.frame.x
-                let rightX =
-                    captureVisible
-                    ? max(
-                        assist.frame.x + assist.frame.width,
-                        capture.frame.x + capture.frame.width)
-                    : assist.frame.x + assist.frame.width
-                let width = rightX - leftX
-                HStack(alignment: .bottom, spacing: 8) {
-                    if assistVisible {
-                        // The core map sets `collapsible` on the landscape assist zone, but there
-                        // it denotes the edge-fade scroll strip — NOT a collapse pill (that is the
-                        // vertical portrait rail). Rendering stays `axis`-driven (D5).
-                        MonitorAssistStrip(
-                            axis: .horizontal,
-                            collapsible: false,
-                            compactHorizontal: MonitorBatteryRailLayout.usesClassicSideNotch(
-                                safeArea: context.feedSafeArea
-                            )
-                        )
-                        .environment(model)
-                        .liveViewGuideAnchor(.viewAssist)
-                        .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
-                        // Always the zone's own width — the ternary here used to hand the strip
-                        // `.infinity` when the capture strip was visible, which is exactly when it
-                        // must be bounded: the tool row then took the whole band and squeezed the
-                        // capture bar into a sliver at the trailing edge. The zone already carries
-                        // the right answer for both cases: half the band when a capture strip
-                        // shares it, its own centred width when a watcher has the band alone.
-                        .frame(maxWidth: CGFloat(assist.frame.width), alignment: .leading)
-                        .layoutPriority(0)
-                        .frame(maxHeight: .infinity)
-                    }
-                    if captureVisible {
-                        MonitorCaptureStrip(fitsWidth: true)
-                            .environment(model)
-                            .liveViewGuideAnchor(.cameraControls)
-                            .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .layoutPriority(1)
-                            .frame(maxHeight: .infinity)
-                    }
-                }
-                .opacity(model.interfaceLocked ? 0.4 : 1)
-                // Photography centres the strip under the centred feed (cinema keeps the
-                // assist-then-strip leading flow). The freed band needs no alignment override:
-                // its zone is the layout's own, and the
-                // strip's scroller fills whatever width the zone hands it.
-                .frame(
-                    width: CGFloat(width), height: CGFloat(assist.frame.height),
-                    alignment: MonitorBottomBandAlignment.alignment(
-                        photography: isPhotographyBand, assistVisible: assistVisible)
-                )
-                .position(
-                    x: CGFloat(leftX + width / 2),
-                    y: CGFloat(assist.frame.y + assist.frame.height / 2))
-            }
-
-            // Photography's vertical assist rail, top-aligned next to the lock button and
-            // expanding downward — the full tool column when the height allows (Pro Max),
-            // otherwise filling (and scrolling) until it reaches the capture band. Overlaying
-            // the feed edge is fine; the band strip is chrome over the feed too.
-            if isPhotographyBand, chrome.assistToolbarVisible, !model.interfaceLocked,
-                let band = map.assistStrip
-            {
-                let lock = map.systemSlots.lock
-                // The rail clears whichever lock-side chrome reaches furthest: the lock
-                // button, the island pill, or — on width-constrained iPad — the inline
-                // battery cluster beside the lock. Using the phone-pill constant there
-                // parked PLAY on top of the gauges (#93).
-                let leftChromeTrailing =
-                    MonitorBatteryRailLayout.photographyLeftChromeTrailing(
-                        lock: lock,
-                        batteryCluster: map.batteryCluster,
-                        batteriesVisible: model.railControlMounts(
-                            .batteryIndicators, plan: model.monitorSideRailPlan),
-                        safeArea: context.feedSafeArea
-                    )
-                let railX =
-                    leftChromeTrailing + 12 + Double(MonitorAssistStrip.expandedWidth) / 2
-                // Expanded: the tool column's top hugs the lock row. Collapsed: the pill is
-                // taller than the lock button, so shift its top up to centre-align the two.
-                let railTop =
-                    photoRailExpanded
-                    ? lock.y
-                    : lock.y
-                        + (lock.height - Double(MonitorAssistStrip.collapsedPillSize)) / 2
-                // "Fill until it hits the bottom bar": the trailing-aligned capture strip on a
-                // wider body (Pro Max) never reaches the rail's lane, so the rail runs down to
-                // the band's bottom edge there; it stops above the band only when the strip's
-                // measured frame actually enters the lane.
-                let laneTrailing =
-                    leftChromeTrailing + 12 + Double(MonitorAssistStrip.expandedWidth)
-                let stripFrame = model.captureBarFrame
-                let stripEntersLane =
-                    stripFrame.width > 1 && Double(stripFrame.minX) < laneTrailing + 16
-                let railBottom =
-                    stripEntersLane
-                    ? band.frame.y - 10
-                    : band.frame.y + band.frame.height
-                let railHeight = max(0, railBottom - railTop)
-                MonitorAssistStrip(
-                    axis: .vertical,
-                    collapsible: true,
-                    feedHeight: CGFloat(railHeight),
-                    expanded: $photoRailExpanded
-                )
-                .environment(model)
-                .liveViewGuideAnchor(.viewAssist)
-                // Top-aligned in the rail lane: a tool column shorter than the lane hugs the
-                // lock row instead of centring in the leftover space.
-                .frame(maxHeight: CGFloat(railHeight), alignment: .top)
-                .position(
-                    x: CGFloat(railX),
-                    y: CGFloat(railTop + railHeight / 2))
-            }
-
-            // Recenter-focus affordance, bottom-left above the bars, when the AF point is off
-            // centre or subject tracking is latched (reset ends tracking, so it must stay visible
-            // while a tracked box drifts through centre). Hidden while locked, and with the focus
-            // box — it recentres that box, so it is part of the same element.
-            // Battery-rail-relative x, scope-panel-clearance y (`focusResetButtonClearY`).
-            //
-            // The 50/50 comparison key shares this lane and stacks directly above it (see below),
-            // which is why the geometry is one expression read by both.
-            let focusResetMounted =
-                model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
-                && !model.interfaceLocked && model.chromeEditorMode == nil
-            if let battery = map.batteryCluster, focusResetMounted || splitComparisonKeyMounts {
-                let rail = battery.frame
-                let size: CGFloat = 40
-                // Inline battery (iPad) sits in the top band, so its frame no longer marks the
-                // bottom-left lane; fall back to the assist bar's leading edge plus the same
-                // clearance the rail layout produced (indicator width 38 + 24). Photography's
-                // lock-side assist rail owns that lane instead, so clear past it there.
-                // The module frames in `map` arrive already MIRRORED for the layout direction —
-                // that is how the battery rail lands on the correct side without this code
-                // knowing. But this lane is DERIVED: "sit just past the rail, toward the feed".
-                // Which way "toward the feed" points flips with the direction, and extending a
-                // right-edge rail rightwards parked the button under the Dynamic Island, a
-                // sliver on screen. (iPad has shipped the same lane off-screen in its second
-                // landscape since the mirrored layout landed — no island there, just a bezel —
-                // which is how it went unseen: this button only mounts with an AF point active.)
-                let mirroredLane = context.horizontalDirection == .mirrored
-                let batteriesVisible = model.railControlMounts(
-                    .batteryIndicators, plan: model.monitorSideRailPlan)
-                let photographyLeftChromeTrailing =
-                    MonitorBatteryRailLayout.photographyLeftChromeTrailing(
-                        lock: map.systemSlots.lock,
-                        batteryCluster: battery,
-                        batteriesVisible: batteriesVisible,
-                        safeArea: context.feedSafeArea
-                    )
-                // Closure, not a ViewBuilder `if`: this is geometry, not a view branch.
-                let photographyRailEdge: Double = {
-                    if mirroredLane {
-                        // Frames are already mirrored: lock-side chrome is on the right,
-                        // and "toward the feed" is the inner (min-x) edge of that cluster.
-                        let lockInner = map.systemSlots.lock.x
-                        let batteryInner =
-                            (batteriesVisible && battery.style == .batteryInline)
-                            ? battery.frame.x
-                            : Double(context.viewportWidth)
-                                - MonitorBatteryRailLayout.batteryPillTrailing(
-                                    safeArea: context.feedSafeArea)
-                        return min(lockInner, batteryInner) - 12
-                            - Double(MonitorAssistStrip.expandedWidth)
-                    }
-                    return photographyLeftChromeTrailing + 12
-                        + Double(MonitorAssistStrip.expandedWidth)
-                }()
-                let assistInlineX =
-                    map.assistStrip.map {
-                        mirroredLane
-                            ? CGFloat($0.frame.x + $0.frame.width) - 62
-                            : CGFloat($0.frame.x) + 62
-                    } ?? (mirroredLane ? CGFloat(context.viewportWidth) - 96 : 96)
-                let x =
-                    isPhotographyBand && chrome.assistToolbarVisible
-                    ? CGFloat(photographyRailEdge)
-                        + (mirroredLane ? -(24 + size / 2) : 24 + size / 2)
-                    : battery.style == .batteryInline
-                        ? assistInlineX
-                        : mirroredLane
-                            ? CGFloat(rail.x) - 24
-                            : CGFloat(rail.x + rail.width) + 24
-                let baseY =
-                    map.assistStrip.map { CGFloat($0.frame.y) - 30 }
-                    ?? CGFloat(context.viewportHeight) - 40
-                let y = model.focusResetButtonClearY(centerX: x, baseY: baseY, size: size)
-                if focusResetMounted {
-                    Button {
-                        model.resetFocusPoint()
-                    } label: {
-                        Image(systemName: "dot.viewfinder")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(LiveDesign.text)
-                            .frame(width: size, height: size)
-                            .background(.black.opacity(0.55), in: Circle())
-                            .overlay(Circle().strokeBorder(LiveDesign.hairline, lineWidth: 1))
-                    }
-                    .buttonStyle(.zcTapTarget)
-                    .position(x: x, y: y)
-                    .animation(.easeOut(duration: 0.2), value: y)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-                }
-
-                // 50/50 quick key: hides and restores the armed comparison without reopening the
-                // LUT pop-up, because judging a look is an A/B the operator repeats. Stacks above
-                // the recenter key in the same lane, and takes the lane on its own when that key
-                // is away.
-                if splitComparisonKeyMounts {
-                    SplitComparisonKey()
-                        .environment(model)
-                        .position(x: x, y: y - (focusResetMounted ? size + 10 : 0))
-                        .animation(.easeOut(duration: 0.2), value: y)
-                        .transition(.scale(scale: 0.6).combined(with: .opacity))
-                }
-            }
-
-            // MF focus-by-wire scrub: beside the right system rail whenever the operator has
-            // switched the Focus dial on (default off) and the body is in an AF focus mode —
-            // video and photo alike. Refusals are transient, so the strip never hides on one.
-            if model.showsMFDriveScrub {
-                MFDriveVerticalScrub()
-                    .environment(model)
-                    .frame(height: min(280, CGFloat(context.viewportHeight) * 0.55))
-                    .position(
-                        // "Beside the record button, toward the feed" — the record slot mirrors
-                        // to the LEFT rail in the mirrored layout, so the scrub steps right of it
-                        // there rather than off the screen edge.
-                        x: context.horizontalDirection == .mirrored
-                            ? CGFloat(map.systemSlots.record.x + map.systemSlots.record.width) + 34
-                            : CGFloat(map.systemSlots.record.x) - 34,
-                        y: CGFloat(context.viewportHeight) / 2
-                    )
-                    .transition(.opacity)
-            }
-
-            // Watcher control key: centred above the bottom band, CLEAR of the assist
-            // toolbar's lane — the old feed-anchored bottom-center mount landed inside that
-            // band, half-under the toolbar's tools.
-            if model.videoSource == .relay, !model.interfaceLocked,
-                model.chromeEditorMode == nil,
-                model.relayHoldsControl || model.relayAllowsControlRequests
-            {
-                let keyY =
-                    map.assistStrip.map { CGFloat($0.frame.y) - 28 }
-                    ?? CGFloat(context.viewportHeight) - 60
-                WatcherControlKey()
-                    .environment(model)
-                    .position(x: CGFloat(deck.midX), y: keyY)
-            } else if model.relayControlSurrendered, !model.interfaceLocked,
-                model.chromeEditorMode == nil
-            {
-                let keyY =
-                    map.assistStrip.map { CGFloat($0.frame.y) - 28 }
-                    ?? CGFloat(context.viewportHeight) - 60
-                BroadcasterControlKey()
-                    .environment(model)
-                    .position(x: CGFloat(deck.midX), y: keyY)
-            }
-        }
-    }
-
-    /// Wraps chrome children in the feed-canvas coordinate space: a full-bleed `.ignoresSafeArea()`
-    /// GeometryReader (physical-screen `proxy.size`), then a `viewportWidth`-wide top-leading
-    /// canvas shifted by `canvasOffsetX`. Map-derived frames that sit inside the Dynamic Island
-    /// lane (lock/battery at x≈16) land exactly instead of being clipped by a safe-area-inset
-    /// parent.
-    @ViewBuilder private func canvasLayer<Content: View>(
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        GeometryReader { canvasProxy in
-            ZStack(alignment: .topLeading) { content() }
-                .frame(
-                    width: CGFloat(context.viewportWidth), height: canvasProxy.size.height,
-                    alignment: .topLeading
-                )
-                .offset(x: CGFloat(context.canvasOffsetX))
-        }
-        .ignoresSafeArea()
-    }
-
-    /// Reserve the live bottom-bar band in every mode so the right rail never shifts between modes.
-    private var landscapeBottomBarHeight: Double {
-        model.chromeSectionMounts(.assistToolbar) || model.chromeSectionMounts(.cameraValues)
-            ? Double(LiveDesign.controlHeight)
-            : 0
-    }
-
-    // MARK: - Portrait
-
-    @ViewBuilder private func portraitShell(proxy: GeometryProxy) -> some View {
-        // Command wants a full-height control grid regardless of the persisted aspect; `.fit16x9`
-        // for the zone maths yields the topBar→systemBar span it needs.
-        let persistedAspect = model.preferences.portraitFeedAspect
-        // Photography lays out as fit: the stills frame is 3:2/1:1/16:9 per image area (passed as
-        // the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
-        //
-        // A VERTICAL body is the exception, and the reason is that vertical fill does not crop:
-        // the picture pillarboxes inside the frame rather than over-widening (see
-        // `feedContentWidth`), so the objection above does not apply to it. What fit gives a 2:3
-        // still instead is a feed tall enough to push its own stacked bands off the screen — the
-        // toolbar clips at the right edge, the shutter lands on top of the DRIVE tile, and the
-        // white-balance row falls off the bottom entirely. Fill is the layout that fits, and it is
-        // the one video already uses for the same body position.
-        let isPhotography = model.isPhotographyMode
-        // Vertical mode (body on its side) always lays out as FILL: the fill zones are exactly
-        // the vertical viewer — feed spanning topBar→systemBar (the 9:16 picture pillarboxes
-        // inside), the floating vertical assist rail, and the capture bar over the feed's
-        // bottom edge — where fit's stacked toolbar/tile bands would strand the controls.
-        let isVerticalFeed = model.displayedFeedRotation.isVertical
-        // Vertical is tested before photography, so a vertically held stills body reaches fill.
-        let zoneAspect: PortraitFeedAspect =
-            model.displayMode == .command
-            ? .fit16x9
-            : isVerticalFeed ? .fill : isPhotography ? .fit16x9 : persistedAspect
-        // The stacked-scopes zone must bill only what `PortraitScopesStack` will actually render
-        // (photography drops cinema-only scopes; clean drops everything unpinned) — a zone sized
-        // to the unfiltered count leaves a dead band between the feed and the toolbar.
-        let zoneScopeCount = scopeCount
-        let map = MonitorZoneLayout.map(
-            viewportWidth: context.viewportWidth,
-            viewportHeight: context.viewportHeight,
-            safeArea: context.feedSafeArea,
-            mode: model.displayMode,
-            isPortrait: true,
-            aspect: zoneAspect,
-            scopeCount: zoneScopeCount,
-            horizontalDirection: context.horizontalDirection,
-            // Fit-mode assist toolbar (R6): the core emits an `assistStrip` zone only when this is
-            // non-zero (and only for fit + live). Fill/clean/command collapse it to nothing.
-            bottomBarHeight: model.chromeSectionMounts(.assistToolbar)
-                ? MonitorPortraitLayout.assistToolbarHeight : 0,
-            portraitFeedAspectRatio: {
-                let source =
-                    isPhotography
-                    ? model.cameraPropertySnapshot.photographyFeedAspect : 16.0 / 9.0
-                return isVerticalFeed ? 1 / source : source
-            }()
-        )
-        let feed = map.feed
-        // A vertical body is fill in BOTH modes; only the persisted cinema choice is photography's
-        // to be excluded from. Must agree with `zoneAspect` above — this flag drives the rail, the
-        // floating scopes and the capture strip, and disagreeing with the zone map is how the
-        // controls end up in a lane the layout did not reserve.
-        let isFill = isVerticalFeed || (persistedAspect == .fill && !isPhotography)
-        // Fill's capture bar is chrome like the landscape strip: the zone is only a layout frame,
-        // the per-DISP Camera Values switch decides the mount — and, through this one binding, the
-        // clearances every key that stacks above the bar derives from it.
-        let captureStrip = model.chromeSectionMounts(.cameraValues) ? map.captureStrip : nil
-        // The Fit/Fill quick key mounts only where the choice is real: photography forces fit, a
-        // vertical camera feed forces fill, command has no feed — and lock or the Edit view hides
-        // every on-feed affordance.
-        let aspectToggleMounts =
-            model.displayMode != .command && !isPhotography && !isVerticalFeed
-            && !model.interfaceLocked && model.chromeEditorMode == nil
-        // The zone map hands us the feed FRAME; the content aspect-fills within it: over-widen to
-        // the source's 16:9 at the frame's height, center via the outer frame, clip to the frame.
-        // Fit passes the frame width straight through (16:9 frame == 16:9 content, no crop).
-        // A vertical feed never over-widens — its 9:16 picture pillarboxes inside the fill frame.
-        let feedContentWidth =
-            isFill && !isVerticalFeed ? feed.height * 16 / 9 : feed.width
-
-        ZStack(alignment: .topLeading) {
-            // Sized to the FULL physical height explicitly: this ZStack is the safe-area frame
-            // re-rooted to physical 0, so its own bottom edge sits `safeArea.top` short of the
-            // screen bottom — a bare `.ignoresSafeArea()` can't extend past a boundary the view
-            // never reaches at layout time, and the root background bled through under the
-            // translucent system band (the "two bottom frames" artifact).
-            Color.black
-                .frame(
-                    width: proxy.size.width, height: CGFloat(context.viewportHeight),
-                    alignment: .topLeading
-                )
-                .ignoresSafeArea()
-
-            if model.displayMode != .command {
-                LiveFeedModule(
-                    safeArea: context.feedSafeArea,
-                    viewportWidth: feedContentWidth,
-                    canvasOffsetX: context.canvasOffsetX,
-                    // The portrait chain positions with render-transform offsets, so at LAYOUT
-                    // time this box sits at the ZStack origin inside the safe-area region — the
-                    // module's own measured-height path derives an undersized, up-shifted 16:9
-                    // box from the mangled proposal (the fill "cropped on top and right" bug).
-                    // Handing it the zone height makes the box independent of that machinery.
-                    fixedContentHeight: feed.height
-                )
-                .frame(width: feedContentWidth, height: feed.height)
-                // The over-widened content is centered by this outer frame's default center
-                // alignment alone (R10): a redundant inner `.offset(x: feedContentOffsetX)` used
-                // to composite ON TOP of this centering, adding the two together and landing the
-                // fill crop on the right edge instead of dead-center. One centering mechanism now.
-                .frame(width: feed.width, height: feed.height)
-                .clipped()
-                .offset(x: feed.x, y: feed.y)
-
-                // Portrait suppresses the floating scope panels (redundant with the stacked scopes
-                // zone below); feed-anchored assists live inside LiveFeedModule. Mounted with
-                // suppression directly — `MonitorScopes(.scopesFloating)` is the non-suppressed
-                // landscape case.
-                FeedAssistOverlayModule(
-                    safeArea: context.feedSafeArea,
-                    viewportWidth: feedContentWidth,
-                    canvasOffsetX: context.canvasOffsetX,
-                    suppressFloatingScopes: true
-                )
-                .environment(model)
-                .frame(width: feedContentWidth, height: feed.height)
-                // Same single-centering fix as the feed chain above (R10).
-                .frame(width: feed.width, height: feed.height)
-                .clipped()
-                .offset(x: feed.x, y: feed.y)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        if railExpanded { railExpanded = false }
-                    }
-                )
-            }
-
-            // Fill mode: landscape-behaviour floating scopes over the visible feed (R8) —
-            // draggable, resizable, uncapped, positions persisted by `MovablePanel`. Mounted
-            // OUTSIDE the crop-clip chain at the *visible* feed zone, so `viewportWidth:
-            // feed.width` clamps drag bounds to what the operator sees. This renders ONLY the
-            // scope/false-colour panels, so it duplicates nothing from the suppressed inner
-            // overlay above (that one renders no panels; it survives as the rail-collapse tap
-            // catcher).
-            // Not live-only: clean mounts it too, where the policy funnel inside renders exactly
-            // the pinned tools — same as the landscape floating scopes (#256's one-rule contract).
-            if isFill, model.displayMode != .command {
-                // No `.clipped()` here (G2): MovablePanel already clamps panels inside its
-                // bounds, so clipping only ever manifests as a sliced panel edge when a panel
-                // straddles the frame boundary (WAVE/PARADE cut mid-panel on device).
-                MonitorScopes(
-                    style: .scopesFloating,
-                    safeArea: context.feedSafeArea,
-                    viewportWidth: feed.width,
-                    canvasOffsetX: 0
-                )
-                .environment(model)
-                .frame(width: feed.width, height: feed.height)
-                .offset(x: feed.x, y: feed.y)
-            }
-
-            // Overlaid top bar — per-DISP-mode, and clean ships with it off (#256).
-            if model.chromeSectionMounts(.statusBar) {
-                MonitorInfoBar(style: .infoBar)
-                    .environment(model)
-                    .liveViewGuideAnchor(.infoBar)
-                    .chromeEditable(.statusBar, editing: model.chromeEditorMode)
-                    .frame(width: map.infoBar.frame.width, height: map.infoBar.frame.height)
-                    .offset(x: map.infoBar.frame.x, y: map.infoBar.frame.y)
-            }
-
-            // REC options quick access: the zone map returns nil recOptions in both orientations,
-            // so the shell places the button itself — top-right over the feed, below the top bar.
-            // It rides with the record control: hiding record hides its options too.
-            if model.displayMode != .command, model.chromeSectionMounts(.railRecord),
-                model.chromeEditorMode == nil
-            {
-                PortraitRecOptionsButton()
-                    .environment(model)
-                    .opacity(model.interfaceLocked ? 0.4 : 1)
-                    .frame(width: 40, height: 40, alignment: .topTrailing)
-                    .offset(
-                        x: feed.x + feed.width - 40 - 10,
-                        y: map.infoBar.frame.y + map.infoBar.frame.height + 8
-                    )
-            }
-
-            // Fit mode: dedicated stacked scopes zone below the feed.
-            if !isFill, let scopes = map.scopes {
-                MonitorScopes(style: .scopesStacked)
-                    .padding(.horizontal, 12)
-                    .frame(width: scopes.frame.width, height: scopes.frame.height)
-                    .offset(x: scopes.frame.x, y: scopes.frame.y)
-            }
-
-            // Controls zone: fill → capture strip over the feed bottom; fit/command → command grid.
-            // The core adapter emits a non-nil `controlsGrid` for every fit-aspect pass, including
-            // clean mode where the region collapses to zero height — guard on the frame height so
-            // clean shows no grid.
-            if let capture = captureStrip {
-                MonitorCaptureStrip(fitsWidth: false)
-                    .environment(model)
-                    .liveViewGuideAnchor(.cameraControls)
-                    .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
-                    .opacity(model.interfaceLocked ? 0.4 : 1)
-                    .frame(width: capture.frame.width, height: capture.frame.height)
-                    .offset(x: capture.frame.x, y: capture.frame.y)
-            } else if let grid = map.controlsGrid, grid.frame.height > 0,
-                model.chromeSectionMounts(.cameraValues)
-            {
-                // Command (DISP 3) reserves a hero-timecode band off the top of the tile region
-                // and shifts the tiles down by it; fit-mode live tiles carry no band. The timecode
-                // isn't lock-dimmed (live status, like the top bar); only the tiles dim.
-                let isCommand = model.displayMode == .command
-                // A body that runs no timecode gets no hero band — the grid takes the space back
-                // rather than heading the dashboard with a frozen 00:00:00:00.
-                let showsHeroTimecode = isCommand && model.cameraReportsTimecode
-                let tcBand: CGFloat = showsHeroTimecode ? 80 : 0
-                if showsHeroTimecode {
-                    PortraitCommandTimecode()
-                        .environment(model)
-                        .padding(.horizontal, 12)
-                        .frame(width: grid.frame.width, height: tcBand)
-                        .offset(x: grid.frame.x, y: grid.frame.y)
-                }
-                CommandPrimaryGrid(
-                    availableHeight: CGFloat(grid.frame.height) - tcBand
-                        - (isCommand ? 0 : 8),
-                    columns: 3
-                )
-                .environment(model)
-                .liveViewGuideAnchor(.cameraControls)
-                // A no-op in command, where the tiles are the mode itself, not configurable chrome.
-                .chromeEditable(.cameraValues, editing: model.chromeEditorMode)
-                .padding(.horizontal, 12)
-                .opacity(model.interfaceLocked || model.relayControlSurrendered ? 0.4 : 1)
-                .allowsHitTesting(!model.relayControlSurrendered)
-                .frame(width: grid.frame.width, height: grid.frame.height - tcBand)
-                .offset(x: grid.frame.x, y: grid.frame.y + tcBand)
-            }
-
-            // Fit mode: horizontal assist toolbar between the scopes zone and the tile grid (R6).
-            // The core emits `assistStrip` only for fit + live; 12/4pt insets float the glass pill
-            // off the screen edges. The vertical rail is fill-only (below).
-            if let assist = map.assistStrip {
-                MonitorAssistStrip(axis: .horizontal, collapsible: false)
-                    .environment(model)
-                    .liveViewGuideAnchor(.viewAssist)
-                    .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
-                    .opacity(model.interfaceLocked ? 0.4 : 1)
-                    .frame(width: assist.frame.width - 24, height: assist.frame.height - 8)
-                    .offset(x: assist.frame.x + 12, y: assist.frame.y + 4)
-
-                // Scope-cap notice (R7): self-dissolving capsule centered above the toolbar zone.
-                MonitorToast(text: model.scopeCapNoticeText, trigger: model.scopeCapNotice)
-                    .frame(width: assist.frame.width)
-                    .offset(x: assist.frame.x, y: assist.frame.y - 40)
-            }
-
-            // Assist rail (fill only): collapsed pill on the feed's bottom-left; expanded spans the
-            // feed height. Fit mode uses the horizontal toolbar above instead.
-            // `axis: .vertical, collapsible: true` renders the collapse pill.
-            if model.displayMode != .command, isFill,
-                model.chromeSectionMounts(.assistToolbar)
-            {
-                // The rule lives in the shared policy, not here and again in Kotlin. It used to
-                // be written twice, and the two copies had already drifted: this side measured
-                // the collapsed pill from the FEED's bottom minus the strip height while Android
-                // measured from the STRIP's top, which agree only while the strip is flush with
-                // the feed — the common case, and why nobody noticed.
-                let feedRegion = MonitorLayoutRegion(
-                    x: feed.x, y: feed.y, width: feed.width, height: feed.height)
-                let expandedRail = MonitorPortraitLayout.fillAssistRail(
-                    feed: feedRegion, captureStripTop: captureStrip.map(\.frame.y), expanded: true)
-                let collapsedRail = MonitorPortraitLayout.fillAssistRail(
-                    feed: feedRegion, captureStripTop: captureStrip.map(\.frame.y), expanded: false)
-                let railTop = expandedRail.y
-                let railHeight = expandedRail.height
-                MonitorAssistStrip(
-                    axis: .vertical, collapsible: true, feedHeight: railHeight,
-                    expanded: $railExpanded
-                )
-                .environment(model)
-                .liveViewGuideAnchor(.viewAssist)
-                .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
-                .opacity(model.interfaceLocked ? 0.4 : 1)
-                .frame(
-                    width: railExpanded ? expandedRail.width : collapsedRail.width,
-                    height: railExpanded ? railHeight : collapsedRail.height,
-                    alignment: .bottomLeading
-                )
-                .offset(
-                    x: railExpanded ? expandedRail.x : collapsedRail.x,
-                    y: railExpanded ? railTop : collapsedRail.y
-                )
-            }
-
-            // Watcher control key: center-bottom over the feed, CLEAR of the assist lane. In fit
-            // the horizontal toolbar owns a band across the feed bottom — the key sits above it
-            // (a feed-anchored mount used to land inside that band, half-under the toolbar). In
-            // fill it clears the capture strip like the rail's collapsed pill does. Same overlay
-            // layer as the rail and recenter keys, so taps land the same way theirs do.
-            if model.displayMode != .command, model.videoSource == .relay,
-                !model.interfaceLocked,
-                model.chromeEditorMode == nil,
-                model.relayHoldsControl || model.relayAllowsControlRequests
-            {
-                let keyHeight: CGFloat = 40
-                let controlsHeight = captureStrip?.frame.height ?? 0
-                let laneTop =
-                    map.assistStrip?.frame.y
-                    ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
-                WatcherControlKey()
-                    .environment(model)
-                    .frame(width: feed.width, height: keyHeight)
-                    .offset(x: feed.x, y: laneTop - keyHeight - 8)
-            } else if model.displayMode != .command, model.relayControlSurrendered,
-                !model.interfaceLocked,
-                model.chromeEditorMode == nil
-            {
-                let keyHeight: CGFloat = 40
-                let controlsHeight = captureStrip?.frame.height ?? 0
-                let laneTop =
-                    map.assistStrip?.frame.y
-                    ?? (feed.y + feed.height - (isFill ? controlsHeight + 10 : 10))
-                BroadcasterControlKey()
-                    .environment(model)
-                    .frame(width: feed.width, height: keyHeight)
-                    .offset(x: feed.x, y: laneTop - keyHeight - 8)
-            }
-
-            // Fit/Fill quick key — the feed frame's own bottom-right corner control, replacing
-            // the old Display-tab picker row. The recenter and 50/50 keys stack above it in the
-            // same trailing lane while it shows.
-            if aspectToggleMounts {
-                let size: CGFloat = 40
-                let controlsHeight = captureStrip?.frame.height ?? 0
-                let bottomClearance = isFill ? controlsHeight + 10 : 10
-                Button {
-                    model.preferences.portraitFeedAspect =
-                        persistedAspect == .fill ? .fit16x9 : .fill
-                } label: {
-                    Image(
-                        systemName: persistedAspect == .fill
-                            ? "arrow.down.right.and.arrow.up.left"
-                            : "arrow.up.left.and.arrow.down.right"
-                    )
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(LiveDesign.text)
-                    .frame(width: size, height: size)
-                    .background(.black.opacity(0.55), in: Circle())
-                    .overlay(Circle().strokeBorder(LiveDesign.hairline, lineWidth: 1))
-                }
-                .buttonStyle(.zcTapTarget)
-                .offset(
-                    x: feed.x + feed.width - size - 10,
-                    y: feed.y + feed.height - size - bottomClearance
-                )
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-
-            // Recenter-focus affordance, bottom-right of the feed — the portrait counterpart of
-            // the landscape `focusResetButton`. In fill the capture strip overlays the feed
-            // bottom, so lift it clear (same clearance as the assist rail); in fit the feed
-            // bottom is free.
-            if model.displayMode != .command, model.chromeSectionMounts(.focusBox),
-                model.isFocusResetAvailable, !model.interfaceLocked,
-                model.chromeEditorMode == nil
-            {
-                let size: CGFloat = 40
-                let controlsHeight = captureStrip?.frame.height ?? 0
-                let bottomClearance = isFill ? controlsHeight + 10 : 10
-                let x = feed.x + feed.width - size - 10
-                let y =
-                    feed.y + feed.height - size - bottomClearance
-                    - (aspectToggleMounts ? size + 10 : 0)
-                Button {
-                    model.resetFocusPoint()
-                } label: {
-                    Image(systemName: "dot.viewfinder")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                        .frame(width: size, height: size)
-                        .background(.black.opacity(0.55), in: Circle())
-                        .overlay(Circle().strokeBorder(LiveDesign.hairline, lineWidth: 1))
-                }
-                .buttonStyle(.zcTapTarget)
-                .offset(x: x, y: y)
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-
-            // 50/50 quick key — the portrait counterpart. Stacks above the recenter key in the
-            // same bottom-RIGHT lane, and takes the lane on its own when that key is away. Not
-            // bottom-left: the collapsed assist rail already owns that corner in portrait.
-            if model.displayMode != .command, splitComparisonKeyMounts {
-                let size: CGFloat = 40
-                let controlsHeight = captureStrip?.frame.height ?? 0
-                let bottomClearance = isFill ? controlsHeight + 10 : 10
-                let recenterMounted =
-                    model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
-                    && !model.interfaceLocked && model.chromeEditorMode == nil
-                SplitComparisonKey()
-                    .environment(model)
-                    .offset(
-                        x: feed.x + feed.width - size - 10,
-                        y: feed.y + feed.height - size - bottomClearance
-                            - (aspectToggleMounts ? size + 10 : 0)
-                            - (recenterMounted ? size + 10 : 0)
-                    )
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-
-            // Bottom system band. The opaque glass draws only when the band still carries a
-            // control — an empty band over the letterbox is just a black stripe. Every control is
-            // configured per DISP mode and capture side. `context.viewportHeight` is the restored
-            // full physical height; the ZStack is top-anchored at physical 0 (no safe-area
-            // centering — the offset children carry physical coordinates), so the band reaches
-            // the true bottom edge.
-            let railPlan = model.monitorSideRailPlan
-            if !railPlan.isEmpty || model.chromeEditorMode == model.displayMode {
-                Rectangle()
-                    .fill(LiveDesign.glass)
-                    .frame(
-                        width: map.systemCluster.frame.width,
-                        height: CGFloat(context.viewportHeight) - map.systemCluster.frame.y
-                    )
-                    .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
-                    .allowsHitTesting(false)
-            }
-            MonitorSystemCluster(
-                slots: map.systemSlots, axis: .axisHorizontal, plan: railPlan
-            )
-            .environment(model)
-            .frame(
-                width: map.systemCluster.frame.width,
-                height: map.systemCluster.frame.height
-            )
-            .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
-
-            // Pickers / assist popups (portrait-anchored host).
-            if let panel = model.activePanel, !panel.coversFullScreen {
-                PanelHost(
-                    panel: panel, chromeInsets: context.chromeInsets,
-                    feedSafeArea: context.feedSafeArea, isPortrait: true
-                )
-                .environment(model)
-                .transition(panelTransition(panel))
-            }
-        }
-        // `.top`: the full-physical-height base black inflates the ZStack's layout union past
-        // this frame — default center alignment would shift the whole physical-coordinate tree
-        // up by half the overshoot. Top-aligned, the canvas stays rooted at physical 0.
-        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-        .ignoresSafeArea(.container, edges: .all)
-    }
-
-    private func panelTransition(_ panel: NativeAppModel.ActivePanel) -> AnyTransition {
-        panel.managesOwnAppearance
-            ? .asymmetric(insertion: .identity, removal: .opacity)
-            : .opacity.combined(with: .scale(scale: 0.98))
-    }
-}
-
-/// On-feed key that hides and restores the armed 50/50 Log-vs-LUT comparison.
-///
-/// The comparison is armed in the LUT pop-up and stays armed; this only mutes it, which is why
-/// tapping it never makes the key itself disappear. Judging a look means flipping the split back
-/// and forth, and a trip through the pop-up for each flip is the thing the comparison exists to
-/// avoid.
 struct SplitComparisonKey: View {
     @Environment(NativeAppModel.self) private var model
 

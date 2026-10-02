@@ -2135,7 +2135,7 @@ final class NativeAppModel {
         didSet {
             if case .picker(let picker) = activePanel, let setting = picker.nikonControlSetting {
                 refreshCommonControlFacts()
-                commonEditor = shell.control.edit(setting == .iso ? .iso : .whiteBalance)
+                commonEditor = shell.control.edit(setting.key)
             } else {
                 commonEditor = nil
             }
@@ -12392,9 +12392,11 @@ extension NativeAppModel {
         shell.control.onChange = { [weak self, weak shell] in
             guard let self, let control = shell?.control else { return }
             publishCameraDisplayState()
-            for (key, value) in control.pending {
-                guard let (_, label) = NikonCameraSession.settingValue(for: value) else { continue }
-                applyLocalPickerValue(label, for: key == .iso ? .iso : .whiteBalance)
+            for (_, value) in control.pending {
+                guard let (setting, label) = NikonCameraSession.settingValue(for: value) else {
+                    continue
+                }
+                applyLocalPickerValue(label, for: CameraPicker(setting))
             }
             if !control.recordPending, let recording = control.isRecording {
                 isRecording = recording
@@ -12488,7 +12490,19 @@ extension NativeAppModel {
             liveViewReady: isMonitorPresented,
             reported: reportedPropertySnapshot,
             recording: reportedRecording,
-            whiteBalancePresets: presets)
+            whiteBalancePresets: presets,
+            shutterLabels: {
+                switch reportedPropertySnapshot.shutterMode {
+                case .angle:
+                    cameraControlOptions[.movieShutterAngle]
+                        ?? CameraPicker.shutter.modes[0].options
+                case .speed:
+                    cameraControlOptions[.movieShutterSpeed]
+                        ?? CameraPicker.shutter.modes[1].options
+                case nil: []
+                }
+            }(),
+            apertureLabels: irisApertures)
     }
 
 }
@@ -14425,6 +14439,8 @@ extension CameraPicker {
         switch setting {
         case .iso: self = .iso
         case .whiteBalance: self = .whiteBalance
+        case .shutter: self = .shutter
+        case .aperture: self = .iris
         }
     }
 
@@ -14432,6 +14448,8 @@ extension CameraPicker {
         switch self {
         case .iso: .iso
         case .whiteBalance: .whiteBalance
+        case .shutter: .shutter
+        case .iris: .aperture
         default: nil
         }
     }
