@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Multicam** (iOS + Android): the grid button on Your cameras opens a stage of four tiles;
+  add up to four bodies over USB-C, a router or the phone's hotspot (a camera's own access point
+  cannot join). Grid or Center stage, name, battery, timecode and record tally on every tile,
+  ISO and white balance of the selected camera, and one Record for all. Each camera reports its
+  own result ("2 of 3 rolling. C didn't start."), and nothing is stopped because another camera
+  failed. A tile opens that camera's full Live View on its open link; Return to Multicam hands it
+  back. Built on the shared OpenCine multicam engine and monitor UI.
 - **Share This Feed** (iOS + Android): broadcast the monitor to other devices on set and watch
   another device's, with per-watcher scopes and LUTs, an optional passcode, and camera-control
   handoff — one holder at a time, requested on the broadcaster's own screen, and control now

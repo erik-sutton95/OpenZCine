@@ -13,6 +13,7 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | VENDOR-02 (Runner links OpenZCineCore; Nikon code in OpenCineNikon) | `opencine/vendor-02-nikon` (on integration) | see branch |
 | OPTIONAL-01 (Frame.io from OpenCineFrameIO) | `opencine/frameio` (on integration) | see branch |
 | MEDIA-02 step 4 (HDMI/UVC capture source from OpenCineApple) | `opencine/apple` (on integration) | see branch |
+| NIKON-01 (shared monitor UI and multicam from OpenCine) | `opencine/nikon-01` (on integration) | see branch |
 
 Shared package: the OpenCine platform repository `../OpenCine` (every shared Swift product and
 Android module), pinned in `opencine-pins.txt` (one line, `OpenCine <sha>`) and fetched in CI by
@@ -50,8 +51,21 @@ actor), releasing each lease after the render. `ios/Runner/UVCVideoSource.swift`
 glue. The JPEG `FrameDecoder` / Metal live view are app runtime and unchanged. Pinned to OpenCineCore's
 `apple` branch until it merges to Core main.
 
-Not included: the engine-port UI candidate `opencine/ui-03-engine-port-candidate` (OpenCineUI on
-the unmerged `feat/monitor-engine-port`). It stays separate until the engine-port decision is made.
+NIKON-01: the app takes the shared monitor UI and the multicam engine from `../OpenCine` instead of
+copying them. iOS: the Runner links `MonitorUI`, `MonitorPresentation` and `OpenCineMulticam`, and
+`AppDelegate` sets `MonitorTheme.accentRGB` to the OpenZCine gold. Android: the app depends on
+`com.opencapture.opencine:monitor-ui` and `:multicam` from the same included build (the catalog
+moved to OpenCine's AGP 9.4.1, Kotlin 2.4.20, Compose BOM 2026.09.00 and compileSdk 37, because a
+composite build cannot load two Android Gradle plugins), and `OpenZCineTheme` sets
+`MonitorPalette.accent` and turns `MonitorIosParity` on. Multicam is new on both platforms (see
+below). It re-implements the multi-Nikon-Z learnings of the engine-port branch on the shared
+engine instead of merging that branch: eligibility and serial identity in OpenCineNikon
+`NikonMulticamPolicy`, each member's command queue with readback in `NikonMemberControl`, group
+record as an eligible-subset `RecordPlan`, the Live View loan as an `EditorLease`, the four-camera
+limit as the app's `ResourceBudget`. Your cameras, pairing, the single-camera monitor, Operator
+Setup and media keep OpenZCine's own UI for now: moving them onto the shared pages is SHELL-02
+(cameras and pairing) and SHELL-03 (app shell) work. The engine-port branch and its UI candidate
+(`opencine/ui-03-engine-port-candidate`) are not merged and are left as they were.
 
 ## What changes for users
 
@@ -69,6 +83,21 @@ the unmerged `feat/monitor-engine-port`). It stays separate until the engine-por
   the monitor takes them (the newest-wins drop happens before the render, not after), off the main
   actor instead of on the capture queue, and a frame captured from a device that was unplugged or
   swapped is dropped.
+
+- Multicam (NIKON-01, iOS and Android): new. Your cameras has a Multicam control (grid button) that
+  opens an empty stage of four tiles. Add up to four bodies over USB-C, a router or this phone's
+  hotspot; a camera's own access point, an HDMI setup, an unreachable setup or a fifth camera is
+  refused with a reason. Every tile shows name, battery, timecode and REC/STBY; the selected
+  camera's ISO, shutter, white balance and focus sit under or inside its tile, and ISO and white
+  balance can be changed there (that camera only, confirmed by reading it back). One Record button
+  starts or stops every eligible camera; each tile reports its own result, a mixed start says
+  "2 of 3 rolling. C didn't start.", and nothing is stopped because another camera failed.
+  Double-tap (or long-press, Open Live View) opens that camera's full Live View on its open link;
+  Return to Multicam in the lock slot hands it back without reconnecting. Closing the stage closes
+  every link and never stops a recording.
+- Shared monitor UI (NIKON-01): no visible change outside multicam on iOS (simulator screenshots of
+  first launch, live view, Operator Setup and media are unchanged). Android takes the shared
+  monitor-ui with its iOS-look switch on; only multicam uses it so far.
 
 ## Physical device checklist
 
@@ -106,6 +135,34 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     hot-unplug and replug, swapping dongles, switching between HDMI and the camera's own live view,
     scopes and LUT on the HDMI picture, watch relay. Compare CPU, memory and thermal state over
     20 min at 1080p60 and 4K30 against `opencine/integration`.
+
+12. NIKON-01 single camera (iOS and Android): connect over Wi-Fi and USB-C, live view, ISO, WB,
+    record with confirmation, media, Operator Setup. Nothing should differ from
+    `opencine/integration` except the Multicam control on Your cameras.
+13. NIKON-01 multicam with two, three and four Z bodies (ZR plus at least one other Z model; mix
+    USB-C through a hub, a router and the phone's hotspot): add each from the stage, check name,
+    battery, timecode and picture on every tile in Grid and Center stage, portrait and landscape.
+    Try to add a camera-AP setup, an unplugged USB body, the same body over a second setup (it
+    must be refused or dropped with "That camera is already on the stage.") and a fifth camera.
+    Unplug one USB member and drop one Wi-Fi member: that tile shows Connection lost with Retry,
+    the others keep streaming, Retry brings it back.
+14. NIKON-01 borrow and return: open a member's Live View (double-tap, or long-press then Open
+    Live View), change ISO, record and stop there, then Return to Multicam: the tile resumes
+    without reconnecting, the camera never shows a new pairing or session prompt, and the other
+    members kept streaming meanwhile. Leave Live View with Disconnect too: it must return to the
+    stage, not close the camera.
+15. NIKON-01 group record: with confirmation on and off, start all; remove the card from one body
+    first: that tile says Couldn't rec, the toast says "N of M rolling. X didn't start.", the
+    others keep rolling. Stop all: only rolling cameras get a stop. A body already rolling when
+    added is counted, not restarted. Close the stage while recording: every camera keeps rolling.
+16. NIKON-01 settings writes: change ISO and WB of the selected camera from the stage values row on
+    two different members in quick succession: only the selected camera changes, its tile reads
+    the camera's value back, a refused or clamped value shows "ISO not applied" / "WB not
+    applied". Under thermal pressure only non-selected tiles slow down (iOS).
+17. NIKON-01 Android parity: Android stage and Return to Multicam behave like iOS; the existing
+    Android screens look as before (`MonitorIosParity` affects only shared monitor-ui pieces,
+    which only multicam uses so far). Compare picture smoothness and phone temperature with four
+    tiles for 20 min on both platforms.
 
 ## Before this can ship
 
