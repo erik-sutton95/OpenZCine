@@ -844,6 +844,9 @@ final class NativeAppModel {
     var connectedIdentity: NativeCameraIdentity?
     var discoveredCameras: [DiscoveredCamera] = []
     var savedCameras: [PTPIPSavedCameraRecord] = []
+    /// Multicam (NIKON-01): up to four bodies on the shared OpenCineMulticam engine, beside the
+    /// single-camera session. Opened from Your cameras; see `beginMulticam`.
+    let multicam = MulticamCoordinator(isCameraRefusal: NativeCameraSessionError.isCameraRefusal)
     var startupMode: StartupMode = .savedCameras
     var isIPhoneHotspotBridgeActive = false
     var selectedDiscoveredCameraID: String?
@@ -3486,6 +3489,9 @@ final class NativeAppModel {
         setup: PTPIPSavedCameraRecord? = nil,
         takingOverConfirmed: Bool = false
     ) {
+        // While the multicam stage is up its members own their links: no single-camera connect
+        // starts underneath it (a lent member's Live View recovery still may).
+        if multicam.isPresented, multicam.lentMember == nil { return }
         // The gate lives at the funnel every path already goes through, not on the row that
         // happens to show the holder — a second entry point to connecting must not be a second
         // way to drop someone else's session without asking.
@@ -4092,6 +4098,11 @@ final class NativeAppModel {
     }
 
     func disconnect() {
+        // A multicam member lent to Live View goes back to its tile; never CloseSession here.
+        if multicam.lentMember != nil {
+            returnToMulticam()
+            return
+        }
         // A viewer has no camera session to tear down — it has a socket to a device that does.
         if videoSource == .relay {
             leaveRelay()
@@ -4103,6 +4114,107 @@ final class NativeAppModel {
         sessionDropStormGuard.reset()
         disconnectCameraSession(resetConnection: true)
         startDiscoveryLoop(resetResults: false)
+    }
+
+    // MARK: - Multicam (NIKON-01)
+
+    func beginMulticam() {
+        guard !isStartupActionLocked, cameraSession == nil else { return }
+        multicam.connect = { [weak self] record in
+            guard let self else { throw CancellationError() }
+            return try await self.establishSession(
+                host: record.host, guid: NativeCameraConnectionStore.shared.guid(),
+                requestPairing: false)
+        }
+        multicam.pollInterval = { [weak self] isProgram, base in
+            (self?.thermalTier ?? .nominal).multicamPollInterval(isProgram: isProgram, base: base)
+        }
+        multicam.whiteBalancePresets =
+            CameraPicker.whiteBalance.modes.first { $0.title == "Preset" }?.options ?? []
+        multicam.begin()
+        syncScreenWakePolicy()
+    }
+
+    /// Closes every member link. Never stops a recording.
+    func endMulticam() {
+        if multicam.lentMember != nil { returnToMulticam() }
+        multicam.end()
+        syncScreenWakePolicy()
+    }
+
+    /// One row per saved body; members are omitted, the rest say why they cannot join.
+    func multicamPickerRows() -> [MulticamPickerRow] {
+        let hotspots = NativeNetworkInterfaceSnapshot.hotspotSubnetBases()
+        let availability = { (record: PTPIPSavedCameraRecord) in
+            SavedCameraAvailabilityPolicy.resolve(
+                camera: record, discoveredCameras: self.discoveredCameras,
+                connectedHost: self.connectedIdentity?.host,
+                onCameraAccessPoint: self.isOnCameraAccessPointNetwork,
+                hotspotSubnetBases: hotspots)
+        }
+        let members = Set(multicam.members.compactMap(\.device))
+        return SavedCameraPathGroups.group(savedCameras).compactMap { group in
+            guard
+                let active = SavedCameraPathGroups.activePath(
+                    in: group, availability: availability)
+            else { return nil }
+            if let device = NikonMulticamPolicy.device(serialNumber: active.serialNumber),
+                members.contains(device)
+            {
+                return nil
+            }
+            let reachable: Bool
+            if case .offline = availability(active) { reachable = false } else { reachable = true }
+            return MulticamPickerRow(
+                record: active, refusal: multicam.refusal(for: active, reachable: reachable))
+        }
+    }
+
+    /// Whether the single-camera monitor is showing a lent multicam member.
+    var isMulticamLiveView: Bool { multicam.lentMember != nil && isMonitorPresented }
+
+    /// Opens one member's full Live View on its own open link: the member's stage pump stands
+    /// down (the monitor pumps the link now) and the other members keep streaming.
+    func openMulticamLiveView(_ id: MonitorEntryID) {
+        guard cameraSession == nil, let member = multicam.member(id),
+            let link = multicam.lend(id)
+        else { return }
+        guard let session = link as? NativeCameraSession else {
+            multicam.reclaim(link)
+            return
+        }
+        cameraSession = session
+        controlSession = NikonCameraSession(
+            driver: self, serialNumber: session.identity.serialNumber)
+        isCameraControlSession = true
+        connectedIdentity = session.identity
+        activeSessionPath = member.record.path
+        startKeepAlive(session: session)
+        startEventDraining(session: session)
+        startLinkHealthMonitoring()
+        cameraState = cameraState.updating(cameraName: member.displayName)
+        connection = .connected
+        connectionPhase = .connected
+        isMonitorPresented = true
+        Task {
+            // The monitor starts live view as it does on a fresh session.
+            await session.stopLiveView()
+            guard multicam.lentMember == id, cameraSession === session else { return }
+            enterLiveView()
+        }
+    }
+
+    /// Return to Multicam: the monitor stands down without CloseSession and hands the link (or
+    /// the replacement a recovery opened) back to the member's tile.
+    func returnToMulticam() {
+        guard multicam.lentMember != nil else { return }
+        let lent = cameraSession
+        // Stops the monitor's loops, keep-alive and polls; unlike `disconnectCameraSession` it
+        // sends no CloseSession, so the member keeps its session.
+        clearCameraSessionState(resetConnection: false)
+        connection = .disconnected
+        connectionPhase = .idle
+        multicam.reclaim(lent)
     }
 
     /// Presents the versioned guide after the first successfully decoded live-view frame.
@@ -6301,6 +6413,12 @@ final class NativeAppModel {
     private func disconnectCameraSession(
         resetConnection: Bool, preserveMonitorSurface: Bool = false
     ) {
+        // A lent multicam member returns to its tile instead of closing; a recovery
+        // (`preserveMonitorSurface`) still replaces its link, and the tile takes the replacement.
+        if multicam.lentMember != nil, !preserveMonitorSurface {
+            returnToMulticam()
+            return
+        }
         let session = cameraSession
         clearCameraSessionState(
             resetConnection: resetConnection, preserveMonitorSurface: preserveMonitorSurface)
@@ -7087,7 +7205,7 @@ final class NativeAppModel {
     func syncScreenWakePolicy() {
         let wantsAwake =
             !screenWakeSuppressedForBackground && preferences.keepScreenAwake
-            && (isMonitorPresented || isMediaPlaybackActive)
+            && (isMonitorPresented || multicam.isPresented || isMediaPlaybackActive)
         ScreenWakeController.apply(keepAwake: wantsAwake)
     }
 
@@ -13395,6 +13513,13 @@ struct NativeAppRoot: View {
             if model.isMonitorPresented {
                 MonitorExperience()
                     .environment(model)
+            } else if model.multicam.isPresented {
+                MulticamStage(
+                    coordinator: model.multicam,
+                    confirmsRecord: model.preferences.recordConfirmationEnabled,
+                    pickerRows: model.multicamPickerRows,
+                    openLiveView: model.openMulticamLiveView,
+                    close: model.endMulticam)
             } else {
                 LinkExperience()
                     .environment(model)

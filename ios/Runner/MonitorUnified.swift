@@ -1066,7 +1066,37 @@ struct MonitorSystemCluster: View {
         }
     }
 
+    @ViewBuilder
     private var lockButton: some View {
+        if model.isMulticamLiveView {
+            returnToMulticamButton
+        } else {
+            interfaceLockButton
+        }
+    }
+
+    /// Lock slot while Live View borrows a multicam member: back to the stage, link kept open.
+    private var returnToMulticamButton: some View {
+        Button {
+            model.returnToMulticam()
+        } label: {
+            Image(systemName: "square.grid.2x2")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(LiveDesign.accent)
+                .frame(
+                    width: CGFloat(MonitorLiveViewModuleLayout.lockButtonSize),
+                    height: CGFloat(MonitorLiveViewModuleLayout.lockButtonSize)
+                )
+                .liquidGlass(
+                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                )
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Return to Multicam")
+        .accessibilityIdentifier("monitor.system.multicamReturn")
+    }
+
+    private var interfaceLockButton: some View {
         let locked = model.interfaceLocked
         return Button {
             model.toggleInterfaceLock()

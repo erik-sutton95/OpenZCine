@@ -52,4 +52,10 @@ public enum ThermalTier: Int, Sendable, CaseIterable, Comparable {
     public func sheddingInterval(base: Double) -> Double {
         base * cadenceMultiplier
     }
+
+    /// Multicam sheds only non-program member polls; the program camera keeps its cadence. It
+    /// never stops a pump and never changes a camera's record, codec or resolution.
+    public func multicamPollInterval(isProgram: Bool, base: Double) -> Double {
+        isProgram ? base : sheddingInterval(base: base)
+    }
 }

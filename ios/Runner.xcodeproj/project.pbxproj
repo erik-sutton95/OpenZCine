@@ -100,6 +100,10 @@
 		N01000000000000000000002 /* MonitorPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000001 /* MonitorPresentation */; };
 		N01000000000000000000004 /* MonitorUI in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000003 /* MonitorUI */; };
 		N01000000000000000000006 /* OpenCineMulticam in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000005 /* OpenCineMulticam */; };
+		N01000000000000000000008 /* MulticamCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000007 /* MulticamCoordinator.swift */; };
+		N0100000000000000000000A /* MulticamStage.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000009 /* MulticamStage.swift */; };
+		N0100000000000000000000C /* MulticamLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000B /* MulticamLinks.swift */; };
+		N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000D /* MulticamCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -236,6 +240,10 @@
 		WTCH00000000000000000041 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		WTCH00000000000000000051 /* OpenZCineWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenZCineWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		WTCH000000000000000000A4 /* Watch.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Watch.xcconfig; sourceTree = "<group>"; };
+		N01000000000000000000007 /* MulticamCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinator.swift; sourceTree = "<group>"; };
+		N01000000000000000000009 /* MulticamStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamStage.swift; sourceTree = "<group>"; };
+		N0100000000000000000000B /* MulticamLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamLinks.swift; sourceTree = "<group>"; };
+		N0100000000000000000000D /* MulticamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -269,6 +277,7 @@
 		331C8082294A63A400263BE5 /* RunnerTests */ = {
 			isa = PBXGroup;
 			children = (
+				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
@@ -312,6 +321,9 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				N0100000000000000000000B /* MulticamLinks.swift */,
+				N01000000000000000000009 /* MulticamStage.swift */,
+				N01000000000000000000007 /* MulticamCoordinator.swift */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
@@ -548,6 +560,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
@@ -571,6 +584,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				N0100000000000000000000C /* MulticamLinks.swift in Sources */,
+				N0100000000000000000000A /* MulticamStage.swift in Sources */,
+				N01000000000000000000008 /* MulticamCoordinator.swift in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */,
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,

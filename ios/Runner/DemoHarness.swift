@@ -913,6 +913,49 @@ enum DemoHarness {
                 // camera-connection flow and needs a physical camera screen to exercise.
                 model.isCameraWiFiScannerPresented = true
             }
+            if let count = env["ZC_DEMO_MULTICAM"].flatMap(Int.init) {
+                stageMulticam(count: count, env: env, model: model)
+            }
+        }
+
+        /// Demo/screenshot affordance: `ZC_DEMO_MULTICAM=<1-4>` opens the multicam stage with that
+        /// many scripted bodies (`DemoMulticamLink`) running the real pumps, plans and member
+        /// queues. `ZC_DEMO_MULTICAM_LAYOUT=grid` picks Grid; `ZC_DEMO_MULTICAM_REC=1` rolls A.
+        @MainActor private static func stageMulticam(
+            count: Int, env: [String: String], model: NativeAppModel
+        ) {
+            model.beginMulticam()
+            let isos: [UInt32] = [800, 400, 1600, 6400]
+            let batteries: [UInt8] = [87, 60, 35, 15]
+            model.multicam.connect = { record in
+                let index = Int(record.serialNumber?.suffix(1) ?? "") ?? 0
+                return DemoMulticamLink(
+                    serialNumber: record.serialNumber ?? "", iso: isos[index % 4],
+                    battery: batteries[index % 4])
+            }
+            if env["ZC_DEMO_MULTICAM_LAYOUT"] == "grid" { model.multicam.arrangement = .grid }
+            let paths: [CameraPath] = [
+                .usbC, .infrastructure(networkName: "Set"), .phoneHotspot,
+                .infrastructure(networkName: "Set"),
+            ]
+            for index in 0..<min(4, max(0, count)) {
+                let name = ["Wide", "Close", "High", "Roam"][index]
+                model.multicam.add(
+                    PTPIPSavedCameraRecord(
+                        host: index == 0 ? "usb:demo-zr" : "10.0.0.\(20 + index)",
+                        displayName: "ZR_300012\(index)",
+                        transport: paths[index].legacyTransportLabel, lastSeenAt: nil,
+                        presentation: PTPIPSavedCameraPresentation(customName: name),
+                        serialNumber: "300012\(index)", path: paths[index]),
+                    reachable: true)
+            }
+            if env["ZC_DEMO_MULTICAM_REC"] == "1" {
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    guard let first = model.multicam.member(atSlot: 0) else { return }
+                    await model.multicam.run(model.multicam.plan(for: first.id))
+                }
+            }
         }
     }
 

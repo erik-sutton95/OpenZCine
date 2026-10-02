@@ -327,10 +327,30 @@ struct StartupSavedCamerasView: View {
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .tracking(1.4)
                 .foregroundStyle(StartupColors.muted)
-            Text("Tap a camera to connect")
-                .font(.system(size: 25, weight: .bold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
-                .padding(.top, 6)
+            HStack(alignment: .center, spacing: 12) {
+                Text("Tap a camera to connect")
+                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                    .foregroundStyle(StartupColors.ink)
+                Spacer(minLength: 0)
+                // Multicam: an empty stage of four tiles; cameras are added from there.
+                Button {
+                    model.beginMulticam()
+                } label: {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(StartupColors.ink)
+                        .frame(width: 44, height: 44)
+                        .background(StartupColors.control, in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(StartupColors.border.opacity(0.08), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(isBusy)
+                .accessibilityLabel("Multicam")
+                .accessibilityIdentifier("startup.multicam")
+            }
+            .padding(.top, 6)
 
             // Indicators off: the system scroll bar draws INSIDE the padded content and ran
             // straight over the card borders; the wizard's scroller already hides it and leans
