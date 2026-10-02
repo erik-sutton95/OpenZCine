@@ -1156,168 +1156,11 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
     listOf("R3D NE", "N-RAW", "ProRes RAW HQ", "ProRes 422 HQ", "H.265 10-bit")
 
 /**
- * The DISP 3 command dashboard: camera-backed health and primary controls at
- * left, with an iOS-shaped Image / Focus / Audio / Monitor companion column at
- * right (`ios/Runner/MonitorPanels.swift` CommandMonitor).
- */
-@Composable
-internal fun CommandDashboard(
-    recording: Boolean,
-    timecodeRetention: MonitorTimecodeRetention,
-    /**
-     * The live-view header's timecode status bit. A body that runs no timecode gets no hero
-     * readout — the record chip takes the row back rather than heading the dashboard with a
-     * frozen 00:00:00:00.
-     */
-    showsTimecode: Boolean = true,
-    sessionState: CameraSessionState,
-    presentation: CommandDashboardPresentation,
-    controlsEnabled: Boolean,
-    pendingControl: CameraControl?,
-    onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveTile: (CommandTileKind, Int) -> Unit,
-    onReorderStarted: () -> Unit = {},
-    liveFps: String = presentation.frameRate,
-    signalBars: Int = 0,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(
-            Modifier.weight(2.35f).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RecordChip(recording)
-                // iOS CommandTimecodeReadout: monospaced 60pt, shrinking into whatever the
-                // chip leaves (`minimumScaleFactor(0.78)`) — the hero timecode is a hair too
-                // wide for the column on a 16:9 landscape deck, where the dashboard narrows to
-                // clear the side rail.
-                if (showsTimecode) {
-                    BoxWithConstraints(Modifier.weight(1f)) {
-                        FitScale(maxWidth) {
-                            RetainedCameraTimecodeReadout(
-                                retention = timecodeRetention,
-                                sessionState = sessionState,
-                                sizeSp = 60f,
-                            )
-                        }
-                    }
-                }
-            }
-            CommandHealthStrip(
-                presentation = presentation,
-                liveFps = liveFps,
-                signalBars = signalBars,
-            )
-            CommandGrid(
-                tiles = presentation.tiles,
-                controlsEnabled = controlsEnabled,
-                pendingControl = pendingControl,
-                onOpenControl = onOpenControl,
-                onMoveTile = onMoveTile,
-                onReorderStarted = onReorderStarted,
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            )
-        }
-        // iOS sideWidth = max(160, width * 0.27) ≈ 0.85fr of the 2.35+0.85 split.
-        CommandSideColumn(
-            sections = presentation.sideSections,
-            controlsEnabled = controlsEnabled,
-            pendingControl = pendingControl,
-            onOpenControl = onOpenControl,
-            modifier = Modifier.weight(0.85f).fillMaxHeight(),
-        )
-    }
-}
-
-/**
- * The portrait command surface keeps the system rail outside its viewport and
- * makes every secondary control reachable through one labeled scroll region.
- */
-@Composable
-internal fun PortraitCommandDashboard(
-    presentation: CommandDashboardPresentation,
-    timecodeRetention: MonitorTimecodeRetention,
-    /** As [CommandDashboard]: no body timecode, no hero band — the grid takes the space back. */
-    showsTimecode: Boolean = true,
-    sessionState: CameraSessionState,
-    controlsEnabled: Boolean,
-    pendingControl: CameraControl?,
-    onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveTile: (CommandTileKind, Int) -> Unit,
-    onReorderStarted: () -> Unit = {},
-    modifier: Modifier = Modifier,
-) {
-    CommandDashboardScrollContainer(
-        accessibilityLabel = stringResource(R.string.command_dashboard_description),
-        modifier = modifier.background(LiveDesign.background),
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (showsTimecode) {
-                BoxWithConstraints(
-                    Modifier.fillMaxWidth().height(80.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    FitScale(maxWidth) {
-                        RetainedCameraTimecodeReadout(
-                            retention = timecodeRetention,
-                            sessionState = sessionState,
-                            sizeSp = 52f,
-                        )
-                    }
-                }
-            }
-            CommandGrid(
-                tiles = presentation.tiles,
-                controlsEnabled = controlsEnabled,
-                pendingControl = pendingControl,
-                onOpenControl = onOpenControl,
-                onMoveTile = onMoveTile,
-                onReorderStarted = onReorderStarted,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .height(portraitCommandGridHeightDp(presentation.tiles.size).dp),
-            )
-            CommandSecondarySections(
-                sections = presentation.sideSections,
-                controlsEnabled = controlsEnabled,
-                pendingControl = pendingControl,
-                onOpenControl = onOpenControl,
-                compact = false,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}
-
-/** Hero timecode with the accent frame field (iOS `CommandTimecodeReadout`). */
-@Composable
-internal fun CommandTimecode(
-    timecode: LiveFrameTimecode?,
-    sizeSp: Float,
-    modifier: Modifier = Modifier,
-) {
-    CameraTimecodeReadout(timecode = timecode, sizeSp = sizeSp, modifier = modifier)
-}
-
-/**
  * Camera-derived Temp / Storage / Camera / Lens strip + live FPS chip
  * (iOS `CommandHealthStrip` — no "Read" block; FPS lives in [FpsChip]).
  */
 @Composable
-private fun CommandHealthStrip(
+internal fun CommandHealthStrip(
     presentation: CommandDashboardPresentation,
     liveFps: String,
     signalBars: Int,
@@ -1665,7 +1508,7 @@ internal fun commandTileValueSize(value: String): Float =
 
 /** The compact iOS-shaped Image / Focus / Audio companion column. */
 @Composable
-private fun CommandSideColumn(
+internal fun CommandSideColumn(
     sections: List<CommandSideSectionPresentation>,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
@@ -1689,7 +1532,7 @@ private fun CommandSideColumn(
 
 /** The shared Image / Focus / Audio / Monitor section stack (iOS CommandSideColumn). */
 @Composable
-private fun CommandSecondarySections(
+internal fun CommandSecondarySections(
     sections: List<CommandSideSectionPresentation>,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,

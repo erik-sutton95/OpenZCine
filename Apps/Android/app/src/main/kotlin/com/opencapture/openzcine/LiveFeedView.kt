@@ -482,6 +482,8 @@ fun LiveFeedView(
      */
     mirrored: Boolean = false,
     preferComposablePresentation: Boolean = false,
+    /** Pauses acquisition without replacing the retained native picture host or held raster. */
+    collectFrames: Boolean = true,
 ) {
     val applicationContext = LocalContext.current.applicationContext
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
@@ -641,6 +643,9 @@ fun LiveFeedView(
         fallbackFrame.value = null
         fallbackColorMode.value = LiveFeedColorMode.UNKNOWN
         gpuBackend.clearFrame()
+    }
+    LaunchedEffect(source, presentationState, collectFrames) {
+        if (!collectFrames) return@LaunchedEffect
         if (BuildConfig.DEBUG) {
             Log.d(
                 TAG,
@@ -702,6 +707,7 @@ fun LiveFeedView(
         AndroidView(
             factory = { context ->
                 gpuBackend.createView(context).also { view ->
+                    view.tag = "monitor.native.picture"
                     gpuBackend.attach(view)
                 }
             },

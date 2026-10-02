@@ -1,7 +1,8 @@
 import CoreImage
+import MonitorUI
+import OpenZCineCore
 import SwiftUI
 import UIKit
-import OpenZCineCore
 
 enum LiveDesign {
     static let background = Color(red: 0.072, green: 0.064, blue: 0.053)
@@ -39,12 +40,6 @@ struct MonitorExperience: View {
             .overlay {
                 TimerTallyBorderOverlay()
             }
-            // A dropped session keeps the operator here on the held frame, with Retry / Operator
-            // menu, instead of collapsing the monitor back to the connect screen.
-            .overlay {
-                MonitorRecoveryOverlay()
-                    .animation(.easeOut(duration: 0.2), value: model.sessionRecovery)
-            }
             // Instant playback covers the whole monitor — a focused look at the captured
             // frame, above every piece of chrome.
             .overlay {
@@ -73,6 +68,7 @@ struct MonitorExperience: View {
 
 private struct LiveViewShell: View {
     @Environment(NativeAppModel.self) private var model
+    @Environment(\.monitorWindowGeometry) private var windowGeometry
     /// OBSERVED state, not a body-time read. The two landscapes are invisible to layout —
     /// same size, symmetric safe areas — so flipping between them changes nothing SwiftUI
     /// already watches, and a body-time read of the orientation stayed stale until some other
@@ -87,21 +83,19 @@ private struct LiveViewShell: View {
             let context = LiveViewLayoutContext(
                 proxy: proxy,
                 deviceOrientation: deviceOrientation,
-                screenWidth: screenWidth
+                screenWidth: screenWidth, windowGeometry: windowGeometry
             )
 
             // One view tree for both orientations, driven by the zone map: rotation is a geometry
             // change under stable view identity — the `.easeInOut(value: isPortrait)` glides every
             // module to its new frame. `MonitorFullScreenPanelOverlay` is logically part of the
             // shell but must mount here, past `.ignoresSafeArea` (see below).
-            MonitorShell(context: context)
+            NikonMonitorShell(context: context)
                 .environment(model)
                 .animation(.easeInOut(duration: 0.3), value: context.isPortrait)
                 // The landscape-to-landscape flip animates for the same reason the portrait one
                 // does — the modules glide to their mirrored frames under stable identity.
                 .animation(.easeInOut(duration: 0.3), value: context.horizontalDirection)
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .ignoresSafeArea(.container, edges: .all)
                 // Tally + full-screen panel overlay the already-extended (physical-screen) layer
                 // so both reach the bezel on every edge — mounted inside `MonitorShell` they pin
                 // to the safe-area frame (its `GeometryReader` reports its size before this
@@ -109,15 +103,6 @@ private struct LiveViewShell: View {
                 // a property off a sibling `MonitorShell` instance) so `.environment` installs on
                 // ITS tree position before `@Environment` resolves — the sibling-property form
                 // crashed on `model` resolving to the missing default.
-                .overlay(alignment: .topLeading) {
-                    MonitorFullScreenPanelOverlay(context: context)
-                        .environment(model)
-                }
-                .overlay {
-                    if model.cameraState.recordState == .recording {
-                        RecordingBorderModule()
-                    }
-                }
                 .overlayPreferenceValue(LiveViewGuideAnchorKey.self) { anchors in
                     if let step = model.liveViewGuideStep,
                         model.activePanel == nil,
@@ -136,6 +121,7 @@ private struct LiveViewShell: View {
                     }
                 }
         }
+        .ignoresSafeArea(.container, edges: .all)
         // Snappy panel insert/remove so dismissing a popup feels near-instant.
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
@@ -200,6 +186,7 @@ struct LiveViewLayoutContext {
     let horizontalDirection: MonitorHorizontalLayoutDirection
     let viewportWidth: Double
     let canvasOffsetX: Double
+    let topControlInset: Double
     /// True when the viewport is taller than it is wide — drives the portrait monitor shell.
     let isPortrait: Bool
     /// Full PHYSICAL viewport height for the portrait zone layout. The GeometryReader reports the
@@ -209,11 +196,27 @@ struct LiveViewLayoutContext {
     let viewportHeight: Double
 
     @MainActor
-    init(proxy: GeometryProxy, deviceOrientation: MonitorDeviceOrientation, screenWidth: Double?) {
-        feedSafeArea = proxy.monitorEdgeInsets
-        isPortrait = proxy.size.height > proxy.size.width
+    init(
+        proxy: GeometryProxy, deviceOrientation: MonitorDeviceOrientation, screenWidth: Double?,
+        windowGeometry: MonitorWindowGeometry = MonitorWindowGeometry()
+    ) {
+        let physical = windowGeometry.size.width > 0 && windowGeometry.size.height > 0
+        // The root already observes the physical UIWindow. An edge-to-edge SwiftUI child may
+        // report zero safe insets; pass the actual window insets without adding them to its size.
+        feedSafeArea =
+            physical
+            ? MonitorEdgeInsets(
+                top: windowGeometry.safeArea.top, leading: windowGeometry.safeArea.leading,
+                bottom: windowGeometry.safeArea.bottom, trailing: windowGeometry.safeArea.trailing
+            ) : proxy.monitorEdgeInsets
+        isPortrait =
+            physical
+            ? windowGeometry.size.height > windowGeometry.size.width
+            : proxy.size.height > proxy.size.width
         viewportHeight =
-            Double(proxy.size.height) + max(0, feedSafeArea.top) + max(0, feedSafeArea.bottom)
+            physical
+            ? windowGeometry.size.height
+            : Double(proxy.size.height) + max(0, feedSafeArea.top) + max(0, feedSafeArea.bottom)
         chromeInsets =
             MonitorChromeLayout.insets(feedSafeArea: feedSafeArea)
             .clearingWindowControls
@@ -221,20 +224,26 @@ struct LiveViewLayoutContext {
             deviceOrientation: deviceOrientation,
             safeArea: feedSafeArea
         )
-        viewportWidth = MonitorLiveViewViewport.fullWidth(
-            layoutWidth: Double(proxy.size.width),
-            safeArea: feedSafeArea,
-            screenWidth: screenWidth,
-            geometrySpace: .safeArea
-        )
-        canvasOffsetX = MonitorLiveViewViewport.canvasOffsetX(
-            layoutWidth: Double(proxy.size.width),
-            safeArea: feedSafeArea,
-            screenWidth: screenWidth
-        )
+        viewportWidth =
+            physical
+            ? windowGeometry.size.width
+            : MonitorLiveViewViewport.fullWidth(
+                layoutWidth: Double(proxy.size.width),
+                safeArea: feedSafeArea,
+                screenWidth: screenWidth,
+                geometrySpace: .safeArea
+            )
+        topControlInset = Double(windowGeometry.topControlInset)
+        canvasOffsetX =
+            physical
+            ? 0
+            : MonitorLiveViewViewport.canvasOffsetX(
+                layoutWidth: Double(proxy.size.width),
+                safeArea: feedSafeArea,
+                screenWidth: screenWidth
+            )
     }
 }
-
 @MainActor
 private enum MonitorDeviceOrientationReader {
     static func current() -> MonitorDeviceOrientation {
@@ -280,23 +289,6 @@ extension UIInterfaceOrientation {
     }
 }
 
-struct RecordingBorderModule: View {
-    var body: some View {
-        // Fills the physical screen (it overlays the extended layer); `strokeBorder` keeps the whole
-        // line inside the bezel, and the device's own corner radius makes it track the rounded edge.
-        RoundedRectangle(cornerRadius: Self.displayCornerRadius, style: .continuous)
-            .strokeBorder(LiveDesign.rec, lineWidth: 4)
-            .shadow(color: LiveDesign.rec.opacity(0.55), radius: 14)
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-    }
-
-    /// Approximate display corner radius. No public API exists, and the private
-    /// `_displayCornerRadius` KVC key risks App Store rejection — the corner is decorative, so a
-    /// fixed value tuned to modern iPhones is a few points off at most.
-    @MainActor static var displayCornerRadius: CGFloat { 52 }
-}
-
 struct LiveFeedModule: View {
     @Environment(NativeAppModel.self) private var model
     let safeArea: MonitorEdgeInsets
@@ -309,6 +301,8 @@ struct LiveFeedModule: View {
     /// height, and the derived 16:9 box renders oversized and shifted up — the fill-mode "cropped
     /// on top and right" bug. Nil (landscape) keeps the measured path unchanged.
     var fixedContentHeight: Double? = nil
+    /// The shared canvas already decided the picture footprint; native rendering only fills it.
+    var sharedPictureGeometry = false
 
     /// True while a finger is held (roughly still) on the feed — drives the AF-box lock "draw-in".
     @GestureState private var feedHold = false
@@ -488,14 +482,19 @@ struct LiveFeedModule: View {
                     ?? (isPhotography
                         ? model.cameraPropertySnapshot.photographyFeedAspect
                         : MonitorFeedLayout.aspectRatio)
-                let feedFrame = MonitorFeedLayout.fullBleedFrame(
-                    viewportWidth: viewportWidth,
-                    viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
-                    safeArea: safeArea,
-                    horizontalDirection: horizontalDirection,
-                    aspect: feedRotation.isVertical ? 1 / sourceAspect : sourceAspect,
-                    centered: isPhotography || feedRotation.isVertical
-                )
+                let feedFrame =
+                    sharedPictureGeometry
+                    ? MonitorFeedFrame(
+                        x: 0, y: 0, width: viewportWidth,
+                        height: fixedContentHeight ?? Double(proxy.size.height))
+                    : MonitorFeedLayout.fullBleedFrame(
+                        viewportWidth: viewportWidth,
+                        viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
+                        safeArea: safeArea,
+                        horizontalDirection: horizontalDirection,
+                        aspect: feedRotation.isVertical ? 1 / sourceAspect : sourceAspect,
+                        centered: isPhotography || feedRotation.isVertical
+                    )
                 let imageWidth = CGFloat(feedFrame.width)
                 let imageHeight = CGFloat(feedFrame.height)
                 ZStack(alignment: .leading) {
@@ -767,6 +766,7 @@ private struct DemoProcessedLiveFrameView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
+        view.accessibilityIdentifier = "monitor.native.picture"
         // Fit, never fill: an aspect mismatch letterboxes instead of cropping (#115).
         view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
@@ -1305,6 +1305,7 @@ private struct LiveFrameView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
+        view.accessibilityIdentifier = "monitor.native.picture"
         // Fit, never fill: an aspect mismatch letterboxes instead of cropping (#115).
         view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
@@ -1619,23 +1620,6 @@ struct CaptureSettingButton: View {
         return picker.valueLabel == value.label
     }
 
-    /// The widest value this setting can show, used to fix the readout width so the bar stays put.
-    private var widestValue: String {
-        switch value.label {
-        case "ISO": "25600"  // XXXXX
-        case "SHUTTER": "1/16000"  // X/XXXXX
-        case "IRIS": "f/2.8"  // f/X.X
-        case "FOCUS": "Wide-L"
-        case "WB": "5560K"  // Kelvin dial step; presets render as icons (narrower)
-        // Photography strip pins, so the bar doesn't shift as stills values change.
-        case "MODE": "Auto"
-        case "DRIVE": "Single"
-        case "FLASH": "Red+S"
-        case "METER": "Matrix"
-        default: value.value
-        }
-    }
-
     /// The value as shown in the bar — abbreviated where the full form (kept in the drum) is too
     /// long for the readout.
     private var displayValue: String {
@@ -1702,46 +1686,20 @@ struct CaptureSettingButton: View {
         }
     }
 
-    @ViewBuilder
     private var readoutLabel: some View {
-        VStack(spacing: 3) {
-            HStack(spacing: 3) {
-                Text(value.label)
-                    .font(.system(size: 9 * scale, weight: .semibold, design: .default))
-                    .foregroundStyle(
-                        isActive ? LiveDesign.accent.opacity(0.85) : LiveDesign.faint)
-                if isControlLocked {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 7.5, weight: .semibold))
-                        .foregroundStyle(LiveDesign.accent.opacity(0.9))
-                }
+        MonitorReadout(value.label, active: isActive) {
+            if let icon = valueIcon {
+                Image(systemName: icon)
+            } else {
+                Text(displayValue)
             }
-            Text(widestValue)
-                .font(.system(size: 19 * scale, weight: .medium, design: .monospaced))
-                .hidden()
-                .overlay {
-                    if let icon = valueIcon {
-                        Image(systemName: icon)
-                            .font(.system(size: 20 * scale, weight: .regular))
-                            .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.text)
-                    } else {
-                        Text(displayValue)
-                            .font(.system(size: 19 * scale, weight: .medium, design: .monospaced))
-                            .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.text)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                    }
-                }
         }
-        .padding(.vertical, 5 * scale)
-        .padding(.horizontal, 8 * scale)
-        .background {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .fill(isActive ? LiveDesign.accentDim : Color.clear)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .strokeBorder(isActive ? LiveDesign.accentDim : Color.clear, lineWidth: 1)
+        .overlay(alignment: .topTrailing) {
+            if isControlLocked {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 7.5, weight: .semibold))
+                    .foregroundStyle(LiveDesign.accent)
+            }
         }
     }
 
