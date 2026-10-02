@@ -88,6 +88,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.NikonNative
 
 private const val MAX_PREVIEW_DIMENSION_PX = 2_048
 private const val PROGRESSIVE_DECODE_STEP_BYTES = 256L * 1_024L
@@ -168,7 +169,7 @@ internal fun MediaStillViewer(
                 stopTransfer = {
                     if (cameraTransferAvailable && connectionOwner != null) {
                         withContext(Dispatchers.IO) {
-                            SwiftCore.sessionStopMediaTransfer(connectionOwner)
+                            NikonNative.sessionStopMediaTransfer(connectionOwner)
                         }
                     }
                 },
@@ -197,7 +198,7 @@ internal fun MediaStillViewer(
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
         val owner = connectionOwner ?: return@LaunchedEffect
         val read =
-            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(owner, clip.handle.toInt()) }
+            withContext(Dispatchers.IO) { NikonNative.sessionObjectRating(owner, clip.handle.toInt()) }
         if (read >= 0) {
             ratingStars = read
             // Self-correct the local favorite cache against the body (truth) on open — this is
@@ -212,7 +213,7 @@ internal fun MediaStillViewer(
         val cameraThumbnail =
             withContext(Dispatchers.IO) {
                 if (cameraTransferAvailable && SwiftCore.isAvailable && connectionOwner != null) {
-                    SwiftCore.sessionThumbnail(connectionOwner, displayClip.handle.toInt())?.let { jpeg ->
+                    NikonNative.sessionThumbnail(connectionOwner, displayClip.handle.toInt())?.let { jpeg ->
                         // Stripped thumb bytes fall back to the session-learned orientation.
                         val key = displayClip.libraryKey(cameraID)
                         val orientation =
@@ -400,12 +401,12 @@ internal fun MediaStillViewer(
                                 // -1 = "could not be attempted"; never another camera's card.
                                 val owner = connectionOwner ?: return@withContext -1
                                 val result =
-                                    SwiftCore.sessionSetObjectRating(owner, clip.handle.toInt(), target)
+                                    NikonNative.sessionSetObjectRating(owner, clip.handle.toInt(), target)
                                 if (result >= 0 && rawSibling != null) {
                                     // iOS parity: a pair writes both sides, tolerating
                                     // the RAW side's refusal; the JPEG handle stays the
                                     // confirming identity. [verify-on-HW]
-                                    SwiftCore.sessionSetObjectRating(
+                                    NikonNative.sessionSetObjectRating(
                                         owner,
                                         rawSibling.handle.toInt(),
                                         target,

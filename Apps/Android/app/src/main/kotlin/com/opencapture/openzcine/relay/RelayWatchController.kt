@@ -1,12 +1,12 @@
 package com.opencapture.openzcine.relay
 
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraControlException
-import com.opencapture.openzcine.core.CameraFocusPoint
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraControlException
+import com.opencapture.opencine.nikon.CameraFocusPoint
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

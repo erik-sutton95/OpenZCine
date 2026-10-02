@@ -27,6 +27,8 @@ includeBuild("../../../OpenCine/Android") {
         // Shared Compose monitor UI and the multicam engine (NIKON-01).
         substitute(module("com.opencapture.opencine:monitor-ui")).using(project(":monitor-ui"))
         substitute(module("com.opencapture.opencine:multicam")).using(project(":multicam"))
+        // The Nikon session, its contract and the NikonNative JNI facade (SHELL-04).
+        substitute(module("com.opencapture.opencine:nikon")).using(project(":nikon"))
     }
 }
 

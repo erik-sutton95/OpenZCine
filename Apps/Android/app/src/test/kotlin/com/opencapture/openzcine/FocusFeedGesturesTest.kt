@@ -1,9 +1,9 @@
 package com.opencapture.openzcine
 
 import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.LiveFocusBox
-import com.opencapture.openzcine.core.LiveFocusInfo
-import com.opencapture.openzcine.core.LiveFocusResult
+import com.opencapture.opencine.nikon.LiveFocusBox
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals

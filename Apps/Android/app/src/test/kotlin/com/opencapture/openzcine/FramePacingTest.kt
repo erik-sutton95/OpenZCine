@@ -1,6 +1,6 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrame
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

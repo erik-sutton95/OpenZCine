@@ -60,14 +60,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import java.util.concurrent.atomic.AtomicBoolean
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
-import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
-import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
+import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
@@ -127,6 +127,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.NikonNative
 
 private enum class MonitorOverlay {
     NONE,
@@ -170,6 +171,8 @@ class MainActivity : ComponentActivity() {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition { !composeFirstFrameDrawn.get() }
         super.onCreate(savedInstanceState)
+        // Load the Swift core (and with it OpenCine's NikonNative) before any camera session.
+        SwiftCore.isAvailable
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
         diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
         publishFrameioRedirect(intent)

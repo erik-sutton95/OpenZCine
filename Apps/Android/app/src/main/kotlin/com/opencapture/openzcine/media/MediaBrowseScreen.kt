@@ -130,7 +130,7 @@ import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import com.opencapture.openzcine.core.CameraStorageSlotStatus
+import com.opencapture.opencine.nikon.CameraStorageSlotStatus
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -144,6 +144,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.NikonNative
 
 /**
  * ObjectInfo budget per cursor advance. The facade alternates cards inside
@@ -767,7 +768,7 @@ internal fun MediaBrowseScreen(
         // object. The grid holds steady (the listing stays cancelled) — one progress bar covers
         // the run and it refreshes once at the end.
         withContext(Dispatchers.IO) {
-            if (SwiftCore.isAvailable) connectionOwner?.let(SwiftCore::sessionStopMediaTransfer)
+            if (SwiftCore.isAvailable) connectionOwner?.let(NikonNative::sessionStopMediaTransfer)
         }
         deletionProgress = 0 to targets.size
         targets.forEachIndexed { index, clip ->
@@ -777,7 +778,7 @@ internal fun MediaBrowseScreen(
                 if (
                     SwiftCore.isAvailable &&
                         connectionOwner != null &&
-                        SwiftCore.sessionDeleteObject(connectionOwner, clip.handle.toInt())
+                        NikonNative.sessionDeleteObject(connectionOwner, clip.handle.toInt())
                 ) {
                     val owner = ownerCameraID(clip)
                     runCatching {
@@ -990,7 +991,7 @@ internal fun MediaBrowseScreen(
         ) {
             scope.launch {
                 withContext(Dispatchers.IO) {
-                    SwiftCore.sessionSetObjectRating(
+                    NikonNative.sessionSetObjectRating(
                         ratingOwner,
                         clip.handle.toInt(),
                         if (nowFavorite) 1 else 0,
@@ -1397,7 +1398,7 @@ internal fun MediaBrowseScreen(
             withContext(NonCancellable) { frameioController.endInternetHop() }
         }
         if (effectiveCameraConnected && connectionOwner != null) {
-            withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode(connectionOwner) }
+            withContext(Dispatchers.IO) { NikonNative.sessionExitMediaMode(connectionOwner) }
         }
         onClose()
     }
@@ -3575,7 +3576,7 @@ private fun ClipArtwork(
                             SwiftCore.isAvailable &&
                             connectionOwner != null
                     ) {
-                        SwiftCore.sessionThumbnail(connectionOwner, clip.handle.toInt())?.let { jpeg ->
+                        NikonNative.sessionThumbnail(connectionOwner, clip.handle.toInt())?.let { jpeg ->
                             // The body's thumb bytes may be EXIF-stripped — fall back to the
                             // orientation this session learned from the object's full file.
                             val key = clip.libraryKey(cameraID)

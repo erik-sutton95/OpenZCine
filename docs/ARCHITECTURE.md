@@ -20,10 +20,11 @@ Instead, the guide's organizing principles map onto the existing tree as follows
 | Core | `Sources/OpenZCineCore` | Portable camera protocol, state machines, business logic |
 | Core tests | `Tests/OpenZCineCoreTests` | Swift Testing suite for the shared core |
 | Shell tests | `ios/RunnerTests` | Swift Testing suite for the iOS shell |
-| Android facade | `Sources/OpenZCineAndroidFacade` | Swift-owned Android sessions and JNI wires |
-| Facade tests | `Tests/OpenZCineAndroidFacadeTests` | Swift tests for Android transport/session wires |
+| Android facade | `Sources/OpenZCineAndroidFacade` | The app's own JNI wires (scopes, feed effects, LUTs, Frame.io); links OpenCine `OpenCineNikonAndroid` (Swift-owned Android sessions and their JNI exports) |
+| Facade tests | `Tests/OpenZCineAndroidFacadeTests` | Swift tests for the app's wires (session tests: OpenCine `OpenCineNikonAndroidTests`) |
 | Android app | `Apps/Android/app` | Compose phone shell, lifecycle, rendering, storage, and adapters |
-| Android API | `Apps/Android/core-api` | Typed Kotlin interface between the app and camera session |
+| Android session | OpenCine `Android/nikon` | Typed Kotlin session interface (`CameraSession`, `LiveFrameSource`) and its Swift-backed implementation |
+| Android API | `Apps/Android/core-api` | Monitor availability and relay lease/encoder types |
 | Wear OS | `Apps/Android/wear`, `Apps/Android/wear-relay` | Wear UI and phone-mediated relay |
 | Android tests | `Apps/Android/*/src/test`, `Apps/Android/*/src/androidTest` | JVM policy tests and device UI tests |
 
@@ -78,8 +79,9 @@ All new code in the iOS shell follows these conventions:
 
 - Jetpack Compose owns UI and app-local presentation state; Kotlin never packs PTP commands or
   invents camera property values.
-- `core-api` defines the typed Kotlin session boundary. `OpenZCineAndroidFacade` owns PTP session
-  serialization, raw protocol values, transport framing, and JNI memory/lifetime rules.
+- OpenCine `:nikon` defines the typed Kotlin session boundary. OpenCine `OpenCineNikonAndroid`
+  (linked into this app's `OpenZCineAndroidFacade` library) owns PTP session serialization, raw
+  protocol values, transport framing, and JNI memory/lifetime rules.
 - Android adapters own NSD, USB Host, permissions, CameraX/ML Kit, Keystore, MediaStore, lifecycle,
   rendering, and platform share surfaces.
 - JVM tests cover pure state/policy. Instrumentation tests cover critical Compose and Android
@@ -215,8 +217,9 @@ shared abstraction cannot sit any lower.
   is transport-agnostic.
 - `Apps/Android/app/.../transport` owns Android NSD and USB Host discovery plus raw socket/USB byte
   adapters. It does not build PTP operations locally.
-- `Sources/OpenZCineAndroidFacade` owns Android PTP-IP and USB transaction/session serialization,
-  response validation, event draining, and the narrow JNI records consumed by `core-api`.
+- OpenCine `Sources/OpenCineNikonAndroid` owns Android PTP-IP and USB transaction/session
+  serialization, response validation, event draining, and the narrow JNI records consumed by
+  OpenCine `:nikon`.
 
 USB cameras are identified by stable `usb:<device-id>` host keys in discovery results and saved
 camera records (`transport: "USB-C"`), so startup policies can skip network probing for tethered

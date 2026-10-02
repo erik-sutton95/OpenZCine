@@ -1,16 +1,16 @@
 package com.opencapture.openzcine
 
 import androidx.compose.ui.geometry.Offset
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraControlCapabilities
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
-import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraShutterMode
-import com.opencapture.openzcine.core.CameraStorageStatus
-import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraControlCapabilities
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraShutterMode
+import com.opencapture.opencine.nikon.CameraStorageStatus
+import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals

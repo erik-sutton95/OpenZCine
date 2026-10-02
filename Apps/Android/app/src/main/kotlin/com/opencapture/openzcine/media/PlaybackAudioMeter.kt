@@ -11,8 +11,8 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.core.LiveAudioMeterChannel
-import com.opencapture.openzcine.core.LiveAudioMeterLevels
+import com.opencapture.opencine.nikon.LiveAudioMeterChannel
+import com.opencapture.opencine.nikon.LiveAudioMeterLevels
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay

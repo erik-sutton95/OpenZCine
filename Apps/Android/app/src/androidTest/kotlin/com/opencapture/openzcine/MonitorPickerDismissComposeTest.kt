@@ -9,7 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.opencine.nikon.CameraControl
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test

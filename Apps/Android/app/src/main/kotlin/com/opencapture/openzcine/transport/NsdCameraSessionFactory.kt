@@ -1,10 +1,10 @@
 package com.opencapture.openzcine.transport
 
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingException
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingException
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import java.io.IOException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

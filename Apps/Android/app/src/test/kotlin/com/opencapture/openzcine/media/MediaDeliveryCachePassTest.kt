@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import com.opencapture.opencine.nikon.NikonNative
 
 /**
  * The delivery cache pre-pass: every selected clip reaches the destination, and the ones the
@@ -124,7 +125,7 @@ class MediaDeliveryCachePassTest {
             handle: Int,
             reportedSize: Long,
             resumeOffset: Long,
-            listener: SwiftCore.MediaTransferListener,
+            listener: NikonNative.MediaTransferListener,
         ) {
             startedHandles += handle
             if (handle in failingHandles) {

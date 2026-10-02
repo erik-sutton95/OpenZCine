@@ -9,13 +9,13 @@ import com.opencapture.openzcine.monitorResolutionLabel
 import com.opencapture.openzcine.monitorStorageLabel
 import com.opencapture.openzcine.monitorValueOrNull
 import com.opencapture.openzcine.validBatteryPercent
-import com.opencapture.openzcine.core.CameraFocusPoint
-import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.opencine.nikon.CameraFocusPoint
+import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import com.opencapture.openzcine.core.RelayEncoderProfile
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveFrameSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import com.opencapture.opencine.nikon.LiveFocusResult
 
 /** What the Sharing rows and the grant banner render. */
 data class RelayBroadcastUiState(
@@ -158,9 +159,9 @@ class RelayBroadcastController(
                                         coordinateHeight = focus.coordinateHeight,
                                         focusResult =
                                             when (focus.result) {
-                                                com.opencapture.openzcine.core.LiveFocusResult
+                                                LiveFocusResult
                                                     .NOT_FOCUSED -> 1
-                                                com.opencapture.openzcine.core.LiveFocusResult
+                                                LiveFocusResult
                                                     .FOCUSED -> 2
                                                 else -> 0
                                             },

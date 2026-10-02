@@ -166,6 +166,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.NikonNative
 
 private const val PLAYBACK_ZOOM_MAX = 4f
 
@@ -325,7 +326,7 @@ private fun PlaybackClipSession(
                 stopTransfer = {
                     if (cameraTransferAvailable && connectionOwner != null) {
                         withContext(Dispatchers.IO) {
-                            SwiftCore.sessionStopMediaTransfer(connectionOwner)
+                            NikonNative.sessionStopMediaTransfer(connectionOwner)
                         }
                     }
                 },
@@ -360,7 +361,7 @@ private fun PlaybackClipSession(
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
         val owner = connectionOwner ?: return@LaunchedEffect
         val read =
-            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(owner, clip.handle.toInt()) }
+            withContext(Dispatchers.IO) { NikonNative.sessionObjectRating(owner, clip.handle.toInt()) }
         if (read >= 0) {
             ratingStars = read
             // Self-correct the local favorite cache against the body (truth) on open.
@@ -382,7 +383,7 @@ private fun PlaybackClipSession(
                 withContext(Dispatchers.IO) {
                     // -1 = "could not be attempted"; never another camera's card.
                     val owner = connectionOwner ?: return@withContext -1
-                    SwiftCore.sessionSetObjectRating(owner, clip.handle.toInt(), target)
+                    NikonNative.sessionSetObjectRating(owner, clip.handle.toInt(), target)
                 }
             when (val outcome = ratingWriteResult(written)) {
                 is RatingWriteResult.Confirmed -> {

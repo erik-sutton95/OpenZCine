@@ -28,8 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.openzcine.settings.PanelCloseButton
 
 /**

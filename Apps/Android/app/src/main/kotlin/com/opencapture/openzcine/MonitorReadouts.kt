@@ -3,11 +3,11 @@ package com.opencapture.openzcine
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraStorageStatus
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraStorageStatus
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import java.util.Locale
 import kotlin.math.ceil
 

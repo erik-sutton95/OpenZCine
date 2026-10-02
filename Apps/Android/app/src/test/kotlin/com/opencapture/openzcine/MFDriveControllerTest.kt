@@ -1,9 +1,9 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.MFDriveOutcome
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.MFDriveOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

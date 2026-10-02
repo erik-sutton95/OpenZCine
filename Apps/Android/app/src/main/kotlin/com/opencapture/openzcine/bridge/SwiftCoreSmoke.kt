@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.bridge
 
 import android.util.Log
+import com.opencapture.opencine.nikon.NikonNative
 
 /**
  * Debug-only smoke check proving the Swift core answers over JNI: logs the
@@ -32,8 +33,8 @@ object SwiftCoreSmoke {
         }
         formatReport(
             version = SwiftCore.coreVersion(),
-            ssid = SwiftCore.deriveAccessPointSSID(SAMPLE_CAMERA_NAME),
-            displayName = SwiftCore.resolveDisplayName(SAMPLE_CAMERA_NAME),
+            ssid = NikonNative.deriveAccessPointSSID(SAMPLE_CAMERA_NAME),
+            displayName = NikonNative.resolveDisplayName(SAMPLE_CAMERA_NAME),
         ).forEach { Log.i(TAG, it) }
         SwiftCore.startConnectionDemo { title, detail ->
             Log.i(TAG, "phase: $title — $detail")

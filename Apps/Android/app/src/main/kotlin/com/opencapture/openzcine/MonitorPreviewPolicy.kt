@@ -1,7 +1,7 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.ChromeSection
 import com.opencapture.openzcine.settings.MonitorDisplayMode

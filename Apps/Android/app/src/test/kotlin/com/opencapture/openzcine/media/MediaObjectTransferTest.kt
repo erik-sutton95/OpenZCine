@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.NikonNative
 
 /** Regression coverage for the one generic cache listener used by clips and stills. */
 class MediaObjectTransferTest {
@@ -20,7 +21,7 @@ class MediaObjectTransferTest {
             reportedSize = 4,
             resumeOffset = 0,
             listener =
-                object : SwiftCore.MediaTransferListener {
+                object : NikonNative.MediaTransferListener {
                     override fun onStarted(totalBytes: Long) = error("unowned transfer started")
 
                     override fun onChunk(offset: Long, bytes: ByteArray): Boolean =
@@ -243,7 +244,7 @@ class MediaObjectTransferTest {
             handle: Int,
             reportedSize: Long,
             resumeOffset: Long,
-            listener: SwiftCore.MediaTransferListener,
+            listener: NikonNative.MediaTransferListener,
         ) {
             started += StartedTransfer(handle, resumeOffset)
             listener.onStarted(reportedSize)
@@ -265,7 +266,7 @@ class MediaObjectTransferTest {
             handle: Int,
             reportedSize: Long,
             resumeOffset: Long,
-            listener: SwiftCore.MediaTransferListener,
+            listener: NikonNative.MediaTransferListener,
         ) = error("A disconnected cache must never start a camera transfer.")
     }
 
@@ -279,7 +280,7 @@ class MediaObjectTransferTest {
             handle: Int,
             reportedSize: Long,
             resumeOffset: Long,
-            listener: SwiftCore.MediaTransferListener,
+            listener: NikonNative.MediaTransferListener,
         ) {
             listener.onStarted(resolvedSize)
             check(listener.onChunk(resumeOffset, ByteArray(resolvedSize.toInt()) { 1 }))

@@ -24,7 +24,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.opencapture.openzcine.core.CameraSession
+import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.openzcine.media.MediaExifOrientation
 import com.opencapture.openzcine.media.upright
 import kotlinx.coroutines.CoroutineScope

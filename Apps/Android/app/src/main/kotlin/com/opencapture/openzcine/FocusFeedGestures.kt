@@ -1,6 +1,6 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.math.abs
 import kotlin.math.hypot

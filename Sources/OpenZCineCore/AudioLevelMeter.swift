@@ -45,10 +45,8 @@ extension AudioMeterLevels {
     /// the panel directly with no local decay.
     public init(cameraIndicator sound: PTPLiveViewSoundIndicator) {
         func decibels(_ segment: Int) -> Double {
-            let fraction =
-                Double(min(max(segment, 0), PTPLiveViewSoundIndicator.maxSegment))
-                / Double(PTPLiveViewSoundIndicator.maxSegment)
-            return AudioMeterBallistics.floorDB * (1 - fraction)
+            PTPLiveViewSoundIndicator.decibels(
+                segment: segment, floorDB: AudioMeterBallistics.floorDB)
         }
         self.init(
             left: AudioMeterChannel(

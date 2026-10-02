@@ -13,7 +13,7 @@ import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.opencapture.openzcine.LiveFramePreviewBaker
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import com.opencapture.openzcine.wearrelay.WatchConnectionState
 import com.opencapture.openzcine.wearrelay.WatchRelayCommand
@@ -29,16 +29,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.LiveFrameSource
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 
 /**
  * Foreground handheld relay for the Wear OS companion.
  *
  * This class receives already-presented monitor frames; it never subscribes to
- * a [com.opencapture.openzcine.core.LiveFrameSource]. Consequently it cannot
+ * a [LiveFrameSource]. Consequently it cannot
  * keep Nikon live view running after the monitor stops, backgrounds, enters
  * command/media mode, or leaves composition. The wearable gets only a bounded
  * JPEG preview, current monitor state, and the result of a guarded record
- * toggle routed back through the phone's existing [com.opencapture.openzcine.core.CameraSession].
+ * toggle routed back through the phone's existing [CameraSession].
  */
 internal class AndroidWearPhoneRelay(context: Context) :
     MessageClient.OnMessageReceivedListener,
@@ -535,7 +538,7 @@ private data class PreviewCompletion(
     val degraded: Boolean,
 )
 
-private fun com.opencapture.openzcine.core.LiveFrameTimecode.toWatchTimecode(): WatchTimecode =
+private fun LiveFrameTimecode.toWatchTimecode(): WatchTimecode =
     WatchTimecode(
         on = on,
         hour = hour,

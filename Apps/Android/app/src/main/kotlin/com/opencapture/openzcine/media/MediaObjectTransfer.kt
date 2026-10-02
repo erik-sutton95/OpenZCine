@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.NikonNative
 
 /** Narrow Kotlin adapter for Swift-owned generic object-transfer operations. */
 internal interface MediaObjectTransferBridge {
@@ -24,7 +25,7 @@ internal interface MediaObjectTransferBridge {
         handle: Int,
         reportedSize: Long,
         resumeOffset: Long,
-        listener: SwiftCore.MediaTransferListener,
+        listener: NikonNative.MediaTransferListener,
     )
 
     /** Stops the in-flight transfer this bridge started; a synchronous fake has none. */
@@ -43,20 +44,20 @@ internal class SwiftCoreMediaObjectTransferBridge(
         get() = SwiftCore.isAvailable
 
     override fun resolveMediaSize(handle: Int, reportedSize: Long): Long =
-        connectionOwner?.let { SwiftCore.sessionResolveMediaSize(it, handle, reportedSize) } ?: -1L
+        connectionOwner?.let { NikonNative.sessionResolveMediaSize(it, handle, reportedSize) } ?: -1L
 
     override fun startMediaTransfer(
         handle: Int,
         reportedSize: Long,
         resumeOffset: Long,
-        listener: SwiftCore.MediaTransferListener,
+        listener: NikonNative.MediaTransferListener,
     ) {
         val owner = connectionOwner ?: return listener.onFailed("Not connected to a camera.")
-        SwiftCore.sessionStartMediaTransfer(owner, handle, reportedSize, resumeOffset, listener)
+        NikonNative.sessionStartMediaTransfer(owner, handle, reportedSize, resumeOffset, listener)
     }
 
     override fun stopMediaTransfer() {
-        if (SwiftCore.isAvailable) connectionOwner?.let(SwiftCore::sessionStopMediaTransfer)
+        if (SwiftCore.isAvailable) connectionOwner?.let(NikonNative::sessionStopMediaTransfer)
     }
 }
 
@@ -304,8 +305,8 @@ private suspend fun cacheOneClipForDelivery(
 private const val CACHE_PASS_POLL_MILLIS = 200L
 
 /** Persists one Swift-owned generic object transfer into a validated cache entry. */
-private fun MediaCacheEntry.mediaTransferListener(): SwiftCore.MediaTransferListener =
-    object : SwiftCore.MediaTransferListener {
+private fun MediaCacheEntry.mediaTransferListener(): NikonNative.MediaTransferListener =
+    object : NikonNative.MediaTransferListener {
         override fun onStarted(totalBytes: Long) {
             if (totalBytes != expectedLength) {
                 fail(MediaCacheLengthException(expectedLength, totalBytes))

@@ -35,8 +35,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.LiveAudioMeterChannel
-import com.opencapture.openzcine.core.LiveAudioMeterLevels
+import com.opencapture.opencine.nikon.LiveAudioMeterChannel
+import com.opencapture.opencine.nikon.LiveAudioMeterLevels
 import kotlin.math.max
 import kotlin.math.min
 

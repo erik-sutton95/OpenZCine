@@ -2,14 +2,15 @@ package com.opencapture.openzcine
 
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraControlCapabilities
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraShutterMode
-import com.opencapture.openzcine.core.CodecBitDepthOption
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraControlCapabilities
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.withOptimisticControlValue
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraShutterMode
+import com.opencapture.opencine.nikon.CodecBitDepthOption
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import kotlin.test.Test
@@ -18,6 +19,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.IsoPickerPolicy
+import com.opencapture.opencine.nikon.WbPickerPolicy
 
 class MonitorCameraControlsTest {
     private val strings = PhoneStringResolver { resource, _ -> resource.toString() }

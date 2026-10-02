@@ -1,6 +1,6 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrame
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlinx.coroutines.flow.Flow

@@ -93,7 +93,8 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   profile without replacing the iOS pairing.
 - **Swift core:** the camera brain is the shared Swift core (`Sources/OpenZCineCore`), cross-compiled
   to `libOpenZCineAndroid.so` and bound via JNI (`bridge/SwiftCore.kt` ↔
-  `Sources/OpenZCineAndroidFacade`). Every Gradle debug/release build stages the optimized core and
+  `Sources/OpenZCineAndroidFacade`; the Nikon session natives are OpenCine's `NikonNative` ↔
+  `OpenCineNikonAndroid`, linked into the same library). Every Gradle debug/release build stages the optimized core and
   its dynamic Swift runtime closure into Gradle-owned `app/build/generated/` output; it never reads
   ignored `src/main/jniLibs/`. The one supported ABI is **arm64-v8a** (target triple
   `aarch64-unknown-linux-android29`, matching minSdk 29). Install Swift 6.3.3 and its matching
@@ -102,8 +103,9 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   `just android-bridge-smoke <adb-serial>` installs the generated debug APK without clearing data
   and requires the `SwiftCoreSmoke` JNI core-version line on an arm64 device. CI and the Play
   workflow provision the same pinned toolchain/SDK before running Gradle.
-- **Core seam:** `core-api/` is a pure-JVM module defining `CameraSession`, `LiveFrameSource`, and
-  `CameraIdentity`; the Swift core plugs in behind it. Decision record:
+- **Core seam:** OpenCine's `com.opencapture.opencine:nikon` module (included build) defines
+  `CameraSession`, `LiveFrameSource`, and `CameraIdentity`; the Swift core plugs in behind it.
+  `core-api/` keeps the monitor availability and relay types. Decision record:
   `docs/investigations/android-core-feasibility.md`.
 - **Transport foundations:** `app/.../transport/` owns the platform byte layer — NSD/mDNS camera
   discovery (`CameraDiscovery` over an `NsdBrowser` seam, `_ptp._tcp`, plus the fixed camera-AP
@@ -115,14 +117,14 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   cancellation close the raw transport before the UI publishes stale discovery state. Debug hook
   to try the PTP-IP path live:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez openzcine.nsdTransport true`.
-- **Camera session (Swift core):** `bridge/SwiftCoreCameraSession` implements the `CameraSession`
-  seam over the Swift core's PTP-IP and USB generic-container session layers
-  (`Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift`): Init handshake, the Nikon
+- **Camera session (Swift core):** `SwiftCoreCameraSession` (OpenCine `:nikon`) implements the
+  `CameraSession` seam over the Swift core's PTP-IP and USB generic-container session layers
+  (OpenCine `Sources/OpenCineNikonAndroid/PTPIPClientSession.swift`): Init handshake, the Nikon
   open/pair/identify sequence, core-decoded property reads, live view, and graceful `CloseSession`
   teardown all run inside the `.so` — the facade owns the session sockets (decision record: the
   feasibility doc's "Where sockets go"). Live view is a Swift-side frame pump
   (`sessionStartLiveView` / `sessionStopLiveView`, latest-wins backpressure, absolute-schedule
-  poll pacing) bridged into the `LiveFrameSource` seam by `bridge/SwiftCoreLiveFrameSource`;
+  poll pacing) bridged into the `LiveFrameSource` seam by `SwiftCoreLiveFrameSource` (OpenCine `:nikon`);
   `MonitorScreen` streams a connected Swift-core session's frames automatically (gated on a
   STARTED lifecycle), and ending collection — disconnect or backgrounding — always sends
   `EndLiveView` (the heat-audit rule). DISP 3 has no frame, audio, scope, or health collector, so
@@ -133,7 +135,7 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   shell against a camera or fake server:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.session.host <ipv4>`
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
-  twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
+  twin: OpenCine `Tests/OpenCineNikonAndroidTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
   An unexpected command or event-channel loss publishes `Disconnected`; the mounted monitor then
   retries the same full `CameraSession.connect()` path with jittered exponential backoff capped at

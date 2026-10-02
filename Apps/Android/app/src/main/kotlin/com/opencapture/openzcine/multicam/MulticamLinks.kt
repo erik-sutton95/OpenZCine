@@ -3,12 +3,12 @@ package com.opencapture.openzcine.multicam
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.asImageBitmap
 import com.opencapture.openzcine.JpegFrameDecoder
-import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.openzcine.pairing.PairingEnvironment
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
-import com.opencapture.openzcine.transport.UsbPtpOpenResult
+import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import kotlinx.coroutines.flow.emptyFlow
 
 /**

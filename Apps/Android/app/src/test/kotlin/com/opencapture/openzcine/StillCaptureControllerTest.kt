@@ -1,10 +1,10 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.StillReleasePoll
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.StillReleasePoll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import com.opencapture.opencine.nikon.CameraControlException
 
 /** JVM coverage for the press-tracked still-release sequencing. */
 class StillCaptureControllerTest {
@@ -44,7 +45,7 @@ class StillCaptureControllerTest {
 
         override suspend fun initiateStillCapture(preserveFocus: Boolean) {
             if (failInitiate) {
-                throw com.opencapture.openzcine.core.CameraControlException.CommandRejected
+                throw CameraControlException.CommandRejected
             }
             initiates += 1
             lastPreserveFocus = preserveFocus
@@ -59,7 +60,7 @@ class StillCaptureControllerTest {
 
         override suspend fun setStillBurstBracket(active: Boolean) {
             if (failBracket) {
-                throw com.opencapture.openzcine.core.CameraControlException.CommandRejected
+                throw CameraControlException.CommandRejected
             }
             bracketCalls += active
         }

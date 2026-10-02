@@ -89,6 +89,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import com.opencapture.opencine.nikon.NikonNative
 
 /** JNI payload separator shared with `AndroidCameraWiFiScreenParserWire` in Swift. */
 internal const val CAMERA_WIFI_CREDENTIAL_WIRE_SEPARATOR: Char = '\u001F'
@@ -102,7 +103,7 @@ internal fun interface CameraWifiTranscriptParser {
 /** Production [CameraWifiTranscriptParser] — no camera credential policy exists in Kotlin. */
 internal object SwiftCameraWifiTranscriptParser : CameraWifiTranscriptParser {
     override fun parse(transcript: String): String? =
-        if (SwiftCore.isAvailable) SwiftCore.parseCameraWifiScreen(transcript) else null
+        if (SwiftCore.isAvailable) NikonNative.parseCameraWifiScreen(transcript) else null
 }
 
 /** The manual-entry twin of [CameraWifiTranscriptParser], same shared-core authority. */
@@ -114,7 +115,7 @@ internal fun interface CameraWifiManualParser {
 /** Production [CameraWifiManualParser] — validation stays in Swift, as it does on iOS. */
 internal object SwiftCameraWifiManualParser : CameraWifiManualParser {
     override fun parse(ssid: String, key: String): String? =
-        if (SwiftCore.isAvailable) SwiftCore.manualCameraWifiCredentials(ssid, key) else null
+        if (SwiftCore.isAvailable) NikonNative.manualCameraWifiCredentials(ssid, key) else null
 }
 
 /** Validates typed Connection-wizard details into a candidate, or null when incomplete. */

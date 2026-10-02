@@ -75,7 +75,7 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.TrafficLightsBarSide
 import com.opencapture.openzcine.bridge.TrafficLightsReading
 import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutSelection
@@ -97,6 +97,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.LiveFrameSource
 
 private const val TAG = "ZCScope"
 
@@ -496,7 +497,7 @@ internal fun ScopePanels(
     lutLibrary: AndroidLutLibrary?,
     onScaleChange: (ScopeKind, Float) -> Unit,
     thermalTier: AndroidThermalTier,
-    source: com.opencapture.openzcine.core.LiveFrameSource,
+    source: LiveFrameSource,
     isPortrait: Boolean,
     portraitFloating: Boolean = false,
     feed: ZoneFrame,
@@ -1405,7 +1406,7 @@ private fun DrawScope.drawTrafficIndicator(
  */
 @Composable
 private fun rememberScopeSnapshot(
-    source: com.opencapture.openzcine.core.LiveFrameSource,
+    source: LiveFrameSource,
     selected: Set<ScopeKind>,
     crushClipCompensationRaw: Int,
     histogramTrafficLightsEnabled: Boolean,

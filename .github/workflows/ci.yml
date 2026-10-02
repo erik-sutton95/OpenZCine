@@ -57,7 +57,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
-          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|Sources/CJNI/|scripts/android-|scripts/verify-android-|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
+          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|scripts/android-|scripts/verify-android-|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
             if ! grep -Fxq 'Apps/Android/distribution/whatsnew/whatsnew-en-US' <<< "$changed_files"; then
               echo "Update Apps/Android/distribution/whatsnew/whatsnew-en-US with plain-language changes for Play testers." >&2
               exit 1
@@ -138,7 +138,6 @@ jobs:
               - 'Apps/Android/**'
               - 'Sources/OpenZCineCore/**'
               - 'Sources/OpenZCineAndroidFacade/**'
-              - 'Sources/CJNI/**'
               - 'Package.swift'
               - 'opencine-pins.txt'
               - 'Package.resolved'

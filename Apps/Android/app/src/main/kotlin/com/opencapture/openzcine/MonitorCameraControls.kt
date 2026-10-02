@@ -81,7 +81,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.SettingsSwitchGraphic
@@ -91,6 +91,8 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlinx.coroutines.withTimeoutOrNull
+import com.opencapture.opencine.nikon.IsoPickerPolicy
+import com.opencapture.opencine.nikon.WbPickerPolicy
 
 /**
  * iOS `panelRevealCurve`: CSS cubic-bezier(0.16, 1, 0.3, 1), 0.20s ease-out-expo

@@ -61,15 +61,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.core.CameraConnectionPhase
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.CameraConnectionPhase
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.relay.probeHostAlive
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
-import com.opencapture.openzcine.transport.UsbPtpOpenResult
+import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import com.opencapture.openzcine.transport.localIPv4Interfaces
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -82,6 +82,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import com.opencapture.opencine.nikon.NikonNative
 
 private sealed interface SavedCameraPhase {
     data object Idle : SavedCameraPhase
@@ -1907,7 +1908,7 @@ internal fun SavedCameraRow(
  */
 internal fun accessPointSsidFor(record: SavedCameraRecord): String? =
     record.wifiSsid?.takeIf(::looksLikeNikonAccessPointSsid)
-        ?: runCatching { SwiftCore.deriveAccessPointSSID(record.cameraName) }.getOrNull()
+        ?: runCatching { NikonNative.deriveAccessPointSSID(record.cameraName) }.getOrNull()
 
 /** The kinds this camera could still be set up for -- mirror of the iOS list. */
 internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCameraTransport> {

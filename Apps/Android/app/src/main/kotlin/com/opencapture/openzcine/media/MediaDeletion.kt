@@ -35,6 +35,7 @@ import com.opencapture.openzcine.chromePressable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
 import java.util.Locale
+import com.opencapture.opencine.nikon.NikonNative
 
 /**
  * Camera-card deletion policy and the star-rating chrome shared by the still
@@ -291,7 +292,7 @@ internal fun StarRatingRow(
 }
 
 /**
- * The outcome of `SwiftCore.sessionSetObjectRating`, whose packed `Int` return encodes three
+ * The outcome of `NikonNative.sessionSetObjectRating`, whose packed `Int` return encodes three
  * cases: a confirmed 0–5 star count, a state-based refusal carrying the body's wire code, or a
  * generic failure with no code. The camera stays source of truth — a refusal is surfaced with
  * its code, never a silent rollback, and never mirrored into the local favorite index.

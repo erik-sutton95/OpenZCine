@@ -1,8 +1,8 @@
 package com.opencapture.openzcine
 
 import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.LiveAudioMeterChannel
-import com.opencapture.openzcine.core.LiveAudioMeterLevels
+import com.opencapture.opencine.nikon.LiveAudioMeterChannel
+import com.opencapture.opencine.nikon.LiveAudioMeterLevels
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

@@ -2,11 +2,11 @@ package com.opencapture.openzcine.multicam
 
 import com.opencapture.opencine.multicam.ExclusionReason
 import com.opencapture.opencine.multicam.RecordDirection
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingException
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.FakeCameraSession
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingException
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.FakeCameraSession
+import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlin.coroutines.EmptyCoroutineContext
@@ -25,6 +25,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 
 /**
  * NIKON-01 (Android twin of iOS `MulticamCoordinatorTests`): the app's multicam on the shared Kotlin

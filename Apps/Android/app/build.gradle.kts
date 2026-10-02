@@ -220,9 +220,10 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
             include("Package.swift", "Package.resolved", "Sources/**")
         },
         // The root Package.swift takes these from the sibling OpenCine checkout: OpenCineMedia
-        // (and OpenCineCore, which it depends on), OpenCineFrameIO (the Frame.io facade) and
-        // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it), so
-        // a package edit must restage the core.
+        // (and OpenCineCore, which it depends on), OpenCineFrameIO (the Frame.io facade),
+        // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it),
+        // OpenCineNikonAndroid (the PTP-IP / USB session layer and NikonNative's JNI exports)
+        // and OpenCineJNI (+ COpenCineJNI), so a package edit must restage the core.
         fileTree(repositoryRoot.resolve("../OpenCine")) {
             include(
                 "Package.swift",
@@ -230,6 +231,9 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineCore/**",
                 "Sources/OpenCineFrameIO/**",
                 "Sources/OpenCineNikon/**",
+                "Sources/OpenCineNikonAndroid/**",
+                "Sources/OpenCineJNI/**",
+                "Sources/COpenCineJNI/**",
             )
         },
         stageSwiftCoreScript,
@@ -293,6 +297,8 @@ dependencies {
     // Shared Compose monitor UI and the multicam engine from the same OpenCine build.
     implementation(libs.opencine.monitor.ui)
     implementation(libs.opencine.multicam)
+    // The Nikon session (PTP-IP / USB PTP over the Swift layer), its contract and NikonNative.
+    implementation(libs.opencine.nikon)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))

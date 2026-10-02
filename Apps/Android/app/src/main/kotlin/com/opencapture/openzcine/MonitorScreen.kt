@@ -101,34 +101,34 @@ import com.opencapture.opencine.core.SessionCloseReason
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.NikonOpenCineSession
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
-import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
+import com.opencapture.opencine.nikon.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.bridge.ZoneStyle
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraControlException
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionEvent
-import com.opencapture.openzcine.core.CameraStorageStatus
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraControlException
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionEvent
+import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
-import com.opencapture.openzcine.core.CameraFocusException
-import com.opencapture.openzcine.core.CameraFocusPoint
-import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
-import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
-import com.opencapture.openzcine.core.CameraRecordingException
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraTemperatureStatus
-import com.opencapture.openzcine.core.LiveAudioMeterLevels
-import com.opencapture.openzcine.core.LiveFeedRotation
-import com.opencapture.openzcine.core.LiveFocusResult
-import com.opencapture.openzcine.core.metadataOnly
-import com.opencapture.openzcine.core.LiveFrameSource
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.CameraFocusException
+import com.opencapture.opencine.nikon.CameraFocusPoint
+import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
+import com.opencapture.opencine.nikon.CameraRecordingException
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraTemperatureStatus
+import com.opencapture.opencine.nikon.LiveAudioMeterLevels
+import com.opencapture.opencine.nikon.LiveFeedRotation
+import com.opencapture.opencine.nikon.LiveFocusResult
+import com.opencapture.opencine.nikon.metadataOnly
+import com.opencapture.opencine.nikon.LiveFrameSource
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.openzcine.relay.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -157,6 +157,8 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
+import com.opencapture.opencine.nikon.IsoPickerPolicy
+import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 
 /** One measured live-toolbar tool and the orientation in which its anchor is valid. */
 private data class LiveAssistOptionsRequest(
@@ -448,7 +450,7 @@ internal fun MonitorScreen(
     val thermalTier = rememberAndroidThermalTier()
     val actualLinkHealth = linkHealth ?: remember(session) { AndroidLinkHealthMonitor() }
     val swiftLiveFrameSource =
-        (session as? SwiftCoreCameraSession)?.liveFrames as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+        (session as? SwiftCoreCameraSession)?.liveFrames as? SwiftCoreLiveFrameSource
     val liveViewController =
         remember(swiftLiveFrameSource) {
             swiftLiveFrameSource?.let(::AndroidLiveViewController)
@@ -1827,7 +1829,7 @@ internal fun MonitorScreen(
         // backpressures the shared live-frame bus (feed hitch root cause).
         LaunchedEffect(actualLinkHealth, healthFrameSource) {
             val swiftSource =
-                healthFrameSource as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+                healthFrameSource as? SwiftCoreLiveFrameSource
                     ?: return@LaunchedEffect
             swiftSource.currentStreamFrames
                 .metadataOnly()

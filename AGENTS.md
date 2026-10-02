@@ -243,9 +243,10 @@ The canonical layer names map to this repository as follows:
 | Resources | `ios/Runner` | Assets, localisation strings, Info.plist |
 | Watch | `ios/OpenZCineWatch` | watchOS companion app (embedded in Runner) |
 | Core | `Sources/OpenZCineCore` | Portable camera protocol and business logic |
-| Android facade | `Sources/OpenZCineAndroidFacade` | Swift session/JNI boundary for Android |
+| Android facade | `Sources/OpenZCineAndroidFacade` | The app's own Swift JNI exports (scopes, feed effects, LUTs, Frame.io); the Nikon session layer is OpenCine `OpenCineNikonAndroid` |
 | Android app | `Apps/Android/app` | Compose phone shell and Android adapters |
-| Android API | `Apps/Android/core-api` | Kotlin interface shared by shell and adapters |
+| Android session | OpenCine `Android/nikon` (`com.opencapture.opencine:nikon`) | Nikon session contract, Kotlin session over the Swift layer, JNI facade `NikonNative` |
+| Android API | `Apps/Android/core-api` | Monitor availability and relay lease/encoder types |
 | Wear | `Apps/Android/wear`, `Apps/Android/wear-relay` | Wear OS UI and phone relay contract |
 | Android tests | `Apps/Android/*/src/test`, `Apps/Android/*/src/androidTest` | JVM and device UI tests |
 

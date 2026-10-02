@@ -1,10 +1,10 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

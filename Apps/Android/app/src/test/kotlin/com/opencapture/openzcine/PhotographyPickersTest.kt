@@ -1,8 +1,8 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraControlCapabilities
-import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraControlCapabilities
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

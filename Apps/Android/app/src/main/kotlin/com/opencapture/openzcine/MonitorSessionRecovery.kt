@@ -8,8 +8,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import kotlin.random.Random
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
+import com.opencapture.opencine.nikon.NikonNative
 
 /**
  * What the operator is told while an established session is being recovered.
@@ -92,25 +93,25 @@ internal fun interface SessionRetryScheduleBridge {
 internal object ProductionSessionRetryScheduleBridge : SessionRetryScheduleBridge {
     override fun retryDelayMillis(failures: Int, jitter: Double): Long? {
         if (!SwiftCore.isAvailable) return null
-        val millis = SwiftCore.sessionRetryDelayMillis(failures, jitter)
+        val millis = NikonNative.sessionRetryDelayMillis(failures, jitter)
         return if (millis < 0) null else millis
     }
 
     override fun maxAutomaticAttempts(): Int =
         if (SwiftCore.isAvailable) {
-            SwiftCore.sessionMaxAutomaticAttempts()
+            NikonNative.sessionMaxAutomaticAttempts()
         } else {
             SessionRetryScheduleBridge.DEFAULT_MAX_AUTOMATIC_ATTEMPTS
         }
 
     override fun noteSessionDrop(): Boolean =
-        SwiftCore.isAvailable && SwiftCore.sessionNoteSessionDrop()
+        SwiftCore.isAvailable && NikonNative.sessionNoteSessionDrop()
 
     override fun dropsInStormWindow(): Int =
-        if (SwiftCore.isAvailable) SwiftCore.sessionDropsInStormWindow() else 0
+        if (SwiftCore.isAvailable) NikonNative.sessionDropsInStormWindow() else 0
 
     override fun resetDropStormGuard() {
-        if (SwiftCore.isAvailable) SwiftCore.sessionResetDropStormGuard()
+        if (SwiftCore.isAvailable) NikonNative.sessionResetDropStormGuard()
     }
 }
 

@@ -1,11 +1,11 @@
 package com.opencapture.openzcine
 
 import android.os.BatteryManager
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraStorageStatus
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraStorageStatus
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.openzcine.settings.ChromeSection
 import java.nio.file.Path
@@ -219,7 +219,7 @@ class MonitorReadoutsTest {
     @Test
     fun `media status estimates minutes with the iOS bitrate table`() {
         val storage =
-            com.opencapture.openzcine.core.CameraStorageStatus(
+            CameraStorageStatus(
                 totalCapacityBytes = 1_000_000_000_000L,
                 freeSpaceBytes = 470_000_000_000L,
             )

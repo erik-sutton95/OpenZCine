@@ -33,11 +33,11 @@ import com.opencapture.opencine.multicam.ResourceClaim
 import com.opencapture.opencine.multicam.ResourceRequest
 import com.opencapture.opencine.multicam.TargetOutcome
 import com.opencapture.opencine.multicam.TargetPolicy
-import com.opencapture.openzcine.bridge.NikonOpenCineSession
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlinx.coroutines.CancellationException
@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 
 /** One member's open link: its own Nikon session and that session's live frames. */
 class MulticamLink(val session: CameraSession, val frames: Flow<LiveFrame>)

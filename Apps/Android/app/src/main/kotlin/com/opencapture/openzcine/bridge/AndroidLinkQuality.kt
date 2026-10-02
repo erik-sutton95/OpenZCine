@@ -4,57 +4,18 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
-import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveFrame
 import java.util.ArrayDeque
 import kotlin.math.max
-
-/** Swift-approved preview request that Android may pass unchanged to the live-view facade. */
-public data class SwiftLiveViewRequest(
-    val imageSize: Int,
-    val compression: Int,
-    val frameIntervalNanoseconds: Long,
-) {
-    init {
-        require(imageSize in 1..3) { "Preview image size must be 1...3." }
-        // 6-value Nikon enum (Basic/Normal/Fine x size/quality priority). The old 1..3 bound
-        // silently discarded EVERY preview request whose bias resolved to 0 (latency) or 5
-        // (detail) — the require threw inside parseLiveViewRequest's runCatching, so size,
-        // compression AND cadence were all dropped with no log. The Swift twin was widened for
-        // exactly this reason; this bound must match it.
-        require(compression in 0..5) { "Preview compression must be 0...5." }
-        require(frameIntervalNanoseconds in MIN_FRAME_INTERVAL_NANOS..MAX_FRAME_INTERVAL_NANOS) {
-            "Preview interval must be between ${MIN_FRAME_INTERVAL_NANOS}ns and ${MAX_FRAME_INTERVAL_NANOS}ns."
-        }
-    }
-
-    /**
-     * How often the monitor ASKS the body for a frame (always 60 Hz — see
-     * [STANDARD_FRAME_INTERVAL_NANOS]).
-     *
-     * This is a request rate, not a production rate, so it is **not** the link-health target: the
-     * body produces frames at its recording rate, and scoring a healthy 25p feed against 60 read
-     * ~41 (two bars) where iOS reads 100 (four) beside an identical FPS number. The health target
-     * is [LinkHealthInput.targetLiveViewFramesPerSecond], which iOS defines as the body's
-     * recording rate (`NativeAppRoot.currentLinkHealthInputs`).
-     */
-    val targetFramesPerSecond: Double
-        get() = NANOS_PER_SECOND.toDouble() / frameIntervalNanoseconds.toDouble()
-
-    internal companion object {
-        const val NANOS_PER_SECOND = 1_000_000_000L
-        /** Fixed 60 Hz monitor pull target (always). */
-        const val MIN_FRAME_INTERVAL_NANOS = NANOS_PER_SECOND / 60L
-        /** Validation floor only; policy never emits slower than 60 Hz. */
-        const val MAX_FRAME_INTERVAL_NANOS = 100_000_000L
-        /** Always 60 Hz. */
-        const val STANDARD_FRAME_INTERVAL_NANOS = MIN_FRAME_INTERVAL_NANOS
-        /** Balanced-bias values the Swift policy actually emits (size 2, compression 3). */
-        val DEFAULT = SwiftLiveViewRequest(2, 3, STANDARD_FRAME_INTERVAL_NANOS)
-    }
-}
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
+import com.opencapture.opencine.nikon.SwiftLiveViewPreviewState
+import com.opencapture.opencine.nikon.SwiftLiveViewRequest
 
 /** Inputs that Kotlin persists or observes, with all policy resolved in Swift. */
 internal data class SwiftLiveViewPolicyInput(
@@ -201,7 +162,7 @@ internal object ProductionLinkHealthBridge : LinkHealthBridge {
     override fun score(input: LinkHealthInput): LinkHealthPresentation? {
         if (!SwiftCore.isAvailable) return null
         val payload =
-            SwiftCore.linkHealthSnapshot(
+            NikonNative.linkHealthSnapshot(
                 connectionOwner = input.connectionOwner ?: NO_CONNECTION_OWNER,
                 phase = input.phase,
                 roundTripMilliseconds = input.roundTripMilliseconds ?: 0.0,

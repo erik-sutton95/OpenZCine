@@ -11,13 +11,14 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.FakeCameraSession
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.FakeCameraSession
 import com.opencapture.openzcine.settings.OperatorSettings
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.opencine.nikon.CameraSession
 
 /**
  * Record start/stop coverage through the production monitor's Compose

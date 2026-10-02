@@ -1,7 +1,7 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import kotlin.test.Test

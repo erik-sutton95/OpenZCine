@@ -14,6 +14,7 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | OPTIONAL-01 (Frame.io from OpenCineFrameIO) | `opencine/frameio` (on integration) | see branch |
 | MEDIA-02 step 4 (HDMI/UVC capture source from OpenCineApple) | `opencine/apple` (on integration) | see branch |
 | NIKON-01 (shared monitor UI and multicam from OpenCine) | `opencine/nikon-01` (on integration) | see branch |
+| SHELL-04 Nikon (Android session and JNI facade, iOS PTP transports, JPEG leases in OpenCine) | `opencine/shell-04` (on integration) | see branch |
 
 Shared package: the OpenCine platform repository `../OpenCine` (every shared Swift product and
 Android module), pinned in `opencine-pins.txt` (one line, `OpenCine <sha>`) and fetched in CI by
@@ -30,7 +31,7 @@ Nikon properties/profiles/media naming, discovery/connect/session policy and `Ni
 live in the `OpenCineNikon` product of `../OpenCine` (pinned in `opencine-pins.txt`), which
 `OpenZCineCore` depends on and re-exports (`Sources/OpenZCineCore/OpenCineNikon.swift`).
 `stageSwiftCore` also fingerprints `../OpenCine/Sources/OpenCineNikon/**`. The Android JNI facade and its
-`AndroidSessionOwnerRegistry` stay here and link the package through `OpenZCineCore`.
+`AndroidSessionOwnerRegistry` moved to OpenCine later (SHELL-04, below).
 
 OPTIONAL-01: Frame.io request planning, OAuth PKCE, response models and the iOS upload client
 come from the optional `OpenCineFrameIO` product of `../OpenCine`. The Runner links it
@@ -66,6 +67,23 @@ limit as the app's `ResourceBudget`. Your cameras, pairing, the single-camera mo
 Setup and media keep OpenZCine's own UI for now: moving them onto the shared pages is SHELL-02
 (cameras and pairing) and SHELL-03 (app shell) work. The engine-port branch and its UI candidate
 (`opencine/ui-03-engine-port-candidate`) are not merged and are left as they were.
+
+SHELL-04 (Android): the Nikon session moved to OpenCine. Kotlin: the session contract
+(`CameraSession`, `LiveFrameSource`, `FakeCameraSession`, formerly `core-api`), the production
+session over the Swift layer (`SwiftCoreCameraSession`, `SwiftCoreLiveFrameSource`), the property
+and metadata wires, ISO and white-balance picker policy, the initiator identity, the
+`UsbPtpTransport` seam and `NikonOpenCineSession` are the `com.opencapture.opencine:nikon` module
+(package `com.opencapture.opencine.nikon`) from the same included build. Its JNI class is
+`NikonNative` (44 session, media, link health, recovery and camera Wi-Fi natives); `SwiftCore`
+keeps the app's own 29 (scopes, feed effects, LUTs, Frame.io, zone map, audio meter, live-view
+preferences). Swift: `PTPIPClientSession`, the USB transaction transport,
+`AndroidSessionOwnerRegistry`, media browse and the `NikonNative` exports are OpenCine's
+`OpenCineNikonAndroid`, linked into `libOpenZCineAndroid.so` with the JNI helpers of
+`OpenCineJNI` (the app's `CJNI` target is gone). `SwiftCore.isAvailable` loads the library through
+`NikonNative.load`, and `MainActivity` touches it first. `core-api` keeps only the monitor
+availability, relay lease and relay encoder profile. Release keep rules for the moved classes ship
+in the module (`consumer-rules.pro`). `stageSwiftCore` also fingerprints
+`Sources/OpenCineNikonAndroid/**`, `Sources/OpenCineJNI/**` and `Sources/COpenCineJNI/**`.
 
 ## What changes for users
 
@@ -163,6 +181,29 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     Android screens look as before (`MonitorIosParity` affects only shared monitor-ui pieces,
     which only multicam uses so far). Compare picture smoothness and phone temperature with four
     tiles for 20 min on both platforms.
+18. SHELL-04 Android (no intended behavior change; the Nikon session code moved to OpenCine):
+    connect over the camera access point, router Wi-Fi and USB-C (fresh pairing and a saved
+    profile); live view starts and keeps running for 10 min; record start and stop; ISO, WB,
+    shutter, iris and focus mode writes read back; tap focus and reset; media browse, thumbnails,
+    rating, delete, transfer and share; Wi-Fi credential scan and manual entry; pull the USB cable
+    and reconnect; reconnect after a Wi-Fi drop (attempt N of M, drop storm pause). Install the
+    signed release build for this item, since R8 keeps the moved JNI classes only through the
+    module's rules.
+
+### Device performance baselines (SHELL-04)
+
+Record each number before (on `opencine/integration` before SHELL-04) and after, same phone,
+same body, same settings, room temperature, battery above 50 %. iOS and Android.
+
+1. Latency, glass to glass: film a running stopwatch with the camera and photograph the stopwatch
+   and the monitor together; median of 10 readings, one feed, Wi-Fi and USB-C.
+2. Memory: app memory after 1 min and after 30 min of live view with a LUT and a waveform on
+   (Xcode memory gauge; Android `dumpsys meminfo com.opencapture.openzcine`).
+3. Thermal: phone thermal state (iOS) or `dumpsys thermalservice` status (Android) and the
+   camera's temperature warning after 20 min of live view while recording.
+4. Two feeds: multicam with 2 bodies for 20 min: frame rate per tile (link health panel),
+   memory and thermal as above, any feed stall or reconnect.
+5. Four feeds: the same with 4 bodies.
 
 ## Before this can ship
 

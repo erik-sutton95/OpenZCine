@@ -1,9 +1,9 @@
 package com.opencapture.openzcine.media
 
-import com.opencapture.openzcine.bridge.CameraPropertySnapshotWire
-import com.opencapture.openzcine.bridge.NativePropertyRefreshResult
+import com.opencapture.opencine.nikon.CameraPropertySnapshotWire
+import com.opencapture.opencine.nikon.NativePropertyRefreshResult
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.core.CameraStorageSlotStatus
+import com.opencapture.opencine.nikon.CameraStorageSlotStatus
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -11,6 +11,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
+import com.opencapture.opencine.nikon.NikonNative
 
 /** Stable persisted identity shared by page additions and R3D-pair removals. */
 internal data class MediaObjectIdentity(
@@ -121,12 +122,12 @@ internal interface MediaBrowseGateway {
  * binds the returned cursor to that session, so next/cancel are already camera-addressed.
  */
 internal class SwiftMediaBrowseGateway(private val connectionOwner: Long?) : MediaBrowseGateway {
-    override fun begin(): String? = connectionOwner?.let(SwiftCore::sessionBeginMediaBrowse)
+    override fun begin(): String? = connectionOwner?.let(NikonNative::sessionBeginMediaBrowse)
 
     override fun next(cursor: Long, maxObjects: Int): String? =
-        SwiftCore.sessionNextMediaBrowsePage(cursor, maxObjects)
+        NikonNative.sessionNextMediaBrowsePage(cursor, maxObjects)
 
-    override fun cancel(cursor: Long) = SwiftCore.sessionCancelMediaBrowse(cursor)
+    override fun cancel(cursor: Long) = NikonNative.sessionCancelMediaBrowse(cursor)
 }
 
 /** Sanitized failure from an incomplete or malformed native listing pass. */

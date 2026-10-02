@@ -72,8 +72,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.offset
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
 // MonitorControls.swift + MonitorExperience.swift). Layout frames come from the

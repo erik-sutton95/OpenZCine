@@ -10,7 +10,8 @@ let package = Package(
     ],
     products: [
         .library(name: "OpenZCineCore", targets: ["OpenZCineCore"]),
-        // JNI facade consumed by the Android app (`just android-core`). The JNI
+        // JNI facade consumed by the Android app (`just android-core`): the app's own exports
+        // (Kotlin `SwiftCore`) plus OpenCineNikonAndroid's (Kotlin `NikonNative`). The JNI
         // shims are `#if os(Android)`-gated; on Darwin only the platform-neutral
         // wire helpers compile, so iOS/macOS behavior is unchanged.
         .library(
@@ -43,29 +44,32 @@ let package = Package(
             // app/runtime resource.
             exclude: ["Fixtures"]
         ),
-        // Header-only shim exposing the NDK's <jni.h> to Swift; empty on Darwin.
-        .target(name: "CJNI"),
         // Frame.io comes from OpenCineFrameIO here, not through OpenZCineCore, so the Watch
-        // (links OpenZCineCore) carries no delivery code.
+        // (links OpenZCineCore) carries no delivery code. The Nikon session layer and its JNI
+        // exports (Kotlin `NikonNative`) come from OpenCineNikonAndroid and link into this
+        // library; OpenCineJNI is the NDK <jni.h> shim and the JNI copy helpers.
         .target(
             name: "OpenZCineAndroidFacade",
             dependencies: [
-                "OpenZCineCore", "CJNI",
+                "OpenZCineCore",
+                .product(name: "OpenCineJNI", package: "OpenCine"),
+                .product(name: "OpenCineNikonAndroid", package: "OpenCine"),
                 .product(name: "OpenCineFrameIO", package: "OpenCine"),
                 .product(
                     name: "Crypto", package: "swift-crypto",
                     condition: .when(platforms: [.linux, .android])),
             ]
         ),
-        // Runs on Darwin (and on Android via the cross-compile test path):
-        // the PTP-IP session layer against a scripted fake camera server, and
-        // the platform-independent zone-map wire format (MonitorZoneMapWire).
+        // Runs on Darwin (and on Android via the cross-compile test path): the app's
+        // platform-independent wires (zone map, scopes, feed effects, LUTs, Frame.io, live-view
+        // preferences). The PTP-IP session layer's tests moved to OpenCineNikonAndroidTests.
         // The JNI shims themselves stay Android-only.
         .testTarget(
             name: "OpenZCineAndroidFacadeTests",
             dependencies: [
                 "OpenZCineAndroidFacade", "OpenZCineCore",
                 .product(name: "OpenCineFrameIO", package: "OpenCine"),
+                .product(name: "OpenCineNikonAndroid", package: "OpenCine"),
             ]
         ),
     ]

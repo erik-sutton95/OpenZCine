@@ -2,8 +2,8 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.Intent
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.settings.PortraitFeedAspect

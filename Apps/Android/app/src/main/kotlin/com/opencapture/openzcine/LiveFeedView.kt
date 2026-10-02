@@ -64,10 +64,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.core.LiveCameraLevel
-import com.opencapture.openzcine.core.LiveFocusInfo
-import com.opencapture.openzcine.core.LiveFrame
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.opencine.nikon.LiveCameraLevel
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import kotlin.math.max
 import kotlin.math.min

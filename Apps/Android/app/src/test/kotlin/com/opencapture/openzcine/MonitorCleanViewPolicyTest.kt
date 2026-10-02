@@ -7,6 +7,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrameSource
 
 /**
  * Android's half of the shared clean-view contract (#256). The rule itself is asserted once in the
@@ -129,8 +131,8 @@ class MonitorCleanViewPolicyTest {
 
     @Test
     fun `command keeps the timecode source while dropping every preview consumer`() {
-        val source = object : com.opencapture.openzcine.core.LiveFrameSource {
-            override val frames = kotlinx.coroutines.flow.emptyFlow<com.opencapture.openzcine.core.LiveFrame>()
+        val source = object : LiveFrameSource {
+            override val frames = kotlinx.coroutines.flow.emptyFlow<LiveFrame>()
         }
         assertNull(monitorPreviewFrameSource(source, isCommandMode = true))
         assertSame(source, monitorTimecodeFrameSource(source))

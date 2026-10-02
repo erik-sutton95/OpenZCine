@@ -69,13 +69,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.opencapture.openzcine.R
-import com.opencapture.openzcine.bridge.PtpIpConnectionStrategy
-import com.opencapture.openzcine.bridge.PtpIpInitiatorIdentity
-import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
-import com.opencapture.openzcine.core.CameraConnectionPhase
-import com.opencapture.openzcine.core.CameraConnectionProgress
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.PtpIpConnectionStrategy
+import com.opencapture.opencine.nikon.PtpIpInitiatorIdentity
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.CameraConnectionPhase
+import com.opencapture.opencine.nikon.CameraConnectionProgress
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.hasExternalUvcCamera
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.AndroidUsbPtpCameraSource
@@ -88,8 +88,8 @@ import com.opencapture.openzcine.transport.InfrastructureSearchReport
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpCameraSource
-import com.opencapture.openzcine.transport.UsbPtpOpenResult
-import com.opencapture.openzcine.transport.UsbPtpTransportReopener
+import com.opencapture.opencine.nikon.UsbPtpOpenResult
+import com.opencapture.opencine.nikon.UsbPtpTransportReopener
 import com.opencapture.openzcine.transport.reopenReadyUsbTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -103,6 +103,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import com.opencapture.opencine.nikon.CameraControl
 
 /** Saved camera-AP credential surface the wizard needs (real: [CameraWifiCredentialStore]). */
 public interface PairingCredentials {
