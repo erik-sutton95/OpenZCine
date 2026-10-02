@@ -92,6 +92,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Record confirmation runs the start or stop you confirmed** (iOS): answering "Start
+  recording?" or "Stop recording?" used to recompute the toggle, so a take started or stopped on
+  the body while the prompt was open was inverted. Every record entry point (button,
+  confirmation, Apple Watch, Bluetooth remote, relay viewer) now resolves once to an explicit
+  start or stop, and a target the camera already reports is not sent again.
+- **A refused record puts the button back** (iOS): when the camera refuses a record (no card,
+  card full), Record returns to the state the camera reports.
+- **Android commands reach their own camera**: every session call is addressed to its connection
+  owner, so a stale or unknown connection gets no session instead of falling through to the
+  last-connected camera. Media browse, playback, transfer and delivery name that owner too.
 - **Frame.io stays signed in across token refreshes** (iOS): when Adobe IMS refreshes an access
   token without returning a new refresh token, the app keeps the one it has instead of dropping
   it and asking for a new sign-in at the next expiry. A Frame.io account, folder or file ID with
@@ -297,6 +307,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **ISO, white balance and record go through one camera session** (iOS + Android), shared with
+  the other OpenCine apps. Requested and reported values are kept apart, each write is confirmed
+  by reading the camera back, and record is an explicit start or stop that waits for the camera's
+  report and times out without inventing state. A value the camera parked on (Auto ISO at 51200,
+  for example) stays writable when leaving Auto.
+- **Record from Apple Watch or a Bluetooth shutter is refused while a watcher holds camera
+  control** (iOS). These presses used to go through.
+- **HDMI capture on iPad** renders a frame only when the monitor takes it, off the main thread,
+  and drops frames from a capture device that was unplugged or swapped. No visible change
+  intended.
+- The Nikon PTP wire, properties and session policy now come from the OpenCineNikon package, and
+  LUT parsing, the frame-rate sampler and the HDMI capture source from OpenCineCore. The Runner
+  and Watch link the `OpenZCineCore` product instead of compiling its sources.
 - A weak or congested wireless link now degrades the picture instead of dropping the session,
   on both platforms; the Android live path also sheds several per-frame costs (GPU re-uploads,
   redundant copies, background-priority decode) and holds Wi-Fi in low-latency mode during a
