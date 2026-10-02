@@ -331,6 +331,9 @@ struct StartupSavedCamerasView: View {
                 Text("Tap a camera to connect")
                     .font(.system(size: 25, weight: .bold, design: .rounded))
                     .foregroundStyle(StartupColors.ink)
+                    // One line beside the Multicam control, as before it existed.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Spacer(minLength: 0)
                 // Multicam: an empty stage of four tiles; cameras are added from there.
                 Button {
