@@ -264,7 +264,8 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
 23. SHELL-02 held camera: with a second phone live on a body, the first phone's card and NEARBY row
     say it is in use; Take over asks first, and the second phone's session ends only after Take
     over is confirmed.
-24. SHELL-02 Multicam from the cameras page header (2 bodies), and Watch a nearby broadcast.
+24. SHELL-02 Multicam from the cameras page header (2 bodies; on Android tap the Multiview button
+    at its edges too, the whole drawn button must open it), and Watch a nearby broadcast.
 25. SHELL-02 upgrade: install the current TestFlight or Play build, save three cameras (one with
     two setups, one camera Wi-Fi setup with its key, one renamed, one named setup), then install
     this build: every camera, setup, name and date is there, camera Wi-Fi reconnects with no key
