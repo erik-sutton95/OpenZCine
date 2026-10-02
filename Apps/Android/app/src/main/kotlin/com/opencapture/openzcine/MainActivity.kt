@@ -113,6 +113,13 @@ import com.opencapture.openzcine.pairing.recordsForgetting
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.opencine.appkit.AppIntegration
 import com.opencapture.opencine.appkit.CamerasModel
+import com.opencapture.opencine.appkit.ShellModel
+import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.core.ConnectedCamera
+import com.opencapture.opencine.core.IntegrationID
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
+import androidx.lifecycle.Lifecycle
 import com.opencapture.opencine.appkit.CamerasScreen
 import com.opencapture.opencine.core.ConnectTarget
 import com.opencapture.opencine.core.RecoveryAction
@@ -261,6 +268,7 @@ class MainActivity : ComponentActivity() {
                 var requestedReconnectID by rememberSaveable { mutableStateOf<String?>(null) }
                 var suppressedUsbAutoReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
                 val connectionScope = rememberCoroutineScope()
+                val shellSessions = remember(connectionScope) { NikonShellSessions(connectionScope) }
                 // The monitor relay ("multicast") — iOS parity: this device can WATCH another
                 // device's broadcast, and BROADCAST its own feed to watchers.
                 var watchController by
@@ -641,6 +649,7 @@ class MainActivity : ComponentActivity() {
                             },
                             scope = connectionScope,
                             offersDiagnostics = true,
+                            commonSession = shellSessions::acquire,
                         )
                     }
                 val camerasModel =
@@ -669,9 +678,38 @@ class MainActivity : ComponentActivity() {
                             connectionScope,
                         ).also { model -> savedCameraStore.onReplaced = model::reloadSaved }
                     }
+                val shell = remember(camerasModel, connectionScope) {
+                    ShellModel(camerasModel, MonitorControlModel(connectionScope)).also {
+                        it.control.onNote = { note -> android.widget.Toast.makeText(applicationContext, note, android.widget.Toast.LENGTH_SHORT).show() }
+                    }
+                }
+                val shellState by shell.state.collectAsState()
+                val sceneState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+                LaunchedEffect(sceneState) { shell.setSceneActive(sceneState.isAtLeast(Lifecycle.State.RESUMED)) }
+                LaunchedEffect(monitorSession, activeSavedCamera) {
+                    val native = monitorSession ?: return@LaunchedEffect
+                    val borrowed = multicam.lentMember(native)
+                    val common = borrowed?.control ?: shellSessions.acquire(native)
+                    if (shell.state.value.monitor?.session?.id == common.id) return@LaunchedEffect
+                    camerasModel.reloadSaved()
+                    val saved = camerasModel.state.value.saved.firstOrNull { camera ->
+                        camera.routes.any { it.extras[NikonSavedRecordsV0.Extra.PROFILE_ID] == activeSavedCamera?.profileID }
+                    } ?: SavedCamera(
+                        id = "monitor:${common.id}", integration = IntegrationID("nikon"),
+                        advertisedName = activeSavedCamera?.cameraName ?: "Monitor", model = "")
+                    val connected = ConnectedCamera(saved, common)
+                    if (borrowed != null) {
+                        shell.borrow(connected) {
+                            monitorSession = null
+                            multicam.reclaim()
+                        }
+                    } else {
+                        shell.present(connected)
+                    }
+                }
                 // A live session handed back (disconnect, drop): the shared page discovers again.
                 LaunchedEffect(monitorSession == null) {
-                    if (monitorSession == null) camerasModel.sessionEnded()
+                    if (monitorSession == null) { shell.close(); camerasModel.sessionEnded() }
                 }
                 val camerasState by camerasModel.state.collectAsState()
                 /** The saved camera and route that hold the app record with [profileID]. */
@@ -768,9 +806,16 @@ class MainActivity : ComponentActivity() {
                     // camera session, which a watcher never has.
                     var watchSettingsPresented by
                         remember(watching) { mutableStateOf(false) }
+                    val watchCommon = remember(watching.session) { shellSessions.acquire(watching.session) }
+                    val watchControl = remember(watchCommon) { MonitorControlModel(connectionScope).also { it.bind(watchCommon) } }
+                    DisposableEffect(watchCommon) {
+                        onDispose { watchControl.unbind(); shellSessions.retire(watching.session) }
+                    }
                     Box(Modifier.fillMaxSize()) {
                         MonitorScreen(
                             watching.session,
+                            commonSession = watchCommon,
+                            commonControl = watchControl,
                             frameSource = watching.frameSource,
                             assist = watchAssist,
                             operatorSettings = operatorSettings,
@@ -1167,6 +1212,7 @@ class MainActivity : ComponentActivity() {
                             withContext(NonCancellable) {
                                 // A multicam member keeps its session for its tile.
                                 if (!multicam.owns(active)) {
+                                    shellSessions.retire(active)
                                     active.disconnect()
                                     pairingEnvironment.releaseCameraAp()
                                 }
@@ -1188,6 +1234,13 @@ class MainActivity : ComponentActivity() {
                                     MonitorOverlay.NONE
                                 },
                             )
+                        }
+                        LaunchedEffect(overlay) {
+                            when (overlay) {
+                                MonitorOverlay.NONE -> shell.dismissCover()
+                                MonitorOverlay.SETTINGS -> shell.open(ShellModel.Cover.SETTINGS)
+                                MonitorOverlay.MEDIA -> shell.open(ShellModel.Cover.MEDIA)
+                            }
                         }
                         val assist = remember(active) {
                             AssistState.restore(
@@ -1278,8 +1331,7 @@ class MainActivity : ComponentActivity() {
                             // A multicam member lent to Live View goes back to its tile: the
                             // session stays open (no CloseSession) and the stage resumes it.
                             if (multicam.lentMember(exitingSession) != null) {
-                                monitorSession = null
-                                multicam.reclaim()
+                                shell.close()
                                 return@disconnect
                             }
                             val reconnectID = activeSavedCamera?.id
@@ -1303,6 +1355,7 @@ class MainActivity : ComponentActivity() {
                                 relayBroadcastController.stop(
                                     notifyReason = "The broadcast ended.")
                                 relayBroadcastEnabled = false
+                                shell.close()
                                 monitorSession = null
                                 uvcSource?.close()
                                 uvcSource = null
@@ -1342,6 +1395,8 @@ class MainActivity : ComponentActivity() {
                         Box {
                             MonitorScreen(
                                 active,
+                                commonSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
+                                commonControl = shell.control,
                                 frameSource = demo?.second ?: uvcSource,
                                 assist = assist,
                                 operatorSettings = operatorSettings,
