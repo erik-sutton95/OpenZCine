@@ -47,12 +47,12 @@ let package = Package(
         // Frame.io comes from OpenCineFrameIO here, not through OpenZCineCore, so the Watch
         // (links OpenZCineCore) carries no delivery code. The Nikon session layer and its JNI
         // exports (Kotlin `NikonNative`) come from OpenCineNikonAndroid and link into this
-        // library; OpenCineJNI is the NDK <jni.h> shim and the JNI copy helpers.
+        // library; OpenCineJNISupport is the JNI copy helpers over the NDK <jni.h> shim.
         .target(
             name: "OpenZCineAndroidFacade",
             dependencies: [
                 "OpenZCineCore",
-                .product(name: "OpenCineJNI", package: "OpenCine"),
+                .product(name: "OpenCineJNISupport", package: "OpenCine"),
                 .product(name: "OpenCineNikonAndroid", package: "OpenCine"),
                 .product(name: "OpenCineFrameIO", package: "OpenCine"),
                 .product(

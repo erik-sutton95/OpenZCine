@@ -79,11 +79,11 @@ keeps the app's own 29 (scopes, feed effects, LUTs, Frame.io, zone map, audio me
 preferences). Swift: `PTPIPClientSession`, the USB transaction transport,
 `AndroidSessionOwnerRegistry`, media browse and the `NikonNative` exports are OpenCine's
 `OpenCineNikonAndroid`, linked into `libOpenZCineAndroid.so` with the JNI helpers of
-`OpenCineJNI` (the app's `CJNI` target is gone). `SwiftCore.isAvailable` loads the library through
+`OpenCineJNISupport` (over OpenCine's `OpenCineJNI` header; the app's `CJNI` target is gone). `SwiftCore.isAvailable` loads the library through
 `NikonNative.load`, and `MainActivity` touches it first. `core-api` keeps only the monitor
 availability, relay lease and relay encoder profile. Release keep rules for the moved classes ship
 in the module (`consumer-rules.pro`). `stageSwiftCore` also fingerprints
-`Sources/OpenCineNikonAndroid/**`, `Sources/OpenCineJNI/**` and `Sources/COpenCineJNI/**`.
+`Sources/OpenCineNikonAndroid/**`, `Sources/OpenCineJNISupport/**` and `Sources/OpenCineJNI/**`.
 
 ## What changes for users
 

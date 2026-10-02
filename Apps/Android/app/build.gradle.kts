@@ -223,7 +223,7 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
         // (and OpenCineCore, which it depends on), OpenCineFrameIO (the Frame.io facade),
         // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it),
         // OpenCineNikonAndroid (the PTP-IP / USB session layer and NikonNative's JNI exports)
-        // and OpenCineJNI (+ COpenCineJNI), so a package edit must restage the core.
+        // and OpenCineJNISupport (+ the OpenCineJNI header), so a package edit must restage the core.
         fileTree(repositoryRoot.resolve("../OpenCine")) {
             include(
                 "Package.swift",
@@ -232,8 +232,8 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineFrameIO/**",
                 "Sources/OpenCineNikon/**",
                 "Sources/OpenCineNikonAndroid/**",
+                "Sources/OpenCineJNISupport/**",
                 "Sources/OpenCineJNI/**",
-                "Sources/COpenCineJNI/**",
             )
         },
         stageSwiftCoreScript,

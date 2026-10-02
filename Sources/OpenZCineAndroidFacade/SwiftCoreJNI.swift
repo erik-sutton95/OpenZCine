@@ -10,7 +10,7 @@
 #if os(Android)
 
     import Foundation
-    import OpenCineJNI
+    import OpenCineJNISupport
     import OpenCineNikonAndroid
     import OpenZCineCore
 
