@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -190,6 +191,8 @@ public fun SavedCamerasExperience(
     nearbyBroadcasts: List<com.opencapture.openzcine.relay.RelayBroadcast> = emptyList(),
     onWatchBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit = {},
     networkFiltersDiscovery: Boolean = false,
+    /** Opens the multicam stage (an empty stage; cameras are added there). */
+    onMulticam: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -1042,6 +1045,7 @@ public fun SavedCamerasExperience(
                                 modifier = Modifier.width(overviewWidth).fillMaxSize(),
                             )
                             SavedCameraList(
+                                onMulticam = onMulticam,
                                 cameras = cameras,
                                 discoveredCameras = discoveredCameras,
                                 usbCameras = usbCameras,
@@ -1089,6 +1093,7 @@ public fun SavedCamerasExperience(
                             }
                             item {
                                 SavedCameraList(
+                                    onMulticam = onMulticam,
                                     cameras = cameras,
                                     discoveredCameras = discoveredCameras,
                                     usbCameras = usbCameras,
@@ -1478,6 +1483,7 @@ private fun SavedCameraList(
     fillAvailableHeight: Boolean,
     scrollRows: Boolean,
     modifier: Modifier,
+    onMulticam: (() -> Unit)? = null,
 ) {
     val busy = phase.isBusy()
     Column(modifier.startupCard().padding(20.dp)) {
@@ -1489,12 +1495,30 @@ private fun SavedCameraList(
             letterSpacing = 1.4.sp,
         )
         Spacer(Modifier.height(6.dp))
-        Text(
-            stringResource(R.string.saved_tap_to_connect),
-            color = StartupColors.ink,
-            fontSize = 21.sp,
-            fontWeight = FontWeight.Bold,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.saved_tap_to_connect),
+                color = StartupColors.ink,
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            // Multicam: an empty stage of four tiles; cameras are added from there.
+            onMulticam?.let { open ->
+                Box(
+                    Modifier.size(44.dp).background(StartupColors.control, RoundedCornerShape(12.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .clickable(enabled = !busy, onClick = open)
+                        .semantics { contentDescription = "Multicam" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    com.opencapture.monitorui.MonitorIcon(
+                        com.opencapture.monitorui.MonitorIcon.LAYOUT_GRID, null,
+                        Modifier.size(18.dp), tint = StartupColors.ink,
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
         val rowScroll = rememberScrollState()
         Column(

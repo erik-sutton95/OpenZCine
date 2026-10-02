@@ -524,6 +524,21 @@ fun FitScale(maxWidth: Dp, content: @Composable () -> Unit) {
 /** Lock toggle: glass rounded square, gold when engaged (iOS `lockButton`). */
 @Composable
 fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    // While Live View shows a lent multicam member, the lock slot returns to the stage instead
+    // (iOS `returnToMulticamButton`); the member keeps its session.
+    com.opencapture.openzcine.multicam.LocalMulticamReturn.current?.let { returnToMulticam ->
+        Box(
+            modifier = modifier.glass(ChromeShape).chromeClickable(returnToMulticam)
+                .semantics { contentDescription = "Return to Multicam" },
+            contentAlignment = Alignment.Center,
+        ) {
+            com.opencapture.monitorui.MonitorIcon(
+                com.opencapture.monitorui.MonitorIcon.LAYOUT_GRID, null,
+                Modifier.size(17.dp), tint = LiveDesign.accent,
+            )
+        }
+        return
+    }
     val tint = if (locked) LiveDesign.accent else LiveDesign.text.copy(alpha = 0.86f)
     // iOS says the same two things about this button — a label and an accessibilityHint
     // (MonitorUnified.swift:1092-1093). Compose has no hint slot, so both ride the description and

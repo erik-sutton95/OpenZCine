@@ -96,6 +96,13 @@ import com.opencapture.openzcine.pairing.SavedCameraRecords
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SavedCamerasExperience
+import com.opencapture.openzcine.multicam.LocalMulticamReturn
+import com.opencapture.openzcine.multicam.MulticamCoordinator
+import com.opencapture.openzcine.multicam.MulticamPickerRow
+import com.opencapture.openzcine.multicam.MulticamStage
+import com.opencapture.openzcine.multicam.multicamDecoder
+import com.opencapture.openzcine.multicam.multicamLink
+import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.transport.WifiLowLatencyLock
 import com.opencapture.openzcine.pairing.realPairingEnvironment
@@ -424,6 +431,18 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(pairingEnvironment) {
                     onDispose { pairingEnvironment.usbCameraSource?.close() }
                 }
+                // Multicam (NIKON-01): up to four bodies on the shared OpenCineMulticam engine,
+                // each on its own saved-profile session beside the single-camera monitor.
+                val multicam =
+                    remember(pairingEnvironment) {
+                        MulticamCoordinator(
+                            scope = connectionScope,
+                            connect = { record ->
+                                withContext(Dispatchers.IO) { multicamLink(record, pairingEnvironment) }
+                            },
+                            decoder = ::multicamDecoder,
+                        )
+                    }
                 var startupSurface by
                     rememberSaveable {
                         mutableStateOf(
@@ -797,6 +816,7 @@ class MainActivity : ComponentActivity() {
                                 SavedCamerasExperience(
                                     cameras = savedCameras,
                                     environment = pairingEnvironment,
+                                    onMulticam = multicam::begin,
                                     onPaired = ::acceptPairedCamera,
                                     onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
                                     onOpenSettings = { standaloneSettingsPresented = true },
@@ -915,6 +935,31 @@ class MainActivity : ComponentActivity() {
                                     },
                                 )
                         }
+                        if (multicam.presented) {
+                            MulticamStage(
+                                coordinator = multicam,
+                                confirmsRecord = operatorSettings.recordConfirmationEnabled.value,
+                                pickerRows = {
+                                    val usb = pairingEnvironment.usbCameraSource?.cameras?.value.orEmpty()
+                                    savedCameras.filter { record -> multicam.members.none { it.record.host == record.host } }
+                                        .map { record ->
+                                            // Network setups are dialled on Add (an operator action, not a
+                                            // discovery probe); USB-C needs the body attached and permitted.
+                                            val reachable =
+                                                record.transport != SavedCameraTransport.USB_C ||
+                                                    usb.any { it.hostKey == record.host && it.access == UsbPtpCameraAccess.READY }
+                                            MulticamPickerRow(record, multicam.refusal(record, reachable))
+                                        }
+                                },
+                                openLiveView = { id ->
+                                    multicam.lend(id)?.let { session ->
+                                        activeSavedCamera = multicam.member(id)?.record
+                                        monitorSession = session
+                                    }
+                                },
+                                close = multicam::end,
+                            )
+                        }
                         if (standaloneSettingsPresented) {
                             val standaloneAssist =
                                 remember {
@@ -957,8 +1002,11 @@ class MainActivity : ComponentActivity() {
                             awaitCancellation()
                         } finally {
                             withContext(NonCancellable) {
-                                active.disconnect()
-                                pairingEnvironment.releaseCameraAp()
+                                // A multicam member keeps its session for its tile.
+                                if (!multicam.owns(active)) {
+                                    active.disconnect()
+                                    pairingEnvironment.releaseCameraAp()
+                                }
                             }
                         }
                     }
@@ -1062,8 +1110,15 @@ class MainActivity : ComponentActivity() {
                             frameioController.attachCameraHop(frameioCameraHop)
                             onDispose { frameioController.attachCameraHop(null) }
                         }
-                        val disconnectToSavedCameraHome: (Boolean) -> Unit = { reconnect ->
+                        val disconnectToSavedCameraHome: (Boolean) -> Unit = disconnect@{ reconnect ->
                             val exitingSession = active
+                            // A multicam member lent to Live View goes back to its tile: the
+                            // session stays open (no CloseSession) and the stage resumes it.
+                            if (multicam.lentMember(exitingSession) != null) {
+                                monitorSession = null
+                                multicam.reclaim()
+                                return@disconnect
+                            }
                             val reconnectID = activeSavedCamera?.id
                             monitorSessionRecoveryEnabled = false
                             suppressedUsbAutoReconnectHosts =
@@ -1114,6 +1169,13 @@ class MainActivity : ComponentActivity() {
                                     ?: activeSavedCamera?.host
                                     ?: "camera"
                             }
+                        val returnToMulticam: (() -> Unit)? =
+                            if (multicam.lentMember(active) != null) {
+                                { disconnectToSavedCameraHome(false) }
+                            } else {
+                                null
+                            }
+                        CompositionLocalProvider(LocalMulticamReturn provides returnToMulticam) {
                         Box {
                             MonitorScreen(
                                 active,
@@ -1357,6 +1419,7 @@ class MainActivity : ComponentActivity() {
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                             }
+                        }
                         }
                         BackHandler(enabled = overlay == MonitorOverlay.SETTINGS) {
                             overlay = MonitorOverlay.NONE
