@@ -49,7 +49,8 @@ the root `Package.swift` do not). It lends each frame as a `DecodedFrameLease` s
 generation that advances when the capture device goes away or changes. The app keeps the operator
 copy for each state and renders leases to `UIImage` in `UVCFrameRenderer` (an actor, off the main
 actor), releasing each lease after the render. `ios/Runner/UVCVideoSource.swift` now holds only that
-glue. The JPEG `FrameDecoder` / Metal live view are app runtime and unchanged. Pinned to OpenCineCore's
+glue. The JPEG `FrameDecoder` / Metal live view were app runtime then (see SHELL-04 below for the
+hardware JPEG decode). Pinned to OpenCineCore's
 `apple` branch until it merges to Core main.
 
 NIKON-01: the app takes the shared monitor UI and the multicam engine from `../OpenCine` instead of
@@ -95,6 +96,14 @@ line goes to `logConnection`) and `USBCameraDeviceBrowser.shared.onEvent` (USB a
 attach and detach go to the diagnostics journal with the same event names). Their Console
 subsystem is now `OpenCineNikon` (categories `camera-connection` and `camera-usb` unchanged).
 `NativeCameraSession` (session orchestration and the saved-camera store) stays in the app.
+
+SHELL-04 (JPEG live view): the hardware motion-JPEG decoder (`JPEGPixelBufferDecoder`,
+VideoToolbox to `420v`) moved to OpenCine's `OpenCineApple` and lends each frame as a
+`DecodedFrameLease` stamped by its `DecodedFrameFence`. `FrameDecoder` advances the fence when a
+live view starts (`resetProcessors`), publishes each lease through it, applies the denoise filter
+and renders to `UIImage` as before, then releases the lease. The CPU fallback, super resolution,
+the denoise filter and `MetalLiveView` (still fed a `UIImage`) stay in the app. Android has no
+Kotlin decoded-frame lease yet, so its JPEG path is unchanged.
 
 ## What changes for users
 
@@ -205,6 +214,10 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     10 min; record; settings writes; media browse; pull the USB-C cable while live (the monitor
     recovers); deny then grant USB camera access in Settings; a Bug Report after these shows
     `usb.authorization.*`, `usb.camera.attached` and `usb.camera.detached` events.
+20. SHELL-04 JPEG live view (iOS, no intended behavior change): the live picture and its frame
+    rate over Wi-Fi and USB-C match the previous build; denoise on and off; the debug key shows
+    `hw 420v` (or the native format) as the decode path; scopes and peaking still read the clean
+    frame; stop and start live view and switch cameras ten times with no stale frame flashing up.
 
 ### Device performance baselines (SHELL-04)
 

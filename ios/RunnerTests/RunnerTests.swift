@@ -1,5 +1,6 @@
 import CoreImage
 import Network
+import OpenCineApple
 import SwiftUI
 import UIKit
 import XCTest
