@@ -6855,13 +6855,11 @@ final class NativeAppModel {
                     liveFPS = "RECOV"
                     isStreamRecovering = true
                     connection = .connected
+                case .reconnectReady:
+                    cameraHost = session.identity.host
+                    connectToCamera(preservingMonitorSurface: true)
                 case .recover(let reason):
-                    if reason == "live view first-frame failure" {
-                        cameraHost = session.identity.host
-                        connectToCamera(preservingMonitorSurface: true)
-                    } else {
-                        beginSessionRecovery(host: session.identity.host, reason: reason)
-                    }
+                    beginSessionRecovery(host: session.identity.host, reason: reason)
                 }
             })
     }
