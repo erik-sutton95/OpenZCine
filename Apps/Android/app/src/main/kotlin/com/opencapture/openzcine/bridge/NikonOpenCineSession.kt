@@ -55,7 +55,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
 import com.opencapture.opencine.core.CameraSession as OpenCineCameraSession
 
 /**
@@ -73,10 +72,11 @@ internal class NikonOpenCineSession(
     private val session: CameraSession,
     private val scope: CoroutineScope,
     private val recordObservationTimeout: Duration = 5.seconds,
+    /** The shared host clock (MULTI-03 F1); tests inject their own. */
+    private val clock: () -> MonotonicInstant = { MonotonicInstant.now() },
 ) : OpenCineCameraSession {
     override val id: CameraSessionID = CameraSessionID()
     private val lock = Any()
-    private val started = TimeSource.Monotonic.markNow()
     private val attempt = ConnectionAttemptID()
     private val _snapshots =
         MutableStateFlow(
@@ -105,7 +105,7 @@ internal class NikonOpenCineSession(
             }
     }
 
-    private fun now(): MonotonicInstant = MonotonicInstant(started.elapsedNow())
+    private fun now(): MonotonicInstant = clock()
 
     override suspend fun submit(command: CameraCommand): CommandReceipt {
         val operation = command.operation
