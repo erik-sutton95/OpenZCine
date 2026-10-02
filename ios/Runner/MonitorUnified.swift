@@ -14,7 +14,9 @@ struct NikonMonitorShell: View {
 
     private var sourceAspect: Double {
         let raw: Double
-        if model.videoSource == .hdmiCapture, let image = model.liveFrameImage, image.size.height > 0 {
+        if model.videoSource == .hdmiCapture, let image = model.liveFrameImage,
+            image.size.height > 0
+        {
             raw = Double(image.size.width / image.size.height)
         } else {
             raw =
@@ -31,7 +33,8 @@ struct NikonMonitorShell: View {
                 top: context.feedSafeArea.top, leading: context.feedSafeArea.leading,
                 bottom: context.feedSafeArea.bottom, trailing: context.feedSafeArea.trailing),
             sourceAspect: sourceAspect, fill: model.preferences.portraitFeedAspect != .fit16x9,
-            showsValues: model.chromeSectionMounts(.cameraValues))
+            showsValues: model.chromeSectionMounts(.cameraValues),
+            topControlInset: context.topControlInset)
     }
 
     var body: some View {
@@ -40,6 +43,7 @@ struct NikonMonitorShell: View {
         MonitorScreen(
             control: model.shell.control, layout: layout, sourceAspect: sourceAspect,
             presentation: MonitorScreenPresentation(
+                visible: model.activePanel?.coversFullScreen != true,
                 interactive: editing == nil,
                 statusMounted: model.chromeSectionMounts(.statusBar),
                 powerMounted: model.railControlMounts(

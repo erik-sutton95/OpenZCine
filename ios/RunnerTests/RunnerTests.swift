@@ -12,36 +12,50 @@ import XCTest
 final class RunnerTests: XCTestCase {
 
     @MainActor
-    func testActualSharedNikonMonitorKeepsNativePictureThroughOwnedAndBorrowedLifetimes() async throws {
+    func testActualSharedNikonMonitorKeepsNativePictureThroughOwnedAndBorrowedLifetimes()
+        async throws
+    {
         // SIMULATED HDMI raster and public-contract session; no camera transport is invoked.
         for borrowed in [false, true] {
             let model = NativeAppModel()
             model.preferences = OperatorPreferences.defaults
             model.isMonitorPresented = true
             model.videoSource = .hdmiCapture
-            let image = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 90)).image { context in
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 90)).image {
+                context in
                 UIColor.green.setFill()
                 context.fill(CGRect(x: 0, y: 0, width: 160, height: 90))
             }
             model.liveFrameImage = image
             let session = NikonPictureLifetimeSession()
-            let saved = SavedCamera(id: "SIMULATED-picture-lifetime", integration: IntegrationID("org.opencapture.nikon-ptp"),
+            let saved = SavedCamera(
+                id: "SIMULATED-picture-lifetime",
+                integration: IntegrationID("org.opencapture.nikon-ptp"),
                 advertisedName: "SIMULATED camera", model: "SIMULATED")
             let camera = ConnectedCamera(saved: saved, session: session)
             var returns = 0
-            if borrowed { model.shell.borrow(camera) { returns += 1 } }
-            else { model.shell.present(camera) }
+            if borrowed {
+                model.shell.borrow(camera) { returns += 1 }
+            } else {
+                model.shell.present(camera)
+            }
             let monitor = model.shell.monitor?.id
             let delivery = MediaDeliveryCoordinator()
             let content = GeometryReader { proxy in
-                NikonMonitorShell(context: LiveViewLayoutContext(proxy: proxy,
-                    deviceOrientation: .unknown, screenWidth: nil)).environment(model).environment(delivery)
+                NikonMonitorShell(
+                    context: LiveViewLayoutContext(
+                        proxy: proxy,
+                        deviceOrientation: .unknown, screenWidth: nil)
+                ).environment(model).environment(delivery)
             }
             let host = UIHostingController(rootView: content)
             let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
             window.rootViewController = host
             window.isHidden = false
-            defer { window.isHidden = true; window.rootViewController = nil }
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
             let original = try await picture(in: host)
             for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
                 window.frame.size = size
@@ -51,7 +65,9 @@ final class RunnerTests: XCTestCase {
                     host.view.setNeedsLayout()
                     host.view.layoutIfNeeded()
                     let next = try await picture(in: host)
-                    XCTAssertTrue(next === original, "Rotation and DISP must preserve the actual native picture view")
+                    XCTAssertTrue(
+                        next === original,
+                        "Rotation and DISP must preserve the actual native picture view")
                 }
             }
             model.displayMode = .live
@@ -77,7 +93,8 @@ final class RunnerTests: XCTestCase {
             for _ in 0..<200 { await Task.yield() }
             XCTAssertEqual(session.closes, borrowed ? [] : [.requested])
             XCTAssertEqual(returns, borrowed ? 1 : 0)
-            XCTAssertEqual(session.commands, 0, "Retirement must never send Stop or any camera command")
+            XCTAssertEqual(
+                session.commands, 0, "Retirement must never send Stop or any camera command")
         }
     }
 
@@ -96,7 +113,6 @@ final class RunnerTests: XCTestCase {
         }
         return try XCTUnwrap(find(host.view), "The production native picture host was not mounted")
     }
-
 
     @MainActor
     func testGlassChoiceKeepsCinemaRatioOnOneLineAtCompactProWidth() {
@@ -2396,14 +2412,16 @@ private final class NikonPictureLifetimeSession: CameraSession {
 
     init() { snapshot = CameraSnapshot(session: id, connection: .ready, authority: .owner) }
     func snapshots() async -> AsyncStream<CameraSnapshot> {
-        let (stream, continuation) = AsyncStream<CameraSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let (stream, continuation) = AsyncStream<CameraSnapshot>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
         subscribers.append(continuation)
         continuation.yield(snapshot)
         return stream
     }
     func submit(_ command: CameraCommand) async -> CommandReceipt {
         commands += 1
-        return CommandReceipt(operation: command.operation, session: id, intent: command.intent,
+        return CommandReceipt(
+            operation: command.operation, session: id, intent: command.intent,
             stage: .rejected(.supportUnknown))
     }
     func outcome(of operation: OperationID) async -> CommandReceipt? { nil }
@@ -2412,7 +2430,10 @@ private final class NikonPictureLifetimeSession: CameraSession {
         guard closes.isEmpty else { return }
         closes.append(reason)
         snapshot.connection = .disconnected(reason)
-        for subscriber in subscribers { subscriber.yield(snapshot); subscriber.finish() }
+        for subscriber in subscribers {
+            subscriber.yield(snapshot)
+            subscriber.finish()
+        }
         subscribers.removeAll()
     }
     func loseControl() {

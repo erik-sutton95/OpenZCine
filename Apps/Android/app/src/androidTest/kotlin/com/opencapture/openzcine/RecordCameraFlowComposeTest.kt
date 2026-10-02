@@ -19,6 +19,7 @@ import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.FakeCameraSession
 import com.opencapture.openzcine.settings.OperatorSettings
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,11 +39,17 @@ class RecordCameraFlowComposeTest {
 
     @Test
     fun fakeCameraRecordControlStartsThenStopsRecording() {
-        val session =
+        val body =
             FakeCameraSession(
                 CameraIdentity(name = "Test ZR", model = "NIKON ZR", serialNumber = "TEST-001"),
             )
-        // This SIMULATED body must report idle before common capture can offer Start.
+        // This SIMULATED body explicitly reports video mode and idle. Unknown mode or record
+        // observations must keep common capture disabled rather than invent standby readiness.
+        val session = object : CameraSession by body {
+            override val cameraProperties =
+                MutableStateFlow(body.cameraProperties.value.copy(captureSelector = "movie"))
+            override val reportedCameraProperties = cameraProperties
+        }
         runBlocking {
             session.connect()
             session.setRecording(false)

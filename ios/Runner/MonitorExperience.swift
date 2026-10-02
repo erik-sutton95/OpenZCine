@@ -96,8 +96,6 @@ private struct LiveViewShell: View {
                 // The landscape-to-landscape flip animates for the same reason the portrait one
                 // does — the modules glide to their mirrored frames under stable identity.
                 .animation(.easeInOut(duration: 0.3), value: context.horizontalDirection)
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .ignoresSafeArea(.container, edges: .all)
                 // Tally + full-screen panel overlay the already-extended (physical-screen) layer
                 // so both reach the bezel on every edge — mounted inside `MonitorShell` they pin
                 // to the safe-area frame (its `GeometryReader` reports its size before this
@@ -123,6 +121,7 @@ private struct LiveViewShell: View {
                     }
                 }
         }
+        .ignoresSafeArea(.container, edges: .all)
         // Snappy panel insert/remove so dismissing a popup feels near-instant.
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
@@ -187,6 +186,7 @@ struct LiveViewLayoutContext {
     let horizontalDirection: MonitorHorizontalLayoutDirection
     let viewportWidth: Double
     let canvasOffsetX: Double
+    let topControlInset: Double
     /// True when the viewport is taller than it is wide — drives the portrait monitor shell.
     let isPortrait: Bool
     /// Full PHYSICAL viewport height for the portrait zone layout. The GeometryReader reports the
@@ -196,18 +196,27 @@ struct LiveViewLayoutContext {
     let viewportHeight: Double
 
     @MainActor
-    init(proxy: GeometryProxy, deviceOrientation: MonitorDeviceOrientation, screenWidth: Double?,
-        windowGeometry: MonitorWindowGeometry = MonitorWindowGeometry()) {
+    init(
+        proxy: GeometryProxy, deviceOrientation: MonitorDeviceOrientation, screenWidth: Double?,
+        windowGeometry: MonitorWindowGeometry = MonitorWindowGeometry()
+    ) {
         let physical = windowGeometry.size.width > 0 && windowGeometry.size.height > 0
         // The root already observes the physical UIWindow. An edge-to-edge SwiftUI child may
         // report zero safe insets; pass the actual window insets without adding them to its size.
-        feedSafeArea = physical ? MonitorEdgeInsets(
-            top: windowGeometry.safeArea.top, leading: windowGeometry.safeArea.leading,
-            bottom: windowGeometry.safeArea.bottom, trailing: windowGeometry.safeArea.trailing
-        ) : proxy.monitorEdgeInsets
-        isPortrait = physical ? windowGeometry.size.height > windowGeometry.size.width : proxy.size.height > proxy.size.width
-        viewportHeight = physical ? windowGeometry.size.height :
-            Double(proxy.size.height) + max(0, feedSafeArea.top) + max(0, feedSafeArea.bottom)
+        feedSafeArea =
+            physical
+            ? MonitorEdgeInsets(
+                top: windowGeometry.safeArea.top, leading: windowGeometry.safeArea.leading,
+                bottom: windowGeometry.safeArea.bottom, trailing: windowGeometry.safeArea.trailing
+            ) : proxy.monitorEdgeInsets
+        isPortrait =
+            physical
+            ? windowGeometry.size.height > windowGeometry.size.width
+            : proxy.size.height > proxy.size.width
+        viewportHeight =
+            physical
+            ? windowGeometry.size.height
+            : Double(proxy.size.height) + max(0, feedSafeArea.top) + max(0, feedSafeArea.bottom)
         chromeInsets =
             MonitorChromeLayout.insets(feedSafeArea: feedSafeArea)
             .clearingWindowControls
@@ -215,20 +224,26 @@ struct LiveViewLayoutContext {
             deviceOrientation: deviceOrientation,
             safeArea: feedSafeArea
         )
-        viewportWidth = physical ? windowGeometry.size.width : MonitorLiveViewViewport.fullWidth(
-            layoutWidth: Double(proxy.size.width),
-            safeArea: feedSafeArea,
-            screenWidth: screenWidth,
-            geometrySpace: .safeArea
-        )
-        canvasOffsetX = physical ? -Double(proxy.safeAreaInsets.leading) : MonitorLiveViewViewport.canvasOffsetX(
-            layoutWidth: Double(proxy.size.width),
-            safeArea: feedSafeArea,
-            screenWidth: screenWidth
-        )
+        viewportWidth =
+            physical
+            ? windowGeometry.size.width
+            : MonitorLiveViewViewport.fullWidth(
+                layoutWidth: Double(proxy.size.width),
+                safeArea: feedSafeArea,
+                screenWidth: screenWidth,
+                geometrySpace: .safeArea
+            )
+        topControlInset = Double(windowGeometry.topControlInset)
+        canvasOffsetX =
+            physical
+            ? 0
+            : MonitorLiveViewViewport.canvasOffsetX(
+                layoutWidth: Double(proxy.size.width),
+                safeArea: feedSafeArea,
+                screenWidth: screenWidth
+            )
     }
 }
-
 @MainActor
 private enum MonitorDeviceOrientationReader {
     static func current() -> MonitorDeviceOrientation {
