@@ -1,5 +1,6 @@
-import Testing
+import OpenCineApple
 import OpenZCineCore
+import Testing
 
 @testable import Runner
 
@@ -136,7 +137,7 @@ struct FirstPairWizardStepTests {
     /// connection first and the specific one second. Five flat choices is the version this
     /// replaced.
     @Test("Every path belongs to exactly one card")
-    func cardGrouping() {
+    @MainActor func cardGrouping() {
         #expect(NativeAppModel.FirstPairCard.allCases == [.wireless, .cableLink])
         #expect(
             NativeAppModel.FirstPairCard.wireless.options == [

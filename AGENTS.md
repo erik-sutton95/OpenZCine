@@ -38,7 +38,9 @@ Install local tooling with `just setup` (macOS / Homebrew).
   its tests there, then bump the pin.
 - `../OpenCineCore` (sibling, pinned in `opencine-pins.txt`, `scripts/checkout-opencine.sh`):
   `OpenCineMedia` supplies `CubeLUT` and `FrameRateSampler` (scoped re-exports in
-  `Sources/OpenZCineCore/CubeLUT.swift`; the Runner project links the product).
+  `Sources/OpenZCineCore/CubeLUT.swift`; the Runner project links the product). `OpenCineApple`
+  supplies the iPad HDMI/UVC capture source (`UVCVideoSource`, leases); the Runner links it and keeps
+  the state copy and the `UIImage` render in `ios/Runner/UVCVideoSource.swift`.
 - `Tests/OpenZCineCoreTests/` — Swift shared-core tests.
 - `ios/Runner/` — production SwiftUI iOS app shell.
 - `Apps/Android/` — production Jetpack Compose app, platform adapters, and Wear OS companion.

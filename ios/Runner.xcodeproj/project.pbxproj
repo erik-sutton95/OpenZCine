@@ -11,6 +11,7 @@
 		OZC000000000000000000013 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000012 /* OpenZCineCore */; };
 		OCC000000000000000000003 /* OpenCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OCC000000000000000000002 /* OpenCineCore */; };
 		F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */ = {isa = PBXBuildFile; productRef = F10000000000000000000A02 /* OpenCineFrameIO */; };
+		APL000000000000000000001 /* OpenCineApple in Frameworks */ = {isa = PBXBuildFile; productRef = APL000000000000000000002 /* OpenCineApple */; };
 		C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F2 /* PhotographyChrome.swift */; };
 		079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */; };
 		0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */; };
@@ -244,6 +245,7 @@
 				OCC000000000000000000003 /* OpenCineCore in Frameworks */,
 				C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */,
 				F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */,
+				APL000000000000000000001 /* OpenCineApple in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -429,6 +431,7 @@
 				OCC000000000000000000002 /* OpenCineCore */,
 				C0DE00000000000000ED1A02 /* OpenCineMedia */,
 				F10000000000000000000A02 /* OpenCineFrameIO */,
+				APL000000000000000000002 /* OpenCineApple */,
 				OZC000000000000000000002 /* OpenZCineCore */,
 			);
 			productName = Runner;
@@ -1115,6 +1118,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
 			productName = OpenCineFrameIO;
+		};
+		APL000000000000000000002 /* OpenCineApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCineCore" */;
+			productName = OpenCineApple;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

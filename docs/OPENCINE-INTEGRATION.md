@@ -12,6 +12,7 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | MEDIA-01 (CubeLUT, FrameRateSampler from OpenCineMedia) | `opencine/media-01` | ba1e340b |
 | VENDOR-02 (Runner links OpenZCineCore; Nikon code in OpenCineNikon) | `opencine/vendor-02-nikon` (on integration) | see branch |
 | OPTIONAL-01 (Frame.io from OpenCineFrameIO) | `opencine/frameio` (on integration) | see branch |
+| MEDIA-02 step 4 (HDMI/UVC capture source from OpenCineApple) | `opencine/apple` (on integration) | see branch |
 
 Shared package: `../OpenCineCore`, pinned in `opencine-pins.txt` (one line, OpenCineCore
 28a0196, which contains the MEDIA-01 commit 4d001e4) and fetched in CI by
@@ -38,6 +39,15 @@ PKCE (CryptoKit on Darwin). The app keeps OAuth presentation, the callback schem
 Kotlin delivery controller, upload history, keystore storage and camera access point hop are
 unchanged. `stageSwiftCore` also fingerprints `Sources/OpenCineFrameIO/**`.
 
+MEDIA-02 step 4: the iPad HDMI/UVC capture source (`UVCVideoSource`, its states and the format
+choice) comes from the `OpenCineApple` product of `../OpenCineCore` (the Runner links it; Watch and
+the root `Package.swift` do not). It lends each frame as a `DecodedFrameLease` stamped with a
+generation that advances when the capture device goes away or changes. The app keeps the operator
+copy for each state and renders leases to `UIImage` in `UVCFrameRenderer` (an actor, off the main
+actor), releasing each lease after the render. `ios/Runner/UVCVideoSource.swift` now holds only that
+glue. The JPEG `FrameDecoder` / Metal live view are app runtime and unchanged. Pinned to OpenCineCore's
+`apple` branch until it merges to Core main.
+
 Not included: the engine-port UI candidate `opencine/ui-03-engine-port-candidate` (OpenCineUI on
 the unmerged `feat/monitor-engine-port`). It stays separate until the engine-port decision is made.
 
@@ -53,6 +63,10 @@ the unmerged `feat/monitor-engine-port`). It stays separate until the engine-por
 - Android facade sessions are keyed by their connection owner (`AndroidSessionOwnerRegistry`
   replaces the single active-session slot), and the `FeedEffectsState.current` mirror is gone.
 - The FPS readout (iOS) no longer rewinds on a stale or repeated frame timestamp (shared sampler).
+- HDMI capture (iPad): no visible change intended. Frames are now rendered to a bitmap only when
+  the monitor takes them (the newest-wins drop happens before the render, not after), off the main
+  actor instead of on the capture queue, and a frame captured from a device that was unplugged or
+  swapped is dropped.
 
 ## Physical device checklist
 
@@ -85,6 +99,11 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
 10. Frame.io (OPTIONAL-01): on an iOS build that was signed in to Frame.io before this update,
     install over it and upload a clip without signing in again. Sign out and in, list and create
     a project, upload with LUT bake. Android: sign in, upload, refresh after expiry.
+
+11. HDMI capture (MEDIA-02 step 4, iPad with a UVC dongle): picture, format and colorimetry readout,
+    hot-unplug and replug, swapping dongles, switching between HDMI and the camera's own live view,
+    scopes and LUT on the HDMI picture, watch relay. Compare CPU, memory and thermal state over
+    20 min at 1080p60 and 4K30 against `opencine/integration`.
 
 ## Before this can ship
 

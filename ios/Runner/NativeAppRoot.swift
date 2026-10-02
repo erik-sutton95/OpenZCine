@@ -1,5 +1,6 @@
 import AVFAudio
 import Network
+import OpenCineApple
 import OpenCineCore
 import OpenCineFrameIO
 import OpenZCineCore
@@ -627,7 +628,7 @@ final class NativeAppModel {
         /// HDMI capture is absent on iPhone rather than shown-and-disabled: `AVCaptureDeviceTypeExternal`
         /// is UVC-on-iPad, so on a phone it is not a path that might work later — it is not a path.
         /// Offering it there would only teach the operator to try something that cannot exist.
-        var options: [FirstPairTransportMethod] {
+        @MainActor var options: [FirstPairTransportMethod] {
             switch self {
             case .wireless: [.cameraAccessPoint, .phoneHotspot, .wiFiNetwork]
             case .cableLink:
@@ -6850,6 +6851,8 @@ final class NativeAppModel {
         if cameraSession == nil { clearFrameHeaderDerivedState() }
         hdmiFrameRate = FrameRateSampler()
         let source = UVCVideoSource(
+            queueLabel: "com.opencapture.openzcine.uvc-capture",
+            logSubsystem: "com.opencapture.openzcine",
             onStateChange: { [weak self] state in self?.applyHDMICaptureState(state) })
         // The first frame's claimed colorimetry, appended to the settings readout. One line of
         // evidence that splits "the camera sends its recording gamma over HDMI" (apply the
@@ -6871,8 +6874,17 @@ final class NativeAppModel {
         // so a slow bake drops frames rather than queueing them behind the picture on screen.
         hdmiConsumerTask = Task { [weak self] in
             guard let self else { return }
-            for await handoff in source.frames {
-                guard !Task.isCancelled, self.videoSource == .hdmiCapture else { break }
+            // Renders off the main actor, one frame at a time, only for frames this loop takes.
+            let renderer = UVCFrameRenderer()
+            for await lease in source.frames {
+                guard !Task.isCancelled, self.videoSource == .hdmiCapture else {
+                    lease.release()
+                    break
+                }
+                // A frame captured before the device went away or changed is stale.
+                guard let handoff = await renderer.image(from: lease),
+                    source.fence.isCurrent(lease.generation)
+                else { continue }
                 await self.presentHDMIFrame(handoff.image)
             }
         }
