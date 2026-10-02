@@ -1,5 +1,9 @@
 package com.opencapture.openzcine.relay
 
+import com.opencapture.opencine.core.CameraCommandIntent
+import com.opencapture.opencine.core.CommandStage
+import com.opencapture.opencine.core.SessionCloseReason
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
@@ -200,10 +204,22 @@ class RelayWatchControllerTest {
             }
             assertTrue(holding != null, "the control token never reached the watcher")
 
-            runBlocking { controller.session.setRecording(true) }
-
+            val common = NikonOpenCineSession(controller.session, scope)
+            assertNull(controller.session.reportedRecording.value)
+            val receipt = runBlocking { common.request(CameraCommandIntent.StartRecording) }
+            assertEquals(CommandStage.AwaitingObservation, receipt.stage)
             assertEquals(MonitorRelayWire.Command.ToggleRecording, host.readCommand(socket))
+            host.send(socket, MonitorRelayWire.Kind.STATE, MonitorRelayWire.State(
+                recordState = "REC", resolutionFrameRate = "", codec = "", media = "", liveFPS = "",
+                cameraBatteryPercent = -1, cameraName = "SIMULATED", lens = "", temperature = "",
+                values = emptyList(), mediaStatus = null, isRecording = true,
+            ).toJson().toString().toByteArray(Charsets.UTF_8))
+            val confirmed = runBlocking { withTimeoutOrNull(30_000) { common.outcome(receipt.operation) } }
+            assertEquals(CommandStage.Confirmed, confirmed?.stage)
+            assertEquals(true, controller.session.reportedRecording.value)
             runBlocking { controller.stop() }
+            assertNull(controller.session.reportedRecording.value)
+            common.closeNow(SessionCloseReason.REQUESTED)
         }
     }
 

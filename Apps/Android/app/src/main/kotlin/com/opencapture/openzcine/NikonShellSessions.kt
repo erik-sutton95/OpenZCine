@@ -22,6 +22,15 @@ internal class NikonShellSessions(private val scope: CoroutineScope) {
     }
 }
 
+
+/** The same permission that mounts controls governs shared command admission and receipts. */
+internal fun NikonOpenCineSession.updateMonitorAuthority(
+    availability: com.opencapture.openzcine.core.MonitorDataAvailability,
+    controlsSurrendered: Boolean,
+) {
+    setHoldsControl(availability.canDriveCamera && !controlsSurrendered)
+}
+
 /** Presentation-only targets over real observations. They never mutate the native state flow. */
 internal fun com.opencapture.opencine.nikon.CameraPropertySnapshot.withPendingControls(
     pending: Map<com.opencapture.opencine.core.SettingKey, com.opencapture.opencine.core.SettingValue>,

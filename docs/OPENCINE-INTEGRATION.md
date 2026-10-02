@@ -96,7 +96,7 @@ became hooks that `AppDelegate` sets at launch: `PTPIPTransport.connectionLog` (
 line goes to `logConnection`) and `USBCameraDeviceBrowser.shared.onEvent` (USB authorization,
 attach and detach go to the diagnostics journal with the same event names). Their Console
 subsystem is now `OpenCineNikon` (categories `camera-connection` and `camera-usb` unchanged).
-`NativeCameraSession` (session orchestration and the saved-camera store) stays in the app.
+`NativeCameraSession` moved into OpenCineNikon in SHELL-03 Z-1a below; the saved-camera store stays in the app.
 
 SHELL-04 (JPEG live view): the hardware motion-JPEG decoder (`JPEGPixelBufferDecoder`,
 VideoToolbox to `420v`) moved to OpenCine's `OpenCineApple` and lends each frame as a
@@ -119,6 +119,15 @@ to the app's records and merged on every launch and after every app write (`Niko
 Replaced and deleted: iOS `ConnectionProgressSheet.swift`, the saved-cameras list, rows and editor
 in `StartupDesign.swift`, the app's own discovery service; Android `SavedCamerasExperience.kt`,
 `ConnectionProgressPopup.kt` and the wizard's own frame in `PairingExperience.kt`.
+
+SHELL-03 Z-1a: OpenCineNikon owns the real iOS NativeCameraSession, selector-first property
+bootstrap, common command queue and the single live/header pump with bounded recovery decisions,
+keepalive and pushed-event readers. Saved namespaces, credentials and joining remain app-owned.
+Both shells reuse one common session through connection and monitor, with ShellModel navigation
+and MonitorControlModel pending edits/terminal receipts. Borrowed members drain their readers
+before returning without CloseSession, EndLiveView or stop-record. HDMI picture remains separately
+owned. The native single-camera monitor is still a temporary slot; shared monitor, settings and
+media screen composition remain the later Z-1/Z-2/Z-3 slices. Physical behavior is untested.
 
 ## What changes for users
 
@@ -324,3 +333,21 @@ same body, same settings, room temperature, battery above 50 %. iOS and Android.
 
 The OpenCine platform repository must be published first (the sibling path becomes SwiftPM url +
 version and Maven coordinates). The steps are in `OpenCine/atlas/docs/PUBLISH.md`.
+
+## SHELL-03 Z-1a physical checks (untested)
+
+- On Wi-Fi and USB-C, open settings/media briefly, return and rotate through portrait and both
+  landscapes. The live picture resumes without a new connection; a cover longer than 30 seconds
+  may end live view and restart it on return. Check first-frame failure and repeated reconnect
+  remain bounded, with usable operator exits and no stale ISO/WB editor commit.
+- Borrow a connected multicam member into Live View and return while recording and while a wire
+  read is pending. The member retains its session and take; readers do not overlap, and no
+  CloseSession, EndLiveView or stop-record is sent on return.
+- With iPad HDMI picture active, drop and restore the Nikon control link. The picture stays
+  mounted while AF/audio/timecode are cleared or recovered honestly.
+- Background/foreground repeatedly while the event channel is quiet, including a suspended
+  keepalive ping. There is one event reader and one idle-ping owner after resume.
+- Grant/revoke a relay watcher's control token; only the holder can record or write ISO/WB.
+  While the host has surrendered control, phone/Watch/Wear/Bluetooth commands refuse. Wear
+  confirms recording only after the camera/broadcaster reports the target; unknown remains
+  unknown and a refusal or timeout does not acknowledge success.

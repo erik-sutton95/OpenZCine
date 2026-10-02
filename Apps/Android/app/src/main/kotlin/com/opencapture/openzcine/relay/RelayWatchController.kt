@@ -403,6 +403,8 @@ class RelayCameraSession(private val controller: RelayWatchController) : CameraS
     override val state: StateFlow<CameraSessionState> = mutableState.asStateFlow()
 
     private val mutableRecording = MutableStateFlow(CameraRecordingState.STANDBY)
+    private val mutableReportedRecording = MutableStateFlow<Boolean?>(null)
+    override val reportedRecording: StateFlow<Boolean?> = mutableReportedRecording.asStateFlow()
     override val recordingState: StateFlow<CameraRecordingState> = mutableRecording.asStateFlow()
 
     internal fun adopt(displayName: String) {
@@ -413,11 +415,13 @@ class RelayCameraSession(private val controller: RelayWatchController) : CameraS
     }
 
     internal fun applyState(state: MonitorRelayWire.State) {
+        mutableReportedRecording.value = state.isRecording
         mutableRecording.value =
             if (state.isRecording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
     }
 
     internal fun close() {
+        mutableReportedRecording.value = null
         mutableState.value = CameraSessionState.Disconnected
     }
 

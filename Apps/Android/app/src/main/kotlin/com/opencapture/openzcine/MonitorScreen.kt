@@ -641,7 +641,8 @@ internal fun MonitorScreen(
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.STOPPING
     val recordControlEnabled =
-        sessionState is CameraSessionState.Connected &&
+        availability.canDriveCamera &&
+            sessionState is CameraSessionState.Connected &&
             !recordCommandPending &&
             !liveViewGuideVisible &&
             // A watcher holding the control token owns the camera outright. Leaving the host's
@@ -652,7 +653,7 @@ internal fun MonitorScreen(
     val recordScope = rememberCoroutineScope()
     // CORE-02: ISO, white balance and record go through the OpenCine camera-session seam. It
     // admits them against camera-reported state, keeps receipts, and drives [session] itself.
-    SideEffect { commonSession.setHoldsControl(!controlsSurrendered) }
+    SideEffect { commonSession.updateMonitorAuthority(availability, controlsSurrendered) }
     val guideNeedsRealFrame = liveViewGuideController?.needsRealDecodedFrame == true
     val latestGuideNeedsRealFrame = rememberUpdatedState(guideNeedsRealFrame)
     val guideFrameDispatchPending = remember(session) { AtomicBoolean(false) }
