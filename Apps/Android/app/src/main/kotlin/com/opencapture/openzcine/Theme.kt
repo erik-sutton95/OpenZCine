@@ -4,6 +4,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import com.opencapture.monitorui.MonitorIosParity
+import com.opencapture.monitorui.MonitorPalette
 
 /**
  * OpenZCine brand tokens — gold on black, matching the iOS shell's
@@ -56,6 +58,12 @@ object LiveDesign {
  */
 @Composable
 fun OpenZCineTheme(content: @Composable () -> Unit) {
+    // Shared OpenCine monitor UI wears the OpenZCine gold; plain fields, set before any shared
+    // chrome in this tree draws.
+    MonitorPalette.accent = BrandColors.accent
+    // OpenZCine takes the iOS look of the shared Android pieces (engine-port UI-03 learning);
+    // Pocket and Insta keep the default until they review it (OpenCine monitor-ui README).
+    MonitorIosParity.enabled = true
     MaterialTheme(
         colorScheme =
             darkColorScheme(

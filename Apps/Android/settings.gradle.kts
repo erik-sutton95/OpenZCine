@@ -24,6 +24,9 @@ includeBuild("../../../OpenCine/Android") {
     name = "opencine"
     dependencySubstitution {
         substitute(module("com.opencapture.opencine:core")).using(project(":core"))
+        // Shared Compose monitor UI and the multicam engine (NIKON-01).
+        substitute(module("com.opencapture.opencine:monitor-ui")).using(project(":monitor-ui"))
+        substitute(module("com.opencapture.opencine:multicam")).using(project(":multicam"))
     }
 }
 

@@ -26,7 +26,7 @@ require(resolvedVersionCode != handheldVersionCode) {
 
 android {
     namespace = "com.opencapture.openzcine.wear"
-    compileSdk = 36
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
 
     defaultConfig {
         // Data Layer peers must use the same signed application id. The

@@ -1,8 +1,11 @@
 [versions]
-agp = "9.2.1"
-kotlin = "2.4.10"
+# AGP, Kotlin, Compose BOM and compile SDK match OpenCine's Android/gradle/libs.versions.toml: the
+# included OpenCine build (monitor-ui, multicam) must load the same Android Gradle plugin.
+androidCompileSdk = "37"
+agp = "9.4.1"
+kotlin = "2.4.20"
 coroutines = "1.11.0"
-composeBom = "2026.06.01"
+composeBom = "2026.09.00"
 activityCompose = "1.13.0"
 media3 = "1.10.1"
 androidxTest = "1.7.0"
@@ -28,6 +31,8 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 opencine-core = { module = "com.opencapture.opencine:core", version.ref = "openCineCore" }
+opencine-monitor-ui = { module = "com.opencapture.opencine:monitor-ui", version.ref = "openCineCore" }
+opencine-multicam = { module = "com.opencapture.opencine:multicam", version.ref = "openCineCore" }
 # The android-application module needs the explicit JUnit variant: AGP's built-in
 # Kotlin support does not apply the framework inference the kotlin-jvm plugin does.
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

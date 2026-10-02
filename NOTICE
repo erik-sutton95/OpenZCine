@@ -6,6 +6,15 @@ Third-party software distributed with this product is listed in THIRD-PARTY-NOTI
 The `.cube` parser (`CubeLUT`) and `FrameRateSampler` now live in OpenCineCore's OpenCineMedia
 (Apache 2.0, same authors).
 
+The shared monitor UI (OpenCine MonitorUI on iOS, monitor-ui on Android) bundles:
+- Sora typeface, Copyright 2019 The Sora Project Authors (SIL Open Font License 1.1;
+  https://github.com/sora-xor/sora-font; copies in OpenCine
+  Sources/MonitorUI/Resources/Fonts/ and Android/monitor-ui/src/main/assets/)
+- Lucide HUD icons, Copyright 2026 Lucide Icons and Contributors (ISC; Feather-derived glyphs
+  also MIT, Copyright 2013-present Cole Bemis; https://github.com/lucide-icons/lucide)
+- View Assist glyphs with Tabler-derived paths, Copyright (c) 2020-2026 Paweł Kuna (MIT;
+  https://github.com/tabler/tabler-icons)
+
 This project is not affiliated with or endorsed by Nikon Corporation.
 "Nikon", "Nikon Z", and "ZR" are trademarks of Nikon Corporation, used for identification only.
 No Nikon SDK or proprietary Nikon documentation is included in, distributed with, or required by

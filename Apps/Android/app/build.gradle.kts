@@ -83,7 +83,7 @@ val keystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")
 
 android {
     namespace = "com.opencapture.openzcine"
-    compileSdk = 36
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "com.opencapture.openzcine"
@@ -286,18 +286,13 @@ val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibr
     )
 }
 
-// Kyant backdrop 2.0 AAR metadata requires compileSdk 37; we stay on 36 until
-// the project SDK is upgraded. Disable only the AAR metadata gate so the rest
-// of the AGP graph still runs.
-afterEvaluate {
-    tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }
-        .configureEach { enabled = false }
-}
-
 dependencies {
     implementation(project(":core-api"))
     // OpenCine common camera contracts (CORE-02 candidate, composite build; see settings).
     implementation(libs.opencine.core)
+    // Shared Compose monitor UI and the multicam engine from the same OpenCine build.
+    implementation(libs.opencine.monitor.ui)
+    implementation(libs.opencine.multicam)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))

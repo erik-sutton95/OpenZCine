@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "com.opencapture.openzcine.wearrelay"
-    compileSdk = 36
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
 
     defaultConfig {
         minSdk = 29
