@@ -1012,6 +1012,8 @@ class MainActivity : ComponentActivity() {
                                                 )
                                                 .also { it.start() }
                                     },
+                                    onPrivacy = { systemSettingsActions.openPrivacy() },
+                                    onTerms = { systemSettingsActions.openTerms() },
                                 )
                                 // "+ Add setup -> Camera access point" without a stored key: the
                                 // scan reads SSID and key off the camera's own network screen,
@@ -1092,6 +1094,8 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     },
+                                    onPrivacy = { systemSettingsActions.openPrivacy() },
+                                    onTerms = { systemSettingsActions.openTerms() },
                                 )
                         }
                         if (multicam.presented) {

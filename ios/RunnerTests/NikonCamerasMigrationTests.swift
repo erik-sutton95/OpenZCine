@@ -32,25 +32,34 @@ final class NikonCamerasMigrationTests: XCTestCase {
 
     /// The app's own encoder.
     private func appWrite(_ records: [PTPIPSavedCameraRecord]) throws {
-        defaults.set(try JSONEncoder().encode(PTPIPSavedCameraRecords.canonicalized(records)), forKey: NikonCameras.legacyKey)
+        defaults.set(
+            try JSONEncoder().encode(PTPIPSavedCameraRecords.canonicalized(records)),
+            forKey: NikonCameras.legacyKey)
     }
 
     /// The app's own decoder (what an older build reads).
     private func appRead() throws -> [PTPIPSavedCameraRecord] {
-        try JSONDecoder().decode([PTPIPSavedCameraRecord].self, from: XCTUnwrap(defaults.data(forKey: NikonCameras.legacyKey)))
+        try JSONDecoder().decode(
+            [PTPIPSavedCameraRecord].self,
+            from: XCTUnwrap(defaults.data(forKey: NikonCameras.legacyKey)))
     }
 
     private var studio: [PTPIPSavedCameraRecord] {
         [
             PTPIPSavedCameraRecord(
-                host: "192.168.1.30", displayName: "ZR_6002199", transport: "Wi-Fi", lastSeenAt: Date(timeIntervalSince1970: 1_800_000_000),
-                serialNumber: "6002199", path: .infrastructure(networkName: "Studio"), setupName: "Stage left"),
+                host: "192.168.1.30", displayName: "ZR_6002199", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 1_800_000_000),
+                serialNumber: "6002199", path: .infrastructure(networkName: "Studio"),
+                setupName: "Stage left"),
             PTPIPSavedCameraRecord(
-                host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C", lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000),
+                host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C",
+                lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000),
                 serialNumber: "6002199", path: .usbC),
             PTPIPSavedCameraRecord(
-                host: "192.168.1.1", displayName: "Z6_3001234", transport: "Wi-Fi", lastSeenAt: Date(timeIntervalSince1970: 1_750_000_000),
-                presentation: PTPIPSavedCameraPresentation(customName: "B cam", wifiSSID: "Z6_3001234"),
+                host: "192.168.1.1", displayName: "Z6_3001234", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 1_750_000_000),
+                presentation: PTPIPSavedCameraPresentation(
+                    customName: "B cam", wifiSSID: "Z6_3001234"),
                 pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "Z6_3001234")),
         ]
     }
@@ -63,18 +72,23 @@ final class NikonCamerasMigrationTests: XCTestCase {
 
         let cameras = store().cameras
 
-        XCTAssertEqual(cameras.count, 2, "one card per body: two setups of 6002199, one access point camera")
+        XCTAssertEqual(
+            cameras.count, 2, "one card per body: two setups of 6002199, one access point camera")
         let zr = try XCTUnwrap(cameras.first { $0.id == "serial:6002199" })
         XCTAssertEqual(zr.routes.map(\.kind), [.infrastructureNetwork, .usb])
         XCTAssertEqual(zr.routes.first?.title, "Stage left")
         XCTAssertEqual(zr.routes.first?.network, "Studio")
         XCTAssertEqual(zr.device, .durable("6002199", integration: NikonCameraSession.integration))
-        let bcam = try XCTUnwrap(cameras.first { $0.routes.contains { $0.kind == .cameraAccessPoint } })
+        let bcam = try XCTUnwrap(
+            cameras.first { $0.routes.contains { $0.kind == .cameraAccessPoint } })
         XCTAssertEqual(bcam.name, "B cam")
-        XCTAssertEqual(defaults.data(forKey: NikonCameras.legacyKey), before, "a read never writes the records")
+        XCTAssertEqual(
+            defaults.data(forKey: NikonCameras.legacyKey), before, "a read never writes the records"
+        )
         XCTAssertNotNil(defaults.data(forKey: NikonCameras.documentKey))
         XCTAssertEqual(defaults.data(forKey: "OpenZCine.PTPIP.GUID"), Data([1, 2, 3]))
-        XCTAssertEqual(defaults.stringArray(forKey: "OpenZCine.PTPIP.PairedHosts"), ["192.168.1.30"])
+        XCTAssertEqual(
+            defaults.stringArray(forKey: "OpenZCine.PTPIP.PairedHosts"), ["192.168.1.30"])
         XCTAssertEqual(legacyWrites, 0)
     }
 
@@ -96,7 +110,8 @@ final class NikonCamerasMigrationTests: XCTestCase {
         var records = studio
         records.append(
             PTPIPSavedCameraRecord(
-                host: "172.20.10.2", displayName: "ZR_6002199", transport: "Wi-Fi", lastSeenAt: Date(timeIntervalSince1970: 1_900_000_000),
+                host: "172.20.10.2", displayName: "ZR_6002199", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 1_900_000_000),
                 serialNumber: "6002199", path: .phoneHotspot))
         try appWrite(records)
 
@@ -128,14 +143,16 @@ final class NikonCamerasMigrationTests: XCTestCase {
     /// launch of this build shows every edit and keeps the document's own route ids.
     func testDowngradeEditsMergeOnUpgrade() throws {
         try appWrite(studio)
-        let zrRoutes = try XCTUnwrap(store().cameras.first { $0.id == "serial:6002199" }).routes.map(\.id)
+        let zrRoutes = try XCTUnwrap(store().cameras.first { $0.id == "serial:6002199" }).routes
+            .map(\.id)
 
         var old = try appRead()
         old.removeAll { $0.path?.kind == .cameraAccessPoint }
         old[0].presentation = PTPIPSavedCameraPresentation(customName: "Renamed on the old build")
         old.append(
             PTPIPSavedCameraRecord(
-                host: "10.0.0.7", displayName: "Z8_4005555", transport: "Wi-Fi", lastSeenAt: Date(timeIntervalSince1970: 1_950_000_000),
+                host: "10.0.0.7", displayName: "Z8_4005555", transport: "Wi-Fi",
+                lastSeenAt: Date(timeIntervalSince1970: 1_950_000_000),
                 serialNumber: "4005555", path: .infrastructure(networkName: "Set")))
         try appWrite(old)
 
@@ -162,12 +179,66 @@ final class NikonCamerasMigrationTests: XCTestCase {
         XCTAssertFalse(try appRead().contains { $0.host == "usb:demo-zr" })
     }
 
+    func testSingleSetupRenameAndClearReachTheLegacyStore() throws {
+        try appWrite(studio)
+        let store = store()
+        let model = CamerasModel(integrations: [], store: store)
+        let camera = try XCTUnwrap(model.saved.first { $0.routes.count == 1 })
+        let route = try XCTUnwrap(camera.routes.first)
+        let original = try appRead()
+
+        model.renameRoute(route.id, of: camera.id, to: "  Shoulder camera  ")
+
+        XCTAssertEqual(
+            model.saved.first { $0.id == camera.id }?.routes.first?.title, "Shoulder camera")
+        var expected = original
+        let index = try XCTUnwrap(expected.firstIndex { $0.host == "192.168.1.1" })
+        expected[index].setupName = "Shoulder camera"
+        XCTAssertEqual(
+            try appRead(), expected, "only this setup changes, including on older builds")
+
+        model.renameRoute(route.id, of: camera.id, to: " \n ")
+
+        XCTAssertNil(model.saved.first { $0.id == camera.id }?.routes.first?.title)
+        XCTAssertEqual(try appRead(), original)
+        XCTAssertEqual(
+            self.store().cameras.first { $0.id == camera.id }?.routes.first?.id, route.id)
+    }
+
+    func testOldBuildSetupRenameAndClearSurviveRepeatedUpgrades() throws {
+        try appWrite(studio)
+        defaults.set(Data([1, 2, 3]), forKey: "OpenZCine.PTPIP.GUID")
+        defaults.set(["192.168.1.30"], forKey: "OpenZCine.PTPIP.PairedHosts")
+        let initial = store().cameras
+        let routeIDs = initial.flatMap(\.routes).map(\.id)
+
+        for name: String? in ["Old build setup", nil] {
+            var records = try appRead()
+            let index = try XCTUnwrap(records.firstIndex { $0.host == "192.168.1.30" })
+            records[index].setupName = name
+            try appWrite(records)
+            let legacy = defaults.data(forKey: NikonCameras.legacyKey)
+
+            let reloaded = store().cameras
+            let camera = try XCTUnwrap(reloaded.first { $0.id == "serial:6002199" })
+            XCTAssertEqual(camera.routes.first { $0.kind == .infrastructureNetwork }?.title, name)
+            XCTAssertEqual(reloaded.flatMap(\.routes).map(\.id), routeIDs)
+            XCTAssertEqual(defaults.data(forKey: NikonCameras.legacyKey), legacy)
+            XCTAssertEqual(store().cameras, reloaded, "repeated launch keeps the old build's clear")
+        }
+        XCTAssertEqual(defaults.data(forKey: "OpenZCine.PTPIP.GUID"), Data([1, 2, 3]))
+        XCTAssertEqual(
+            defaults.stringArray(forKey: "OpenZCine.PTPIP.PairedHosts"), ["192.168.1.30"])
+    }
+
     /// One record an older or newer build wrote that this one cannot read: kept in the records,
     /// skipped in the document, never overwritten by a shared edit.
     func testABadRecordIsKept() throws {
-        var array = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(studio)) as? [Any])
+        var array = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(studio)) as? [Any])
         array.append(["host": 42, "future": true])
-        defaults.set(try JSONSerialization.data(withJSONObject: array), forKey: NikonCameras.legacyKey)
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: array), forKey: NikonCameras.legacyKey)
 
         let store = store()
         XCTAssertEqual(store.cameras.count, 2)
@@ -176,7 +247,8 @@ final class NikonCamerasMigrationTests: XCTestCase {
         store.save(cameras)
 
         let stored = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: XCTUnwrap(defaults.data(forKey: NikonCameras.legacyKey))) as? [[String: Any]])
+            JSONSerialization.jsonObject(
+                with: XCTUnwrap(defaults.data(forKey: NikonCameras.legacyKey))) as? [[String: Any]])
         XCTAssertEqual(stored.count, 4)
         XCTAssertEqual(stored.last?["future"] as? Bool, true)
     }

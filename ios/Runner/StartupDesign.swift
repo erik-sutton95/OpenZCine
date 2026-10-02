@@ -1,9 +1,9 @@
 import AVFoundation
-import SwiftUI
-import OpenCineApple
-import OpenCineAppKit
 import MonitorPresentation
+import OpenCineAppKit
+import OpenCineApple
 import OpenZCineCore
+import SwiftUI
 
 /// Maps technical connection/discovery status strings to operator-friendly copy for startup screens.
 enum StartupConnectionCopy {
@@ -749,12 +749,15 @@ struct StartupWizardDeviceInstructionCard: View {
 
 struct StartupFirstPairWizardView: View {
     @Environment(NativeAppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     let isBusy: Bool
     let contentLayout: StartupContentLayout
     var safeArea = EdgeInsets()
     @State private var permissions = StartupPermissionsCoordinator()
 
-    private var style: WizardCompactStyle { WizardCompactStyle.make(profile: contentLayout.profile) }
+    private var style: WizardCompactStyle {
+        WizardCompactStyle.make(profile: contentLayout.profile)
+    }
     private var step: NativeAppModel.FirstPairWizardStep { model.firstPairWizardStep }
 
     /// The wizard on the shared pair page (SHELL-02): its steps in the rail, the step in the
@@ -767,7 +770,8 @@ struct StartupFirstPairWizardView: View {
             onReportProblem: { model.isBugReportPresented = true },
             onWatchFeed: { model.showSavedCameras() },
             pairingFlow: model.showsAppConnectProgress
-                ? NikonConnectFlow(model: model).flow(steps: railSteps, current: railSteps.count - 1)
+                ? NikonConnectFlow(model: model).flow(
+                    steps: railSteps, current: railSteps.count - 1)
                 : IntegrationPairingFlow(
                     presentation: presentation,
                     onPrimary: { model.advanceFirstPairWizard() },
@@ -778,7 +782,9 @@ struct StartupFirstPairWizardView: View {
                             model.showSavedCameras()
                         }
                     },
-                    content: AnyView(stepBody)))
+                    content: AnyView(stepBody)),
+            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
+            onTerms: { openURL(SupportLinkCatalog.terms) })
     }
 
     private var railSteps: [CameraPairingStep] {
@@ -794,17 +800,20 @@ struct StartupFirstPairWizardView: View {
             skipsPermissions: model.firstPairWizardSkipsPermissions)
         // Transport is chosen by tapping a card; discovery advances by connecting to a found
         // camera; camera access point ends at the network step, whose button opens the scanner.
-        let primary = step != .chooseTransport && (
-            !step.isFinalStep(for: model.firstPairTransportMethod)
+        let primary =
+            step != .chooseTransport
+            && (!step.isFinalStep(for: model.firstPairTransportMethod)
                 || (step == .connectNetwork && model.firstPairTransportMethod == .cameraAccessPoint))
         return CameraPairingPresentation(
             steps: steps.map { CameraPairingStep($0.title, "") },
             currentStep: steps.firstIndex(of: step) ?? 0,
             title: stepTitle, body: "", target: "Nikon Z", hint: "",
-            primaryAction: primary ? (step == .connectNetwork ? "Connect my camera" : "Continue") : nil,
+            primaryAction: primary
+                ? (step == .connectNetwork ? "Connect my camera" : "Continue") : nil,
             // The operator can't leave the permissions step until the required permissions are
             // granted: the camera can't be reached without them.
-            primaryActionEnabled: !isBusy && (step != .permissions || permissions.allRequiredGranted),
+            primaryActionEnabled: !isBusy
+                && (step != .permissions || permissions.allRequiredGranted),
             backAction: model.firstPairWizardCanRetreat(from: step) ? "Back" : "Your cameras")
     }
 

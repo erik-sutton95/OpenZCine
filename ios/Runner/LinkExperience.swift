@@ -1,10 +1,11 @@
 import OpenCineAppKit
-import SwiftUI
 import OpenZCineCore
+import SwiftUI
 
 struct LinkExperience: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         // The safe area is read here and handed to the shared pages, which draw edge to edge.
@@ -106,9 +107,11 @@ struct LinkExperience: View {
                 isBusy: model.isStartupActionLocked, contentLayout: layout, safeArea: safeArea)
         } else if model.isConnected {
             StartupPreparingLiveView(compact: layout.mode == .singleColumn)
-                .padding(EdgeInsets(
-                    top: safeArea.top + 24, leading: safeArea.leading + 24, bottom: safeArea.bottom + 24,
-                    trailing: safeArea.trailing + 24))
+                .padding(
+                    EdgeInsets(
+                        top: safeArea.top + 24, leading: safeArea.leading + 24,
+                        bottom: safeArea.bottom + 24,
+                        trailing: safeArea.trailing + 24))
         } else if model.showsAppConnectProgress {
             NikonConnectScreen(safeArea: safeArea)
         } else if model.isPairingNearby {
@@ -116,7 +119,9 @@ struct LinkExperience: View {
                 model: model.cameras, safeArea: safeArea,
                 onDone: { model.isPairingNearby = false },
                 onDiagnostics: { model.shareDiagnostics() },
-                onReportProblem: { model.isBugReportPresented = true })
+                onReportProblem: { model.isBugReportPresented = true },
+                onPrivacy: { openURL(SupportLinkCatalog.privacy) },
+                onTerms: { openURL(SupportLinkCatalog.terms) })
         } else {
             NikonCamerasPage(safeArea: safeArea)
         }

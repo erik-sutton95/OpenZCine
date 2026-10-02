@@ -731,6 +731,8 @@ public fun PairingExperience(
      * operator or camera text — only stable tokens from [diagnosticPhaseForPairingPath].
      */
     onDiagnosticPhase: (String) -> Unit = {},
+    onPrivacy: (() -> Unit)? = null,
+    onTerms: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -1521,6 +1523,8 @@ public fun PairingExperience(
                     }
                 },
             ),
+            onPrivacy = onPrivacy,
+            onTerms = onTerms,
         )
         if (cameraWifiScannerPresented) {
             CameraWifiScannerOverlay(
