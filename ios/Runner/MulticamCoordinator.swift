@@ -414,7 +414,7 @@ final class MulticamCoordinator {
                 NikonMulticamPolicy.device(serialNumber: record.serialNumber)),
             qualification: NikonMulticamPolicy.qualification(
                 path: record.path, reachable: reachable,
-                isPhotography: false,  // saved-path admission; mode is checked again after connect
+                isPhotography: nil,  // saved-path admission; mode is checked again after connect
                 device: NikonMulticamPolicy.device(serialNumber: record.serialNumber),
                 members: members.compactMap(\.device)),
             alongside: members.map { request($0.id, $0.record, $0.device) }, budget: Self.budget)

@@ -108,7 +108,7 @@ private fun multicamQualification(
         SavedCameraTransport.USB_C -> RouteKind.USB
     }
     return NikonMulticamPolicy.qualification(
-        path, reachable, isPhotography = false, device = null, members = emptyList(),
+        path, reachable, isPhotography = null, device = null, members = emptyList(),
     )
 }
 
