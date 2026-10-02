@@ -3,10 +3,11 @@ import Network
 import OpenCineApple
 import OpenCineCore
 import SwiftUI
+import Testing
 import UIKit
 import XCTest
-@testable import OpenZCineCore
 
+@testable import OpenZCineCore
 @testable import Runner
 
 final class RunnerTests: XCTestCase {
@@ -2441,5 +2442,68 @@ private final class NikonPictureLifetimeSession: CameraSession {
         snapshot.authority = .readOnly
         snapshot.revision = snapshot.revision.next()
         for subscriber in subscribers { subscriber.yield(snapshot) }
+    }
+}
+
+/// SIMULATED descriptor reports enter through the actual app bootstrap producer.
+@MainActor
+@Suite("Common Nikon exposure provenance")
+struct NikonExposureProvenanceTests {
+    private func movieModel() throws -> NativeAppModel {
+        let model = NativeAppModel()
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        model.applyBootstrapObservation(
+            .property(.movieShutterMode, Data([PTPCameraPropertyDecoders.shutterModeCode(.angle)])))
+        model.applyBootstrapObservation(
+            .property(
+                .movieShutterAngle,
+                try #require(PTPCameraPropertyWrite.request(control: .shutter, label: "180°")).data)
+        )
+        model.applyBootstrapObservation(
+            .property(
+                .movieFNumber,
+                try #require(PTPCameraPropertyWrite.request(control: .iris, label: "f/2.8")).data))
+        return model
+    }
+
+    @Test("Legacy UI ladders cannot authorize common exposure writes")
+    func fallbackIsNotAnAdvertisedDomain() throws {
+        let model = try movieModel()
+        model.cameraControlOptions[.movieShutterAngle] = CameraPicker.shutter.modes[0].options
+        #expect(!model.irisApertures.isEmpty)
+        let facts = model.nikonControlFacts
+        #expect(facts.shutterLabels.isEmpty)
+        #expect(facts.apertureLabels.isEmpty)
+        #expect(NikonExposureSettings.reported(facts.reported)[.shutter] == .shutter(.angle(180)))
+        #expect(NikonExposureSettings.reported(facts.reported)[.aperture] == .aperture(2.8))
+        for key in [SettingKey.shutter, .aperture] {
+            let descriptor = try #require(
+                NikonCameraSession.descriptors(facts).first { $0.key == key })
+            #expect(try #require(descriptor.domain).choices.isEmpty)
+            #expect(descriptor.availability == .unavailable(.notReady))
+        }
+    }
+
+    @Test("Actual choices authorize only their advertised domain and retire with the circuit")
+    func descriptorReportsOwnTheDomain() throws {
+        let model = try movieModel()
+        model.applyBootstrapObservation(.options(.movieShutterAngle, ["45°", "90°"]))
+        model.applyBootstrapObservation(.apertures(["f/4.0"]))
+        let facts = model.nikonControlFacts
+        #expect(facts.shutterLabels == ["45°", "90°"])
+        #expect(facts.apertureLabels == ["f/4.0"])
+        let aperture = try #require(
+            NikonCameraSession.descriptors(facts).first { $0.key == .aperture })
+        #expect(try #require(aperture.domain).choices == [.aperture(4)])
+        model.applyBootstrapObservation(.options(.movieShutterAngle, ["180°"]))
+        #expect(model.nikonControlFacts.shutterLabels.isEmpty)
+        model.applyBootstrapObservation(
+            .property(.movieShutterMode, Data([PTPCameraPropertyDecoders.shutterModeCode(.speed)])))
+        #expect(model.nikonControlFacts.shutterLabels.isEmpty)
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([0])))
+        model.applyBootstrapObservation(.apertures(["f/5.6"]))
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        #expect(model.nikonControlFacts.apertureLabels.isEmpty)
+        #expect(model.advertisedExposureOptions.isEmpty)
     }
 }

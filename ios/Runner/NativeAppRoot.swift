@@ -2079,6 +2079,8 @@ final class NativeAppModel {
     /// hardcoded fallback. Reading the real values lets the pickers track whatever the connected body
     /// supports, not just the ZR's defaults.
     var cameraControlOptions: [PTPPropertyCode: [String]] = [:]
+    /// Exposure choices actually returned by a descriptor, independent of legacy picker ladders.
+    private(set) var advertisedExposureOptions: [PTPPropertyCode: [String]] = [:]
     /// Whether the camera reports it's charging. No PTP power-source property is wired yet, so this
     /// stays false on hardware; the indicator's charging glyph is ready for when one is identified.
     var cameraBatteryCharging = false
@@ -4703,6 +4705,7 @@ final class NativeAppModel {
         // No exit path may leave a focus drive owning the command channel of a dead session.
         cancelManualFocusDrive()
         cameraApertures = []
+        advertisedExposureOptions = [:]
         // Still-capture state must never survive a stream (re)start — a stale chained
         // release re-firing after a reconnect loops the whole connection.
         shutterPressLatchedBurst = false
@@ -8342,29 +8345,52 @@ final class NativeAppModel {
         await monitorRuntime?.bootstrapProperties(initial: cameraPropertySnapshot) {
             [weak self] observation in
             guard let self, cameraSession === session else { return }
-            switch observation {
-            case .property(let property, let data):
-                applyCameraRead(property, data)
-                publishCameraDisplayState()
-                syncFocusFromSnapshot()
-                syncShutterLockFromSnapshot()
-                if property == .warningStatus { applyThermalStreamStepDownIfNeeded() }
-            case .storage(let info):
-                lastKnownStorage = info
-                lastStorageRefreshAt = Date()
-            case .apertures(let values): cameraApertures = values
-            case .screenModes(let values): cameraScreenModes = values
-            case .fileTypes(let values): cameraFileTypeModes = values
-            case .options(let property, let values): cameraControlOptions[property] = values
-            case .photographyReady: seedInstantReviewBaseline()
-            case .descriptorsReady:
-                propertyPollIndex = 0
-                lastDescriptorRefreshAt = Date()
-                publishCameraDisplayState()
-                syncFocusFromSnapshot()
-                syncShutterLockFromSnapshot()
-            }
+            applyBootstrapObservation(observation)
         }
+    }
+
+    /// Applies the integration's actual bootstrap reports to the app display and common facts.
+    func applyBootstrapObservation(_ observation: NikonBootstrapObservation) {
+        switch observation {
+        case .property(let property, let data):
+            applyCameraRead(property, data)
+            publishCameraDisplayState()
+            syncFocusFromSnapshot()
+            syncShutterLockFromSnapshot()
+            if property == .warningStatus { applyThermalStreamStepDownIfNeeded() }
+        case .storage(let info):
+            lastKnownStorage = info
+            lastStorageRefreshAt = Date()
+        case .apertures(let values):
+            cacheAdvertisedApertures(
+                values,
+                property: reportedPropertySnapshot.captureSelector == .photo
+                    ? .fNumber : .movieFNumber)
+        case .screenModes(let values): cameraScreenModes = values
+        case .fileTypes(let values): cameraFileTypeModes = values
+        case .options(let property, let values):
+            cacheAdvertisedControlOptions(values, property: property)
+        case .photographyReady: seedInstantReviewBaseline()
+        case .descriptorsReady:
+            propertyPollIndex = 0
+            lastDescriptorRefreshAt = Date()
+            publishCameraDisplayState()
+            syncFocusFromSnapshot()
+            syncShutterLockFromSnapshot()
+        }
+    }
+
+    private func cacheAdvertisedControlOptions(_ values: [String], property: PTPPropertyCode) {
+        cameraControlOptions[property] = values
+        if property == .movieShutterAngle || property == .movieShutterSpeed {
+            // An inactive circuit's one-value placeholder is not a writable movie domain.
+            advertisedExposureOptions[property] = values.count > 1 ? values : []
+        }
+    }
+
+    private func cacheAdvertisedApertures(_ values: [String], property: PTPPropertyCode) {
+        cameraApertures = values
+        advertisedExposureOptions[property] = values
     }
 
     private func consumeStagedClockSync(session: NativeCameraSession) async {
@@ -8489,8 +8515,19 @@ final class NativeAppModel {
 
     /// A value the camera returned, applied to the display snapshot and the reported one.
     private func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
+        let previous = reportedPropertySnapshot
         cameraPropertySnapshot = cameraPropertySnapshot.applying(property: property, data: data)
         reportedPropertySnapshot = reportedPropertySnapshot.applying(property: property, data: data)
+        if previous.captureSelector != reportedPropertySnapshot.captureSelector {
+            advertisedExposureOptions = [:]
+        } else if previous.shutterMode != reportedPropertySnapshot.shutterMode {
+            advertisedExposureOptions.removeValue(forKey: .movieShutterAngle)
+            advertisedExposureOptions.removeValue(forKey: .movieShutterSpeed)
+        }
+        if previous.lens != reportedPropertySnapshot.lens {
+            advertisedExposureOptions.removeValue(forKey: .fNumber)
+            advertisedExposureOptions.removeValue(forKey: .movieFNumber)
+        }
     }
 
     /// One property read applied into the snapshot and derived monitor state.
@@ -8697,6 +8734,7 @@ final class NativeAppModel {
         do {
             var options = try await session.controlOptions(
                 for: property, valueByteCount: valueByteCount)
+            guard cameraSession === session else { return }
             if property == .movieWhiteBalance {
                 options = options.filter { $0 != "Color temp" }
             }
@@ -8708,10 +8746,14 @@ final class NativeAppModel {
             if property == .movieShutterSpeed || property == .movieShutterAngle,
                 options.count <= 1
             {
+                advertisedExposureOptions.removeValue(forKey: property)
                 return
             }
+            if property == .movieShutterSpeed || property == .movieShutterAngle {
+                advertisedExposureOptions[property] = options
+            }
             if !options.isEmpty, cameraControlOptions[property] != options {
-                cameraControlOptions[property] = options
+                cacheAdvertisedControlOptions(options, property: property)
                 logConnection("options \(property): \(options.joined(separator: ", "))")
             }
         } catch {
@@ -8744,8 +8786,8 @@ final class NativeAppModel {
             if let pending = pendingShutterMode, pending != expected { return false }
             do {
                 let data = try await session.readCameraProperty(.movieShutterMode)
-                cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                    property: .movieShutterMode, data: data)
+                guard cameraSession === session else { return false }
+                applyCameraRead(.movieShutterMode, data)
                 publishCameraDisplayState()
                 if cameraPropertySnapshot.shutterMode == expected { return true }
             } catch {
@@ -8765,7 +8807,9 @@ final class NativeAppModel {
         session: NativeCameraSession,
         mode: ShutterDisplayMode
     ) async {
-        guard await waitForShutterModeConfirmation(session: session, expected: mode) else {
+        guard await waitForShutterModeConfirmation(session: session, expected: mode),
+            cameraSession === session
+        else {
             return
         }
 
@@ -8775,15 +8819,17 @@ final class NativeAppModel {
         case .angle: property = .movieShutterAngle
         }
         let valueByteCount = 4
+        advertisedExposureOptions.removeValue(forKey: property)
         var lastCount = 0
 
         for attempt in 1...3 {
             do {
                 let options = try await session.controlOptions(
                     for: property, valueByteCount: valueByteCount)
+                guard cameraSession === session else { return }
                 lastCount = options.count
                 if options.count > 1 {
-                    cameraControlOptions[property] = options
+                    cacheAdvertisedControlOptions(options, property: property)
                     logConnection("options \(property): \(options.joined(separator: ", "))")
                     return
                 }
@@ -8825,9 +8871,11 @@ final class NativeAppModel {
                 ? .fNumber : .movieFNumber
             let raw = try await session.describeCameraPropertyEnum(
                 property, valueByteCount: 2)
+            guard cameraSession === session else { return }
             let apertures = PTPCameraPropertyDecoders.apertureList(fromEnum: raw)
+            advertisedExposureOptions[property] = apertures
             if !apertures.isEmpty {
-                cameraApertures = apertures
+                cacheAdvertisedApertures(apertures, property: property)
             }
         } catch {
             // Descriptor not supported or transiently unavailable — keep the last known list.
@@ -12494,15 +12542,13 @@ extension NativeAppModel {
             shutterLabels: {
                 switch reportedPropertySnapshot.shutterMode {
                 case .angle:
-                    cameraControlOptions[.movieShutterAngle]
-                        ?? CameraPicker.shutter.modes[0].options
+                    advertisedExposureOptions[.movieShutterAngle] ?? []
                 case .speed:
-                    cameraControlOptions[.movieShutterSpeed]
-                        ?? CameraPicker.shutter.modes[1].options
+                    advertisedExposureOptions[.movieShutterSpeed] ?? []
                 case nil: []
                 }
             }(),
-            apertureLabels: irisApertures)
+            apertureLabels: advertisedExposureOptions[.movieFNumber] ?? [])
     }
 
 }
