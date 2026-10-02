@@ -1,7 +1,7 @@
 import MonitorPresentation
 import MonitorUI
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -19,7 +19,9 @@ enum NikonCameras {
 
     /// `onChange`: the shared page patched the records (a rename, a forgotten setup); the app
     /// reads them back.
-    static func store(_ defaults: UserDefaults = .standard, onChange: @escaping () -> Void) -> SavedCamerasStore {
+    static func store(_ defaults: UserDefaults = .standard, onChange: @escaping () -> Void)
+        -> SavedCamerasStore
+    {
         SavedCamerasStore(
             document: .userDefaults(defaults, key: documentKey),
             legacy: .init(
@@ -42,7 +44,9 @@ enum NikonCameras {
     }
 
     /// The records behind a saved camera, most recently seen first (its routes' hosts and kinds).
-    static func records(of camera: SavedCamera, in records: [PTPIPSavedCameraRecord]) -> [PTPIPSavedCameraRecord] {
+    static func records(of camera: SavedCamera, in records: [PTPIPSavedCameraRecord])
+        -> [PTPIPSavedCameraRecord]
+    {
         camera.routes.compactMap { route in
             let host = route.extras[NikonSavedRecordsV0.Extra.host]
             return records.first {
@@ -85,9 +89,11 @@ final class NativeNikonPort: NikonConnectPort {
     /// access point's address (192.168.1.1 by convention, also the commonest home router) says
     /// nothing about the camera unless this phone is on that access point, as the old list ruled.
     func found(_ cameras: [DiscoveredCamera]) {
-        let accessPoints = model.isOnCameraAccessPointNetwork ? [] : model.savedCameraAccessPointHosts
+        let accessPoints =
+            model.isOnCameraAccessPointNetwork ? [] : model.savedCameraAccessPointHosts
         let visible = cameras.filter { camera in
-            camera.source != .liveness || !accessPoints.contains(PTPIPPairedHosts.normalizedHost(camera.ip) ?? camera.ip)
+            camera.source != .liveness
+                || !accessPoints.contains(PTPIPPairedHosts.normalizedHost(camera.ip) ?? camera.ip)
         }
         onSightings?(visible + demoSightings)
     }
@@ -174,7 +180,8 @@ final class NativeNikonPort: NikonConnectPort {
         case .failed:
             let failure = Self.failure(
                 model.lastConnectError, reason: model.lastConnectFailureReason,
-                message: model.connectionFailureDetail.isEmpty ? model.connectionMessage : model.connectionFailureDetail)
+                message: model.connectionFailureDetail.isEmpty
+                    ? model.connectionMessage : model.connectionFailureDetail)
             // The card shows the failure now; the funnel's own sheet stands down.
             model.dismissConnectionProgress()
             finish(.failure(failure))
@@ -188,7 +195,9 @@ final class NativeNikonPort: NikonConnectPort {
     }
 
     /// A failed connect, typed, in the funnel's own words, with its diagnostics report on offer.
-    static func failure(_ error: (any Error)?, reason: ConnectionFailure.Reason?, message: String) -> ConnectionFailure {
+    static func failure(_ error: (any Error)?, reason: ConnectionFailure.Reason?, message: String)
+        -> ConnectionFailure
+    {
         var failure =
             error.map { NikonIntegration.failure($0, message: message) }
             ?? ConnectionFailure(
@@ -210,7 +219,9 @@ final class NativeNikonPort: NikonConnectPort {
             .failure(
                 Self.failure(
                     NativeCameraSessionError.timeout("Camera handshake"), reason: nil,
-                    message: "The camera didn't answer in time. Check it is on and on this network, then try again.")))
+                    message:
+                        "The camera didn't answer in time. Check it is on and on this network, then try again."
+                )))
     }
 }
 
@@ -218,6 +229,7 @@ final class NativeNikonPort: NikonConnectPort {
 /// network notice), its add-setup sheet and its take-over prompt.
 struct NikonCamerasPage: View {
     @Environment(NativeAppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     let safeArea: EdgeInsets
 
     static let relayPrefix = "relay:"
@@ -242,7 +254,8 @@ struct NikonCamerasPage: View {
             onIntegrationAction: { cameraID, action in
                 if action == NativeNikonPort.takeOverAction,
                     case .saved(let camera, let routeID) = model.cameras.failures[cameraID]?.target,
-                    let host = camera.routes.first(where: { $0.id == routeID })?.extras[NikonSavedRecordsV0.Extra.host]
+                    let host = camera.routes.first(where: { $0.id == routeID })?.extras[
+                        NikonSavedRecordsV0.Extra.host]
                 {
                     model.nikonPort.allowTakeOver(host: host)
                     _ = model.cameras.perform(.retry, for: cameraID)
@@ -252,10 +265,16 @@ struct NikonCamerasPage: View {
             },
             extraNearby: extraNearby,
             onExtraNearby: { id in
-                guard let broadcast = model.visibleRelayBroadcasts.first(where: { Self.relayPrefix + $0.id == id })
+                guard
+                    let broadcast = model.visibleRelayBroadcasts.first(where: {
+                        Self.relayPrefix + $0.id == id
+                    })
                 else { return }
                 model.joinRelay(broadcast)
-            })
+            },
+            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
+            onTerms: { openURL(SupportLinkCatalog.terms) }
+        )
         .onAppear {
             model.cameras.sessionEnded()
             model.cameras.reloadSaved()
@@ -269,7 +288,8 @@ struct NikonCamerasPage: View {
         if model.networkFiltersDiscovery {
             items.append(
                 CameraListItem(
-                    id: Self.filterNoticeID, name: "This network", subtitle: "Cameras below were found directly",
+                    id: Self.filterNoticeID, name: "This network",
+                    subtitle: "Cameras below were found directly",
                     status: "", actionTitle: "", isAvailable: false,
                     failure: CameraConnectFailure(
                         title: "Discovery is filtered",
@@ -280,7 +300,8 @@ struct NikonCamerasPage: View {
         for broadcast in model.visibleRelayBroadcasts {
             items.append(
                 CameraListItem(
-                    id: Self.relayPrefix + broadcast.id, name: broadcast.name, subtitle: "Live feed from another device",
+                    id: Self.relayPrefix + broadcast.id, name: broadcast.name,
+                    subtitle: "Live feed from another device",
                     badge: "LIVE", status: "Watch this device's feed", actionTitle: "Watch"))
         }
         return items
@@ -355,7 +376,8 @@ struct NikonConnectFlow {
     }
 
     func presentation(steps: [CameraPairingStep], current: Int) -> CameraPairingPresentation {
-        let status = ConnectionProgressCopy.statusTitle(phase: phase, isUSB: model.connectionProgressIsUSB)
+        let status = ConnectionProgressCopy.statusTitle(
+            phase: phase, isUSB: model.connectionProgressIsUSB)
         let failed = phase == .failed
         let working = phase != .readyToJoin && phase != .connected && !failed
         return CameraPairingPresentation(
@@ -368,7 +390,9 @@ struct NikonConnectFlow {
             backAction: failed ? "Close" : "Cancel")
     }
 
-    private var needsScan: Bool { model.cameraWiFiJoinNeedsPassword && !model.cameraWiFiJoinHasPasswordDraft }
+    private var needsScan: Bool {
+        model.cameraWiFiJoinNeedsPassword && !model.cameraWiFiJoinHasPasswordDraft
+    }
 
     private var primaryTitle: String? {
         switch phase {
@@ -428,9 +452,11 @@ struct NikonConnectPane: View {
                     caption("Wi-Fi details entered manually. Connect when they match the camera.")
                 }
             case .failed:
-                Button(model.isPreparingDiagnostics ? "Preparing…" : "Share diagnostics") { model.shareDiagnostics() }
-                    .buttonStyle(CameraPageButtonStyle())
-                    .disabled(model.isPreparingDiagnostics)
+                Button(model.isPreparingDiagnostics ? "Preparing…" : "Share diagnostics") {
+                    model.shareDiagnostics()
+                }
+                .buttonStyle(CameraPageButtonStyle())
+                .disabled(model.isPreparingDiagnostics)
             case .connected:
                 Label("Connected", systemImage: "checkmark.circle.fill")
                     .font(MonitorTheme.font(13, weight: .semibold))
@@ -452,9 +478,12 @@ struct NikonConnectPane: View {
                 .autocorrectionDisabled()
                 .keyboardType(.numbersAndPunctuation)
                 .modifier(NikonFieldStyle())
-            Button("Connect to this address") { model.connectToManualCameraHost(model.manualCameraHostDraft) }
-                .buttonStyle(CameraPageButtonStyle(primary: true))
-                .disabled(model.manualCameraHostDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Connect to this address") {
+                model.connectToManualCameraHost(model.manualCameraHostDraft)
+            }
+            .buttonStyle(CameraPageButtonStyle(primary: true))
+            .disabled(
+                model.manualCameraHostDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } else {
             Button("Enter address from camera") { model.isManualCameraHostEntryPresented = true }
                 .buttonStyle(CameraPageButtonStyle())
@@ -496,6 +525,7 @@ private struct NikonFieldStyle: ViewModifier {
 /// rejoin, a reconnect it starts itself) on the shared pair page.
 struct NikonConnectScreen: View {
     @Environment(NativeAppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     let safeArea: EdgeInsets
 
     var body: some View {
@@ -505,7 +535,9 @@ struct NikonConnectScreen: View {
             onDiagnostics: { model.shareDiagnostics() },
             onReportProblem: { model.isBugReportPresented = true },
             pairingFlow: NikonConnectFlow(model: model).flow(
-                steps: [CameraPairingStep("Connect", "")], current: 0))
+                steps: [CameraPairingStep("Connect", "")], current: 0),
+            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
+            onTerms: { openURL(SupportLinkCatalog.terms) })
     }
 }
 
@@ -516,14 +548,18 @@ extension NativeAppModel {
                 AnyView(NikonAddSetupSlot(model: self, camera: camera, done: done))
             },
             prompt: { prompt in
-                (prompt as? NikonTakeOverPrompt).map { AnyView(NikonTakeOverPromptView(prompt: $0)) }
+                (prompt as? NikonTakeOverPrompt).map {
+                    AnyView(NikonTakeOverPromptView(prompt: $0))
+                }
             })
         // The rebrand-key move runs before the shared store reads the records.
         _ = NativeCameraConnectionStore.shared
         let cameras = CamerasModel(
             integrations: [AppIntegration(NikonIntegration(port: nikonPort), slots: slots)],
             store: NikonCameras.store { [weak self] in self?.reloadSavedCameraRecords() })
-        NativeCameraConnectionStore.shared.onSavedCamerasChanged = { [weak cameras] in cameras?.reloadSaved() }
+        NativeCameraConnectionStore.shared.onSavedCamerasChanged = { [weak cameras] in
+            cameras?.reloadSaved()
+        }
         return cameras
     }
 
@@ -537,11 +573,13 @@ extension NativeAppModel {
                 })
             else {
                 throw ConnectionFailure(
-                    reason: .notFound, title: "Setup unavailable", message: "This saved setup is no longer available.",
+                    reason: .notFound, title: "Setup unavailable",
+                    message: "This saved setup is no longer available.",
                     actions: [.pairAgain], code: "nikon.setup.gone")
             }
             let availability = SavedCameraAvailabilityPolicy.resolve(
-                camera: record, discoveredCameras: discoveredCameras, connectedHost: connectedIdentity?.host,
+                camera: record, discoveredCameras: discoveredCameras,
+                connectedHost: connectedIdentity?.host,
                 onCameraAccessPoint: isOnCameraAccessPointNetwork,
                 hotspotSubnetBases: NativeNetworkInterfaceSnapshot.hotspotSubnetBases())
             if case .available(let discovered) = availability {
@@ -550,7 +588,10 @@ extension NativeAppModel {
                     throw ConnectionFailure(
                         reason: .heldElsewhere, title: "Camera in use",
                         message: discovered.heldByLabel ?? "Another device is using this camera.",
-                        actions: [.integration(id: NativeNikonPort.takeOverAction, title: "Take over"), .retry],
+                        actions: [
+                            .integration(id: NativeNikonPort.takeOverAction, title: "Take over"),
+                            .retry,
+                        ],
                         code: "nikon.held")
                 }
                 connectToCamera(discovered, setup: record, takingOverConfirmed: approved)
@@ -563,11 +604,13 @@ extension NativeAppModel {
             // Adding a setup arms the funnel's watch for the body on that path.
             guard
                 let anchor = savedCameras.first(where: {
-                    $0.host == PTPIPPairedHosts.normalizedHost(anchorHost) && $0.pathKind == anchorPath
+                    $0.host == PTPIPPairedHosts.normalizedHost(anchorHost)
+                        && $0.pathKind == anchorPath
                 })
             else {
                 throw ConnectionFailure(
-                    reason: .notFound, title: "Setup unavailable", message: "This saved setup is no longer available.",
+                    reason: .notFound, title: "Setup unavailable",
+                    message: "This saved setup is no longer available.",
                     actions: [.pairAgain], code: "nikon.setup.gone")
             }
             pendingSetupIntent = .init(anchor: anchor, kind: path)

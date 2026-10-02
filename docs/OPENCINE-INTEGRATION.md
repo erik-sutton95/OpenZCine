@@ -279,6 +279,15 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
 27. Multicam stage safe area (iOS): on an iPhone 16 Pro, run multicam in both landscapes; the
     Grid/Center toggle and Exit stay clear of the Dynamic Island and respond to taps, and the
     camera strip does not run under the island.
+28. SHELL-02 setup names (iOS and Android): long-press a setup chip, including a camera with
+    only one setup, rename it, then reopen the app. The name stays on that setup only. Clear
+    the name and save: the normal setup label returns. Cancel keeps the previous name. Repeat
+    the old-build/new-build installation cycle in item 25 with a setup renamed on the old
+    build, then with its name cleared there. Both edits survive repeated new-build launches;
+    other routes, camera names, pairing identity and Wi-Fi keys stay intact.
+29. SHELL-02 legal links (iOS and Android): Privacy and Terms open the existing policy pages
+    from Cameras and Pair, including first-run pairing and pairing a nearby camera. Returning
+    to the app leaves the selected pairing step intact.
 
 ### Device performance baselines (SHELL-04)
 

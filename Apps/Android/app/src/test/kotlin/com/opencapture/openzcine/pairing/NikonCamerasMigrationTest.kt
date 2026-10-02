@@ -16,6 +16,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -199,6 +200,56 @@ class NikonCamerasMigrationTest {
 
         val a = phone.store().also { it.load() }.cameras.single { it.name == "A-cam" }
         assertEquals(listOf(RouteKind.INFRASTRUCTURE_NETWORK), a.routes.map { it.kind })
+    }
+
+    @Test
+    fun `a single setup rename and clear reach the legacy store`() = runTest {
+        val phone = Phone()
+        phone.app.replace(appRecords())
+        val model = phone.model(backgroundScope)
+        val camera = model.state.value.saved.single { it.routes.size == 1 }
+        val route = camera.routes.single()
+        val original = phone.app.records()
+
+        model.renameRoute(route.id, camera.id, "  Shoulder camera  ")
+
+        assertEquals("Shoulder camera", model.state.value.saved.single { it.id == camera.id }.routes.single().title)
+        val expected = SavedCameraRecords.updatingSetupName(
+            "192.168.43.20", SavedCameraTransport.PHONE_HOTSPOT, "Shoulder camera", original,
+        )
+        assertEquals(expected, phone.app.records(), "only this setup changes, including on older builds")
+        assertEquals(expected, phone.appList)
+
+        model.renameRoute(route.id, camera.id, " \n ")
+
+        assertNull(model.state.value.saved.single { it.id == camera.id }.routes.single().title)
+        assertEquals(original, phone.app.records())
+        assertEquals(route.id, phone.store().also { it.load() }.cameras.single { it.id == camera.id }.routes.single().id)
+        assertTrue(phone.removedKeys.isEmpty())
+    }
+
+    @Test
+    fun `old build setup rename and clear survive repeated upgrades`() = runTest {
+        val phone = Phone()
+        phone.app.replace(appRecords())
+        phone.wifi.edit().putString("ssid:NIKON_ZR_3001234", "sealed").apply()
+        val initial = phone.store().also { it.load() }.cameras
+        val routeIDs = initial.flatMap { it.routes }.map { it.id }
+
+        for (name in listOf("Old build setup", null)) {
+            phone.app.replace(SavedCameraRecords.updatingSetupName(
+                "192.168.50.23", SavedCameraTransport.INFRASTRUCTURE, name, phone.app.records(),
+            ))
+            val legacy = phone.legacyJson()
+            val reloaded = phone.store().also { it.load() }.cameras
+            val camera = reloaded.single { it.name == "A-cam" }
+            assertEquals(name, camera.routes.single { it.kind == RouteKind.INFRASTRUCTURE_NETWORK }.title)
+            assertEquals(routeIDs, reloaded.flatMap { it.routes }.map { it.id })
+            assertEquals(legacy, phone.legacyJson())
+            assertEquals(reloaded, phone.store().also { it.load() }.cameras, "repeat launch keeps the old build's clear")
+        }
+        assertEquals(mapOf("ssid:NIKON_ZR_3001234" to "sealed"), phone.wifi.all.toMap())
+        assertTrue(phone.removedKeys.isEmpty())
     }
 
     @Test
