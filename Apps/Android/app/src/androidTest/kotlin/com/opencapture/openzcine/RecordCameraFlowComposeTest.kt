@@ -1,6 +1,10 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasContentDescription
@@ -8,7 +12,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -51,9 +54,14 @@ class RecordCameraFlowComposeTest {
                         context.getSharedPreferences("record-flow-test", Context.MODE_PRIVATE),
                     ).also { it.recordConfirmationEnabled.value = true }
                 }
+            val scope = rememberCoroutineScope()
+            val common = remember(session) { NikonOpenCineSession(session, scope) }
+            val control = remember(common) { MonitorControlModel(scope).also { it.bind(common) } }
             OpenZCineTheme {
                 MonitorScreen(
                     session = session,
+                    commonSession = common,
+                    commonControl = control,
                     frameSource = null,
                     assist = AssistState(FeedEffects.NONE, null),
                     operatorSettings = operatorSettings,

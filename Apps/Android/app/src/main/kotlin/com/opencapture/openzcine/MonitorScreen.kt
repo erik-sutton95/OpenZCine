@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -97,7 +98,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.opencapture.opencine.core.SessionCloseReason
+import com.opencapture.opencine.core.SettingKey
+import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
@@ -338,6 +340,8 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
 @Composable
 internal fun MonitorScreen(
     session: CameraSession,
+    commonSession: NikonOpenCineSession,
+    commonControl: MonitorControlModel,
     frameSource: LiveFrameSource?,
     assist: AssistState,
     operatorSettings: OperatorSettings,
@@ -632,7 +636,8 @@ internal fun MonitorScreen(
         delay(350)
         liveViewController.apply(liveViewPolicyInput)
     }
-    val recordCommandPending =
+    val sharedControlState by commonControl.state.collectAsState()
+    val recordCommandPending = sharedControlState.recordPending ||
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.STOPPING
     val recordControlEnabled =
@@ -647,10 +652,7 @@ internal fun MonitorScreen(
     val recordScope = rememberCoroutineScope()
     // CORE-02: ISO, white balance and record go through the OpenCine camera-session seam. It
     // admits them against camera-reported state, keeps receipts, and drives [session] itself.
-    val openCineSession = remember(session, recordScope) { NikonOpenCineSession(session, recordScope) }
-    DisposableEffect(openCineSession) {
-        onDispose { openCineSession.closeNow(SessionCloseReason.REQUESTED) }
-    }
+    SideEffect { commonSession.setHoldsControl(!controlsSurrendered) }
     val guideNeedsRealFrame = liveViewGuideController?.needsRealDecodedFrame == true
     val latestGuideNeedsRealFrame = rememberUpdatedState(guideNeedsRealFrame)
     val guideFrameDispatchPending = remember(session) { AtomicBoolean(false) }
@@ -671,6 +673,15 @@ internal fun MonitorScreen(
             activeMonitorPickerKind = null
             activeAssistOptions = null
         }
+    }
+    var commonEditor by remember { mutableStateOf<MonitorControlModel.Editor?>(null) }
+    LaunchedEffect(activeMonitorPickerKind, activeCommandControl?.control) {
+        val key = when {
+            activeMonitorPickerKind == MonitorPickerKind.ISO || activeCommandControl?.control == CameraControl.ISO -> SettingKey.ISO
+            activeMonitorPickerKind == MonitorPickerKind.WHITE_BALANCE || activeCommandControl?.control == CameraControl.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
+            else -> null
+        }
+        commonEditor = key?.let(commonControl::edit)
     }
     // The other side's panels/popups make no sense after a photo ↔ movie flip —
     // close whatever is open rather than leaving a stale drum floating (iOS
@@ -742,9 +753,10 @@ internal fun MonitorScreen(
         }
     }
     val effectiveShutterLocked = optimisticShutterLocked ?: cameraProperties.shutterLocked
+    val shownCameraProperties = cameraProperties.withPendingControls(sharedControlState.pending)
     val commandPresentation =
         remember(
-            cameraProperties,
+            shownCameraProperties,
             propertyRefreshStatus,
             sessionState,
             commandTileOrder,
@@ -752,7 +764,7 @@ internal fun MonitorScreen(
             stringResolver,
         ) {
             commandDashboardPresentation(
-                snapshot = cameraProperties,
+                snapshot = shownCameraProperties,
                 refreshStatus = propertyRefreshStatus,
                 sessionState = sessionState,
                 tileOrder = commandTileOrder,
@@ -911,7 +923,7 @@ internal fun MonitorScreen(
                         // Facade applyControl already confirms the write on the wire. Do not
                         // soft-fail from a lagging property poll (see docs/android-control-writes.md).
                         if (control in NikonOpenCineSession.CONTROLS) {
-                            openCineSession.applyControl(control, desiredLabel)
+                            NikonOpenCineSession.settingValue(control, desiredLabel)?.let { commonControl.set(it, desiredLabel) }
                         } else {
                             session.applyControl(control, desiredLabel)
                         }
@@ -947,6 +959,18 @@ internal fun MonitorScreen(
     val applyCameraControl: (CommandControlRequest, String) -> Unit =
         applyCameraControl@{ request, label ->
             if (!commandControlsEnabled) return@applyCameraControl
+            if (request.control in NikonOpenCineSession.CONTROLS) {
+                val value = NikonOpenCineSession.settingValue(request.control, label) ?: return@applyCameraControl
+                val editor = commonEditor
+                if (editor?.key == value.key) {
+                    if (!commonControl.commit(value, editor, label)) {
+                        Toast.makeText(appContext, "The camera changed. Reopen this control.", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    commonControl.set(value, label)
+                }
+                return@applyCameraControl
+            }
             // Exit movie ISO auto by choosing a drum value: write MovISOAutoControl Off first
             // so the body accepts the manual ISO write (non-R3D NE codecs).
             // Manual ISO / Auto Off: R3D NE always; other codecs only in M.
@@ -1243,15 +1267,7 @@ internal fun MonitorScreen(
         )
     }
     var pendingRecordTarget by remember { mutableStateOf<Boolean?>(null) }
-    val sendRecordCommand: (Boolean) -> Unit = { target ->
-        recordScope.launch {
-            try {
-                openCineSession.setRecording(target)
-            } catch (error: CameraRecordingException) {
-                Toast.makeText(appContext, error.message, Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
+    val sendRecordCommand: (Boolean) -> Unit = { target -> commonControl.record(target) }
     val requestRecordToggle: () -> Unit = {
         if (recordControlEnabled) {
             val target = !recording
@@ -1279,7 +1295,7 @@ internal fun MonitorScreen(
                         recordConfirmationPending = pendingRecordTarget != null,
                         cameraControlPending = pendingCommandControl != null,
                     )
-                executeWearRecordCommand(safety, recording, openCineSession::setRecording)
+                executeWearRecordCommand(safety, recording) { target -> commonControl.record(target) }
             },
         )
     DisposableEffect(wearRelay) {

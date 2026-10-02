@@ -823,6 +823,7 @@ final class NativeAppModel {
     var lastConnectFailureReason: ConnectionFailure.Reason?
     @ObservationIgnored lazy var nikonPort = NativeNikonPort(model: self)
     @ObservationIgnored lazy var cameras = makeCamerasModel()
+    @ObservationIgnored lazy var shell = makeShellModel()
     /// A NEARBY camera's Pair: the shared pair page with that sighting chosen.
     var isPairingNearby = false
     var diagnosticsShareItem: DiagnosticsShareItem?
@@ -919,7 +920,7 @@ final class NativeAppModel {
             publishWatchState()
             if oldValue != isMonitorPresented {
                 // Record admission follows live-view readiness.
-                controlSession?.refresh()
+                refreshCommonControlFacts()
                 updateBluetoothShutter()
                 AppDiagnostics.shared.record(
                     isMonitorPresented ? .monitorPresented : .monitorDismissed)
@@ -1122,7 +1123,9 @@ final class NativeAppModel {
     var relayControlHolderName: String?
     /// Host side: a viewer waiting on an answer, and who currently holds the camera.
     var relayPendingControlRequest: String?
-    var relayControlHeldBy: String?
+    var relayControlHeldBy: String? {
+        didSet { refreshCommonControlFacts() }
+    }
     /// An armed add-setup watch: the operator tapped "Connect When Plugged In" / "Find On
     /// This Network" / "Wait For Camera" in the add-setup sheet, so the first discovery that
     /// matches the asked-for path IS the operator's tap, given in advance. One-shot,
@@ -2130,6 +2133,17 @@ final class NativeAppModel {
     var lockedControls: Set<CameraPicker> = []
     var activePanel: ActivePanel? {
         didSet {
+            if case .picker(let picker) = activePanel, let setting = picker.nikonControlSetting {
+                refreshCommonControlFacts()
+                commonEditor = shell.control.edit(setting == .iso ? .iso : .whiteBalance)
+            } else {
+                commonEditor = nil
+            }
+            switch activePanel {
+            case .settings: shell.open(.settings)
+            case .media: shell.open(.media)
+            default: shell.dismissCover()
+            }
             // The Bluetooth shutter only listens while the live view is front — re-reconcile
             // when a full-screen panel opens or closes over it.
             if (oldValue?.coversFullScreen ?? false) != (activePanel?.coversFullScreen ?? false) {
@@ -2137,6 +2151,7 @@ final class NativeAppModel {
             }
         }
     }
+    @ObservationIgnored private var commonEditor: MonitorControlModel.Editor?
     /// The DISP mode whose chrome the operator is editing on the monitor itself, or `nil` when the
     /// monitor is live. While editing, every element the mode owns mounts — hidden ones at 30% —
     /// with an eye badge on a corner of its bounding box. Session-only.
@@ -3767,8 +3782,7 @@ final class NativeAppModel {
                 discoveredCameras = []
                 pendingPairingChallenge = nil
                 cameraSession = session
-                controlSession = NikonCameraSession(
-                    driver: self, serialNumber: session.identity.serialNumber)
+                bindMonitorRuntime(session)
                 // This monitor session has a camera behind it, and stays that way across reconnect
                 // gaps — see `isCameraControlSession`.
                 isCameraControlSession = true
@@ -4182,8 +4196,7 @@ final class NativeAppModel {
             return
         }
         cameraSession = session
-        controlSession = NikonCameraSession(
-            driver: self, serialNumber: session.identity.serialNumber)
+        bindMonitorRuntime(session)
         isCameraControlSession = true
         connectedIdentity = session.identity
         activeSessionPath = member.record.path
@@ -4206,13 +4219,21 @@ final class NativeAppModel {
     /// the replacement a recovery opened) back to the member's tile.
     func returnToMulticam() {
         guard multicam.lentMember != nil else { return }
+        if shell.monitor?.isBorrowed == true {
+            shell.close()
+            return
+        }
         let lent = cameraSession
+        let retirement = monitorRuntime?.stopPreview()
         // Stops the monitor's loops, keep-alive and polls; unlike `disconnectCameraSession` it
         // sends no CloseSession, so the member keeps its session.
         clearCameraSessionState(resetConnection: false)
         connection = .disconnected
         connectionPhase = .idle
-        multicam.reclaim(lent)
+        Task {
+            await retirement?.value
+            multicam.reclaim(lent)
+        }
     }
 
     /// Presents the versioned guide after the first successfully decoded live-view frame.
@@ -4418,6 +4439,7 @@ final class NativeAppModel {
                 "Connect to a saved camera first."
             return
         }
+        ensureShellMonitor()
         connection = .preparingLiveView
         connectionPhase = .preparingLiveView
         // Matches Android: fill AF / lens / subject / audio before the feed opens.
@@ -4440,14 +4462,10 @@ final class NativeAppModel {
     }
     private var discoveryLoopTask: Task<Void, Never>?
     private var discoveryLoopGeneration = 0
-    private var liveViewTask: Task<Void, Never>?
-    /// The serial consumer of the HDMI capture stream. Mutually exclusive with `liveViewTask` —
+    /// The serial consumer of the HDMI capture stream. Mutually exclusive with the integration picture pump —
     /// only one picture source drives the monitor at a time.
     private var hdmiConsumerTask: Task<Void, Never>?
     /// Services camera control while the picture comes from somewhere other than the camera's own
-    /// stream. Mutually exclusive with `liveViewTask`, whose safe point does this job otherwise.
-    private var cameraControlPumpTask: Task<Void, Never>?
-    private var keepAliveTask: Task<Void, Never>?
     private var linkHealthUpdateTask: Task<Void, Never>?
     /// The in-flight connection establishment, stored so teardown can cancel it. Guarded by
     /// `connectionGeneration` so an attempt that outlives a disconnect can't resurrect a session.
@@ -4484,7 +4502,6 @@ final class NativeAppModel {
     @ObservationIgnored private var recentKeepaliveFailures = 0
     @ObservationIgnored private var isStreamRecovering = false
     @ObservationIgnored private var signalBarsFilter = LinkSignalBars()
-    private var eventDrainTask: Task<Void, Never>?
     /// The fire-and-forget `stopLiveView()` started on background, tracked so a quick return to the
     /// foreground awaits it before restarting the stream (otherwise the stop can land after the
     /// restart and shut the resumed feed back down).
@@ -4529,7 +4546,6 @@ final class NativeAppModel {
     private(set) var bodyShutterPulse = 0
     private var propertyPollIndex = 0
     /// A drifted body clock found at bootstrap, waiting for the first authoritative record state.
-    @ObservationIgnored private var clockSyncStaged = false
     /// Properties the CAMERA announced as changed (`DevicePropChanged`) and that have not been
     /// re-read yet. Drained ahead of the round-robin so a body-side dial/ring/menu edit lands in
     /// one poll tick instead of a full ~20 s cycle.
@@ -4585,24 +4601,16 @@ final class NativeAppModel {
     /// A record start/stop requested by the record button, serviced at the next live-view safe
     /// point (so the StartMovieRecInCard / EndMovieRec op doesn't race the live-view loop's reads).
     private var pendingRecordToggle = false
-    /// Target record state for a queued app record command (`true` = start, `false` = stop). Kept
-    /// separately from `isRecording` so the optimistic UI flip isn't undone before the safe point runs.
-    private var pendingRecordStart: Bool?
-    /// The seam operation the queued record command belongs to.
-    @ObservationIgnored private var pendingRecordOperation: OperationID?
     /// CORE-02 common camera-session seam over this link (ISO, white balance, record). Created
     /// with `cameraSession` and closed with it. Those three commands run through it and only it.
-    @ObservationIgnored private var controlSession: NikonCameraSession?
+    @ObservationIgnored private var monitorRuntime: NikonMonitorRuntime?
+    private var controlSession: NikonCameraSession? { monitorRuntime?.session }
     /// Recording as the CAMERA last reported it (live-view header or record events), apart from
     /// the optimistic `isRecording` the button shows. `nil` until the body says.
     @ObservationIgnored private var reportedRecording: Bool?
     /// Property values exactly as read from the camera. `cameraPropertySnapshot` also carries the
     /// pickers' optimistic bytes; the seam reports only these.
     @ObservationIgnored private var reportedPropertySnapshot = PTPCameraPropertySnapshot()
-    /// Consecutive live-view-start failures (no first frame), across reconnects. A first-frame
-    /// framing desync needs a fresh command channel, so `.neverStarted` full-reconnects; this counter
-    /// (reset on a good first frame) bounds that so a body that genuinely can't stream doesn't loop.
-    private var consecutiveStartFailures = 0
     @ObservationIgnored private var lastScopeSampleTime: CFAbsoluteTime = 0
     /// True while `sampleLiveScopeAssist` is in flight — skip starting another decode-heavy sample.
     @ObservationIgnored private var scopeSampleInFlight = false
@@ -4639,8 +4647,6 @@ final class NativeAppModel {
         let picker: CameraPicker
         let value: String
         let write: PTPCameraPropertyWrite
-        /// The seam operation this write confirms, when it came through `controlSession`.
-        var operation: OperationID? = nil
     }
 
     /// Keeps only the last queued value for each concrete PTP property. Rapid drags or taps can
@@ -4648,19 +4654,14 @@ final class NativeAppModel {
     /// states the operator has already left. Coalescing by property preserves dependent writes such
     /// as white-balance mode followed by Kelvin temperature.
     private func enqueueCameraWrite(_ pending: PendingCameraWrite) {
-        dropPendingCameraWrites(superseded: true) { $0.write.property == pending.write.property }
+        dropPendingCameraWrites() { $0.write.property == pending.write.property }
         pendingCameraWrites.append(pending)
     }
 
-    /// Removes queued writes, telling the seam their operations will never be sent.
+    /// Removes obsolete Nikon-domain writes. Common ISO/WB operations belong to the runtime.
     private func dropPendingCameraWrites(
-        superseded: Bool = false, where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
+        where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
     ) {
-        for dropped in pendingCameraWrites where shouldDrop(dropped) {
-            if let operation = dropped.operation {
-                controlSession?.operationDropped(operation, superseded: superseded)
-            }
-        }
         pendingCameraWrites.removeAll(where: shouldDrop)
     }
 
@@ -6241,7 +6242,8 @@ final class NativeAppModel {
                     guid: guid,
                     requestPairing: requestPairing,
                     onPairingChallenge: onPairingChallenge,
-                    onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                    onLiveViewObject: DemoHarness.captureLiveViewObject
                 )
             } catch let error
                 where NativeCameraSession.isBusyEstablishFailure(error) && !requestPairing
@@ -6261,7 +6263,8 @@ final class NativeAppModel {
                     guid: guid,
                     requestPairing: requestPairing,
                     onPairingChallenge: onPairingChallenge,
-                    onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                    onLiveViewObject: DemoHarness.captureLiveViewObject
                 )
             } catch let error
                 where NativeCameraSession.isRetryableEstablishFailure(
@@ -6282,7 +6285,8 @@ final class NativeAppModel {
                     guid: guid,
                     requestPairing: requestPairing,
                     onPairingChallenge: onPairingChallenge,
-                    onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                    onLiveViewObject: DemoHarness.captureLiveViewObject
                 )
             }
         }
@@ -6320,7 +6324,8 @@ final class NativeAppModel {
                 cameraName: device.name,
                 requestPairing: requestPairing,
                 onPairingChallenge: onPairingChallenge,
-                onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                    onLiveViewObject: DemoHarness.captureLiveViewObject
             )
         } catch {
             // An adopted warm session can be a stale corpse (camera slept, ICC housekeeping) that
@@ -6345,7 +6350,8 @@ final class NativeAppModel {
                 cameraName: device.name,
                 requestPairing: requestPairing,
                 onPairingChallenge: onPairingChallenge,
-                onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                    onLiveViewObject: DemoHarness.captureLiveViewObject
             )
         }
     }
@@ -6452,8 +6458,14 @@ final class NativeAppModel {
             return
         }
         let session = cameraSession
+        let runtime = monitorRuntime
+        if !preserveMonitorSurface, shell.monitor != nil { shell.close() }
         clearCameraSessionState(
             resetConnection: resetConnection, preserveMonitorSurface: preserveMonitorSurface)
+        if !preserveMonitorSurface, let runtime {
+            sessionTeardownTask = runtime.teardown
+            return
+        }
         // Fire-and-forget the network teardown, but keep a handle: the next connectToCamera awaits
         // it before opening a new command channel (one PTP-IP command channel per initiator).
         let previousTeardown = sessionTeardownTask
@@ -6690,12 +6702,7 @@ final class NativeAppModel {
         pendingPairedReconnectSSID = nil
         lastPairedRejoinAttemptAt = nil
         pairedReconnectSawCameraLeave = false
-        liveViewTask?.cancel()
-        liveViewTask = nil
-        cameraControlPumpTask?.cancel()
-        cameraControlPumpTask = nil
-        keepAliveTask?.cancel()
-        keepAliveTask = nil
+        monitorRuntime?.stopPreview()
         linkHealthUpdateTask?.cancel()
         linkHealthUpdateTask = nil
         propertyPollTask?.cancel()
@@ -6715,12 +6722,15 @@ final class NativeAppModel {
         mediaFetchCompletedTab = nil
         cancelThumbnailWork(resumingWaiters: true)
         resetLinkHealthMeasurements()
-        eventDrainTask?.cancel()
-        eventDrainTask = nil
         cameraSession = nil
         // Closing reports unfinished seam operations honestly and never sends a camera command.
-        controlSession?.close(preserveMonitorSurface ? .linkLost : .requested)
-        controlSession = nil
+        if preserveMonitorSurface {
+            monitorRuntime?.recovering()
+        } else {
+            let retiring = monitorRuntime
+            monitorRuntime = nil
+            retiring?.session.close(.requested)
+        }
         reportedRecording = nil
         connectedIdentity = nil
         // Auto-reconnects keep the monitor shell up with the last frame frozen (RECOV state, same
@@ -6774,134 +6784,78 @@ final class NativeAppModel {
     }
 
     private func startLiveView(session: NativeCameraSession, skipPropertyBootstrap: Bool = false) {
-        // A processor that gave up during the last session gets another go: the decoder outlives
-        // every session, so without this one refusal disabled the feature until a force-quit.
         Task { await frameDecoder.resetProcessors() }
-        // The picture is on HDMI: a session establishing or recovering underneath must not start
-        // pulling camera frames and fight the capture path for the monitor. But the frame loop is
-        // not only a picture — its safe point is where every control operation runs — so the pump
-        // takes over here rather than this simply returning. Standing the loop down without it is
-        // what made the whole camera go deaf while HDMI streamed perfectly.
-        guard videoSource == .cameraLiveView else {
-            startCameraControlPump(session: session, skipPropertyBootstrap: skipPropertyBootstrap)
-            return
-        }
-        cameraControlPumpTask?.cancel()
-        cameraControlPumpTask = nil
-        liveViewTask?.cancel()
-        resetCameraPropertyState()
-        liveViewTask = Task {
-            // Android parity: one full property + descriptor burst before the first
-            // StartLiveView so AF mode / lens / subject land immediately and the
-            // command channel is not shared with GetLiveViewImageEx during fill-in.
-            // A brief semi-stable (or held) feed for 1–3 s is preferred to 20–30 s of
-            // drip-fed one-property-per-frame polls. A stream-quality-only restart
-            // (record/thermal step-down) skips it — the snapshot is warm, and re-running
-            // the multi-second burst is what used to freeze the feed at record start.
-            if !skipPropertyBootstrap {
-                connectionMessage = "Reading camera settings…"
-                await bootstrapCameraProperties(session: session)
-                guard !Task.isCancelled, cameraSession === session else { return }
-            }
-            connectionMessage = "Opening live view…"
-
-            // Jittered exponential backoff (≈1s → cap 8s) so repeated stalls against a flaky AP don't
-            // resync into a restart burst; the random spread de-correlates successive attempts.
-            let backoff = ReconnectBackoff(
-                baseSeconds: 1, maxSeconds: 8, multiplier: 2, jitterFraction: 0.3)
-            // After this many quick back-to-back stalls, stop restarting the stream and re-establish
-            // the whole session — the command channel is likely wedged, not just the stream.
-            let maxStallRestarts = 3
-            var stallAttempt = 0
-            while !Task.isCancelled {
-                let streamStart = Date()
-                let outcome = await streamUntilStall(session: session)
-                if Task.isCancelled { return }
-                // A stream that ran healthily for a while before blipping resets the streak — only
-                // rapid back-to-back stalls (each <30s of streaming) count toward escalation.
-                // Measured from the last GOOD FRAME, not from wall clock: an attempt against a
-                // dead link spends 30s+ purely in transaction deadlines (worse over USB, where
-                // ImageCaptureCore does not fail fast), so the wall-clock reading reset the streak
-                // every pass and the escalation to bounded recovery never fired — the monitor
-                // restarted live view forever on a camera that was physically unplugged (#254).
-                // Android already counts pump deaths this way (`consecutivePumpEnds`).
-                let streamedHealthily =
-                    (lastGoodFrameAt ?? .distantPast).timeIntervalSince(streamStart) > 30
-                switch outcome {
-                case .taskCancelled:
-                    return
-                case .neverStarted(let reason):
-                    // First-frame failure — often a transient framing desync on the first
-                    // GetLiveViewImageEx that leaves the command channel misaligned. Retrying on
-                    // this session would read the same bad stream, so full-reconnect (new socket =
-                    // clean read buffer) after a short backoff. The counter (reset on a good first
-                    // frame) bounds it so a body that truly can't stream gives up.
-                    consecutiveStartFailures += 1
-                    if consecutiveStartFailures >= maxStallRestarts {
-                        logConnection(
-                            "live-view never started ×\(consecutiveStartFailures) host=\(session.identity.host) — giving up (\(reason))"
-                        )
-                        consecutiveStartFailures = 0
-                        await session.stopLiveView()
-                        // Used to drop the monitor here with nothing driving a retry — the "needs
-                        // an app restart" dead end in #254/#253. Hand over to bounded recovery: the
-                        // held frame stays up and the operator gets Retry / Back.
-                        beginSessionRecovery(
-                            host: session.identity.host, reason: "live view never started")
-                        return
-                    }
-                    let wait = backoff.delaySeconds(
-                        forAttempt: consecutiveStartFailures - 1, jitter: .random(in: 0...1))
-                    logConnection(
-                        "live-view never started ×\(consecutiveStartFailures) host=\(session.identity.host) → reconnect in \(formattedSeconds(wait)) (\(reason))"
-                    )
-                    connectionMessage = "Live view didn't start — reconnecting…"
-                    liveFPS = "RECOV"
-                    isStreamRecovering = true
-                    connection = .connected
-                    await session.stopLiveView()
-                    try? await Task.sleep(for: .seconds(wait))
-                    guard !Task.isCancelled else { return }
-                    cameraHost = session.identity.host
-                    connectToCamera(preservingMonitorSurface: true)
-                    return
-                case .stalled(let reason):
-                    AppDiagnostics.shared.record(.liveViewStalled)
-                    if streamedHealthily { stallAttempt = 0 }
-                    if stallAttempt >= maxStallRestarts {
-                        // The stream keeps dying right after each restart — escalate to a full
-                        // reconnect off the saved profile rather than hammering a wedged session.
-                        // Bounded recovery owns it: the operator keeps the held frame instead of
-                        // being thrown back to the full-screen connect sheet mid-shoot.
-                        logConnection(
-                            "stall-escalate host=\(session.identity.host) consecutive=\(stallAttempt) → full reconnect"
-                        )
-                        connectionMessage =
-                            "Live view isn't recovering — reconnecting to the camera…"
-                        beginSessionRecovery(
-                            host: session.identity.host, reason: "live view stall escalation")
-                        return
-                    }
-                    // Recover: back off, restart live view. Watchdog handles normal jitter; we
-                    // only get here for a real stall (no good frame in the timeout window, or a
-                    // run of unparsable frames, or a thrown error).
-                    let wait = backoff.delaySeconds(
-                        forAttempt: stallAttempt, jitter: .random(in: 0...1))
-                    connectionMessage =
-                        "Live view stalled (\(reason)). Restarting in \(formattedSeconds(wait))…"
-                    liveFPS = "RECOV"
-                    isStreamRecovering = true
-                    connection = .connected
-                    try? await Task.sleep(for: .seconds(wait))
-                    guard !Task.isCancelled else { return }
-                    stallAttempt += 1
-                case .streaming:
-                    // Clean exit without cancellation — treat as a stall and restart.
-                    if streamedHealthily { stallAttempt = 0 }
-                    stallAttempt += 1
+        if videoSource == .cameraLiveView { resetCameraPropertyState() }
+        var frameRate = FrameRateSampler()
+        monitorRuntime?.startPreview(
+            bootstrap: { [weak self] in
+                guard let self, cameraSession === session else { return }
+                if !skipPropertyBootstrap {
+                    connectionMessage = "Reading camera settings…"
+                    await bootstrapCameraProperties(session: session)
                 }
-            }
-        }
+            },
+            demand: { [weak self] in
+                guard let self else { return NikonPreviewDemand(mode: .covered, size: 0, compression: 0) }
+                return NikonPreviewDemand(
+                    mode: videoSource != .cameraLiveView ? .controlOnly
+                        : shouldPauseLiveFeed ? .covered : streamsHeaderOnly ? .headerOnly : .picture,
+                    size: effectiveStreamImageSize,
+                    compression: preferences.qualityBias.liveViewImageCompression)
+            },
+            consume: { [weak self] frame, delivery in
+                guard let self, cameraSession === session else { return false }
+                return await consumeCameraFrame(frame, delivery: delivery, session: session, frameRate: &frameRate)
+            },
+            safePoint: { [weak self] count, pollEveryCall in
+                guard let self, cameraSession === session else { return }
+                if shouldPauseLiveFeed { publishWatchState() }
+                await runControlSafePoint(session: session, pollEveryCall: pollEveryCall, frameCounter: count)
+            },
+            applied: { [weak self] demand in
+                self?.lastAppliedStreamImageSize = demand.size
+                self?.lastAppliedStreamCompression = demand.compression
+            },
+            resetCadence: { [weak self] in
+                frameRate = FrameRateSampler()
+                self?.lastLevelUpdateTime = 0
+                self?.lastScopeSampleTime = 0
+            },
+            health: { [weak self] health in
+                guard let self, cameraSession === session else { return }
+                lastGoodFrameAt = health.lastGoodFrameAt
+                consecutiveBadLiveFrames = health.badFrames
+                if health.bodyBusy {
+                    liveFPS = "BUSY"
+                    connectionMessage = "The camera is busy on the body - the feed resumes automatically."
+                }
+            },
+            event: { [weak self] event in
+                guard let self, cameraSession === session else { return }
+                switch event {
+                case .opening:
+                    if videoSource == .cameraLiveView { connectionMessage = "Opening live view…" }
+                case .restart(let reason, let delay):
+                    AppDiagnostics.shared.record(.liveViewStalled)
+                    connectionMessage = "Live view stalled (\(reason)). Restarting in \(formattedSeconds(delay))…"
+                    liveFPS = "RECOV"
+                    isStreamRecovering = true
+                    connection = .connected
+                case .reconnect(_, _):
+                    AppDiagnostics.shared.record(.liveViewFailed)
+                    connectionMessage = "Live view didn't start - reconnecting…"
+                    liveFPS = "RECOV"
+                    isStreamRecovering = true
+                    connection = .connected
+                case .recover(let reason):
+                    if reason == "live view first-frame failure" {
+                        cameraHost = session.identity.host
+                        connectToCamera(preservingMonitorSurface: true)
+                    } else {
+                        beginSessionRecovery(host: session.identity.host, reason: reason)
+                    }
+                }
+            })
     }
 
     // MARK: - Picture source
@@ -6982,8 +6936,7 @@ final class NativeAppModel {
         // The two sources must never drive the monitor at once. Ending live view on the body is
         // not just tidiness: sensor readout plus JPEG encode is the dominant camera-heat source,
         // and stopping it hands the whole command channel back to property polling.
-        liveViewTask?.cancel()
-        liveViewTask = nil
+        monitorRuntime?.stopPreview()
         if let session = cameraSession {
             // DELIBERATELY not `stopLiveView()`. Focus is live-view-scoped on the body:
             // `ChangeAfArea` moves the *live-view* AF area, and AF/MF drive belong to the same
@@ -7047,8 +7000,7 @@ final class NativeAppModel {
         hdmiConsumerTask = nil
         // The frame loop takes control servicing back when it restarts; two pumps would double
         // every write and poll.
-        cameraControlPumpTask?.cancel()
-        cameraControlPumpTask = nil
+        monitorRuntime?.stopPreview()
         uvcSource?.stop()
         uvcSource = nil
         hdmiCaptureState = .waitingForDevice
@@ -7129,47 +7081,7 @@ final class NativeAppModel {
     private func startCameraControlPump(
         session: NativeCameraSession, skipPropertyBootstrap: Bool
     ) {
-        cameraControlPumpTask?.cancel()
-        cameraControlPumpTask = Task { [weak self] in
-            guard let self else { return }
-            if !skipPropertyBootstrap {
-                // Same burst the frame loop runs before its first frame: without it the pickers
-                // have no advertised option lists to offer.
-                await self.bootstrapCameraProperties(session: session)
-            }
-            // Live view stays RUNNING on the body, at the smallest frame it offers, and the pump
-            // keeps pulling it. The picture is coming from HDMI; this stream exists purely as the
-            // carrier for its HEADER — the AF boxes, subject and eye detection, focus result,
-            // level, audio meter and timecode all ride there and have no other source. Command
-            // mode has always worked exactly this way, and its own note is the reason the cost is
-            // acceptable: our pull rate does not change camera heat, the frame SIZE does.
-            //
-            // Focus is also live-view-scoped, so this doubles as the reason `ChangeAfArea` works
-            // at all here: a body whose live view has ended rejects it.
-            await session.configureLiveView(
-                size: self.effectiveStreamImageSize,
-                compression: self.preferences.qualityBias.liveViewImageCompression)
-            // Already-running answers not-OK, which is why the result is discarded rather than
-            // treated as a failed start.
-            try? await session.startLiveView()
-            var frameCounter = 0
-            while !Task.isCancelled {
-                guard self.cameraSession === session, self.monitorAvailability.requiresControlPump
-                else { return }
-                frameCounter &+= 1
-                if let frame = try? await self.liveFrameTask(session).value,
-                    self.cameraSession === session
-                {
-                    self.liveViewFocus = frame.focus
-                    self.applyLiveViewHeaderState(frame)
-                    self.applyLiveViewHeaderTimecode(frame.timecode)
-                    self.captureRelayFrameMetadata(frame)
-                }
-                await self.runLiveViewControlSafePoint(
-                    session: session, frameCounter: frameCounter)
-                try? await Task.sleep(for: Self.controlPumpInterval)
-            }
-        }
+        startLiveView(session: session, skipPropertyBootstrap: skipPropertyBootstrap)
     }
 
     /// Clears everything that only the camera's live-view frame header can supply.
@@ -7193,32 +7105,16 @@ final class NativeAppModel {
     /// ping every 10s with a side-effect-free GetDeviceInfo (tuned TCP keepalive backs this up at
     /// the socket layer). Bound to the session: a stale session stops it.
     private func startKeepAlive(session: NativeCameraSession) {
-        keepAliveTask?.cancel()
-        keepAliveTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
-                guard !Task.isCancelled, let self, self.cameraSession === session else { return }
-                // Skip while the frame loop is already keeping the channel busy.
-                if self.isMonitorPresented, !self.shouldPauseLiveFeed { continue }
-                do {
-                    try await session.sendKeepAlive()
-                    self.recentKeepaliveFailures = max(0, self.recentKeepaliveFailures - 1)
-                } catch {
-                    self.recentKeepaliveFailures = min(3, self.recentKeepaliveFailures + 1)
-                    logConnection(
-                        "keepalive failed host=\(session.identity.host) \(error.localizedDescription)"
-                    )
-                    // Three straight failures on the idle channel is the camera being gone, not
-                    // jitter — the shape of a power cycle with the feed paused (command mode,
-                    // panel open). Previously nothing watched this path at all.
-                    if self.recentKeepaliveFailures >= 3 {
-                        self.beginSessionRecovery(
-                            host: session.identity.host, reason: "keepalive failed ×3")
-                        return
-                    }
-                }
-            }
-        }
+        monitorRuntime?.startKeepAlive(
+            isBusy: { [weak self] in
+                guard let self else { return true }
+                return isMonitorPresented && !shouldPauseLiveFeed
+            },
+            failures: { [weak self] in self?.recentKeepaliveFailures = $0 },
+            recover: { [weak self] in
+                guard let self, cameraSession === session else { return }
+                beginSessionRecovery(host: session.identity.host, reason: "keepalive failed ×3")
+            })
     }
 
     private func startLinkHealthMonitoring() {
@@ -7396,56 +7292,27 @@ final class NativeAppModel {
     /// error means the connection is gone — the loop ends and the live-view watchdog drives
     /// reconnection. Bound to the session.
     private func startEventDraining(session: NativeCameraSession) {
-        eventDrainTask?.cancel()
-        eventDrainTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self, self.cameraSession === session else { return }
-                do {
-                    let event = try await session.nextEvent()
-                    if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
-                        // Some bodies push these on the socket; the ZR delivers them via the
-                        // GetEventEx poll instead. Both route through the same debounced sync.
-                        self.handleBodyFiredCapture(session: session)
-                    } else if event.eventCode == .movieRecordInterrupted {
-                        // An interruption is authoritative even while an optimistic app record
-                        // command is in its brief readback-suppression window.
-                        self.applyCameraRecordState(isRecording: false, force: true)
-                        let error =
-                            event.recordingInterruptionErrorCode.map {
-                                String(format: "0x%08X", $0)
-                            } ?? "unknown"
-                        self.connectionMessage =
-                            "Recording was interrupted by the camera (error \(error))."
-                        await self.refreshWarningStatus(session: session)
-                    } else if let recordState = event.inferredRecordState {
-                        self.applyCameraRecordState(isRecording: recordState == .recording)
-                    } else {
-                        self.noteCameraAnnouncedPropertyChange(event)
-                    }
-                } catch let error as NativeCameraSessionError {
-                    if case .timeout = error { continue }
-                    guard
-                        EventChannelDiagnosticPolicy.shouldRecordUnexpectedEnd(
-                            isCancelled: Task.isCancelled,
-                            ownsSession: self.cameraSession === session
-                        )
-                    else { return }
-                    AppDiagnostics.shared.record(.connectionEventChannelEnded)
-                    self.recoverFromEndedEventChannel(session: session)
-                    return
-                } catch {
-                    guard
-                        EventChannelDiagnosticPolicy.shouldRecordUnexpectedEnd(
-                            isCancelled: Task.isCancelled,
-                            ownsSession: self.cameraSession === session
-                        )
-                    else { return }
-                    AppDiagnostics.shared.record(.connectionEventChannelEnded)
-                    self.recoverFromEndedEventChannel(session: session)
-                    return
+        monitorRuntime?.startEventDrain(
+            receive: { [weak self] event in
+                guard let self, cameraSession === session else { return }
+                if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
+                    handleBodyFiredCapture(session: session)
+                } else if event.eventCode == .movieRecordInterrupted {
+                    applyCameraRecordState(isRecording: false, force: true)
+                    let error = event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) } ?? "unknown"
+                    connectionMessage = "Recording was interrupted by the camera (error \(error))."
+                    await refreshWarningStatus(session: session)
+                } else if let recordState = event.inferredRecordState {
+                    applyCameraRecordState(isRecording: recordState == .recording)
+                } else {
+                    noteCameraAnnouncedPropertyChange(event)
                 }
-            }
-        }
+            },
+            unexpectedEnd: { [weak self] in
+                guard let self, cameraSession === session else { return }
+                AppDiagnostics.shared.record(.connectionEventChannelEnded)
+                recoverFromEndedEventChannel(session: session)
+            })
     }
 
     /// The event channel ending for any reason other than an idle timeout means the link is gone —
@@ -7542,14 +7409,7 @@ final class NativeAppModel {
         // body holding a slot with no CloseSession.
         cancelSessionRecovery()
         guard let session = cameraSession else { return }
-        liveViewTask?.cancel()
-        liveViewTask = nil
-        cameraControlPumpTask?.cancel()
-        cameraControlPumpTask = nil
-        keepAliveTask?.cancel()
-        keepAliveTask = nil
-        eventDrainTask?.cancel()
-        eventDrainTask = nil
+        monitorRuntime?.stopPreview()
         linkHealthUpdateTask?.cancel()
         linkHealthUpdateTask = nil
         // Media PTP traffic (clip download, listing, thumbnail sweep) must pause with the screen
@@ -7623,367 +7483,55 @@ final class NativeAppModel {
         bluetoothShutter.stop()
     }
 
-    /// Upper bound on a single live-view frame fetch. Generous enough that normal jitter (frames
-    /// arrive in ~16-40ms) never trips it, so it only fires on a genuine hang — a camera that
-    /// accepted the connection but stopped delivering bytes. Aligned with the watchdog's 6s stall
-    /// timeout. On breach the fetch's transaction closes the command socket and the streaming loop
-    /// recovers, instead of the fetch hanging forever and jamming the whole command channel.
-    private static let liveViewFrameDeadline: Duration = .seconds(6)
-
-    /// The steady-state bound rides measured latency: a breach CLOSES the command socket, so a
-    /// fixed 6 s converts one multi-second radio stall on a high-RTT link (WiFi5 double-hop)
-    /// into a full session teardown — the exact churn the storm guard exists to absorb. Floor
-    /// 6 s so healthy links stay snappy; ceiling 15 s so a dead link still fails promptly.
-    private func liveViewFrameDeadline(for session: NativeCameraSession) -> Duration {
-        let rttMilliseconds = session.readLastCommandRoundTripMilliseconds() ?? 100
-        return .seconds(min(15.0, max(6.0, rttMilliseconds * 25 / 1000)))
-    }
-
-    /// The FIRST frame after `StartLiveView` gets more headroom than steady-state frames: the sensor
-    /// is spinning up the stream and the initial JPEG is the largest, so a legitimately-slow-but-alive
-    /// first frame must not be falsely kicked into a reconnect. [verify-on-HW: measure the real ZR's
-    /// first-frame latency and tighten if it lands well under this.]
-    private static let firstLiveViewFrameDeadline: Duration = .seconds(10)
-
-    /// How long a full-screen cover persists before the loop ends live view on the body. Short
-    /// covers (settings visits) keep the stream warm — restart churn costs more than seconds of
-    /// encode heat; the heat case this exists for is a cover measured in minutes.
-    private static let coverEndsLiveViewAfterSeconds: TimeInterval = 30
-
-    /// One bounded frame fetch, wrapped so every streaming call site uses a consistent deadline.
-    private func liveFrameTask(
-        _ session: NativeCameraSession,
-        deadline: Duration = liveViewFrameDeadline
-    ) -> Task<PTPLiveViewFrame, Error> {
-        Task { try await session.liveViewFrame(deadline: deadline) }
-    }
-
-    /// Runs one live-view streaming attempt until the watchdog declares a stall or the task is
-    /// cancelled. Returns the reason streaming stopped so the caller can decide to restart.
-    private func streamUntilStall(session: NativeCameraSession) async -> StreamOutcome {
-        var deliveredFirstFrame = false
-        var frameCounter = 0
-        var frameRate = FrameRateSampler()
-        var watchdog = LiveViewWatchdog()
-        // Each streaming attempt starts a fresh interval baseline: the first frame after a
-        // (re)start includes configure/start time and must not be scored as congestion.
-        do {
-            let requestedSize = effectiveStreamImageSize
-            let requestedCompression = preferences.qualityBias.liveViewImageCompression
-            await session.configureLiveView(
-                size: requestedSize,
-                compression: requestedCompression)
-            lastAppliedStreamImageSize = requestedSize
-            lastAppliedStreamCompression = requestedCompression
-            try await session.startLiveView()
-            // NEVER cancel the in-flight fetch on a session this loop intends to keep: task
-            // cancellation inside a blocked socket read fires `PTPIPSocket.interrupt()` (the
-            // abandoned-establishment teardown, audit H4) and LATCHES the command channel
-            // dead. The keep-warm pulls behind a settings cover then fail silently (`try?`),
-            // and the exit discovers a corpse and pays a full reconnect — the "RECOV on every
-            // settings exit" that outlived the deadline and warm-cover fixes. Routine
-            // boundaries (cover entry, DISP flips) DRAIN the pull instead; an exit that
-            // leaves it orphaned is bounded by the pull's own deadline, merely queueing a
-            // same-session restart behind the transaction gate, and a genuine teardown
-            // unblocks it instantly through the session's own socket shutdown.
-            var nextFrameTask = liveFrameTask(session, deadline: Self.firstLiveViewFrameDeadline)
-            let firstFrame = try await nextFrameTask.value
-            guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
-            // Decode off the main actor (FrameDecoder forces the JPEG decode via
-            // preparingForDisplay) so the main thread only composites an already-decoded frame.
-            let firstImage = await displayReadyLiveFrame(
-                from: await frameDecoder.decode(firstFrame.jpeg))
-            guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
-            guard let firstImage else {
-                throw NativeCameraSessionError.connectionFailed(
-                    "Live view returned an unreadable first frame."
-                )
-            }
-            liveFrameImage = firstImage
-            liveViewFocus = firstFrame.focus
-            applyLiveViewHeaderState(firstFrame)
+    /// Publishes the integration pump's picture/header delivery. JPEG decoding and native
+    /// scopes, relay, watch and display processing stay with their presentation owner.
+    private func consumeCameraFrame(
+        _ frame: PTPLiveViewFrame, delivery: NikonLiveViewPump.Delivery,
+        session: NativeCameraSession, frameRate: inout FrameRateSampler
+    ) async -> Bool {
+        if delivery.headerOnly {
+            liveViewFocus = frame.focus
+            applyLiveViewHeaderState(frame)
+            applyLiveViewHeaderTimecode(frame.timecode)
+            captureRelayFrameMetadata(frame)
+            publishWatchState()
+            return true
+        }
+        let cleanFrame = await frameDecoder.decode(frame.jpeg)
+        let decoded = await displayReadyLiveFrame(from: cleanFrame)
+        guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame else { return false }
+        let arrival = CACurrentMediaTime()
+        frameRate.recordFrame(at: arrival)
+        lastGoodFrameAt = Date()
+        consecutiveBadLiveFrames = 0
+        measuredLiveViewFPS = frameRate.displayFPS
+        if delivery.first {
+            liveFrameImage = image
+            liveViewFocus = frame.focus
             isMonitorPresented = true
             AppDiagnostics.shared.record(.liveViewStarted)
             presentLiveViewGuideIfNeeded()
             dismissConnectionProgress()
-            deliveredFirstFrame = true
-            consecutiveStartFailures = 0
             isStreamRecovering = false
-            watchdog.recordGoodFrame(
-                at: Date(), signature: LiveFrameSignature.of(firstFrame.jpeg))
-            lastGoodFrameAt = Date()
-            consecutiveBadLiveFrames = 0
-            frameRate.recordFrame(at: CACurrentMediaTime())
-            measuredLiveViewFPS = frameRate.displayFPS
-            applyLiveViewHeaderTimecode(firstFrame.timecode)
-            liveFPS = frameRate.formatted
             cameraState = cameraState.updating(phoneBatteryPercent: currentPhoneBatteryPercent)
             connectionMessage = "Live view streaming from \(session.identity.displayName)."
             connection = .connected
-            var pausedForCommand = false
-            var liveViewSuspended = false
-            // When the current full-screen cover began; nil while the feed is visible. Only a
-            // cover older than `coverEndsLiveViewAfterSeconds` ends live view on the body.
-            var coverStartedAt: Date?
-            // Non-nil while a repeating-frame stall is being HELD as body-busy (#297) instead
-            // of restarted; cleared when fresh payloads resume or the hold escalates.
-            var bodyBusyHoldStart: Date?
-            // Whether the stream is currently configured for Command's header-only pulls, so the
-            // size change is applied exactly once per DISP transition instead of every frame.
-            var headerOnly = false
-            nextFrameTask = liveFrameTask(session, deadline: liveViewFrameDeadline(for: session))
-            while !Task.isCancelled {
-                if shouldPauseLiveFeed {
-                    // Feed hidden behind a full-screen cover. A SHORT cover (a settings visit)
-                    // keeps the stream up and idles it with a slow keep-warm pull — ending live
-                    // view here meant every settings exit paid a full StartLiveView restart,
-                    // which the body regularly refuses or slow-walks straight into the recovery
-                    // arc (the field "RECOV on every settings exit", still reproducing after
-                    // deadline fixes). Only a cover that PERSISTS ends live view: sensor
-                    // readout + JPEG encode heat matters over minutes, not seconds.
-                    pausedForCommand = true
-                    // Drain, don't cancel (see the note at `nextFrameTask`'s creation): the
-                    // discarded frame costs at most one deadline; a cancel costs the socket.
-                    _ = try? await nextFrameTask.value
-                    if coverStartedAt == nil { coverStartedAt = Date() }
-                    if !liveViewSuspended,
-                        Date().timeIntervalSince(coverStartedAt ?? Date())
-                            >= Self.coverEndsLiveViewAfterSeconds
-                    {
-                        liveViewSuspended = true
-                        await session.stopLiveView()
-                        lastAppliedStreamImageSize = nil
-                        lastAppliedStreamCompression = nil
-                    }
-                    if !liveViewSuspended {
-                        // Keep-warm: one discarded frame per idle tick holds the body's live
-                        // view open, so resume is instant and restart-free.
-                        _ = try? await session.liveViewFrame(deadline: .seconds(2))
-                    }
-                    // Tell the watch so it shows the paused placeholder over the last frame instead
-                    // of a stalled preview.
-                    publishWatchState()
-                    await runCommandModeSafePoint(session: session)
-                    try? await Task.sleep(for: .milliseconds(250))
-                    continue
-                }
-                coverStartedAt = nil
-                if pausedForCommand {
-                    pausedForCommand = false
-                    if liveViewSuspended {
-                        // Feed came back — re-enter live view at the size the current thermal state
-                        // asks for.
-                        liveViewSuspended = false
-                        let requestedSize = effectiveStreamImageSize
-                        await session.configureLiveView(
-                            size: requestedSize,
-                            compression: preferences.qualityBias.liveViewImageCompression)
-                        lastAppliedStreamImageSize = requestedSize
-                        do {
-                            try await session.startLiveView()
-                        } catch {
-                            // Right after EndLiveView the body can still be tearing the old
-                            // stream down and refuse the restart; one settle beat clears it.
-                            // Without this, every settings visit ended in the outer rebuild —
-                            // seconds of RECOV for a pause the app itself asked for. A second
-                            // failure is real and propagates to that rebuild.
-                            connectionLogger.info(
-                                "live view resume refused once; retrying after settle")
-                            try? await Task.sleep(for: .milliseconds(600))
-                            try await session.startLiveView()
-                        }
-                    }
-                    headerOnly = streamsHeaderOnly
-                    watchdog.recordGoodFrame(at: Date())
-                    lastGoodFrameAt = Date()
-                    consecutiveBadLiveFrames = 0
-                    frameRate = FrameRateSampler()
-                    lastLevelUpdateTime = 0
-                    lastScopeSampleTime = 0
-                    // First-frame deadline, not the steady-state one: this is a cold restart —
-                    // StartLiveView plus the body's first encode — exactly like the DISP
-                    // transition below, and the tight RTT-scaled deadline read its normal
-                    // startup latency as a stall.
-                    nextFrameTask = liveFrameTask(
-                        session, deadline: Self.firstLiveViewFrameDeadline)
-                }
-                // Entering or leaving Command: restart the stream at the size that mode wants.
-                // One stop/start per DISP transition — the same count the old pause/resume paid.
-                if streamsHeaderOnly != headerOnly {
-                    headerOnly = streamsHeaderOnly
-                    // Drain, don't cancel (see the note at `nextFrameTask`'s creation).
-                    _ = try? await nextFrameTask.value
-                    await session.stopLiveView()
-                    let requestedSize = effectiveStreamImageSize
-                    let requestedCompression = preferences.qualityBias.liveViewImageCompression
-                    await session.configureLiveView(
-                        size: requestedSize,
-                        compression: requestedCompression)
-                    lastAppliedStreamImageSize = requestedSize
-                    lastAppliedStreamCompression = requestedCompression
-                    try await session.startLiveView()
-                    frameRate = FrameRateSampler()
-                    watchdog.recordGoodFrame(at: Date())
-                    lastGoodFrameAt = Date()
-                    consecutiveBadLiveFrames = 0
-                    lastLevelUpdateTime = 0
-                    lastScopeSampleTime = 0
-                    nextFrameTask = liveFrameTask(
-                        session, deadline: Self.firstLiveViewFrameDeadline)
-                }
-                let frame = try await nextFrameTask.value
-                guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
-                if headerOnly {
-                    // Command mode: the header is the whole point. Publish the authoritative
-                    // timecode and record state, skip the JPEG entirely, and pace the next pull.
-                    //
-                    // `frameRate` / `measuredLiveViewFPS` deliberately do NOT sample here: this
-                    // cadence is our own throttle, not the link's capability, and feeding it to
-                    // the link-health scorer would drop the signal bars to a false alarm. The FPS
-                    // chip holds its last live-feed reading until the feed comes back.
-                    watchdog.recordGoodFrame(at: Date())
-                    lastGoodFrameAt = Date()
-                    consecutiveBadLiveFrames = 0
-                    applyLiveViewHeaderState(frame)
-                    applyLiveViewHeaderTimecode(frame.timecode)
-                    publishWatchState()
-                    nextFrameTask = liveFrameTask(
-                        session, deadline: liveViewFrameDeadline(for: session))
-                    await runCommandModeSafePoint(session: session)
-                    try? await Task.sleep(for: Self.commandHeaderPullInterval)
-                    continue
-                }
-                // Start the NEXT fetch before decoding this frame: the wire time of frame N+1
-                // overlaps decode + bake + publish of frame N, which is a straight 10-25% fps
-                // recovery on a router path where fetch RTT dominates. Peak in-flight cost is
-                // two JPEGs + one decoded bitmap (~200 KB over the old strictly-serial shape —
-                // the "one JPEG" bound this replaced was memory caution, not a protocol rule;
-                // the transaction gate still serializes the wire, so the camera never sees
-                // overlapped operations).
-                nextFrameTask = liveFrameTask(
-                    session, deadline: liveViewFrameDeadline(for: session))
-                // Scopes must meter the clean frame, never the assist-composited bake
-                // (`cleanFrame` is a second reference to a bitmap the render memo retains anyway).
-                let cleanFrame = await frameDecoder.decode(frame.jpeg)
-                let decoded = await displayReadyLiveFrame(from: cleanFrame)
-                guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
-                if let image = decoded, let cleanFrame {
-                    frameCounter += 1
-                    let arrival = CACurrentMediaTime()
-                    frameRate.recordFrame(at: arrival)
-                    // Signed with the payload, so a body that wedges into replaying one cached
-                    // JPEG is read as the stall it is instead of a healthy stream (#283).
-                    watchdog.recordGoodFrame(
-                        at: Date(), signature: LiveFrameSignature.of(frame.jpeg))
-                    lastGoodFrameAt = Date()
-                    consecutiveBadLiveFrames = 0
-                    measuredLiveViewFPS = frameRate.displayFPS
-                    // The relay's "healthy" reference: what THIS feed does when no watcher is
-                    // being served. The starve threshold anchors to it.
-                    if relayPeerCount == 0, measuredLiveViewFPS > 0 {
-                        relaySoloFPSBaseline =
-                            relaySoloFPSBaseline == 0
-                            ? measuredLiveViewFPS
-                            : relaySoloFPSBaseline
-                                + 0.05 * (measuredLiveViewFPS - relaySoloFPSBaseline)
-                    }
-                    publishLiveFrameDisplay(image: image, focus: frame.focus)
-                    applyLiveViewHeaderState(frame)
-                    // The relay re-encodes the CLEAN frame as HEVC. A pass-through of the
-                    // camera's JPEG was tried first — no generational loss — but at ~100 KB a
-                    // frame it is what capped viewers at 8–11 fps on a set router; the hardware
-                    // encode trades an invisible generation for a quarter of the bytes.
-                    captureRelayFrameMetadata(frame)
-                    broadcastRelayFrame(image: cleanFrame)
-                    // The CPU path returns a distinct display-baked image. Metal returns the clean
-                    // frame because its full-size bake stays GPU-side; give the relay the active
-                    // effects in that case so it grades only its small, link-paced thumbnail.
-                    let watchEffects = image === cleanFrame ? liveImageEffects : nil
-                    watchRelay.ingestFrame(
-                        image: image,
-                        applying: watchEffects,
-                        timecode: frame.timecode,
-                        isRecording: frame.isRecording)
-                    sampleScopesIfDue(clean: cleanFrame) { [weak self] in
-                        self?.cameraSession === session
-                    }
-                    applyLiveViewHeaderTimecode(frame.timecode)
-                    let fpsLabel = frameRate.formatted
-                    // The BUSY chip owns the readout while a body-busy hold runs — the slow
-                    // hold pulls would otherwise flash a meaningless sub-1 fps figure.
-                    if bodyBusyHoldStart == nil, fpsLabel != liveFPS { liveFPS = fpsLabel }
-                    await runLiveViewControlSafePoint(
-                        session: session,
-                        frameCounter: frameCounter
-                    )
-                } else {
-                    // Corrupt JPEG — count it so a streak forces a restart instead of freezing
-                    // silently with the last good frame on screen. (The next fetch is already
-                    // in flight from before the decode.)
-                    watchdog.recordBadFrame()
-                    consecutiveBadLiveFrames = watchdog.consecutiveBadFrames
-                }
-                watchdog.check(at: Date())
-                lastGoodFrameAt = watchdog.lastGoodFrameAt
-                if watchdog.status == .stalled {
-                    // A replaying body whose command channel still answers is BUSY — its menu,
-                    // playback, image review — not dead. Restarting live view here is what
-                    // slammed the operator's body menu shut every few seconds (#297), because
-                    // StartLiveView forces the body back to its shooting screen. Hold with slow
-                    // pulls instead: leaving the menu resumes the still-active stream by
-                    // itself, and the payload change ends the hold. The bounded window keeps
-                    // the genuinely wedged body of #283 self-healing, just on a patient clock.
-                    if watchdog.isRepeatingLastFrame,
-                        (try? await session.pollStillReleaseReadiness()) != nil
-                    {
-                        let holdStart = bodyBusyHoldStart ?? Date()
-                        bodyBusyHoldStart = holdStart
-                        if Date().timeIntervalSince(holdStart)
-                            < BodyBusyHoldPolicy.maxHoldSeconds
-                        {
-                            if liveFPS != "BUSY" {
-                                liveFPS = "BUSY"
-                                connectionMessage =
-                                    "The camera is busy on the body — the feed resumes automatically."
-                            }
-                            try? await Task.sleep(
-                                for: .seconds(BodyBusyHoldPolicy.holdPullIntervalSeconds))
-                            continue
-                        }
-                    }
-                    bodyBusyHoldStart = nil
-                    return .stalled(
-                        reason: watchdog.isRepeatingLastFrame
-                            ? "same frame replayed" : "no good frame")
-                }
-                bodyBusyHoldStart = nil
+        } else {
+            if relayPeerCount == 0, measuredLiveViewFPS > 0 {
+                relaySoloFPSBaseline = relaySoloFPSBaseline == 0 ? measuredLiveViewFPS
+                    : relaySoloFPSBaseline + 0.05 * (measuredLiveViewFPS - relaySoloFPSBaseline)
             }
-            return .taskCancelled
-        } catch {
-            guard !Task.isCancelled else { return .taskCancelled }
-            if !deliveredFirstFrame {
-                AppDiagnostics.shared.record(.liveViewFailed)
-                let reason =
-                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                connectionMessage =
-                    "Connected, but live view is not streaming: \(reason)"
-                liveFPS = "LINK"
-                isStreamRecovering = true
-                connection = .connected
-                return .neverStarted(reason: reason)
-            }
-            // A thrown error mid-stream is recoverable: report it and let the outer loop restart.
-            let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            return .stalled(reason: reason)
+            publishLiveFrameDisplay(image: image, focus: frame.focus)
+            captureRelayFrameMetadata(frame)
+            broadcastRelayFrame(image: cleanFrame)
+            let watchEffects = image === cleanFrame ? liveImageEffects : nil
+            watchRelay.ingestFrame(image: image, applying: watchEffects, timecode: frame.timecode, isRecording: frame.isRecording)
+            sampleScopesIfDue(clean: cleanFrame) { [weak self] in self?.cameraSession === session }
         }
-    }
-
-    /// Outcome of one streaming attempt, used by the restart loop.
-    private enum StreamOutcome {
-        case taskCancelled
-        case neverStarted(reason: String)
-        case streaming
-        case stalled(reason: String)
+        applyLiveViewHeaderState(frame)
+        applyLiveViewHeaderTimecode(frame.timecode)
+        if !delivery.bodyBusy { liveFPS = frameRate.formatted }
+        return true
     }
 
     private func formattedSeconds(_ seconds: Double) -> String {
@@ -8064,44 +7612,14 @@ final class NativeAppModel {
             }
             return
         }
-        // Record start/stop is interactive too — service it before property polls. The button was
-        // flipped optimistically; revert it if the camera rejects the op.
-        if let start = pendingRecordStart {
-            let operation = pendingRecordOperation
-            pendingRecordStart = nil
-            pendingRecordOperation = nil
-            pendingRecordToggle = false
-            appRecordCommandAt = Date()
-            if let operation { controlSession?.operationSent(operation) }
-            do {
-                if start {
-                    try await session.startRecording()
-                } else {
-                    try await session.stopRecording()
-                }
-                // Accepted is not confirmed: the seam waits for the camera to report the target.
-                if let operation { controlSession?.recordAccepted(operation) }
-                // `isRecording` was flipped optimistically before this safe point. Only after the
-                // camera accepts the command do we restart the preview at its recording-aware size.
-                applyThermalStreamStepDownIfNeeded()
-            } catch {
-                if let operation {
-                    controlSession?.commandFailed(
-                        operation, cameraRefused: NativeCameraSessionError.isCameraRefusal(error))
-                }
-                // Back to what the camera last reported, not an assumed opposite of the target.
-                isRecording = reportedRecording ?? !start
-                cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
-                connectionMessage =
-                    "Record \(start ? "start" : "stop") failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
-            }
-            return
-        }
+        // The integration owns explicit common record targets and their wire receipts.
+        if await monitorRuntime?.serviceControlSafePoint(allowWrites: false) == true { return }
         // Still release (photography mode): fire queued releases and track completion
         // with DeviceReady between frames, exactly like the record path above.
         if await serviceStillCaptureWork(session: session) {
             return
         }
+        if await monitorRuntime?.serviceControlSafePoint() == true { return }
         if await performNextPendingCameraWrite(session: session) {
             return
         }
@@ -8578,7 +8096,7 @@ final class NativeAppModel {
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
             reportedRecording = recording
-            controlSession?.refresh()
+            refreshCommonControlFacts()
         }
         guard force || !shouldSuppressCameraRecordStateSync() else { return }
         guard isRecording != recording else { return }
@@ -8590,16 +8108,13 @@ final class NativeAppModel {
 
     /// Whether live-view header / event readback should defer to an in-flight app record command.
     private func shouldSuppressCameraRecordStateSync() -> Bool {
-        if pendingRecordToggle || pendingRecordStart != nil { return true }
+        if pendingRecordToggle || shell.control.recordPending { return true }
         if let sentAt = appRecordCommandAt, Date().timeIntervalSince(sentAt) < 1.5 { return true }
         return false
     }
 
     private func resetPendingRecordCommand() {
-        if let operation = pendingRecordOperation { controlSession?.operationDropped(operation) }
-        pendingRecordOperation = nil
         pendingRecordToggle = false
-        pendingRecordStart = nil
         appRecordCommandAt = nil
     }
 
@@ -8621,7 +8136,6 @@ final class NativeAppModel {
     private func performNextPendingCameraWrite(session: NativeCameraSession) async -> Bool {
         guard !pendingCameraWrites.isEmpty else { return false }
         let pending = pendingCameraWrites.removeFirst()
-        if let operation = pending.operation { controlSession?.operationSent(operation) }
         let isShutterModeWrite = pending.write.property == .movieShutterMode
         let isBaseISOWrite = pending.write.property == .movieBaseISO
         let isISOAutoWrite =
@@ -8658,9 +8172,6 @@ final class NativeAppModel {
                     property: pending.write.property,
                     data: pending.write.data
                 )
-            }
-            if let operation = pending.operation {
-                controlSession?.writeLanded(operation, write: pending.write, readback: readback)
             }
             // A confirmed write supersedes any queued re-read of the same property.
             cameraAnnouncedPropertyChanges.cancel(pending.write.property)
@@ -8718,10 +8229,6 @@ final class NativeAppModel {
                 connectionMessage = "\(pending.picker.title) set to \(pending.value)."
             }
         } catch {
-            if let operation = pending.operation {
-                controlSession?.commandFailed(
-                    operation, cameraRefused: NativeCameraSessionError.isCameraRefusal(error))
-            }
             // The camera refused the write — the body's "Control lock" has this control locked
             // (it can lock shutter / aperture / focus). Flag it so the bar shows a lock, and
             // revert the optimistic value to what the camera actually reports.
@@ -8819,86 +8326,36 @@ final class NativeAppModel {
     /// Full live-order property + storage + descriptor burst (Android bootstrap parity).
     /// Call once after connect / before the first `StartLiveView`.
     private func bootstrapCameraProperties(session: NativeCameraSession) async {
-        // The selector decides which property set matters (photo vs movie chrome), so read it
-        // first and burst the matching order — a movie-order burst against a body sitting in
-        // photo mode would leave the entire stills strip to drip-fill one property per frame gap.
-        await readAndApplyCameraProperty(session: session, property: .liveViewSelector)
-        logConnection(
-            "property-bootstrap: starting \(cameraPropertySnapshot.captureSelector == .photo ? "photo" : "movie")-order burst"
-        )
-        await burstMonitorProperties(session: session)
-        propertyPollIndex = 0
-        guard !Task.isCancelled, cameraSession === session else { return }
-        // Force the slow maintenance groups immediately (don't wait for 60 s cadence).
-        lastStorageRefreshAt = nil
-        lastDescriptorRefreshAt = nil
-        await refreshStorageInfo(session: session)
-        lastStorageRefreshAt = Date()
-        guard !Task.isCancelled, cameraSession === session else { return }
-        await refreshLensApertures(session: session)
-        await refreshScreenModes(session: session)
-        await refreshFileTypeModes(session: session)
-        await refreshControlOptions(session: session)
-        lastDescriptorRefreshAt = Date()
-        publishCameraDisplayState()
-        syncFocusFromSnapshot()
-        syncShutterLockFromSnapshot()
-        await stageClockSyncIfDrifted(session: session)
-        logConnection("property-bootstrap: complete")
-    }
-
-    /// Reads the body's clock at bootstrap and STAGES a correction — the write itself waits for
-    /// the first steady-state poll tick, because the record state is only authoritative once
-    /// live view has delivered a frame header, and a session opened against an already-recording
-    /// body (a USB attach mid-take is the reported scenario) must never step the clock mid-take.
-    /// The payload is re-encoded at write time so the deferred clock is not set slow by the gap.
-    /// Policy in `CameraClockSync`; refusals are logged and dropped — the MfDrive lesson,
-    /// refusals are transient and never latch.
-    private func stageClockSyncIfDrifted(session: NativeCameraSession) async {
-        clockSyncStaged = false
-        do {
-            let payload = try await session.readCameraProperty(.dateTime)
-            let decision = CameraClockSync.decide(
-                cameraPayload: payload,
-                phoneNow: CameraClockSync.phoneNow(),
-                isRecording: false
-            )
-            switch decision {
-            case .write:
-                clockSyncStaged = true
-                logConnection("clock-sync: drift found — staged for first idle poll")
-            case .inSync:
-                break
-            case .recordingHoldOff:
-                // Unreachable with isRecording:false; the poll tick owns that gate.
-                break
-            case .unreadable:
-                logConnection("clock-sync: skipped — clock property unreadable")
+        await monitorRuntime?.bootstrapProperties(initial: cameraPropertySnapshot) { [weak self] observation in
+            guard let self, cameraSession === session else { return }
+            switch observation {
+            case .property(let property, let data):
+                applyCameraRead(property, data)
+                publishCameraDisplayState()
+                syncFocusFromSnapshot()
+                syncShutterLockFromSnapshot()
+                if property == .warningStatus { applyThermalStreamStepDownIfNeeded() }
+            case .storage(let info):
+                lastKnownStorage = info
+                lastStorageRefreshAt = Date()
+            case .apertures(let values): cameraApertures = values
+            case .screenModes(let values): cameraScreenModes = values
+            case .fileTypes(let values): cameraFileTypeModes = values
+            case .options(let property, let values): cameraControlOptions[property] = values
+            case .photographyReady: seedInstantReviewBaseline()
+            case .descriptorsReady:
+                propertyPollIndex = 0
+                lastDescriptorRefreshAt = Date()
+                publishCameraDisplayState()
+                syncFocusFromSnapshot()
+                syncShutterLockFromSnapshot()
             }
-        } catch {
-            logConnection("clock-sync: read refused (\(error.localizedDescription))")
         }
     }
 
-    /// Consumes a staged clock correction on the first poll tick, where `isRecording` reflects
-    /// the frame header rather than a fresh session's default. One shot either way: a recording
-    /// body keeps its clock for the whole session, and the next connect retries.
     private func consumeStagedClockSync(session: NativeCameraSession) async {
-        guard clockSyncStaged else { return }
-        clockSyncStaged = false
-        guard !isRecording else {
-            logConnection("clock-sync: dropped — body is recording")
-            return
-        }
-        do {
-            try await session.writeCameraProperty(
-                PTPCameraPropertyWrite(
-                    property: .dateTime,
-                    data: CameraClockSync.encode(CameraClockSync.phoneNow())))
-            logConnection("clock-sync: body clock set to phone time")
-        } catch {
-            logConnection("clock-sync: write refused (\(error.localizedDescription))")
-        }
+        guard cameraSession === session else { return }
+        await monitorRuntime?.consumeStagedClockSync(recording: reportedRecording)
     }
 
     /// Reads the active selector's whole monitor property set back-to-back (skipping properties
@@ -9479,7 +8936,7 @@ final class NativeAppModel {
         cameraState = next
         broadcastRelayState()
         // Every camera property read lands here, so the seam's snapshot follows the camera.
-        controlSession?.refresh()
+        refreshCommonControlFacts()
     }
 
     func cycleDisplayMode() {
@@ -11327,23 +10784,13 @@ final class NativeAppModel {
             cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
             return
         }
-        // One command path: the seam admits the command (live view must run, the existing
-        // preflight), confirms it without sending when the camera already reports the target, and
-        // otherwise queues it through `queueRecord` for the next safe point.
-        let receipt = controlSession?.request(start ? .startRecording : .stopRecording)
-        guard let receipt else {
-            // The refusal reaches the operator, not just the log — the monitor never renders
-            // `connectionMessage` (see `showMonitorNotice`), so the remote-shutter and watch
-            // presses that land here were refused in silence.
+        guard shell.control.session != nil else {
             showMonitorNotice("Start live view before recording.")
             return
         }
-        if case .rejected(let reason) = receipt.stage {
-            showMonitorNotice(
-                reason == .unavailable(.notReady)
-                    ? "Start live view before recording."
-                    : "Record \(start ? "start" : "stop") was not sent (\(reason)).")
-        }
+        refreshCommonControlFacts()
+        shell.control.record(start: start)
+
     }
 
     // MARK: Apple Watch relay
@@ -12797,25 +12244,27 @@ final class NativeAppModel {
         }
         if picker == .shutter, lockedControls.contains(.shutter) { return }
         if picker == .iso, isISORecordingLocked { return }
-        // CORE-02: ISO and white balance go through the common camera-session seam, which admits
-        // the value against the camera-reported domain and tracks it to readback. What it admits
-        // comes back through `queuePickerWrites`; there is no second path for these two.
-        if let controlSession, let nikon = picker.nikonControlSetting,
-            let setting = NikonCameraSession.setting(nikon, label: value)
+        if let nikon = picker.nikonControlSetting,
+            let setting = NikonCameraSession.setting(nikon, label: value),
+            shell.control.session != nil
         {
-            if case .rejected(let reason) = controlSession.request(.set(setting)).stage {
-                connectionMessage = "\(picker.title) \(value) was not sent (\(reason))."
+            refreshCommonControlFacts()
+            if let commonEditor {
+                guard shell.control.commit(setting, from: commonEditor, label: "\(picker.title) \(value)")
+                else { return }
+            } else {
+                shell.control.set(setting, label: "\(picker.title) \(value)")
             }
             return
         }
-        queuePickerWrites(value, for: picker, operation: nil)
+        queuePickerWrites(value, for: picker)
     }
 
     /// Encodes a picker value onto the coalescing write queue (optimistic bar update, safe-point
     /// write, readback). Returns the number of property writes queued.
     @discardableResult
     func queuePickerWrites(
-        _ value: String, for picker: CameraPicker, operation: OperationID?
+        _ value: String, for picker: CameraPicker
     ) -> Int {
         guard let cameraControl = picker.cameraControl else {
             connectionMessage =
@@ -12864,7 +12313,7 @@ final class NativeAppModel {
         }
         for write in writes {
             enqueueCameraWrite(
-                PendingCameraWrite(picker: picker, value: value, write: write, operation: operation)
+                PendingCameraWrite(picker: picker, value: value, write: write)
             )
             // Optimistic UI: reflect the selection in the bar immediately; the poll confirms it.
             cameraPropertySnapshot = cameraPropertySnapshot.applying(
@@ -12916,13 +12365,86 @@ final class NativeAppModel {
     }
 }
 
-// CORE-02: the app's command service as the Nikon seam drives it. Same queue, same safe point,
-// same optimistic bar and button as before; only the bookkeeping moved into the seam.
-extension NativeAppModel: NikonControlDriver {
-    func queueSettingWrites(
-        _ label: String, for setting: NikonControlSetting, operation: OperationID?
-    ) -> Int {
-        queuePickerWrites(label, for: CameraPicker(setting), operation: operation)
+// Compatibility projection of camera observations; command and receipt ownership is shared.
+extension NativeAppModel {
+    func makeShellModel() -> ShellModel {
+        let shell = ShellModel(cameras: cameras)
+        shell.onSceneActivity = { [weak self] active in
+            if active { self?.enterForeground() } else { self?.enterBackground() }
+        }
+        shell.control.onNote = { [weak self] in self?.showMonitorNotice($0) }
+        shell.control.onChange = { [weak self, weak shell] in
+            guard let self, let control = shell?.control else { return }
+            publishCameraDisplayState()
+            for (key, value) in control.pending {
+                guard let (_, label) = NikonCameraSession.settingValue(for: value) else { continue }
+                applyLocalPickerValue(label, for: key == .iso ? .iso : .whiteBalance)
+            }
+            if !control.recordPending, let recording = control.isRecording {
+                isRecording = recording
+                cameraState = cameraState.updating(recordState: recording ? .recording : .standby)
+            }
+        }
+        return shell
+    }
+
+    private func bindMonitorRuntime(_ session: NativeCameraSession) {
+        if let monitorRuntime {
+            monitorRuntime.replaceLink(session)
+        } else {
+            let runtime = NikonMonitorRuntime(link: session, ownsLink: multicam.lentMember == nil)
+            runtime.onReadback = { [weak self, weak runtime] write, readback in
+                guard let self, monitorRuntime === runtime else { return }
+                if let readback { applyCameraRead(write.property, readback) }
+                publishCameraDisplayState()
+            }
+            runtime.onRecordQueued = { [weak self, weak runtime] start in
+                guard let self, monitorRuntime === runtime else { return }
+                isRecording = start
+                pendingRecordToggle = true
+                appRecordCommandAt = Date()
+                cameraState = cameraState.updating(recordState: start ? .recording : .standby)
+                publishWatchState()
+            }
+            runtime.onRecordCommand = { [weak self, weak runtime] _, accepted in
+                guard let self, monitorRuntime === runtime else { return }
+                pendingRecordToggle = false
+                appRecordCommandAt = Date()
+                if accepted {
+                    applyThermalStreamStepDownIfNeeded()
+                } else if let reportedRecording {
+                    isRecording = reportedRecording
+                    cameraState = cameraState.updating(recordState: reportedRecording ? .recording : .standby)
+                }
+            }
+            runtime.onClosed = { [weak self, weak runtime] _ in
+                guard let self, monitorRuntime === runtime else { return }
+                clearCameraSessionState(resetConnection: true)
+            }
+            monitorRuntime = runtime
+        }
+        refreshCommonControlFacts()
+    }
+
+    private func ensureShellMonitor() {
+        guard let cameraSession, let controlSession else { return }
+        guard shell.monitor?.session.id != controlSession.id else { return }
+        cameras.reloadSaved()
+        guard let saved = cameras.saved.first(where: { camera in
+            camera.routes.contains { $0.extras[NikonSavedRecordsV0.Extra.host] == cameraSession.host }
+        }) ?? NikonSavedRecordsV0.cameras(from: savedCameras).first(where: { camera in
+            camera.routes.contains { $0.extras[NikonSavedRecordsV0.Extra.host] == cameraSession.host }
+        }) else { return }
+        let camera = ConnectedCamera(saved: saved, session: controlSession)
+        if multicam.lentMember != nil {
+            shell.borrow(camera) { [weak self] in self?.returnToMulticam() }
+        } else {
+            shell.present(camera)
+        }
+    }
+
+    private func refreshCommonControlFacts() {
+        monitorRuntime?.updateFacts(nikonControlFacts)
     }
 
     var nikonControlFacts: NikonControlFacts {
@@ -12945,21 +12467,6 @@ extension NativeAppModel: NikonControlDriver {
             whiteBalancePresets: presets)
     }
 
-    func queueRecord(start: Bool, operation: OperationID) {
-        // A press the safe point has not serviced yet is replaced, never sent twice.
-        if let superseded = pendingRecordOperation {
-            controlSession?.operationDropped(superseded, superseded: true)
-        }
-        pendingRecordOperation = operation
-        // Optimistically flip the button now (snappy), then queue the actual record op for the next
-        // live-view safe point; if the camera rejects it, the safe point reverts the state.
-        isRecording = start
-        cameraState = cameraState.updating(recordState: start ? .recording : .standby)
-        pendingRecordStart = start
-        pendingRecordToggle = true
-        appRecordCommandAt = Date()
-        publishWatchState()
-    }
 }
 
 extension CameraDisplayState {
@@ -13647,6 +13154,7 @@ struct NativeAppRoot: View {
         .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
             // paired/reachable or WatchConnectivity is unsupported.
+            _ = model.shell
             model.activateWatchRelay()
         }
         .task {
@@ -13656,7 +13164,7 @@ struct NativeAppRoot: View {
                 named: UIApplication.didEnterBackgroundNotification)
             {
                 model.noteExternalInternetLinkHandoffEnteredBackground()
-                model.enterBackground()
+                model.shell.setSceneActive(false)
             }
         }
         .task {
@@ -13664,7 +13172,7 @@ struct NativeAppRoot: View {
             for await _ in NotificationCenter.default.notifications(
                 named: UIApplication.willEnterForegroundNotification)
             {
-                model.enterForeground()
+                model.shell.setSceneActive(true)
             }
         }
         .task {
@@ -14902,13 +14410,5 @@ extension CameraPicker {
         case .whiteBalance: .whiteBalance
         default: nil
         }
-    }
-}
-
-extension NativeCameraSessionError {
-    /// True when the body answered the command with a PTP refusal (not a lost transaction).
-    static func isCameraRefusal(_ error: any Error) -> Bool {
-        if case NativeCameraSessionError.operationRejected = error { return true }
-        return false
     }
 }

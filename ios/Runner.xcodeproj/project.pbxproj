@@ -48,7 +48,7 @@
 		B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */; };
 		BRND00000000000000000002 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BRND00000000000000000001 /* Branding.swift */; };
 		C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000002 /* NativeAppRoot.swift */; };
-		C0DE00000000000000000016 /* NativeCameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000017 /* NativeCameraSession.swift */; };
+		C0DE00000000000000000016 /* NativeCameraConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000017 /* NativeCameraConnectionStore.swift */; };
 		C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000019 /* NativeCameraDiscovery.swift */; };
 		C0DE00000000000000000024 /* LinkExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000025 /* LinkExperience.swift */; };
 		C0DE00000000000000000026 /* StartupDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000027 /* StartupDesign.swift */; };
@@ -78,7 +78,6 @@
 		LVSP00000000000000000002 /* LiveViewSignposts.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVSP00000000000000000001 /* LiveViewSignposts.swift */; };
 		MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */; };
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
-		TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */; };
 		TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000091 /* ConnectionLifecycleTests.swift */; };
 		TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000093 /* RelayRecordControlTests.swift */; };
 		TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */; };
@@ -190,7 +189,7 @@
 		B99B47BB1FB3BC66DC16FAC8 /* Frameio.local.xcconfig.example */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Frameio.local.xcconfig.example; sourceTree = "<group>"; };
 		BRND00000000000000000001 /* Branding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Branding.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000002 /* NativeAppRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAppRoot.swift; sourceTree = "<group>"; };
-		C0DE00000000000000000017 /* NativeCameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraSession.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000017 /* NativeCameraConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraConnectionStore.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000019 /* NativeCameraDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraDiscovery.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000025 /* LinkExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkExperience.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000027 /* StartupDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupDesign.swift; sourceTree = "<group>"; };
@@ -219,7 +218,6 @@
 		LVSP00000000000000000001 /* LiveViewSignposts.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveViewSignposts.swift; sourceTree = "<group>"; };
 		MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalFeedFrameBaker.swift; sourceTree = "<group>"; };
 		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
-		TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraEstablishRetryTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000091 /* ConnectionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLifecycleTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000093 /* RelayRecordControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRecordControlTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFeedNoiseFilterWindowTests.swift; sourceTree = "<group>"; };
@@ -289,7 +287,6 @@
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
 				7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */,
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
-				TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */,
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
 				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
@@ -335,7 +332,7 @@
 				DIAG00000000000000000001 /* AppDiagnostics.swift */,
 				C0DE00000000000000000002 /* NativeAppRoot.swift */,
 				N02000000000000000000001 /* NikonCamerasFlow.swift */,
-				C0DE00000000000000000017 /* NativeCameraSession.swift */,
+				C0DE00000000000000000017 /* NativeCameraConnectionStore.swift */,
 				C0DE00000000000000000019 /* NativeCameraDiscovery.swift */,
 				INFR00000000000000000001 /* InfrastructureCameraFinder.swift */,
 				UVCV00000000000000000001 /* UVCVideoSource.swift */,
@@ -572,7 +569,6 @@
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,
 				7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */,
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
-				TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */,
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
 				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
@@ -592,7 +588,7 @@
 				DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */,
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,
 				N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */,
-				C0DE00000000000000000016 /* NativeCameraSession.swift in Sources */,
+				C0DE00000000000000000016 /* NativeCameraConnectionStore.swift in Sources */,
 				C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */,
 				UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */,
 				RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */,
