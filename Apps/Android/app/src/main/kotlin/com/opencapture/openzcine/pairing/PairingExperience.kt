@@ -1439,7 +1439,13 @@ public fun PairingExperience(
                     primaryAction = primary,
                     primaryActionEnabled = !busy && (flow.step != PairingStep.PERMISSIONS ||
                         permissionGranted && isCameraPermissionSatisfied(cameraRequired, cameraPermissionGranted)),
-                    backAction = if (flow.canRetreat) stringResource(R.string.action_back) else "Your cameras",
+                    backAction =
+                        when {
+                            flow.canRetreat -> stringResource(R.string.action_back)
+                            // The way home exists only when there is a home to go to.
+                            onShowSavedCameras != null -> stringResource(R.string.saved_your_cameras)
+                            else -> null
+                        },
                 ).let { step ->
                     when (val active = phase) {
                         PairingPhase.Idle -> step
@@ -1480,7 +1486,7 @@ public fun PairingExperience(
                     when {
                         phase != PairingPhase.Idle -> cancelWork()
                         flow.canRetreat -> retreat()
-                        else -> onShowSavedCameras?.invoke() ?: onOpenWatcherList?.invoke()
+                        else -> onShowSavedCameras?.invoke()
                     }
                 },
                 content = {

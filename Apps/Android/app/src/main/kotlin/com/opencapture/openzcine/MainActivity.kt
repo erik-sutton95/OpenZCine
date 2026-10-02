@@ -110,6 +110,7 @@ import com.opencapture.openzcine.pairing.CAMERAS_DOCUMENT_PREFERENCES
 import com.opencapture.openzcine.pairing.nikonCamerasStore
 import com.opencapture.openzcine.pairing.recordsAfterSharedEdit
 import com.opencapture.openzcine.pairing.recordsForgetting
+import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.opencine.appkit.AppIntegration
 import com.opencapture.opencine.appkit.CamerasModel
 import com.opencapture.opencine.appkit.CamerasScreen
@@ -955,7 +956,12 @@ class MainActivity : ComponentActivity() {
                                         offlineMediaBuckets = completedMediaBuckets.values.toList()
                                     },
                                     onSettings = { standaloneSettingsPresented = true },
-                                    modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
+                                    // The shared pages' own ground and margins (the pair page draws
+                                    // MonitorPalette.background itself; this page leaves it to the app).
+                                    modifier =
+                                        Modifier.background(MonitorPalette.background)
+                                            .windowInsetsPadding(WindowInsets.safeDrawing)
+                                            .padding(start = 18.dp, top = 24.dp, end = 18.dp, bottom = 16.dp),
                                     nearbyNote = "on this network",
                                     onMultiview = multicam::begin,
                                     onIntegrationAction = { cameraID, action ->

@@ -186,6 +186,7 @@
     <string name="conn_failed_detail">Check your network and try again.</string>
 
     <!-- Saved cameras: the add-setup card and the cameras page rows. -->
+    <string name="saved_your_cameras">Your cameras</string>
     <string name="saved_wifi_subtitle">Wi‑Fi · %1$s · %2$s</string>
     <string name="saved_add_setup_title">Add a setup · %1$s</string>
     <string name="saved_add_setup_body">One camera, several ways to reach it. Pick how this rig runs; the setup saves itself the first time you connect that way.</string>
