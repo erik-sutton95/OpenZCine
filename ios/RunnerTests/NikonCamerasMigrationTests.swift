@@ -146,6 +146,22 @@ final class NikonCamerasMigrationTests: XCTestCase {
         XCTAssertEqual(zr.routes.map(\.id), zrRoutes)
     }
 
+    /// One record per setup: the app drops one setup of a body that keeps another (an abandoned
+    /// pairing, a forget). The setup leaves the document and a shared edit never writes it back.
+    func testASetupTheAppDropsStaysGone() throws {
+        try appWrite(studio)
+        _ = store()
+        try appWrite(studio.filter { $0.path != .usbC })
+
+        let store = store()
+        let zr = try XCTUnwrap(store.cameras.firstIndex { $0.id == "serial:6002199" })
+        XCTAssertEqual(store.cameras[zr].routes.map(\.kind), [.infrastructureNetwork])
+        var cameras = store.cameras
+        cameras[zr].name = "A cam"
+        store.save(cameras)
+        XCTAssertFalse(try appRead().contains { $0.host == "usb:demo-zr" })
+    }
+
     /// One record an older or newer build wrote that this one cannot read: kept in the records,
     /// skipped in the document, never overwritten by a shared edit.
     func testABadRecordIsKept() throws {

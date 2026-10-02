@@ -13,7 +13,6 @@ import com.opencapture.opencine.nikon.NikonSighting
 import com.opencapture.openzcine.TestSharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -190,14 +189,7 @@ class NikonCamerasMigrationTest {
         assertEquals(routes["192.168.43.20"], cameras.single { it.name == "B-cam" }.routes.single().id, "route ids survive")
     }
 
-    /**
-     * Needs the OpenCine merge fix: `SavedCamerasDocument.merge` (Swift and Kotlin) only treats a
-     * camera as changed in legacy when one of its CURRENT records differs from the base, so a
-     * removed record of a camera that keeps other unchanged records leaves its route in the
-     * document (and the next patch writes it back). Un-ignore once the merge also compares the
-     * camera's route keys.
-     */
-    @Ignore("OpenCine SavedCamerasDocument.merge misses a removed record of a multi-record camera")
+    /** One record per setup: the app drops one setup of a body that keeps another (OpenCine be2da87). */
     @Test
     fun `a setup removed by an older build or the app leaves the document`() = runTest {
         val phone = Phone()
