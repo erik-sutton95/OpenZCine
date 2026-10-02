@@ -97,6 +97,9 @@
 		WTCH00000000000000000026 /* WatchMonitorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000025 /* WatchMonitorView.swift */; };
 		WTCH00000000000000000042 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000041 /* Assets.xcassets */; };
 		WTCH00000000000000000052 /* OpenZCineWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000051 /* OpenZCineWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		N01000000000000000000002 /* MonitorPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000001 /* MonitorPresentation */; };
+		N01000000000000000000004 /* MonitorUI in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000003 /* MonitorUI */; };
+		N01000000000000000000006 /* OpenCineMulticam in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000005 /* OpenCineMulticam */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -246,6 +249,9 @@
 				C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */,
 				F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */,
 				APL000000000000000000001 /* OpenCineApple in Frameworks */,
+				N01000000000000000000006 /* OpenCineMulticam in Frameworks */,
+				N01000000000000000000004 /* MonitorUI in Frameworks */,
+				N01000000000000000000002 /* MonitorPresentation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -432,6 +438,9 @@
 				C0DE00000000000000ED1A02 /* OpenCineMedia */,
 				F10000000000000000000A02 /* OpenCineFrameIO */,
 				APL000000000000000000002 /* OpenCineApple */,
+				N01000000000000000000005 /* OpenCineMulticam */,
+				N01000000000000000000003 /* MonitorUI */,
+				N01000000000000000000001 /* MonitorPresentation */,
 				OZC000000000000000000002 /* OpenZCineCore */,
 			);
 			productName = Runner;
@@ -1123,6 +1132,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineApple;
+		};
+		N01000000000000000000001 /* MonitorPresentation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = MonitorPresentation;
+		};
+		N01000000000000000000003 /* MonitorUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = MonitorUI;
+		};
+		N01000000000000000000005 /* OpenCineMulticam */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineMulticam;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
