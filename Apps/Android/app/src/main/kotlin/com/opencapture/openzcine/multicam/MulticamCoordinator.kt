@@ -13,6 +13,9 @@ import com.opencapture.opencine.core.CommandStage
 import com.opencapture.opencine.core.ControlAuthority
 import com.opencapture.opencine.core.MonitorEntryDescriptor
 import com.opencapture.opencine.core.MonitorEntryID
+import com.opencapture.opencine.core.MulticamQualification
+import com.opencapture.opencine.core.MulticamQualificationRefusal
+import com.opencapture.opencine.core.RouteKind
 import com.opencapture.opencine.core.SessionCloseReason
 import com.opencapture.opencine.core.SettingDescriptor
 import com.opencapture.opencine.core.SettingKey
@@ -28,12 +31,14 @@ import com.opencapture.opencine.multicam.RecordPlan
 import com.opencapture.opencine.multicam.RecordSubmissionError
 import com.opencapture.opencine.multicam.RecordSubmissionException
 import com.opencapture.opencine.multicam.ResourceAdmission
+import com.opencapture.opencine.multicam.AdmissionReason
 import com.opencapture.opencine.multicam.ResourceBudget
 import com.opencapture.opencine.multicam.ResourceClaim
 import com.opencapture.opencine.multicam.ResourceRequest
 import com.opencapture.opencine.multicam.TargetOutcome
 import com.opencapture.opencine.multicam.TargetPolicy
 import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.NikonMulticamPolicy
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -85,18 +90,41 @@ object MulticamCopy {
 }
 
 /**
- * Which saved setups may join, the OpenCineNikon `NikonMulticamPolicy` rules as the app applies
- * them on Android (no Kotlin OpenCineNikon yet): camera access point refused, not reachable
- * refused, the same setup twice refused. Android records carry no serial, so the body serial is
+ * The app's saved-path adapter to the integration's qualification. Android records carry no
+ * serial, so the same setup is refused here and the body serial is
  * checked again after connect from the session's identity. HDMI is not a saved Android setup, and
  * photography mode is unknown before connect (a member that is in it fails its record instead).
  */
+private fun multicamQualification(
+    record: SavedCameraRecord, reachable: Boolean, memberHosts: Collection<String>,
+): MulticamQualification {
+    if (record.host in memberHosts) {
+        return MulticamQualification.Refused(MulticamQualificationRefusal.ALREADY_MEMBER)
+    }
+    val path = when (record.transport) {
+        SavedCameraTransport.CAMERA_ACCESS_POINT -> RouteKind.CAMERA_ACCESS_POINT
+        SavedCameraTransport.PHONE_HOTSPOT -> RouteKind.PHONE_HOTSPOT
+        SavedCameraTransport.INFRASTRUCTURE -> RouteKind.INFRASTRUCTURE_NETWORK
+        SavedCameraTransport.USB_C -> RouteKind.USB
+    }
+    return NikonMulticamPolicy.qualification(
+        path, reachable, isPhotography = false, device = null, members = emptyList(),
+    )
+}
+
+private fun qualificationCopy(reason: MulticamQualificationRefusal): String = when (reason) {
+    MulticamQualificationRefusal.ALREADY_MEMBER -> MulticamCopy.ALREADY_MEMBER
+    MulticamQualificationRefusal.UNSUPPORTED_CONFIGURATION -> MulticamCopy.CAMERA_WIFI
+    MulticamQualificationRefusal.OPERATION_UNAVAILABLE -> "Movie mode only."
+    MulticamQualificationRefusal.NOT_REACHABLE -> MulticamCopy.NOT_REACHABLE
+}
+
+/** Compatibility copy helper; admission consumes the typed qualification directly. */
 fun multicamRefusal(record: SavedCameraRecord, reachable: Boolean, memberHosts: Collection<String>): String? =
-    when {
-        record.host in memberHosts -> MulticamCopy.ALREADY_MEMBER
-        record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT -> MulticamCopy.CAMERA_WIFI
-        !reachable -> MulticamCopy.NOT_REACHABLE
-        else -> null
+    when (val qualification = multicamQualification(record, reachable, memberHosts)) {
+        MulticamQualification.Qualified -> null
+        MulticamQualification.Unknown -> "Multicam support is not known for this setup."
+        is MulticamQualification.Refused -> qualificationCopy(qualification.reason)
     }
 
 sealed interface MemberStatus {
@@ -217,8 +245,12 @@ class MulticamCoordinator(
     // MARK: Adding cameras
 
     fun refusal(record: SavedCameraRecord, reachable: Boolean): String? =
-        multicamRefusal(record, reachable, members.map { it.record.host })
-            ?: MulticamCopy.SESSION_FULL.takeIf { admission(record).isNotEmpty() }
+        when (val reason = admission(record, reachable).firstOrNull()) {
+            null -> null
+            is AdmissionReason.IntegrationRefused -> qualificationCopy(reason.reason)
+            AdmissionReason.QualificationUnknown -> "Multicam support is not known for this setup."
+            else -> MulticamCopy.SESSION_FULL
+        }
 
     fun add(record: SavedCameraRecord, reachable: Boolean, slot: Int? = null): MulticamMember? {
         refusal(record, reachable)?.let {
@@ -394,7 +426,7 @@ class MulticamCoordinator(
         members.mapNotNull { member -> member.control?.let { it.id to (it as com.opencapture.opencine.core.CameraSession) } }
             .toMap()
 
-    private fun admission(record: SavedCameraRecord): List<com.opencapture.opencine.multicam.AdmissionReason> {
+    private fun admission(record: SavedCameraRecord, reachable: Boolean): List<AdmissionReason> {
         // ponytail: only USB interfaces are claimed; the engine-port qualified USB-C, router and
         // hotspot members together. Network conflicts join once a mix is device-tested.
         fun request(entry: MonitorEntryID, record: SavedCameraRecord) =
@@ -410,6 +442,7 @@ class MulticamCoordinator(
             )
         return ResourceAdmission.reasons(
             request(MonitorEntryID(), record),
+            multicamQualification(record, reachable, members.map { it.record.host }),
             members.map { request(it.id, it.record) },
             BUDGET,
         )
@@ -541,9 +574,8 @@ class MulticamCoordinator(
     }
 
     companion object {
-        const val TILES = 4
-
         /** App qualification policy (the engine-port's tested product limit), not an engine constant. */
         val BUDGET = ResourceBudget(qualifiedEntries = 4)
+        val TILES: Int = requireNotNull(BUDGET.qualifiedEntries) { "Multicam requires a finite app qualification budget" }
     }
 }
