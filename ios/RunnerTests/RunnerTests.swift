@@ -2378,10 +2378,11 @@ extension RunnerTests {
 /// The app side of the OpenCineNikon session port: picker routing and the refusal mapping.
 final class NikonSessionPortMappingTests: XCTestCase {
     @MainActor
-    func testOnlyISOAndWhiteBalanceRouteThroughTheSessionSeam() {
+    func testMovieExposureAndWhiteBalanceRouteThroughTheSessionSeam() {
+        let movieControls: [CameraPicker] = [.iso, .whiteBalance, .shutter, .iris]
         for picker in CameraPicker.allCases {
             let setting = picker.nikonControlSetting
-            XCTAssertEqual(setting != nil, picker == .iso || picker == .whiteBalance, "\(picker)")
+            XCTAssertEqual(setting != nil, movieControls.contains(picker), "\(picker)")
             if let setting {
                 XCTAssertEqual(CameraPicker(setting), picker)
                 XCTAssertEqual(picker.cameraControl, setting.cameraControl)
@@ -2399,7 +2400,6 @@ final class NikonSessionPortMappingTests: XCTestCase {
         XCTAssertFalse(NativeCameraSessionError.isCameraRefusal(CancellationError()))
     }
 }
-
 
 /// SIMULATED public-contract control lifetime for the production monitor composition test.
 @MainActor
