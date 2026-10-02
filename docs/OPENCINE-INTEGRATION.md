@@ -275,6 +275,9 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     or a hotspot capture) shows mDNS and TCP SYNs to port 15741 only (presence and liveness), no
     TCP to 15740 and no PTP/IP bytes from the phone. A second phone's live session on the same
     body survives the whole time.
+27. Multicam stage safe area (iOS): on an iPhone 16 Pro, run multicam in both landscapes; the
+    Grid/Center toggle and Exit stay clear of the Dynamic Island and respond to taps, and the
+    camera strip does not run under the island.
 
 ### Device performance baselines (SHELL-04)
 

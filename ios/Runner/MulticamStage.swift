@@ -27,10 +27,12 @@ struct MulticamStage: View {
     @State private var clean = false
     @State private var confirming: RecordPlan?
     @State private var leaving = false
+    @Environment(\.monitorWindowGeometry) private var windowGeometry
 
     var body: some View {
         GeometryReader { proxy in
-            let insets = proxy.safeAreaInsets
+            // The reader ignores the safe area, so its own insets are zero.
+            let insets = windowGeometry.safeArea
             let layout = MultiviewPresentationLayout(
                 width: proxy.size.width, height: proxy.size.height,
                 safeArea: MonitorSafeArea(

@@ -1,4 +1,5 @@
 import AVFAudio
+import MonitorUI
 import Network
 import OpenCineApple
 import OpenCineAppKit
@@ -13575,6 +13576,7 @@ struct NativeAppRoot: View {
         }
         .environment(model)
         .environment(deliveryCoordinator)
+        .observeMonitorWindowGeometry()
         .task {
             try? await Task.sleep(for: LaunchSplashTiming.visibleDuration)
             withAnimation(.easeOut(duration: LaunchSplashTiming.fadeOutDuration)) {
