@@ -314,6 +314,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Your cameras and pairing on the shared OpenCine pages** (iOS + Android): one card per camera
+  with a chip per setup, connect progress, prompts and failures on the card (Try again, Take over
+  a camera another device holds, Share diagnostics), and NEARBY cameras on this network. The
+  pairing wizard and the app's own connects run on the shared pair page instead of a full-screen
+  card. Saved setups, Wi-Fi keys and pairings carry over, and an older build still reads them.
 - **ISO, white balance and record go through one camera session** (iOS + Android), shared with
   the other OpenCine apps. Requested and reported values are kept apart, each write is confirmed
   by reading the camera back, and record is an explicit start or stop that waits for the camera's

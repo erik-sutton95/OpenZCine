@@ -265,7 +265,7 @@ flowchart TD
 - **Screen:** White connection-progress card (same join pipeline as first pair).
 - **Code:** `NativeAppRoot.endInternetHop` → `runCameraWiFiJoin(.specificSSID, .hotspotConfigurationOnly)`.
 - **Detail:** `defer` in runner calls `endInternetHop()` when hop was started (popup or runner).
-  Full rejoin with discovery → auto-reconnect; narrated in `ConnectionProgressSheet`.
+  Full rejoin with discovery → auto-reconnect; narrated on the shared pair page (`NikonConnectFlow`).
 - 📝 Notes:
 
 ### FRAME-09 — Upload summary toast

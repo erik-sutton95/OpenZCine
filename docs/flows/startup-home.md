@@ -59,8 +59,10 @@ flowchart TD
 ### START-02 — First-pair wizard (no saved cameras)
 
 - **Status:** shipped
-- **Screen:** Full-viewport `StartupFirstPairWizardView` — header "Connection setup".
-- **Code:** `LinkExperience.swift` (`shouldShowFirstPairWizard`), `StartupDesign.swift`.
+- **Screen:** `StartupFirstPairWizardView` on OpenCine's shared pair page (SHELL-02): the wizard's
+  steps in the rail, the current step in the pane.
+- **Code:** `LinkExperience.swift` (`shouldShowFirstPairWizard`), `StartupDesign.swift`, OpenCine
+  `PairScreen` + `IntegrationPairingFlow`.
 - **Detail:** `shouldShowFirstPairWizard` is true when `savedCameras.isEmpty` **or**
   `isPairingNewCamera`. Routes to [camera-ap-join.md](./camera-ap-join.md) — not expanded here.
 - 📝 Notes:
@@ -68,13 +70,16 @@ flowchart TD
 ### HOME-01 — Your cameras home
 
 - **Status:** shipped
-- **Screen:** Header "Your cameras"; two-column landscape layout — intro card ("Your cameras.",
-  Pair new camera, Media library, Settings) + scrollable camera list ("Tap a camera to connect").
-- **Code:** `LinkExperience.swift`, `StartupDesign.swift` (`StartupSavedCamerasView`,
-  `StartupHeader`).
-- **Detail:** Shown when `!shouldShowFirstPairWizard && !isConnected`. `startupMode` is
-  `.savedCameras`. Status pill in header reflects discovery (`Looking` / `Ready`). Actions lock
-  while `connection` is `.pairing`, `.reconnecting`, or `.preparingLiveView`.
+- **Screen:** OpenCine's shared cameras page (SHELL-02): "Your cameras", one card per body with a
+  chip per setup, Add setup, rename and forget in the card menu, NEARBY "on this network" (unsaved
+  cameras, broadcasts to watch, the filtered-network notice), Multicam, Media and Settings in the
+  header, "Pair a new camera".
+- **Code:** `LinkExperience.swift`, `NikonCamerasFlow.swift` (`NikonCamerasPage`, `NativeNikonPort`),
+  OpenCine `CamerasScreen` / `CamerasModel` / `NikonIntegration`.
+- **Detail:** Shown when `!shouldShowFirstPairWizard && !isConnected`. Saved setups are OpenCine's
+  saved-camera document (`OpenZCine.Cameras`), mirrored to the app's records
+  (`OpenZCine.PTPIP.SavedCameras`), which the connect funnel keeps writing; every write is merged
+  at once. Discovery for this page is passive (`NikonDiscovery` `.passive`).
 - 📝 Notes:
 
 ### HOME-02 — Hotspot recovery card
@@ -106,8 +111,9 @@ flowchart TD
 ### HOME-04 — Connect saved camera
 
 - **Status:** shipped
-- **Screen:** Row Connect button (filled when Online/Connected, outline when offline/recovery).
-- **Code:** `StartupDesign.swift` (`StartupCameraListRow.connect()`),
+- **Screen:** Card Connect / Reconnect, or a setup chip; the card shows the attempt's steps, its
+  prompts and a typed failure (Try again, Take over, Share diagnostics).
+- **Code:** `NikonCamerasFlow.swift` (`NativeNikonPort.connect`, `runSharedConnect`),
   `NativeAppModel.connectSavedCamera` / `connectToCamera`.
 - **Detail:** `.available(discovered)` passes the live `DiscoveredCamera`; `.offline` connects by
   saved host only. Long-press / ⋯ menu: Rename, Remove (`forgetPairing`). Single-flights
@@ -129,9 +135,9 @@ flowchart TD
 ### HOME-06 — Wi-Fi join if needed
 
 - **Status:** shipped
-- **Screen:** White `ConnectionProgressSheet` card — phase `joiningWiFi`: "Connecting…" / "Tap Join
-  when iOS asks to switch networks."
-- **Code:** `ConnectionProgressSheet.swift`, `NativeAppRoot.performWiFiJoinIfNeeded`,
+- **Screen:** The card's "Joining the camera's Wi-Fi" step ("Tap Join when iOS asks to switch
+  networks."); a join the app starts itself shows on the shared pair page.
+- **Code:** `NikonCamerasFlow.swift` (`NikonConnectFlow`), `NativeAppRoot.performWiFiJoinIfNeeded`,
   `WiFiJoinCoordinator.swift`, core `CameraWiFiJoinPolicy.joinTargetIfNeeded`.
 - **Detail:** Runs inside `connectToCamera` when the phone is off the camera AP subnet and the saved
   record resolves an SSID (keychain password). Skipped when already on the camera AP, transport is
@@ -146,7 +152,7 @@ flowchart TD
 ### HOME-07 — Silent PTP reconnect
 
 - **Status:** shipped
-- **Screen:** Progress sheet phases `handshaking` → `connected` (spinner rows).
+- **Screen:** The card's steps `Connecting` → `Starting live view`.
 - **Code:** `NativeAppRoot.establishStartupSession`, core `CameraStartupPolicy.connectionStrategy`
   (`.savedProfile`), `ConnectionProgress.swift`.
 - **Detail:** Saved host → `requestPairing: false` silent reconnect. Stale saved profile falls back
@@ -158,9 +164,10 @@ flowchart TD
 ### HOME-FAILED-01 — Failure card
 
 - **Status:** shipped
-- **Screen:** White card phase `failed` — pinned `connectionFailureDetail` (discovery loop must not
-  overwrite failure copy). Close / Cancel returns to home; discovery restarts.
-- **Code:** `ConnectionProgressSheet.swift`, `NativeAppRoot.cancelConnectionAttempt`,
+- **Screen:** The card's failure (or the pair page's error box): pinned `connectionFailureDetail`
+  (discovery loop must not overwrite failure copy). Close / Cancel returns to home; discovery restarts.
+- **Code:** `NikonCamerasFlow.swift` (`NativeNikonPort.failure`, `NikonConnectFlow`),
+  `NativeAppRoot.cancelConnectionAttempt`,
   `surfaceCameraWiFiJoinFailure`.
 - **Detail:** Wi‑Fi join errors, discovery timeout after join, PTP handshake failures, and rejected
   initiator all land here. Cancel also disarms `pendingPairedReconnectHost` so background reconnect
@@ -205,8 +212,8 @@ flowchart TD
 
 - **Status:** shipped
 - **Screen:** Wizard replaces home — same surface as START-02.
-- **Code:** `NativeAppModel.startFirstPairWizard()`, intro card button in
-  `StartupSavedCamerasView`.
+- **Code:** `NativeAppModel.startFirstPairWizard()`, "Pair a new camera" on the shared cameras
+  page (a NEARBY camera's Pair opens the shared pair page with it chosen).
 - **Detail:** Stops discovery, sets `isPairingNewCamera = true`, resets wizard to permissions
   (or transport if permissions already granted). Completing pair saves the camera and returns to
   saved-camera mode. See [camera-ap-join.md](./camera-ap-join.md).

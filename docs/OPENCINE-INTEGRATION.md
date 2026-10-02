@@ -15,6 +15,7 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 | MEDIA-02 step 4 (HDMI/UVC capture source from OpenCineApple) | `opencine/apple` (on integration) | see branch |
 | NIKON-01 (shared monitor UI and multicam from OpenCine) | `opencine/nikon-01` (on integration) | see branch |
 | SHELL-04 Nikon (Android session and JNI facade, iOS PTP transports, JPEG leases in OpenCine) | `opencine/shell-04` (on integration) | see branch |
+| SHELL-02 step 9 (cameras and pairing on OpenCine's shared flow, discovery from `NikonDiscovery`) | `opencine/shell-02` (on integration) | see branch |
 
 Shared package: the OpenCine platform repository `../OpenCine` (every shared Swift product and
 Android module), pinned in `opencine-pins.txt` (one line, `OpenCine <sha>`) and fetched in CI by
@@ -105,6 +106,20 @@ and renders to `UIImage` as before, then releases the lease. The CPU fallback, s
 the denoise filter and `MetalLiveView` (still fed a `UIImage`) stay in the app. Android has no
 Kotlin decoded-frame lease yet, so its JPEG path is unchanged.
 
+SHELL-02 step 9: iOS and Android link OpenCine's `OpenCineAppKit` / `:appkit` and run their
+cameras page and pair page on `CamerasModel` with OpenCineNikon's `NikonIntegration`. The app
+implements `NikonConnectPort` over its own discovery loop and connect funnel (iOS
+`NikonCamerasFlow.swift`: `NativeNikonPort`; Android `AppNikonConnectPort` over
+`SavedCameraConnector`), so connect, pairing and save rules are unchanged; the integration types
+failures, maps phases to card steps and asks before taking over a held camera. Discovery is
+OpenCine's `NikonDiscovery` (iOS `PosixNikonDialer`, Android `SocketNikonDialer`): `.passive` for
+the cameras page (Bonjour/NSD, USB, presence and liveness on 15741; never the PTP/IP port),
+`.active` only while pairing or for an armed setup watch. The saved-camera document is stored next
+to the app's records and merged on every launch and after every app write (`NikonSavedRecordsV0`).
+Replaced and deleted: iOS `ConnectionProgressSheet.swift`, the saved-cameras list, rows and editor
+in `StartupDesign.swift`, the app's own discovery service; Android `SavedCamerasExperience.kt`,
+`ConnectionProgressPopup.kt` and the wizard's own frame in `PairingExperience.kt`.
+
 ## What changes for users
 
 - Record confirmation runs the target the operator confirmed. Before this, the app recomputed
@@ -136,6 +151,22 @@ Kotlin decoded-frame lease yet, so its JPEG path is unchanged.
 - Shared monitor UI (NIKON-01): no visible change outside multicam on iOS (simulator screenshots of
   first launch, live view, Operator Setup and media are unchanged). Android takes the shared
   monitor-ui with its iOS-look switch on; only multicam uses it so far.
+
+- Your cameras and pairing (SHELL-02, iOS and Android): the cameras page is OpenCine's shared page.
+  One card per body (iOS groups setups by serial, Android by camera name) with a chip per setup,
+  Add setup, rename and forget; NEARBY lists cameras "on this network" that are not saved, feeds
+  other devices share and the filtered-network notice; Multicam, Media and Settings sit in the
+  header. A connect shows its steps, prompts and a typed failure on the card (Try again, Take
+  over for a camera another device holds, Share diagnostics) instead of the full-screen
+  progress card. The pairing wizard runs on the shared pair page (its steps in the rail, the step
+  in the pane), and a connect the app starts itself (the wizard's, a camera Wi-Fi join, the
+  internet-hop rejoin) shows its progress, the scanned network and key to confirm, a manual
+  address entry and its failure on that page. Saved setups move to OpenCine's saved-camera
+  document (iOS `OpenZCine.Cameras`, Android prefs `openzcine.cameras`/`document`); the app's own
+  records stay where every older build reads them and are kept in step both ways. Wi-Fi keys,
+  the pairing identity and paired-host memory are untouched. Not on the shared cards any more:
+  the camera border color and icon (kept in the records), renaming one setup (names are kept and
+  shown), and the Privacy/Terms links on the startup screens (still in Settings).
 
 ## Physical device checklist
 
@@ -218,6 +249,32 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     rate over Wi-Fi and USB-C match the previous build; denoise on and off; the debug key shows
     `hw 420v` (or the native format) as the decode path; scopes and peaking still read the clean
     frame; stop and start live view and switch cameras ten times with no stale frame flashing up.
+
+21. SHELL-02 cameras page (iOS and Android): connect each saved setup from its chip (camera Wi-Fi,
+    router, hotspot, USB-C); the card shows the steps and a failure with Try again; rename a
+    camera; forget one setup (an access point setup takes its Wi-Fi key with it) and a whole
+    camera; Add setup of each kind (USB-C waits for the plug, router finds the camera on this
+    network, hotspot waits for the camera, camera Wi-Fi joins with the stored key or scans it).
+    Several bodies, and one body over USB-C and router at once, show as one card each.
+22. SHELL-02 pairing on the shared pair page: every wizard path (camera Wi-Fi with the OCR scan and
+    a corrected key, router including the manual address after an empty search, hotspot, USB-C,
+    HDMI on iPad); confirm the PIN on the camera and the access point restart; Cancel and Back at
+    each step; a failure, Try again and Share diagnostics. A NEARBY camera's Pair connects it on the
+    pair page.
+23. SHELL-02 held camera: with a second phone live on a body, the first phone's card and NEARBY row
+    say it is in use; Take over asks first, and the second phone's session ends only after Take
+    over is confirmed.
+24. SHELL-02 Multicam from the cameras page header (2 bodies), and Watch a nearby broadcast.
+25. SHELL-02 upgrade: install the current TestFlight or Play build, save three cameras (one with
+    two setups, one camera Wi-Fi setup with its key, one renamed, one named setup), then install
+    this build: every camera, setup, name and date is there, camera Wi-Fi reconnects with no key
+    prompt and no new PIN. Install the old build again, rename and forget something there, then
+    this build again: the old build's edits show and nothing else is lost.
+26. SHELL-02 passive check: open the cameras page and leave it for 2 min with no connect running.
+    A packet capture of the phone (iOS `rvictl -s <UDID>` plus Wireshark; Android via the router
+    or a hotspot capture) shows mDNS and TCP SYNs to port 15741 only (presence and liveness), no
+    TCP to 15740 and no PTP/IP bytes from the phone. A second phone's live session on the same
+    body survives the whole time.
 
 ### Device performance baselines (SHELL-04)
 

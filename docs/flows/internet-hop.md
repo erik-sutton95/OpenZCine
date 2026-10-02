@@ -207,7 +207,7 @@ flowchart TD
   Removing the hotspot config on hop-out may re-prompt iOS "Wants to Join" on return — expected
   trade-off.
 - **Code:** `NativeAppRoot.swift` (`endInternetHop`, `runCameraWiFiJoin`),
-  `ConnectionProgressSheet.swift`, `WiFiJoinCoordinator.swift`.
+  `NikonCamerasFlow.swift` (`NikonConnectFlow`), `WiFiJoinCoordinator.swift`.
 - 📝 Notes:
 
 ### HOP-06 — Direct reconnect to known host (retried)
@@ -243,7 +243,7 @@ flowchart TD
 - **Screen:** White card failure message (join exhausted or discovery timeout) + **Close**.
 - **Detail:** Operator lands on saved-cameras home with normal **Connect** recovery — no new
   failure surface beyond the connection popup.
-- **Code:** `surfaceCameraWiFiJoinFailure`, `ConnectionProgressSheet.swift`.
+- **Code:** `surfaceCameraWiFiJoinFailure`, `NikonCamerasFlow.swift` (`NikonConnectFlow`).
 - 📝 Notes:
 
 ### LIVE-01 — Back to monitor
