@@ -1,5 +1,11 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.appkit.CamerasModel
+import com.opencapture.opencine.appkit.IntegrationPairingFlow
+import com.opencapture.opencine.appkit.PairScreen
+import com.opencapture.monitorui.MonitorPairingPresentation
+import com.opencapture.monitorui.MonitorPairingStep
+
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -697,6 +703,8 @@ private fun PairingPhase.isBusy(): Boolean =
 @Composable
 public fun PairingExperience(
     environment: PairingEnvironment,
+    camerasModel: CamerasModel,
+    onReportProblem: (() -> Unit)? = null,
     script: PairingScript? = null,
     onPaired: (PairedCamera) -> Unit,
     onPairingProfilePrepared: (SavedCameraRecord) -> Unit = {},
@@ -1398,119 +1406,71 @@ public fun PairingExperience(
         }
 
     Box(Modifier.fillMaxSize().startupBackdrop()) {
-        Column(
-            Modifier.fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(horizontal = 24.dp, vertical = 10.dp)
-        ) {
-            // No Settings entry during first pairing — iOS keeps it on the
-            // saved-cameras home only.
-            StartupHeader(
-                title = stringResource(R.string.pairing_connection_setup),
-                statusTitle = statusTitle,
-                isBusy = true,
-            )
-            Spacer(Modifier.height(12.dp))
-            BoxWithConstraints(Modifier.weight(1f)) {
-                val viewportWidth = maxWidth
-                val twoColumn = viewportWidth >= 640.dp
-                // Three connection choices need enough horizontal room in the
-                // shallow landscape panel to keep every card's title and
-                // tradeoffs visible. Give the active choice step a little of
-                // the intro column's unused width rather than clipping its
-                // scrollable card body behind the navigation edge.
-                val introWidth =
-                    if (flow.step == PairingStep.CHOOSE_PATH) {
-                        148.dp
-                    } else {
-                        maxOf(236.dp, viewportWidth * 0.28f)
-                    }
-                if (twoColumn) {
-                    val compactThreshold =
-                        if (flow.step == PairingStep.CHOOSE_PATH) 500.dp else 400.dp
-                    val compactStep = viewportWidth - introWidth - 16.dp < compactThreshold
-                    val condensedIntro = flow.step == PairingStep.CHOOSE_PATH && !compactStep
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        IntroCard(
-                            flow = flow,
-                            condensed = condensedIntro,
-                            onShowSavedCameras = onShowSavedCameras,
-                            onShareDiagnostics = onShareDiagnostics,
-                            modifier = Modifier.width(introWidth).fillMaxSize(),
-                        )
-                        StepCard(
-                            flow = flow,
-                            permissionGranted = permissionGranted,
-                            permissionDenied = permissionDenied,
-                            cameraRequired = cameraRequired,
-                            cameraPermissionGranted = cameraPermissionGranted,
-                            cameraPermissionDenied = cameraPermissionDenied,
-                            cameras = cameras,
-                            usbCameras = usbCameras,
-                            wifiSearchMiss = wifiSearchMiss,
-                            onRequestPermission = ::requestPairingPermission,
-                            onRequestCameraPermission = ::requestCameraPermission,
-                            onChoose = { path ->
-                                onDiagnosticPhase(diagnosticPhaseForPairingPath(path))
-                                flow = flow.choose(path)
-                            },
-                            onAdvance = { flow = flow.advance() },
-                            onRetreat = ::retreat,
-                            onConnectMyCamera = ::connectMyCamera,
-                            onConnectCamera = { connect(it.host) },
-                            onConnectUsbCamera = ::connectUsb,
-                            hdmiCaptureReady = hdmiCaptureReady,
-                            onStartHdmiMonitor = onStartHdmiMonitor,
-                            onOpenWatcherList = onOpenWatcherList,
-                            compact = compactStep,
-                            tightChrome = true,
-                            modifier = Modifier.weight(1f).fillMaxSize(),
-                        )
-                    }
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        // iOS portrait stacks the first-run hero above the
-                        // progress bar on every step.
-                        PortraitIntroHeader(
-                            flow = flow,
-                            onShowSavedCameras = onShowSavedCameras,
-                            onShareDiagnostics = onShareDiagnostics,
-                        )
-                        StartupWizardProgress(
-                            currentStep = flow.displayStepNumber,
-                            totalSteps = flow.stepCount,
-                        )
-                        StepCard(
-                            flow = flow,
-                            permissionGranted = permissionGranted,
-                            permissionDenied = permissionDenied,
-                            cameraRequired = cameraRequired,
-                            cameraPermissionGranted = cameraPermissionGranted,
-                            cameraPermissionDenied = cameraPermissionDenied,
-                            cameras = cameras,
-                            usbCameras = usbCameras,
-                            wifiSearchMiss = wifiSearchMiss,
-                            onRequestPermission = ::requestPairingPermission,
-                            onRequestCameraPermission = ::requestCameraPermission,
-                            onChoose = { path ->
-                                onDiagnosticPhase(diagnosticPhaseForPairingPath(path))
-                                flow = flow.choose(path)
-                            },
-                            onAdvance = { flow = flow.advance() },
-                            onRetreat = ::retreat,
-                            onConnectMyCamera = ::connectMyCamera,
-                            onConnectCamera = { connect(it.host) },
-                            onConnectUsbCamera = ::connectUsb,
-                            hdmiCaptureReady = hdmiCaptureReady,
-                            onStartHdmiMonitor = onStartHdmiMonitor,
-                            onOpenWatcherList = onOpenWatcherList,
-                            compact = viewportWidth < 480.dp,
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        )
-                    }
-                }
-            }
+        val steps = PairingStep.entries.filter {
+            !(it == PairingStep.PERMISSIONS && flow.skipsPermissions) &&
+                !(it == PairingStep.NETWORK && flow.path == PairingPath.HDMI_CAPTURE) &&
+                !(it == PairingStep.DISCOVER && flow.path == PairingPath.CAMERA_ACCESS_POINT)
         }
+        val primary = when {
+            flow.step == PairingStep.CHOOSE_PATH || flow.isFinalStep && flow.step != PairingStep.NETWORK -> null
+            flow.step == PairingStep.NETWORK -> stringResource(R.string.pairing_connect_my_camera)
+            else -> stringResource(R.string.action_continue)
+        }
+        PairScreen(
+            model = camerasModel,
+            onDone = { onShowSavedCameras?.invoke() ?: onOpenWatcherList?.invoke() },
+            onDiagnostics = { onShareDiagnostics?.invoke() },
+            onReportProblem = { onReportProblem?.invoke() },
+            onWatchFeed = onOpenWatcherList,
+            modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp),
+            pairingFlow = IntegrationPairingFlow(
+                presentation = MonitorPairingPresentation(
+                    steps = steps.map { MonitorPairingStep(stringResource(PairingCopy.stepTitle(it)), "") },
+                    currentStep = flow.displayStepNumber - 1,
+                    title = stringResource(PairingCopy.stepTitle(flow.step)),
+                    body = "", target = "Nikon Z", hint = "",
+                    primaryAction = primary,
+                    primaryActionEnabled = !busy && (flow.step != PairingStep.PERMISSIONS ||
+                        permissionGranted && isCameraPermissionSatisfied(cameraRequired, cameraPermissionGranted)),
+                    backAction = if (flow.canRetreat) stringResource(R.string.action_back) else "Your cameras",
+                ),
+                onPrimary = {
+                    if (flow.step == PairingStep.NETWORK && flow.path == PairingPath.CAMERA_ACCESS_POINT) {
+                        connectMyCamera()
+                    } else {
+                        flow = flow.advance()
+                    }
+                },
+                onBack = {
+                    if (flow.canRetreat) retreat() else onShowSavedCameras?.invoke() ?: onOpenWatcherList?.invoke()
+                },
+                content = {
+                    when (flow.step) {
+                        PairingStep.PERMISSIONS -> PermissionsBody(
+                            nearbyGranted = permissionGranted, nearbyDenied = permissionDenied,
+                            cameraRequired = cameraRequired, cameraGranted = cameraPermissionGranted,
+                            cameraDenied = cameraPermissionDenied,
+                            onRequestNearby = ::requestPairingPermission, onRequestCamera = ::requestCameraPermission,
+                        )
+                        PairingStep.CHOOSE_PATH -> ChoosePathBody(
+                            onChoose = { path ->
+                                onDiagnosticPhase(diagnosticPhaseForPairingPath(path))
+                                flow = flow.choose(path)
+                            },
+                            compact = true, onOpenWatcherList = onOpenWatcherList,
+                        )
+                        PairingStep.PREPARE -> NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
+                        PairingStep.NETWORK -> NetworkBody(path = flow.path)
+                        PairingStep.DISCOVER -> DiscoverBody(
+                            path = flow.path, cameras = cameras, usbCameras = usbCameras,
+                            onConnectCamera = { connect(it.host) }, onConnectUsbCamera = ::connectUsb,
+                            hdmiCaptureReady = hdmiCaptureReady, onStartHdmiMonitor = onStartHdmiMonitor,
+                            wifiSearchMiss = wifiSearchMiss,
+                        )
+                    }
+                },
+            ),
+        )
         val popupPhase =
             when (val active = phase) {
                 PairingPhase.Idle -> null

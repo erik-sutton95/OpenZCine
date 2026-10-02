@@ -29,6 +29,8 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:multicam")).using(project(":multicam"))
         // The Nikon session, its contract and the NikonNative JNI facade (SHELL-04).
         substitute(module("com.opencapture.opencine:nikon")).using(project(":nikon"))
+        // The shared cameras page, connection model and saved-camera document (SHELL-02).
+        substitute(module("com.opencapture.opencine:appkit")).using(project(":appkit"))
     }
 }
 

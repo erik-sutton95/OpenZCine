@@ -633,6 +633,16 @@ internal constructor(private val preferences: SharedPreferences) : SavedCameraSt
         context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE),
     )
 
+    /**
+     * Runs right after every [replace]: the shared saved-camera document merges what this store
+     * wrote at once (`CamerasModel.reloadSaved`), so a later save from the shared page never
+     * patches over it.
+     */
+    public var onReplaced: () -> Unit = {}
+
+    /** The stored records exactly as written (the shared document's legacy source). */
+    public fun recordsJson(): String? = preferences.getString(RECORDS_KEY, null)
+
     override fun records(): List<SavedCameraRecord> {
         val encoded = preferences.getString(RECORDS_KEY, null) ?: return emptyList()
         val array = runCatching { JSONArray(encoded) }.getOrNull() ?: return emptyList()
@@ -666,6 +676,7 @@ internal constructor(private val preferences: SharedPreferences) : SavedCameraSt
             )
         }
         preferences.edit().putString(RECORDS_KEY, encoded.toString()).apply()
+        onReplaced()
     }
 
     private fun parse(value: JSONObject?): SavedCameraRecord? {
@@ -702,7 +713,7 @@ internal constructor(private val preferences: SharedPreferences) : SavedCameraSt
         )
     }
 
-    private companion object {
+    internal companion object {
         const val PREFERENCES_NAME = "openzcine.saved-cameras"
         const val RECORDS_KEY = "records-json"
         const val HOST_KEY = "host"

@@ -299,6 +299,8 @@ dependencies {
     implementation(libs.opencine.multicam)
     // The Nikon session (PTP-IP / USB PTP over the Swift layer), its contract and NikonNative.
     implementation(libs.opencine.nikon)
+    // The shared cameras page, connection model and saved-camera document (SHELL-02).
+    implementation(libs.opencine.appkit)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))

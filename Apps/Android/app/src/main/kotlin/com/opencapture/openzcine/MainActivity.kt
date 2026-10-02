@@ -95,7 +95,32 @@ import com.opencapture.openzcine.pairing.ConnectedNetworkName
 import com.opencapture.openzcine.pairing.SavedCameraRecords
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
-import com.opencapture.openzcine.pairing.SavedCamerasExperience
+import com.opencapture.openzcine.pairing.AppNikonConnectPort
+import com.opencapture.openzcine.pairing.CameraWifiScannerOverlay
+import com.opencapture.openzcine.pairing.FILTER_NOTICE_ID
+import com.opencapture.openzcine.pairing.RELAY_ROW_PREFIX
+import com.opencapture.openzcine.pairing.SavedCameraConnector
+import com.opencapture.openzcine.pairing.isOnCameraAccessPointNetwork
+import com.opencapture.openzcine.pairing.isWifiRadioEnabled
+import com.opencapture.openzcine.pairing.WifiOffPromptDialog
+import androidx.core.content.edit
+import com.opencapture.openzcine.pairing.mayAutoReconnectUsb
+import com.opencapture.openzcine.pairing.nearbyBroadcastItems
+import com.opencapture.openzcine.pairing.nikonIntegrationSlots
+import com.opencapture.openzcine.pairing.removedAccessPointSsids
+import com.opencapture.opencine.appkit.AppIntegration
+import com.opencapture.opencine.appkit.CamerasModel
+import com.opencapture.opencine.appkit.CamerasScreen
+import com.opencapture.opencine.appkit.SavedCamerasStore
+import com.opencapture.opencine.appkit.StoredString
+import com.opencapture.opencine.appkit.stored
+import com.opencapture.opencine.core.ConnectTarget
+import com.opencapture.opencine.core.RecoveryAction
+import com.opencapture.opencine.core.RouteDraft
+import com.opencapture.opencine.core.RouteKind
+import com.opencapture.opencine.core.SavedCamera
+import com.opencapture.opencine.nikon.NikonIntegration
+import com.opencapture.opencine.nikon.NikonSavedRecordsV0
 import com.opencapture.openzcine.multicam.LocalMulticamReturn
 import com.opencapture.openzcine.multicam.MulticamCoordinator
 import com.opencapture.openzcine.multicam.MulticamPickerRow
@@ -584,6 +609,122 @@ class MainActivity : ComponentActivity() {
                     savedCameras = updated
                     savedCameraStore.replace(updated)
                 }
+                // The shared cameras page (SHELL-02): saved setups live in OpenCine's saved-camera
+                // document ("openzcine.cameras"), mirrored to this app's own records, which its
+                // connect, pairing and settings code keeps writing with its own rules; every such
+                // write is merged into the document at once (onReplaced below).
+                val savedCameraConnector =
+                    remember(pairingEnvironment) {
+                        SavedCameraConnector(
+                            pairingEnvironment,
+                            wifiEnabled = { isWifiRadioEnabled(applicationContext) },
+                            onCameraAccessPoint = { isOnCameraAccessPointNetwork(applicationContext) },
+                            scope = connectionScope,
+                        )
+                    }
+                var scanningAccessPointFor by remember { mutableStateOf<SavedCamera?>(null) }
+                var watchOnCameraApNoticeVisible by remember { mutableStateOf(false) }
+                val nikonPort =
+                    remember(savedCameraConnector) {
+                        AppNikonConnectPort(
+                            copy = { id, args -> applicationContext.getString(id, *args) },
+                            connector = savedCameraConnector,
+                            records = { savedCameras },
+                            recordsJson = savedCameraStore::recordsJson,
+                            onPaired = ::acceptPairedCamera,
+                            onForget = { hosts ->
+                                // Forget means every setup at these hosts, each taking its own
+                                // access-point key with it (the app's forget rule).
+                                var remaining = savedCameras
+                                for (record in savedCameras.filter { r -> hosts.any { it.equals(r.host, ignoreCase = true) } }) {
+                                    record.wifiSsid
+                                        ?.takeIf { record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
+                                        ?.let(pairingEnvironment.credentials::remove)
+                                    remaining = SavedCameraRecords.removing(record.host, record.cameraName, remaining)
+                                }
+                                savedCameras = remaining
+                                savedCameraStore.replace(remaining)
+                            },
+                            onExplicitUsbReconnect = { host ->
+                                suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts - host
+                            },
+                            scope = connectionScope,
+                            offersDiagnostics = true,
+                        )
+                    }
+                val camerasModel =
+                    remember(nikonPort) {
+                        val legacyPreferences =
+                            getSharedPreferences(SharedPreferencesSavedCameraStore.PREFERENCES_NAME, MODE_PRIVATE)
+                        // The shared page patched the records (a rename, a forgotten setup): this
+                        // app reads them back, and a removed access-point setup takes its key.
+                        val legacy =
+                            object : StoredString {
+                                override fun read(): String? =
+                                    legacyPreferences.getString(SharedPreferencesSavedCameraStore.RECORDS_KEY, null)
+
+                                override fun write(value: String) {
+                                    legacyPreferences.edit { putString(SharedPreferencesSavedCameraStore.RECORDS_KEY, value) }
+                                    val after = savedCameraStore.records()
+                                    removedAccessPointSsids(savedCameras, after).forEach(pairingEnvironment.credentials::remove)
+                                    savedCameras = after
+                                }
+                            }
+                        CamerasModel(
+                            listOf(
+                                AppIntegration(
+                                    NikonIntegration(nikonPort),
+                                    nikonIntegrationSlots(
+                                        savedCameraConnector,
+                                        { savedCameras },
+                                        pairingEnvironment.credentials,
+                                        onScanAccessPoint = { scanningAccessPointFor = it },
+                                    ),
+                                ),
+                            ),
+                            SavedCamerasStore(
+                                getSharedPreferences("openzcine.cameras", MODE_PRIVATE).stored("document"),
+                                SavedCamerasStore.Legacy(legacy, NikonSavedRecordsV0(), "records"),
+                            ),
+                            connectionScope,
+                        ).also { model -> savedCameraStore.onReplaced = model::reloadSaved }
+                    }
+                // A live session handed back (disconnect, drop): the shared page discovers again.
+                LaunchedEffect(monitorSession == null) {
+                    if (monitorSession == null) camerasModel.sessionEnded()
+                }
+                val camerasState by camerasModel.state.collectAsState()
+                /** The saved camera and route that hold the app record with [profileID]. */
+                fun savedRoute(profileID: String): Pair<SavedCamera, com.opencapture.opencine.core.ConnectionRouteID>? =
+                    camerasState.saved.firstNotNullOfOrNull { camera ->
+                        camera.routes
+                            .firstOrNull { it.extras[NikonSavedRecordsV0.Extra.PROFILE_ID] == profileID }
+                            ?.let { camera to it.id }
+                    }
+                // Link settings leaves the monitor asking for a reconnect of the same setup.
+                LaunchedEffect(requestedReconnectID, camerasState.saved, camerasState.attempts.isEmpty()) {
+                    val requestedID = requestedReconnectID ?: return@LaunchedEffect
+                    if (camerasState.attempts.isNotEmpty() || monitorSession != null) return@LaunchedEffect
+                    requestedReconnectID = null
+                    savedRoute(requestedID)?.let { (camera, route) -> camerasModel.connect(camera, route) }
+                }
+                // One reconnect per real USB attachment of a saved cable setup (the key drops out
+                // on detach, re-arming the next plug-in without retrying a refused body).
+                var attemptedUsbReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
+                val usbCameras by savedCameraConnector.usbCameras.collectAsState()
+                LaunchedEffect(usbCameras, savedCameras, camerasState.attempts.isEmpty(), suppressedUsbAutoReconnectHosts) {
+                    val attached =
+                        usbCameras.filter { it.access == UsbPtpCameraAccess.READY }.mapNotNull { it.hostKey }.toSet()
+                    attemptedUsbReconnectHosts = attemptedUsbReconnectHosts.intersect(attached)
+                    suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts.intersect(attached)
+                    if (camerasState.attempts.isNotEmpty() || monitorSession != null || requestedReconnectID != null) return@LaunchedEffect
+                    val match =
+                        savedCameras.firstOrNull {
+                            mayAutoReconnectUsb(it, attached, attemptedUsbReconnectHosts, suppressedUsbAutoReconnectHosts)
+                        } ?: return@LaunchedEffect
+                    attemptedUsbReconnectHosts = attemptedUsbReconnectHosts + match.host
+                    savedRoute(match.profileID)?.let { (camera, route) -> camerasModel.connect(camera, route) }
+                }
                 // Startup and monitor are both immersive; re-assert whenever
                 // the surface changes so a transient swipe-reveal on one
                 // surface never leaks bars onto the next.
@@ -816,59 +957,59 @@ class MainActivity : ComponentActivity() {
                     }
                     Box(Modifier.fillMaxSize()) {
                         when (startupSurface) {
-                            StartupSurface.SAVED_CAMERAS ->
-                                SavedCamerasExperience(
-                                    cameras = savedCameras,
-                                    environment = pairingEnvironment,
-                                    onMulticam = multicam::begin,
-                                    onPaired = ::acceptPairedCamera,
-                                    onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
-                                    onOpenSettings = { standaloneSettingsPresented = true },
-                                    onOpenMediaLibrary = {
-                                        // iOS openCachedMediaLibrary: every
-                                        // complete on-device cache bucket.
-                                        offlineMediaBuckets =
-                                            completedMediaBuckets.values.toList()
+                            StartupSurface.SAVED_CAMERAS -> {
+                                // In-use beacons (w=0) shield their camera from probes but are not
+                                // joinable; presence answers NSD never delivered join as rows.
+                                val broadcasts =
+                                    mergedNearbyBroadcasts(nearbyBroadcasts, relayPresences, relayDeviceName, presenceRefutedNames)
+                                        .filter { it.isWatchable }
+                                DisposableEffect(nikonPort) {
+                                    nikonPort.pageVisible = true
+                                    onDispose { nikonPort.pageVisible = false }
+                                }
+                                CamerasScreen(
+                                    model = camerasModel,
+                                    brandName = "OpenZCine",
+                                    onPair = { startupSurface = StartupSurface.PAIRING },
+                                    onMedia = {
+                                        // iOS openCachedMediaLibrary: every complete on-device cache bucket.
+                                        offlineMediaBuckets = completedMediaBuckets.values.toList()
                                     },
-                                    requestedReconnectID = requestedReconnectID,
-                                    onReconnectRequestConsumed = { requestedReconnectID = null },
-                                    suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts,
-                                    onUsbAutoReconnectSuppressionCleared = { host ->
-                                        suppressedUsbAutoReconnectHosts =
-                                            suppressedUsbAutoReconnectHosts - host
-                                    },
-                                    onRecordsChanged = { updated ->
-                                        savedCameras = updated
-                                        savedCameraStore.replace(updated)
-                                        if (updated.isEmpty() && !watcherListRequested) {
-                                            startupSurface = StartupSurface.PAIRING
+                                    onSettings = { standaloneSettingsPresented = true },
+                                    modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
+                                    nearbyNote = "on this network",
+                                    onMultiview = multicam::begin,
+                                    onIntegrationAction = { cameraID, action ->
+                                        when (action) {
+                                            AppNikonConnectPort.TAKE_OVER -> {
+                                                val target = camerasState.failures[cameraID]?.target as? ConnectTarget.Saved
+                                                target?.camera?.routes?.firstOrNull { it.id == target.route }
+                                                    ?.extras?.get(NikonSavedRecordsV0.Extra.HOST)
+                                                    ?.let(nikonPort::allowTakeOver)
+                                                camerasModel.perform(RecoveryAction.Retry, cameraID)
+                                            }
+                                            AppNikonConnectPort.DIAGNOSTICS ->
+                                                if (!systemSettingsActions.shareDiagnostics()) {
+                                                    Toast.makeText(
+                                                            this@MainActivity,
+                                                            getString(R.string.system_action_unavailable),
+                                                            Toast.LENGTH_SHORT,
+                                                        )
+                                                        .show()
+                                                }
                                         }
                                     },
-                                    onShareDiagnostics = {
-                                        if (!systemSettingsActions.shareDiagnostics()) {
-                                            Toast.makeText(
-                                                    this@MainActivity,
-                                                    getString(R.string.system_action_unavailable),
-                                                    Toast.LENGTH_SHORT,
-                                                )
-                                                .show()
+                                    extraNearby = nearbyBroadcastItems(broadcasts, networkFiltersDiscovery),
+                                    onExtraNearby = { id ->
+                                        val broadcast =
+                                            broadcasts.firstOrNull { RELAY_ROW_PREFIX + it.name == id } ?: return@CamerasScreen
+                                        // A watcher ON the camera's own AP can see broadcasts but its
+                                        // join cannot reach them (camera APs isolate their clients).
+                                        if (isOnCameraAccessPointNetwork(this@MainActivity)) {
+                                            watchOnCameraApNoticeVisible = true
+                                            return@CamerasScreen
                                         }
-                                    },
-                                    // In-use beacons (w=0) shield their camera from probes but
-                                    // are not joinable — the list never shows them. Presence
-                                    // answers NSD never delivered join as regular rows.
-                                    nearbyBroadcasts =
-                                        mergedNearbyBroadcasts(
-                                                nearbyBroadcasts,
-                                                relayPresences,
-                                                relayDeviceName,
-                                                presenceRefutedNames,
-                                            )
-                                            .filter { it.isWatchable },
-                                    networkFiltersDiscovery = networkFiltersDiscovery,
-                                    onWatchBroadcast = { broadcast ->
-                                        relayBroadcastController.stop(
-                                            notifyReason = "The broadcast ended.")
+                                        relayBroadcastController.stop(notifyReason = "The broadcast ended.")
                                         relayBroadcastEnabled = false
                                         watchController =
                                             com.opencapture.openzcine.relay
@@ -877,22 +1018,51 @@ class MainActivity : ComponentActivity() {
                                                     deviceName = relayDeviceName,
                                                     broadcast = broadcast,
                                                     watcherId =
-                                                        com.opencapture.openzcine.relay
-                                                            .RelayWatcherIdentity
+                                                        com.opencapture.openzcine.relay.RelayWatcherIdentity
                                                             .current(applicationContext),
                                                     onJpegOnlyLatched = persistJpegOnly,
                                                     onPasscodeRemembered = { code ->
-                                                        persistWatcherPasscode(
-                                                            broadcast.name, code
-                                                        )
+                                                        persistWatcherPasscode(broadcast.name, code)
                                                     },
                                                 )
                                                 .also { it.start() }
                                     },
                                 )
+                                // "+ Add setup -> Camera access point" without a stored key: the
+                                // scan reads SSID and key off the camera's own network screen,
+                                // anchored to THIS camera (never a second one).
+                                scanningAccessPointFor?.let { camera ->
+                                    CameraWifiScannerOverlay(
+                                        onConfirmed = { candidate ->
+                                            scanningAccessPointFor = null
+                                            nikonPort.pendingAccessPoint = candidate.ssid to candidate.key
+                                            camerasModel.addRoute(
+                                                RouteDraft(RouteKind.CAMERA_ACCESS_POINT, network = candidate.ssid),
+                                                camera,
+                                            )
+                                        },
+                                        onDismiss = { scanningAccessPointFor = null },
+                                    )
+                                }
+                                if (watchOnCameraApNoticeVisible) {
+                                    WifiOffPromptDialog(
+                                        onDismiss = { watchOnCameraApNoticeVisible = false },
+                                        title = R.string.watch_on_camera_ap_title,
+                                        message = R.string.watch_on_camera_ap_message,
+                                    )
+                                }
+                                // An empty list is not a home unless a watcher asked for it.
+                                LaunchedEffect(savedCameras.isEmpty()) {
+                                    if (savedCameras.isEmpty() && !watcherListRequested) {
+                                        startupSurface = StartupSurface.PAIRING
+                                    }
+                                }
+                            }
                             StartupSurface.PAIRING ->
                                 PairingExperience(
                                     environment = pairingEnvironment,
+                                    camerasModel = camerasModel,
+                                    onReportProblem = { systemSettingsActions.openGitHubBugReport() },
                                     script = pairingScript,
                                     onPaired = ::acceptPairedCamera,
                                     onPairingProfilePrepared = ::persistPairedCameraProfile,
