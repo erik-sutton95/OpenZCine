@@ -627,9 +627,11 @@ public interface SavedCameraStore {
  * of connection policy. It tolerates malformed legacy blobs by dropping only
  * the bad entry, so one corrupt profile cannot block first-run pairing.
  */
-public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraStore {
-    private val preferences: SharedPreferences =
-        context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+public class SharedPreferencesSavedCameraStore
+internal constructor(private val preferences: SharedPreferences) : SavedCameraStore {
+    public constructor(context: Context) : this(
+        context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE),
+    )
 
     override fun records(): List<SavedCameraRecord> {
         val encoded = preferences.getString(RECORDS_KEY, null) ?: return emptyList()
