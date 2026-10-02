@@ -122,7 +122,12 @@ final class MulticamMember: Identifiable {
 final class MulticamCoordinator {
     /// App qualification policy (engine-port's tested product limit), not an engine constant.
     static let budget = ResourceBudget(qualifiedEntries: 4)
-    static let tileCount = 4
+    static var tileCount: Int {
+        guard let count = budget.qualifiedEntries else {
+            preconditionFailure("Multicam requires a finite app qualification budget")
+        }
+        return count
+    }
 
     var isPresented = false
     var arrangement = MultiviewPresentationLayout.Arrangement.centerStage
@@ -185,15 +190,16 @@ final class MulticamCoordinator {
 
     /// Why `record` cannot join now, as operator copy, or `nil` when it may.
     func refusal(for record: PTPIPSavedCameraRecord, reachable: Bool) -> String? {
-        if let reason = NikonMulticamPolicy.refusal(
-            path: record.path, reachable: reachable,
-            isPhotography: false,  // unknown before connect; checked again from the camera
-            device: NikonMulticamPolicy.device(serialNumber: record.serialNumber),
-            members: members.compactMap(\.device))
-        {
-            return MulticamCopy.refusal(reason)
+        guard let reason = admission(record, reachable: reachable).first else { return nil }
+        switch reason {
+        case .integrationRefused(.alreadyMember): return MulticamCopy.alreadyMember
+        case .integrationRefused(.unsupportedConfiguration): return MulticamCopy.cameraWiFi
+        case .integrationRefused(.operationUnavailable):
+            return record.path?.kind == .hdmiCapture ? MulticamCopy.hdmi : MulticamCopy.movieOnly
+        case .integrationRefused(.notReachable): return MulticamCopy.notReachable
+        case .qualificationUnknown: return "Multicam support is not known for this setup."
+        default: return MulticamCopy.sessionFull
         }
-        return admission(record).isEmpty ? nil : MulticamCopy.sessionFull
     }
 
     /// Adds a saved body on `slot` when that tile is empty, else on the first empty tile.
@@ -390,7 +396,7 @@ final class MulticamCoordinator {
         ) { first, _ in first }
     }
 
-    private func admission(_ record: PTPIPSavedCameraRecord) -> [AdmissionReason] {
+    private func admission(_ record: PTPIPSavedCameraRecord, reachable: Bool) -> [AdmissionReason] {
         func request(
             _ entry: MonitorEntryID, _ record: PTPIPSavedCameraRecord, _ device: CameraDeviceID?
         )
@@ -406,6 +412,11 @@ final class MulticamCoordinator {
             admitting: request(
                 MonitorEntryID(), record,
                 NikonMulticamPolicy.device(serialNumber: record.serialNumber)),
+            qualification: NikonMulticamPolicy.qualification(
+                path: record.path, reachable: reachable,
+                isPhotography: nil,  // saved-path admission; mode is checked again after connect
+                device: NikonMulticamPolicy.device(serialNumber: record.serialNumber),
+                members: members.compactMap(\.device)),
             alongside: members.map { request($0.id, $0.record, $0.device) }, budget: Self.budget)
     }
 

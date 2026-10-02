@@ -1008,7 +1008,7 @@ class MainActivity : ComponentActivity() {
                                             .windowInsetsPadding(WindowInsets.safeDrawing)
                                             .padding(start = 18.dp, top = 24.dp, end = 18.dp, bottom = 16.dp),
                                     nearbyNote = "on this network",
-                                    onMultiview = multicam::begin,
+                                    onMultiview = if (MulticamCoordinator.TILES > 1) multicam::begin else null,
                                     onIntegrationAction = { cameraID, action ->
                                         when (action) {
                                             AppNikonConnectPort.TAKE_OVER -> {

@@ -250,7 +250,7 @@ struct NikonCamerasPage: View {
             },
             onMedia: { model.openCachedMediaLibrary() },
             onSettings: { model.openStandaloneSettings() },
-            onMultiview: { model.beginMulticam() },
+            onMultiview: MulticamCoordinator.tileCount > 1 ? { model.beginMulticam() } : nil,
             onIntegrationAction: { cameraID, action in
                 if action == NativeNikonPort.takeOverAction,
                     case .saved(let camera, let routeID) = model.cameras.failures[cameraID]?.target,

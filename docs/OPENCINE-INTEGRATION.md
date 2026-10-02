@@ -6,10 +6,10 @@ hardware-qualified. It combines the OpenCine work packages that apply to the shi
 ## Contents
 
 | Work package | Branch | Tip |
-|---|---|---|
+| --- | --- | --- |
 | CORE-02 (Nikon adapter on OpenCineCore) + CORE-01b update | `opencine/core-02-nikon` | 6bce2301 |
 | STATE-01 (Nikon session ownership) | `opencine/state-01-nikon` (on core-02) | 8de98639 |
-| MEDIA-01 (CubeLUT, FrameRateSampler from OpenCineMedia) | `opencine/media-01` | ba1e340b |
+| MEDIA-01 (CubeLUT, FrameRateSampler from OpenCineMedia) | `opencine/media-01` | `ba1e340b9435e1de9b6f14d355ca3256f4a8e299` |
 | VENDOR-02 (Runner links OpenZCineCore; Nikon code in OpenCineNikon) | `opencine/vendor-02-nikon` (on integration) | see branch |
 | OPTIONAL-01 (Frame.io from OpenCineFrameIO) | `opencine/frameio` (on integration) | see branch |
 | MEDIA-02 step 4 (HDMI/UVC capture source from OpenCineApple) | `opencine/apple` (on integration) | see branch |
@@ -288,6 +288,22 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
 29. SHELL-02 legal links (iOS and Android): Privacy and Terms open the existing policy pages
     from Cameras and Pair, including first-run pairing and pairing a nearby camera. Returning
     to the app leaves the selected pairing step intact.
+
+### Multiview qualification checks (SHELL-01, untested on physical devices)
+
+On iPhone/iPad and Android, fill the four slots using the existing qualified USB-C,
+router and hotspot paths. A fifth camera must be refused. Try a second saved path
+to the same body, a camera access point, an unreachable setup and, on iPad, HDMI:
+their existing refusal messages must remain. Enter movie mode and record only
+after confirming the group plan; leave Multicam while a body records and confirm
+it keeps recording. Passive discovery must remain passive throughout.
+
+The app's `ResourceBudget(qualifiedEntries: 4)` now supplies the tile limit. The
+integration's typed saved-path qualification and resource admission produce one
+admission result. Saved-path qualification before connect does not invent a
+camera mode or serial: reported body identity and recording eligibility still
+apply after connect. USB-C/router/hotspot combinations retain the existing
+qualification policy; this change qualifies no new hardware combination.
 
 ### Device performance baselines (SHELL-04)
 
