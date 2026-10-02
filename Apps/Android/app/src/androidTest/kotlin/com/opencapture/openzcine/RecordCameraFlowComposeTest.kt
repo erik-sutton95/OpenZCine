@@ -47,7 +47,7 @@ class RecordCameraFlowComposeTest {
         // observations must keep common capture disabled rather than invent standby readiness.
         val session = object : CameraSession by body {
             override val cameraProperties =
-                MutableStateFlow(body.cameraProperties.value.copy(captureSelector = "movie"))
+                MutableStateFlow(body.cameraProperties.value.copy(captureSelector = "video"))
             override val reportedCameraProperties = cameraProperties
         }
         runBlocking {
