@@ -875,6 +875,22 @@ enum DemoHarness {
                     onCameraAccessPoint: true, serialNumber: "7005555")
                 model.showSavedCameras()
             }
+            if env["ZC_DEMO_NEARBY"] == "1" {
+                // A camera on this network that is not saved, and one another device holds.
+                model.nikonPort.demoSightings = [
+                    DiscoveredCamera(ip: "192.168.1.44", name: "Z8_4005555", source: .bonjour),
+                    DiscoveredCamera(
+                        ip: "192.168.1.45", name: "Z6_3001234", source: .heldByAnotherDevice,
+                        heldByDeviceName: "Director's iPad"),
+                ]
+                model.nikonPort.found(model.discoveredCameras)
+            }
+            if let outcome = env["ZC_DEMO_CARD"] {
+                // Stages the shared card on the first saved camera without dialling anything:
+                // "connecting" holds it on its steps, "failed" fails it with the funnel's copy.
+                model.nikonPort.demoOutcome = outcome
+                if let camera = model.cameras.saved.first { model.cameras.connect(camera) }
+            }
             if let raw = env["ZC_DEMO_HOTSPOT_CARD"] {
                 // Stages the hotspot-recovery strip on the camera list ("active" / "needed") —
                 // the real prompt derives from saved records plus live hotspot state, so

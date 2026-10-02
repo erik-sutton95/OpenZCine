@@ -45,6 +45,7 @@ typealias NativePairingChallengeHandler = @Sendable (PTPIPPairingChallenge) asyn
 @MainActor
 final class NativeCameraConnectionStore {
     static let shared = NativeCameraConnectionStore()
+    var onSavedCamerasChanged: (() -> Void)?
 
     private let guidKey = "OpenZCine.PTPIP.GUID"
     private let pairedHostsKey = "OpenZCine.PTPIP.PairedHosts"
@@ -144,22 +145,6 @@ final class NativeCameraConnectionStore {
         )
     }
 
-    func updateSavedCameraPresentation(
-        host: String,
-        customName: String?,
-        borderColor: String?,
-        icon: String?
-    ) {
-        let records = PTPIPSavedCameraRecords.updatingPresentation(
-            host: host,
-            customName: customName,
-            borderColor: borderColor,
-            icon: icon,
-            in: savedCameras()
-        )
-        saveSavedCameras(records)
-    }
-
     func updateSavedCameraStreamSettings(
         host: String,
         pathKind: CameraPath.Kind?,
@@ -175,14 +160,6 @@ final class NativeCameraConnectionStore {
                 in: savedCameras()
             )
         )
-    }
-
-    func updateSavedCameraSetupName(
-        host: String, pathKind: CameraPath.Kind?, setupName: String?
-    ) {
-        saveSavedCameras(
-            PTPIPSavedCameraRecords.updatingSetupName(
-                host: host, pathKind: pathKind, setupName: setupName, in: savedCameras()))
     }
 
     func forgetPairing(host: String) {
@@ -266,6 +243,7 @@ final class NativeCameraConnectionStore {
         let canonical = PTPIPSavedCameraRecords.canonicalized(records)
         if let data = try? JSONEncoder().encode(canonical) {
             UserDefaults.standard.set(data, forKey: savedCamerasKey)
+            onSavedCamerasChanged?()
         }
     }
 

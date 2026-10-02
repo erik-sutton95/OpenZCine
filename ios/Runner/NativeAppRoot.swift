@@ -1,6 +1,7 @@
 import AVFAudio
 import Network
 import OpenCineApple
+import OpenCineAppKit
 import OpenCineCore
 import OpenCineFrameIO
 import OpenZCineCore
@@ -813,6 +814,37 @@ final class NativeAppModel {
     }
     /// Phased lifecycle for the connection progress sheet.
     var connectionPhase: CameraConnectionPhase = .idle
+    /// The connect in flight belongs to a shared-flow attempt: its card or pair page shows it.
+    var connectionProgressUsesCard = false
+    /// Why the funnel's last connect failed, for the shared flow's typed failure: the thrown
+    /// error, or a reason the funnel surfaced without one (a camera Wi-Fi join).
+    var lastConnectError: (any Error)?
+    var lastConnectFailureReason: ConnectionFailure.Reason?
+    @ObservationIgnored lazy var nikonPort = NativeNikonPort(model: self)
+    @ObservationIgnored lazy var cameras = makeCamerasModel()
+    /// A NEARBY camera's Pair: the shared pair page with that sighting chosen.
+    var isPairingNearby = false
+    var diagnosticsShareItem: DiagnosticsShareItem?
+    var diagnosticsErrorMessage: String?
+    var isPreparingDiagnostics = false
+
+    /// The app's own connect (the wizard's, a camera-AP join, a setup watch armed here, the
+    /// internet-hop rejoin) is running outside a shared-flow attempt: the pair page shows it.
+    var showsAppConnectProgress: Bool { isConnectionProgressPresented && !connectionProgressUsesCard }
+
+    /// Builds the local diagnostics report for the share sheet.
+    func shareDiagnostics() {
+        guard !isPreparingDiagnostics else { return }
+        isPreparingDiagnostics = true
+        Task {
+            defer { isPreparingDiagnostics = false }
+            do {
+                diagnosticsShareItem = DiagnosticsShareItem(url: try await AppDiagnostics.shared.makeReport())
+            } catch {
+                diagnosticsErrorMessage = error.localizedDescription
+            }
+        }
+    }
     var isConnectionProgressPresented = false
     var connectionProgressDeviceName = ""
     var connectionProgressIsUSB = false
@@ -2844,6 +2876,7 @@ final class NativeAppModel {
 
     private func surfaceCameraWiFiJoinFailure(_ message: String) {
         AppDiagnostics.shared.record(.connectionWifiJoinFailed)
+        lastConnectFailureReason = .joinFailed
         connectionProgressShowsFailure = true
         connectionPhase = .failed
         connectionMessage = message
@@ -3196,21 +3229,6 @@ final class NativeAppModel {
             skipsPermissions: firstPairWizardSkipsPermissions) != nil
     }
 
-    /// Total visible steps for the active wizard session.
-    func firstPairWizardStepCount() -> Int {
-        FirstPairWizardStep.stepCount(
-            transport: firstPairTransportMethod,
-            skipsPermissions: firstPairWizardSkipsPermissions
-        )
-    }
-
-    /// 1-based step index for wizard progress chrome.
-    func firstPairWizardDisplayStepNumber(for step: FirstPairWizardStep) -> Int {
-        step.displayNumber(
-            transport: firstPairTransportMethod,
-            skipsPermissions: firstPairWizardSkipsPermissions)
-    }
-
     /// Seeds the wizard at permissions or the first post-permissions step.
     private func configureFirstPairWizardEntry() {
         let skipPermissions = StartupPermissionsCoordinator.permissionsAlreadySatisfied(
@@ -3314,6 +3332,7 @@ final class NativeAppModel {
     /// Returns to the saved-camera home, clearing any explicit pairing override.
     func showSavedCameras() {
         isPairingNewCamera = false
+        isPairingNearby = false
         // Zero saved cameras is a legitimate place to live once the operator has chosen the
         // list — the wizard's "open the camera list" row is exactly that choice.
         showsCameraListWithoutSavedCameras = true
@@ -3333,14 +3352,6 @@ final class NativeAppModel {
         } else {
             connectToCamera()
         }
-    }
-
-    /// Names ONE setup. Blank clears it back to the generated label.
-    func updateSavedCameraSetupName(setup: PTPIPSavedCameraRecord, name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        NativeCameraConnectionStore.shared.updateSavedCameraSetupName(
-            host: setup.host, pathKind: setup.pathKind, setupName: trimmed.isEmpty ? nil : trimmed)
-        refreshSavedCameras()
     }
 
     func connectSavedCamera(_ camera: PTPIPSavedCameraRecord) {
@@ -3849,6 +3860,7 @@ final class NativeAppModel {
                 // Torn down while establishing — the failure belongs to an attempt the operator
                 // already abandoned; don't overwrite the current connection state or message.
                 guard connectionGeneration == generation else { return }
+                lastConnectError = error
                 let acceptedPairing = acceptedPairingForCurrentAttempt
                 if acceptedPairing {
                     savePendingPairingCamera()
@@ -4072,21 +4084,6 @@ final class NativeAppModel {
         connectionMessage =
             "Removed this camera from OpenZCine. You can pair it again anytime."
         startDiscoveryLoop(resetResults: savedCameras.isEmpty)
-    }
-
-    func updateSavedCameraPresentation(
-        camera: PTPIPSavedCameraRecord,
-        customName: String?,
-        borderColor: String?,
-        icon: String?
-    ) {
-        NativeCameraConnectionStore.shared.updateSavedCameraPresentation(
-            host: camera.host,
-            customName: customName,
-            borderColor: borderColor,
-            icon: icon
-        )
-        refreshSavedCameras()
     }
 
     func acceptPairing() {
@@ -4427,7 +4424,6 @@ final class NativeAppModel {
         startLiveView(session: session)
     }
 
-    private let discoveryService = NativeCameraDiscoveryService()
     private let frameDecoder = FrameDecoder()
     @ObservationIgnored private var frameRendererStorage: LiveFrameRenderer?
     /// Whether the CPU renderer's memo may hold a baked frame — lets the identity/Metal display
@@ -4728,6 +4724,32 @@ final class NativeAppModel {
         }
     }
 
+    func reloadSavedCameraRecords() {
+        let before = savedCameras
+        let after = NativeCameraConnectionStore.shared.savedCameras()
+        let remainingSSIDs = Set(after.filter { $0.pathKind == .cameraAccessPoint }.compactMap { CameraWiFiSSID.resolve(for: $0) })
+        for record in before where record.pathKind == .cameraAccessPoint {
+            if let ssid = CameraWiFiSSID.resolve(for: record), !remainingSSIDs.contains(ssid) {
+                clearCameraWiFiCredential(forForgottenSSID: ssid)
+            }
+        }
+        savedCameras = after
+    }
+
+    var sharedConnection: NikonConnection? {
+        guard isConnected, let controlSession, let connectedIdentity else { return nil }
+        return NikonConnection(session: controlSession, host: connectedIdentity.host, path: activeSessionPath?.kind)
+    }
+
+    /// The shared flow wants sightings again (a session ended, the cameras page shows). Never
+    /// mid-connect: the funnel owns discovery while it dials a camera.
+    func startDiscoveryForSharedFlow() {
+        guard !shouldShowFirstPairWizard || firstPairWizardStep == .discoverAndPair else { return }
+        // Never before the first render either: the USB browser must not start that early.
+        guard didPrepareStartup, !isConnectionProgressPresented, !isEstablishingConnection else { return }
+        startDiscoveryLoop(resetResults: false)
+    }
+
     private func applyStartupDestination() {
         switch CameraStartupPolicy.launchDestination(savedCameras: savedCameras) {
         case .addCamera:
@@ -4753,6 +4775,17 @@ final class NativeAppModel {
     /// camera sitting on the network in plain sight.
     private var discoveryProbesCameras: Bool {
         startupMode == .discovery || pendingSetupIntent != nil
+    }
+
+    /// The discovery mode of the next pass: `.passive` for the camera list (never the PTP/IP
+    /// control port, never a PTP byte; `NikonDiscovery`), `.active` only while pairing or a setup
+    /// watch is armed.
+    var discoveryMode: DiscoveryMode {
+        Self.discoveryMode(probesCameras: discoveryProbesCameras)
+    }
+
+    nonisolated static func discoveryMode(probesCameras: Bool) -> DiscoveryMode {
+        probesCameras ? .active : .passive
     }
 
     /// Exercising ICC camera control makes the OS show its "Using Camera Access to Control
@@ -4841,18 +4874,22 @@ final class NativeAppModel {
         lastInfrastructureMiss = nil
         infrastructureSearchEmptyStreak = 0
         return
-            (try? await discoveryService.discover(
+            (try? await NativeNikonDiscovery.shared.discover(
+                discoveryMode,
                 guid: guid,
                 priorityHosts: discoveryPriorityHosts,
                 excludedHosts: { [weak self] in
-                    self?.hostsServedByVisibleBroadcasts() ?? []
+                    await self?.hostsServedByVisibleBroadcasts() ?? []
                 },
-                probesCameras: discoveryProbesCameras,
                 browsesUSB: discoveryBrowsesUSB,
                 status: { [weak self] message in
-                    self?.connectionMessage = StartupConnectionCopy.friendly(message)
+                    await MainActor.run {
+                        self?.connectionMessage = StartupConnectionCopy.friendly(message)
+                    }
                 },
-                onRelayPresences: { [weak self] hits in self?.applyRelayPresences(hits) }
+                onPresences: { [weak self] hits in
+                    await self?.applyRelayPresences(NativeNikonDiscovery.relayPresences(hits))
+                }
             )) ?? []
     }
 
@@ -5447,6 +5484,7 @@ final class NativeAppModel {
 
     private func applyDiscoveryResults(_ cameras: [DiscoveredCamera]) {
         discoveredCameras = cameras
+        nikonPort.found(cameras)
 
         // After a fresh pairing the camera shows "Pair complete", then drops off and rejoins with
         // its new profile. Reconnect automatically (silently, since it is now saved) — but only
@@ -5584,7 +5622,7 @@ final class NativeAppModel {
             if !isConnected {
                 connection = .scanning
             }
-            if discoveryService.isUSBControlAuthorizationDenied {
+            if USBCameraDeviceBrowser.shared.isControlAuthorizationDenied {
                 connectionMessage =
                     "USB-C camera access is turned off for OpenZCine. Allow camera access in Settings › Privacy & Security, or connect over Wi‑Fi."
             } else {
@@ -5997,7 +6035,7 @@ final class NativeAppModel {
         var dials = 0
         while Date() < deadline, !Task.isCancelled {
             dials += 1
-            if await NativeCameraDiscoveryService.checkHostAlive(host: host) {
+            if await NativeNikonDiscovery.dialer.isAlive(host) {
                 logConnection("post-join: \(host) answered after \(dials) dial(s)")
                 return
             }
@@ -6309,13 +6347,6 @@ final class NativeAppModel {
                 onEstablishmentDiagnostic: onEstablishmentDiagnostic
             )
         }
-    }
-
-    /// Card-scan state for a discovered USB camera (nil for Wi-Fi rows): drives the row's
-    /// "Preparing card… N%" → "Ready" pill so the operator knows when a tap connects instantly.
-    func usbCardScan(for camera: DiscoveredCamera) -> (ready: Bool, percent: Int)? {
-        guard camera.isUSB else { return nil }
-        return USBCameraDeviceBrowser.shared.cardScanProgress(forHostKey: camera.ip)
     }
 
     private func isRejectedInitiator(_ error: Error) -> Bool {

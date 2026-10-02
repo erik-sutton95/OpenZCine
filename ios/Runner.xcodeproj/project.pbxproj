@@ -58,7 +58,6 @@
 		C0DE000000000000000000F7 /* MonitorRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* MonitorRecovery.swift */; };
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
 		C0DE00000000000000000030 /* DesignShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000031 /* DesignShared.swift */; };
-		C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000051 /* ConnectionProgressSheet.swift */; };
 		C0DE00000000000000000056 /* WiFiJoinCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */; };
 		C0DE000000000000000000FD /* CredentialHandoffTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FE /* CredentialHandoffTransport.swift */; };
 		C0DE00000000000000000058 /* CameraWiFiCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */; };
@@ -102,6 +101,9 @@
 		N0100000000000000000000A /* MulticamStage.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000009 /* MulticamStage.swift */; };
 		N0100000000000000000000C /* MulticamLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000B /* MulticamLinks.swift */; };
 		N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000D /* MulticamCoordinatorTests.swift */; };
+		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
+		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
+		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -198,7 +200,6 @@
 		C0DE000000000000000000F8 /* MonitorRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRecovery.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000031 /* DesignShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignShared.swift; sourceTree = "<group>"; };
-		C0DE00000000000000000051 /* ConnectionProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProgressSheet.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiJoinCoordinator.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000FE /* CredentialHandoffTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialHandoffTransport.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStore.swift; sourceTree = "<group>"; };
@@ -240,6 +241,8 @@
 		N01000000000000000000009 /* MulticamStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamStage.swift; sourceTree = "<group>"; };
 		N0100000000000000000000B /* MulticamLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamLinks.swift; sourceTree = "<group>"; };
 		N0100000000000000000000D /* MulticamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinatorTests.swift; sourceTree = "<group>"; };
+		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
+		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -255,6 +258,7 @@
 				APL000000000000000000001 /* OpenCineApple in Frameworks */,
 				N01000000000000000000006 /* OpenCineMulticam in Frameworks */,
 				N01000000000000000000004 /* MonitorUI in Frameworks */,
+				N02000000000000000000004 /* OpenCineAppKit in Frameworks */,
 				N01000000000000000000002 /* MonitorPresentation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -273,6 +277,7 @@
 		331C8082294A63A400263BE5 /* RunnerTests */ = {
 			isa = PBXGroup;
 			children = (
+				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
 				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
@@ -329,6 +334,7 @@
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				DIAG00000000000000000001 /* AppDiagnostics.swift */,
 				C0DE00000000000000000002 /* NativeAppRoot.swift */,
+				N02000000000000000000001 /* NikonCamerasFlow.swift */,
 				C0DE00000000000000000017 /* NativeCameraSession.swift */,
 				C0DE00000000000000000019 /* NativeCameraDiscovery.swift */,
 				INFR00000000000000000001 /* InfrastructureCameraFinder.swift */,
@@ -337,7 +343,6 @@
 				RVID00000000000000000001 /* MonitorRelayVideo.swift */,
 				C0DE00000000000000000025 /* LinkExperience.swift */,
 				C0DE00000000000000000027 /* StartupDesign.swift */,
-				C0DE00000000000000000051 /* ConnectionProgressSheet.swift */,
 				C0DE00000000000000000057 /* WiFiJoinCoordinator.swift */,
 				C0DE000000000000000000FE /* CredentialHandoffTransport.swift */,
 				C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */,
@@ -446,6 +451,7 @@
 				APL000000000000000000002 /* OpenCineApple */,
 				N01000000000000000000005 /* OpenCineMulticam */,
 				N01000000000000000000003 /* MonitorUI */,
+				N02000000000000000000003 /* OpenCineAppKit */,
 				N01000000000000000000001 /* MonitorPresentation */,
 				OZC000000000000000000002 /* OpenZCineCore */,
 			);
@@ -554,6 +560,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
 				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
@@ -584,6 +591,7 @@
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */,
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,
+				N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */,
 				C0DE00000000000000000016 /* NativeCameraSession.swift in Sources */,
 				C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */,
 				UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */,
@@ -591,7 +599,6 @@
 				RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */,
 				C0DE00000000000000000024 /* LinkExperience.swift in Sources */,
 				C0DE00000000000000000026 /* StartupDesign.swift in Sources */,
-				C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */,
 				C0DE00000000000000000028 /* MonitorExperience.swift in Sources */,
 				FTUE00000000000000000002 /* LiveViewOnboarding.swift in Sources */,
 				C0DE0000000000000000002A /* MonitorPanels.swift in Sources */,
@@ -1155,6 +1162,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineMulticam;
+		};
+		N02000000000000000000003 /* OpenCineAppKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineAppKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
