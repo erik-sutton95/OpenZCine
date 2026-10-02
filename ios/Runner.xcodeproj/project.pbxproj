@@ -78,7 +78,6 @@
 		FTUE00000000000000000002 /* LiveViewOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTUE00000000000000000001 /* LiveViewOnboarding.swift */; };
 		LVSP00000000000000000002 /* LiveViewSignposts.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVSP00000000000000000001 /* LiveViewSignposts.swift */; };
 		MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */; };
-		PTPT00000000000000000002 /* PTPIPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTPT00000000000000000001 /* PTPIPTransport.swift */; };
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
 		TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */; };
 		TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000091 /* ConnectionLifecycleTests.swift */; };
@@ -86,7 +85,6 @@
 		TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */; };
 		TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */; };
 		TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */; };
-		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
 		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
 		RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVID00000000000000000001 /* MonitorRelayVideo.swift */; };
 		UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = UVCV00000000000000000001 /* UVCVideoSource.swift */; };
@@ -219,7 +217,6 @@
 		FTUE00000000000000000001 /* LiveViewOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveViewOnboarding.swift; sourceTree = "<group>"; };
 		LVSP00000000000000000001 /* LiveViewSignposts.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveViewSignposts.swift; sourceTree = "<group>"; };
 		MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalFeedFrameBaker.swift; sourceTree = "<group>"; };
-		PTPT00000000000000000001 /* PTPIPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTPIPTransport.swift; sourceTree = "<group>"; };
 		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraEstablishRetryTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000091 /* ConnectionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLifecycleTests.swift; sourceTree = "<group>"; };
@@ -227,7 +224,6 @@
 		TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFeedNoiseFilterWindowTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryEligibilityTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryOverlayStateTests.swift; sourceTree = "<group>"; };
-		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
 		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
 		RVID00000000000000000001 /* MonitorRelayVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayVideo.swift; sourceTree = "<group>"; };
 		UVCV00000000000000000001 /* UVCVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UVCVideoSource.swift; sourceTree = "<group>"; };
@@ -336,8 +332,6 @@
 				C0DE00000000000000000017 /* NativeCameraSession.swift */,
 				C0DE00000000000000000019 /* NativeCameraDiscovery.swift */,
 				INFR00000000000000000001 /* InfrastructureCameraFinder.swift */,
-				PTPT00000000000000000001 /* PTPIPTransport.swift */,
-				USBT00000000000000000001 /* USBCameraTransport.swift */,
 				UVCV00000000000000000001 /* UVCVideoSource.swift */,
 				RLNK00000000000000000001 /* MonitorRelayLink.swift */,
 				RVID00000000000000000001 /* MonitorRelayVideo.swift */,
@@ -592,8 +586,6 @@
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,
 				C0DE00000000000000000016 /* NativeCameraSession.swift in Sources */,
 				C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */,
-				PTPT00000000000000000002 /* PTPIPTransport.swift in Sources */,
-				USBT00000000000000000002 /* USBCameraTransport.swift in Sources */,
 				UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */,
 				RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */,
 				RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */,

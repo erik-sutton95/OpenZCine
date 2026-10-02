@@ -85,6 +85,17 @@ availability, relay lease and relay encoder profile. Release keep rules for the 
 in the module (`consumer-rules.pro`). `stageSwiftCore` also fingerprints
 `Sources/OpenCineNikonAndroid/**`, `Sources/OpenCineJNISupport/**` and `Sources/OpenCineJNI/**`.
 
+SHELL-04 (iOS): the PTP/IP transport (`PTPIPTransport`, BSD sockets, behind
+`#if canImport(Darwin)`) and the USB-C transport (`USBCameraDeviceBrowser`,
+`USBCameraTransport`, `DeviceUSBConnector`, ImageCaptureCore, `#if os(iOS)`) moved from
+`ios/Runner` into OpenCine's `OpenCineNikon` with `NativeCameraSessionError`; the Android build
+compiles them out. The Runner reaches them through `OpenZCineCore` as before. Two app couplings
+became hooks that `AppDelegate` sets at launch: `PTPIPTransport.connectionLog` (the liveness-probe
+line goes to `logConnection`) and `USBCameraDeviceBrowser.shared.onEvent` (USB authorization,
+attach and detach go to the diagnostics journal with the same event names). Their Console
+subsystem is now `OpenCineNikon` (categories `camera-connection` and `camera-usb` unchanged).
+`NativeCameraSession` (session orchestration and the saved-camera store) stays in the app.
+
 ## What changes for users
 
 - Record confirmation runs the target the operator confirmed. Before this, the app recomputed
@@ -189,6 +200,11 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     and reconnect; reconnect after a Wi-Fi drop (attempt N of M, drop storm pause). Install the
     signed release build for this item, since R8 keeps the moved JNI classes only through the
     module's rules.
+19. SHELL-04 iOS transports (no intended behavior change): connect over the camera access point,
+    router Wi-Fi and USB-C (iPhone and iPad); first-time pairing and a saved profile; live view
+    10 min; record; settings writes; media browse; pull the USB-C cable while live (the monitor
+    recovers); deny then grant USB camera access in Settings; a Bug Report after these shows
+    `usb.authorization.*`, `usb.camera.attached` and `usb.camera.detached` events.
 
 ### Device performance baselines (SHELL-04)
 

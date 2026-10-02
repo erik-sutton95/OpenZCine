@@ -47,7 +47,7 @@ produces a privacy-filtered trace instead.
 :::
 
 Implementation lives in `Sources/OpenZCineCore/` (packets, handshake, policies)
-and the platform transports (`ios/Runner/PTPIPTransport.swift`,
-`ios/Runner/USBCameraTransport.swift`, `Sources/OpenZCineAndroidFacade/`).
+and the platform transports (OpenCine `Sources/OpenCineNikon/PTPIPTransport.swift`
+and `USBCameraTransport.swift` for iOS, OpenCine `Sources/OpenCineNikonAndroid/` for Android).
 Platform shells own sockets, permissions and the Wi-Fi join. Body generations
 and per-model differences are in [Nikon Z Devices](../../devices/).

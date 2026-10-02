@@ -208,9 +208,9 @@ the next camera event — because iOS exposes USB PTP only through ImageCaptureC
 runs one full transaction per call. Packet-level control is not available over USB on iOS, so the
 shared abstraction cannot sit any lower.
 
-- `ios/Runner/PTPIPTransport.swift` — Wi-Fi implementation: dual TCP sockets, the PTP-IP
+- OpenCine `Sources/OpenCineNikon/PTPIPTransport.swift`: Wi-Fi implementation, dual TCP sockets, the PTP-IP
   Init_Command/Init_Event handshake, and PTP-IP container framing.
-- `ios/Runner/USBCameraTransport.swift` — USB-C implementation: `ICDeviceBrowser` discovery and
+- OpenCine `Sources/OpenCineNikon/USBCameraTransport.swift` (iOS only): USB-C implementation, `ICDeviceBrowser` discovery and
   authorization, PIMA 15740 generic containers (`PTPUSBContainer` in the core) over
   `requestSendPTPCommand`, and `ptpEventHandler` bridged into the event drain.
 - `NativeCameraSession` keeps orchestration only (open/pair/identify, live view, keep-alive) and
