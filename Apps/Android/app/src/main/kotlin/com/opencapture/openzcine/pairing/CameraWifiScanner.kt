@@ -21,6 +21,7 @@ import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,6 +72,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -1081,3 +1083,43 @@ private tailrec fun Context.findActivity(): Activity? =
         is ContextWrapper -> baseContext.findActivity()
         else -> null
     }
+
+/** The scanner card's light palette (the iOS scanner card's colors). */
+internal object PopupColors {
+    val card = Color.White
+    val title = Color(0xFF111111)
+    val detail = Color(0xFF7A7A80)
+    val field = Color(0xFFF2F2F7)
+    val actionBlue = Color(0xFF0A7AFF)
+    val cancelFill = Color(0xFFEDEDF0)
+    val failure = Color(0xFFFF3B30)
+    val scrim = Color.Black.copy(alpha = 0.45f)
+}
+
+@Composable
+internal fun PopupFilledButton(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth()
+            .height(50.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PopupColors.actionBlue)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+internal fun PopupCancelButton(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth()
+            .height(50.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PopupColors.cancelFill)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = PopupColors.actionBlue, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    }
+}

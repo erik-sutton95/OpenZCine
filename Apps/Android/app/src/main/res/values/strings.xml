@@ -15,9 +15,7 @@
     <string name="action_continue">Continue</string>
     <string name="action_done">Done</string>
     <string name="action_next">Next</string>
-    <string name="action_remove">Remove</string>
     <string name="action_reset">Reset</string>
-    <string name="action_settings">Settings</string>
     <string name="action_try_again">Try again</string>
     <string name="status_allowed">Allowed</string>
     <string name="status_settings">Settings</string>
@@ -51,14 +49,6 @@
     <string name="wifi_scanner_back_to_scan">Back to scan</string>
     <string name="wifi_scanner_core_unavailable">The shared camera core is unavailable. Rebuild OpenZCine before scanning.</string>
     <string name="wifi_scanner_viewfinder_description">Camera viewfinder scanning the Connection wizard</string>
-
-    <!-- Shared startup chrome. -->
-    <string name="startup_wordmark">OPENZCINE</string>
-    <string name="startup_privacy">Privacy</string>
-    <string name="startup_terms">Terms</string>
-    <string name="startup_legal_link_description">Open the OpenZCine %1$s page</string>
-    <string name="startup_setup">Setup</string>
-    <string name="startup_step_progress">Step %1$d of %2$d</string>
 
     <!-- First-run camera pairing. -->
     <string name="pairing_step_permissions">Allow permissions</string>
@@ -161,23 +151,7 @@
     <string name="pairing_wifi_off_settings">Wi‑Fi settings</string>
     <string name="watch_on_camera_ap_title">Leave the camera\'s Wi‑Fi</string>
     <string name="watch_on_camera_ap_message">This phone is on the camera\'s own Wi‑Fi, which doesn\'t pass traffic between devices — the broadcast can\'t reach it here. Switch to your regular Wi‑Fi, then join.</string>
-    <string name="pairing_status_joining">Joining</string>
-    <string name="pairing_status_connecting">Connecting</string>
-    <string name="pairing_status_pairing">Pairing</string>
-    <string name="pairing_status_confirm_on_camera">Confirm on camera</string>
-    <string name="pairing_status_reconnecting">Reconnecting</string>
-    <string name="pairing_status_looking">Looking</string>
-    <string name="pairing_status_ready">Ready</string>
-    <string name="pairing_connection_setup">Connection setup</string>
-    <string name="pairing_first_run">FIRST RUN</string>
-    <string name="pairing_intro_title">Pair your camera.</string>
-    <string name="pairing_intro_compact">Choose the connection path that fits the shoot.</string>
-    <string name="pairing_intro_full">We\'ll walk you through it — your camera is connected in about a minute.</string>
-    <string name="pairing_change_path_later">You can change this path later in Settings.</string>
-    <string name="pairing_share_diagnostics">Share diagnostics</string>
-    <string name="pairing_share_diagnostics_description">Share a local diagnostics report you can review and send for support</string>
     <string name="conn_share_diagnostics">Share diagnostics</string>
-    <string name="pairing_step_counter">STEP %1$d OF %2$d</string>
     <string name="pairing_connect_my_camera">Connect my camera</string>
     <string name="pairing_permission_required">Both are required to connect to your camera — grant them to continue.</string>
     <string name="pairing_on_camera">On camera</string>
@@ -199,7 +173,6 @@
     <string name="conn_scanned_key">Key</string>
     <string name="conn_connecting_title">Connecting…</string>
     <string name="conn_joining_detail">Joining the camera Wi‑Fi… Keep the camera\'s network screen on. Android may show \"Searching for devices…\" — choose the camera network if asked.</string>
-    <string name="conn_searching_title">Searching…</string>
     <string name="conn_searching_detail">Looking for %1$s on your network.</string>
     <string name="conn_handshaking_detail">Establishing a secure link with %1$s.</string>
     <string name="conn_pairing_title">Pairing…</string>
@@ -212,22 +185,8 @@
     <string name="conn_failed_title">Couldn\'t connect</string>
     <string name="conn_failed_detail">Check your network and try again.</string>
 
-    <!-- Saved cameras home (iOS StartupSavedCamerasView). -->
-    <string name="saved_your_cameras">Your cameras</string>
-    <string name="saved_your_cameras_title">Your cameras.</string>
-    <string name="saved_intro_body">Tap a saved camera to reconnect. Recovery help stays on the row that needs it.</string>
-    <string name="saved_pair_new_camera">Pair new camera</string>
-    <string name="saved_media_library">Media Library</string>
-    <string name="saved_camera_list">CAMERA LIST</string>
-    <string name="saved_tap_to_connect">Tap a camera to connect</string>
-    <string name="saved_empty">No saved cameras yet. Pair a camera to make reconnecting faster next time.</string>
-    <string name="saved_pill_online">Online</string>
-    <string name="saved_pill_offline">Offline</string>
-    <string name="saved_usb_subtitle">USB-C · connect cable to wake the session</string>
+    <!-- Saved cameras: the add-setup card and the cameras page rows. -->
     <string name="saved_wifi_subtitle">Wi‑Fi · %1$s · %2$s</string>
-    <string name="saved_path_subtitle">%1$s · %2$s</string>
-    <string name="saved_path_subtitle_ssid">%1$s · %2$s · %3$s</string>
-    <string name="saved_add_setup">Add setup</string>
     <string name="saved_add_setup_title">Add a setup · %1$s</string>
     <string name="saved_add_setup_body">One camera, several ways to reach it. Pick how this rig runs; the setup saves itself the first time you connect that way.</string>
     <string name="saved_setup_ap_title">Camera access point</string>
@@ -244,14 +203,6 @@
     <string name="saved_setup_hotspot_body">Turn on this device\'s hotspot and point a camera network profile at it. The camera joins YOU — once it does, it appears in the list.</string>
     <string name="saved_setup_usb_title">USB-C cable</string>
     <string name="saved_setup_usb_body">Plug the camera straight into this device. It connects and saves itself — nothing to configure.</string>
-    <string name="saved_forget_setup">Forget %1$s setup</string>
-    <string name="saved_rename_setup">Rename this setup</string>
-    <string name="saved_rename_setup_title">Rename setup</string>
-    <string name="saved_rename_setup_body">This one is on %1$s. Name it so you can tell it apart at a glance.</string>
-    <string name="saved_rename_setup_body_plain">Name this setup so you can tell it apart at a glance.</string>
-    <string name="saved_rename_setup_hint">Name</string>
-    <string name="saved_nearby_broadcasts">Nearby broadcasts</string>
-    <string name="saved_nearby_broadcasts_empty">Broadcasts from other devices appear here.</string>
     <string name="saved_network_filters_discovery">This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router.</string>
     <string name="relay_watch">Watch</string>
     <string name="pairing_watcher_question">Watching another device?</string>
@@ -285,18 +236,6 @@
     <string name="sharing_decline">Decline</string>
     <string name="sharing_asks_to_control">%1$s asks to control the camera</string>
     <string name="sharing_share_unavailable">Connect a camera to share its feed.</string>
-    <string name="saved_last_today">last connected today</string>
-    <string name="saved_last_yesterday">last connected yesterday</string>
-    <string name="saved_last_days">last connected %1$dd ago</string>
-    <string name="saved_profile_fallback">saved profile</string>
-    <string name="saved_remove_title">Remove camera?</string>
-    <string name="saved_remove_message">Remove %1$s from saved cameras on this phone.</string>
-    <string name="saved_rename_title">Rename camera</string>
-    <string name="saved_rename_hint">Name</string>
-    <string name="saved_rename_message">Give this camera a name you\'ll recognize.</string>
-    <string name="action_rename">Rename</string>
-    <string name="action_save">Save</string>
-    <string name="saved_more_options">More options</string>
     <string name="pairing_usb_permission">USB-C · allow Android camera access</string>
     <string name="pairing_usb_ready">USB-C · ready to connect</string>
     <string name="pairing_usb_denied">USB-C · access was denied</string>
@@ -1158,9 +1097,6 @@
     <string name="monitor_fps_busy">BUSY</string>
     <string name="monitor_fps_fail">FAIL</string>
     <string name="monitor_waiting_live_view">WAITING FOR LIVE VIEW</string>
-    <string name="saved_pill_waiting_cable">Waiting for cable</string>
-    <string name="saved_pill_watching_network">Watching this network</string>
-    <string name="saved_pill_waiting_hotspot">Waiting for hotspot</string>
     <string name="conn_watch_usb_detail">Connect %1$s with a USB-C cable.</string>
     <string name="conn_watch_hotspot_detail">Turn on Personal Hotspot, then set the camera to join it.</string>
     <string name="a11y_monitor_lock">Lock the interface</string>

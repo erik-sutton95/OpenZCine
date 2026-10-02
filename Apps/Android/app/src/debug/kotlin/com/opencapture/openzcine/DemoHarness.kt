@@ -123,7 +123,7 @@ object DemoHarness {
     const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
 
     /**
-     * Stages the connect popup over the network step (`ready`/`joining`/`failed`),
+     * Stages the connect pane over the network step (`ready`/`joining`/`failed`),
      * mirroring iOS `ZC_DEMO_JOIN_POPUP`: `--es zc.demo.joinPopup ready`.
      */
     const val EXTRA_JOIN_POPUP = "zc.demo.joinPopup"
