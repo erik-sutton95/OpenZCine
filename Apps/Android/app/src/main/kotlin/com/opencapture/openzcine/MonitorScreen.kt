@@ -1295,7 +1295,16 @@ internal fun MonitorScreen(
                         recordConfirmationPending = pendingRecordTarget != null,
                         cameraControlPending = pendingCommandControl != null,
                     )
-                executeWearRecordCommand(safety, recording) { target -> commonControl.record(target) }
+                executeWearRecordCommand(safety, recording) { target ->
+                    val receipt = commonControl.recordAndWait(target)
+                        ?: throw CameraRecordingException.NotConnected
+                    when (receipt.stage) {
+                        com.opencapture.opencine.core.CommandStage.Confirmed -> Unit
+                        is com.opencapture.opencine.core.CommandStage.Rejected,
+                        is com.opencapture.opencine.core.CommandStage.Failed -> throw CameraRecordingException.CommandRejected
+                        else -> throw CameraRecordingException.TransportFailed
+                    }
+                }
             },
         )
     DisposableEffect(wearRelay) {

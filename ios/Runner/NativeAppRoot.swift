@@ -4224,7 +4224,7 @@ final class NativeAppModel {
             return
         }
         let lent = cameraSession
-        let retirement = monitorRuntime?.stopPreview()
+        let retirement = monitorRuntime?.retirePumps()
         // Stops the monitor's loops, keep-alive and polls; unlike `disconnectCameraSession` it
         // sends no CloseSession, so the member keeps its session.
         clearCameraSessionState(resetConnection: false)
@@ -4654,7 +4654,7 @@ final class NativeAppModel {
     /// states the operator has already left. Coalescing by property preserves dependent writes such
     /// as white-balance mode followed by Kelvin temperature.
     private func enqueueCameraWrite(_ pending: PendingCameraWrite) {
-        dropPendingCameraWrites() { $0.write.property == pending.write.property }
+        dropPendingCameraWrites { $0.write.property == pending.write.property }
         pendingCameraWrites.append(pending)
     }
 
@@ -6796,21 +6796,27 @@ final class NativeAppModel {
                 }
             },
             demand: { [weak self] in
-                guard let self else { return NikonPreviewDemand(mode: .covered, size: 0, compression: 0) }
+                guard let self else {
+                    return NikonPreviewDemand(mode: .covered, size: 0, compression: 0)
+                }
                 return NikonPreviewDemand(
-                    mode: videoSource != .cameraLiveView ? .controlOnly
-                        : shouldPauseLiveFeed ? .covered : streamsHeaderOnly ? .headerOnly : .picture,
+                    mode: videoSource != .cameraLiveView
+                        ? .controlOnly
+                        : shouldPauseLiveFeed
+                            ? .covered : streamsHeaderOnly ? .headerOnly : .picture,
                     size: effectiveStreamImageSize,
                     compression: preferences.qualityBias.liveViewImageCompression)
             },
             consume: { [weak self] frame, delivery in
                 guard let self, cameraSession === session else { return false }
-                return await consumeCameraFrame(frame, delivery: delivery, session: session, frameRate: &frameRate)
+                return await consumeCameraFrame(
+                    frame, delivery: delivery, session: session, frameRate: &frameRate)
             },
             safePoint: { [weak self] count, pollEveryCall in
                 guard let self, cameraSession === session else { return }
                 if shouldPauseLiveFeed { publishWatchState() }
-                await runControlSafePoint(session: session, pollEveryCall: pollEveryCall, frameCounter: count)
+                await runControlSafePoint(
+                    session: session, pollEveryCall: pollEveryCall, frameCounter: count)
             },
             applied: { [weak self] demand in
                 self?.lastAppliedStreamImageSize = demand.size
@@ -6827,7 +6833,8 @@ final class NativeAppModel {
                 consecutiveBadLiveFrames = health.badFrames
                 if health.bodyBusy {
                     liveFPS = "BUSY"
-                    connectionMessage = "The camera is busy on the body - the feed resumes automatically."
+                    connectionMessage =
+                        "The camera is busy on the body - the feed resumes automatically."
                 }
             },
             event: { [weak self] event in
@@ -6837,7 +6844,8 @@ final class NativeAppModel {
                     if videoSource == .cameraLiveView { connectionMessage = "Opening live view…" }
                 case .restart(let reason, let delay):
                     AppDiagnostics.shared.record(.liveViewStalled)
-                    connectionMessage = "Live view stalled (\(reason)). Restarting in \(formattedSeconds(delay))…"
+                    connectionMessage =
+                        "Live view stalled (\(reason)). Restarting in \(formattedSeconds(delay))…"
                     liveFPS = "RECOV"
                     isStreamRecovering = true
                     connection = .connected
@@ -7299,7 +7307,9 @@ final class NativeAppModel {
                     handleBodyFiredCapture(session: session)
                 } else if event.eventCode == .movieRecordInterrupted {
                     applyCameraRecordState(isRecording: false, force: true)
-                    let error = event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) } ?? "unknown"
+                    let error =
+                        event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) }
+                        ?? "unknown"
                     connectionMessage = "Recording was interrupted by the camera (error \(error))."
                     await refreshWarningStatus(session: session)
                 } else if let recordState = event.inferredRecordState {
@@ -7499,7 +7509,8 @@ final class NativeAppModel {
         }
         let cleanFrame = await frameDecoder.decode(frame.jpeg)
         let decoded = await displayReadyLiveFrame(from: cleanFrame)
-        guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame else { return false }
+        guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame
+        else { return false }
         let arrival = CACurrentMediaTime()
         frameRate.recordFrame(at: arrival)
         lastGoodFrameAt = Date()
@@ -7518,14 +7529,18 @@ final class NativeAppModel {
             connection = .connected
         } else {
             if relayPeerCount == 0, measuredLiveViewFPS > 0 {
-                relaySoloFPSBaseline = relaySoloFPSBaseline == 0 ? measuredLiveViewFPS
+                relaySoloFPSBaseline =
+                    relaySoloFPSBaseline == 0
+                    ? measuredLiveViewFPS
                     : relaySoloFPSBaseline + 0.05 * (measuredLiveViewFPS - relaySoloFPSBaseline)
             }
             publishLiveFrameDisplay(image: image, focus: frame.focus)
             captureRelayFrameMetadata(frame)
             broadcastRelayFrame(image: cleanFrame)
             let watchEffects = image === cleanFrame ? liveImageEffects : nil
-            watchRelay.ingestFrame(image: image, applying: watchEffects, timecode: frame.timecode, isRecording: frame.isRecording)
+            watchRelay.ingestFrame(
+                image: image, applying: watchEffects, timecode: frame.timecode,
+                isRecording: frame.isRecording)
             sampleScopesIfDue(clean: cleanFrame) { [weak self] in self?.cameraSession === session }
         }
         applyLiveViewHeaderState(frame)
@@ -8326,7 +8341,8 @@ final class NativeAppModel {
     /// Full live-order property + storage + descriptor burst (Android bootstrap parity).
     /// Call once after connect / before the first `StartLiveView`.
     private func bootstrapCameraProperties(session: NativeCameraSession) async {
-        await monitorRuntime?.bootstrapProperties(initial: cameraPropertySnapshot) { [weak self] observation in
+        await monitorRuntime?.bootstrapProperties(initial: cameraPropertySnapshot) {
+            [weak self] observation in
             guard let self, cameraSession === session else { return }
             switch observation {
             case .property(let property, let data):
@@ -12250,7 +12266,9 @@ final class NativeAppModel {
         {
             refreshCommonControlFacts()
             if let commonEditor {
-                guard shell.control.commit(setting, from: commonEditor, label: "\(picker.title) \(value)")
+                guard
+                    shell.control.commit(
+                        setting, from: commonEditor, label: "\(picker.title) \(value)")
                 else { return }
             } else {
                 shell.control.set(setting, label: "\(picker.title) \(value)")
@@ -12414,7 +12432,8 @@ extension NativeAppModel {
                     applyThermalStreamStepDownIfNeeded()
                 } else if let reportedRecording {
                     isRecording = reportedRecording
-                    cameraState = cameraState.updating(recordState: reportedRecording ? .recording : .standby)
+                    cameraState = cameraState.updating(
+                        recordState: reportedRecording ? .recording : .standby)
                 }
             }
             runtime.onClosed = { [weak self, weak runtime] _ in
@@ -12430,11 +12449,18 @@ extension NativeAppModel {
         guard let cameraSession, let controlSession else { return }
         guard shell.monitor?.session.id != controlSession.id else { return }
         cameras.reloadSaved()
-        guard let saved = cameras.saved.first(where: { camera in
-            camera.routes.contains { $0.extras[NikonSavedRecordsV0.Extra.host] == cameraSession.host }
-        }) ?? NikonSavedRecordsV0.cameras(from: savedCameras).first(where: { camera in
-            camera.routes.contains { $0.extras[NikonSavedRecordsV0.Extra.host] == cameraSession.host }
-        }) else { return }
+        guard
+            let saved = cameras.saved.first(where: { camera in
+                camera.routes.contains {
+                    $0.extras[NikonSavedRecordsV0.Extra.host] == cameraSession.host
+                }
+            })
+                ?? NikonSavedRecordsV0.cameras(from: savedCameras).first(where: { camera in
+                    camera.routes.contains {
+                        $0.extras[NikonSavedRecordsV0.Extra.host] == cameraSession.host
+                    }
+                })
+        else { return }
         let camera = ConnectedCamera(saved: saved, session: controlSession)
         if multicam.lentMember != nil {
             shell.borrow(camera) { [weak self] in self?.returnToMulticam() }
