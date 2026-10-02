@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import android.content.SharedPreferences
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -29,6 +30,9 @@ import androidx.compose.ui.unit.sp
 import com.opencapture.monitorui.MonitorConnectFailure
 import com.opencapture.opencine.appkit.CameraItem
 import com.opencapture.opencine.appkit.IntegrationSlots
+import com.opencapture.opencine.appkit.SavedCamerasStore
+import com.opencapture.opencine.appkit.StoredString
+import com.opencapture.opencine.appkit.stored
 import com.opencapture.opencine.core.RouteDraft
 import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.opencine.nikon.NikonNative
@@ -61,6 +65,57 @@ internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCamera
         // the network's name. Every other kind is singular: the access point is the camera's own
         // network, the hotspot is this phone, the cable is the cable.
         .filterNot { it != SavedCameraTransport.INFRASTRUCTURE && saved.contains(it) }
+}
+
+/** The shared saved-camera document's preferences (SHELL-02): `openzcine.cameras` / `document`. */
+internal const val CAMERAS_DOCUMENT_PREFERENCES: String = "openzcine.cameras"
+
+/**
+ * The shared saved-camera document over this app's own records, which stay in
+ * `openzcine.saved-cameras` / `records-json` where every older build reads them (mirrored, merged
+ * on every load). [onRecordsPatched] runs right after the shared page patched the records (a
+ * rename, a forgotten setup) so the app reads them back. Wi-Fi keys are never touched here.
+ */
+internal fun nikonCamerasStore(
+    document: SharedPreferences,
+    records: SharedPreferences,
+    onRecordsPatched: () -> Unit,
+): SavedCamerasStore =
+    SavedCamerasStore(
+        document.stored("document"),
+        SavedCamerasStore.Legacy(
+            object : StoredString {
+                override fun read(): String? = records.getString(SharedPreferencesSavedCameraStore.RECORDS_KEY, null)
+
+                override fun write(value: String) {
+                    records.edit().putString(SharedPreferencesSavedCameraStore.RECORDS_KEY, value).apply()
+                    onRecordsPatched()
+                }
+            },
+            NikonSavedRecordsV0(),
+            "records",
+        ),
+    )
+
+/** The app's records after the shared page patched them; a removed access point setup takes its key. */
+internal fun recordsAfterSharedEdit(
+    before: List<SavedCameraRecord>,
+    store: SavedCameraStore,
+    removeKey: (String) -> Unit,
+): List<SavedCameraRecord> = store.records().also { after -> removedAccessPointSsids(before, after).forEach(removeKey) }
+
+/** The app's forget: every setup at [hosts] goes, each access point setup taking its own key. */
+internal fun recordsForgetting(
+    hosts: List<String>,
+    records: List<SavedCameraRecord>,
+    removeKey: (String) -> Unit,
+): List<SavedCameraRecord> {
+    var remaining = records
+    for (record in records.filter { r -> hosts.any { it.equals(r.host, ignoreCase = true) } }) {
+        record.wifiSsid?.takeIf { record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }?.let(removeKey)
+        remaining = SavedCameraRecords.removing(record.host, record.cameraName, remaining)
+    }
+    return remaining
 }
 
 /** The app records behind a camera of the shared document (its routes name host and transport). */

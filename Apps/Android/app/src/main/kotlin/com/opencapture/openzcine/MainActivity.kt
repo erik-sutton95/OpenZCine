@@ -103,17 +103,16 @@ import com.opencapture.openzcine.pairing.SavedCameraConnector
 import com.opencapture.openzcine.pairing.isOnCameraAccessPointNetwork
 import com.opencapture.openzcine.pairing.isWifiRadioEnabled
 import com.opencapture.openzcine.pairing.WifiOffPromptDialog
-import androidx.core.content.edit
 import com.opencapture.openzcine.pairing.mayAutoReconnectUsb
 import com.opencapture.openzcine.pairing.nearbyBroadcastItems
 import com.opencapture.openzcine.pairing.nikonIntegrationSlots
-import com.opencapture.openzcine.pairing.removedAccessPointSsids
+import com.opencapture.openzcine.pairing.CAMERAS_DOCUMENT_PREFERENCES
+import com.opencapture.openzcine.pairing.nikonCamerasStore
+import com.opencapture.openzcine.pairing.recordsAfterSharedEdit
+import com.opencapture.openzcine.pairing.recordsForgetting
 import com.opencapture.opencine.appkit.AppIntegration
 import com.opencapture.opencine.appkit.CamerasModel
 import com.opencapture.opencine.appkit.CamerasScreen
-import com.opencapture.opencine.appkit.SavedCamerasStore
-import com.opencapture.opencine.appkit.StoredString
-import com.opencapture.opencine.appkit.stored
 import com.opencapture.opencine.core.ConnectTarget
 import com.opencapture.opencine.core.RecoveryAction
 import com.opencapture.opencine.core.RouteDraft
@@ -633,17 +632,8 @@ class MainActivity : ComponentActivity() {
                             recordsJson = savedCameraStore::recordsJson,
                             onPaired = ::acceptPairedCamera,
                             onForget = { hosts ->
-                                // Forget means every setup at these hosts, each taking its own
-                                // access-point key with it (the app's forget rule).
-                                var remaining = savedCameras
-                                for (record in savedCameras.filter { r -> hosts.any { it.equals(r.host, ignoreCase = true) } }) {
-                                    record.wifiSsid
-                                        ?.takeIf { record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
-                                        ?.let(pairingEnvironment.credentials::remove)
-                                    remaining = SavedCameraRecords.removing(record.host, record.cameraName, remaining)
-                                }
-                                savedCameras = remaining
-                                savedCameraStore.replace(remaining)
+                                savedCameras = recordsForgetting(hosts, savedCameras, pairingEnvironment.credentials::remove)
+                                savedCameraStore.replace(savedCameras)
                             },
                             onExplicitUsbReconnect = { host ->
                                 suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts - host
@@ -654,22 +644,6 @@ class MainActivity : ComponentActivity() {
                     }
                 val camerasModel =
                     remember(nikonPort) {
-                        val legacyPreferences =
-                            getSharedPreferences(SharedPreferencesSavedCameraStore.PREFERENCES_NAME, MODE_PRIVATE)
-                        // The shared page patched the records (a rename, a forgotten setup): this
-                        // app reads them back, and a removed access-point setup takes its key.
-                        val legacy =
-                            object : StoredString {
-                                override fun read(): String? =
-                                    legacyPreferences.getString(SharedPreferencesSavedCameraStore.RECORDS_KEY, null)
-
-                                override fun write(value: String) {
-                                    legacyPreferences.edit { putString(SharedPreferencesSavedCameraStore.RECORDS_KEY, value) }
-                                    val after = savedCameraStore.records()
-                                    removedAccessPointSsids(savedCameras, after).forEach(pairingEnvironment.credentials::remove)
-                                    savedCameras = after
-                                }
-                            }
                         CamerasModel(
                             listOf(
                                 AppIntegration(
@@ -682,10 +656,15 @@ class MainActivity : ComponentActivity() {
                                     ),
                                 ),
                             ),
-                            SavedCamerasStore(
-                                getSharedPreferences("openzcine.cameras", MODE_PRIVATE).stored("document"),
-                                SavedCamerasStore.Legacy(legacy, NikonSavedRecordsV0(), "records"),
-                            ),
+                            // The shared page patched the records (a rename, a forgotten setup): this
+                            // app reads them back, and a removed access-point setup takes its key.
+                            nikonCamerasStore(
+                                getSharedPreferences(CAMERAS_DOCUMENT_PREFERENCES, MODE_PRIVATE),
+                                getSharedPreferences(SharedPreferencesSavedCameraStore.PREFERENCES_NAME, MODE_PRIVATE),
+                            ) {
+                                savedCameras =
+                                    recordsAfterSharedEdit(savedCameras, savedCameraStore, pairingEnvironment.credentials::remove)
+                            },
                             connectionScope,
                         ).also { model -> savedCameraStore.onReplaced = model::reloadSaved }
                     }

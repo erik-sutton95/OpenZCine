@@ -1,15 +1,23 @@
 package com.opencapture.openzcine.pairing
 
 import com.opencapture.opencine.core.ConnectionFailure
+import com.opencapture.opencine.core.DiscoveryMode
 import com.opencapture.opencine.core.RecoveryAction
 import com.opencapture.opencine.core.RouteKind
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.FakeCameraSession
+import com.opencapture.opencine.nikon.HostProbeVerdict
+import com.opencapture.opencine.nikon.NikonDialPurpose
+import com.opencapture.opencine.nikon.NikonDialer
+import com.opencapture.opencine.nikon.NikonLocalInterface
+import com.opencapture.opencine.nikon.NikonPresence
 import com.opencapture.opencine.nikon.NikonConnectException
 import com.opencapture.opencine.nikon.NikonConnectRequest
 import com.opencapture.opencine.nikon.NikonSighting
+import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -108,6 +116,39 @@ class AppNikonConnectPortTest {
         )
         runCurrent()
         assertNull(port.phase.value)
+    }
+
+    /** The passive rule (SHELL-02 D8) on the path the cameras page actually runs: port, connector, list discovery. */
+    @Test
+    fun theCamerasPageNeverDialsACameraControlPort() = runTest {
+        val dials = mutableListOf<NikonDialPurpose>()
+        val dialer =
+            object : NikonDialer {
+                override suspend fun presence(host: String): NikonPresence? = null.also { dials += NikonDialPurpose.PRESENCE }
+
+                override suspend fun isAlive(host: String): Boolean = (host == "192.168.1.30").also { dials += NikonDialPurpose.PRESENCE }
+
+                override suspend fun scanControlPort(host: String, timeoutMillis: Int): HostProbeVerdict =
+                    HostProbeVerdict.OPEN.also { dials += NikonDialPurpose.CAMERA_CONTROL }
+            }
+        val connector =
+            SavedCameraConnector(
+                environment(), { true }, { false }, backgroundScope,
+                CameraListDiscovery(dialer, { listOf(NikonLocalInterface("wlan0", "192.168.1.42")) }),
+            )
+        val port =
+            AppNikonConnectPort(
+                { id, _ -> "$id" }, connector, { listOf(studio, ap) }, { null }, onPaired = {}, onForget = {},
+                onExplicitUsbReconnect = {}, scope = backgroundScope, offersDiagnostics = false,
+            )
+        port.pageVisible = true
+        port.startDiscovery(DiscoveryMode.PASSIVE)
+        advanceTimeBy(25_000)
+        runCurrent()
+
+        assertTrue(dials.isNotEmpty(), "the page did look")
+        assertTrue(NikonDialPurpose.CAMERA_CONTROL !in dials, "the cameras page never reaches a camera's control port")
+        assertEquals(setOf("192.168.1.30"), connector.aliveHosts.value)
     }
 
     @Test
