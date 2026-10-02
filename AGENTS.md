@@ -41,6 +41,12 @@ Install local tooling with `just setup` (macOS / Homebrew).
   `Sources/OpenZCineCore/CubeLUT.swift`; the Runner project links the product). `OpenCineApple`
   supplies the iPad HDMI/UVC capture source (`UVCVideoSource`, leases); the Runner links it and keeps
   the state copy and the `UIImage` render in `ios/Runner/UVCVideoSource.swift`.
+- Shared monitor UI and multicam (NIKON-01), also from `../OpenCine`: the Runner links `MonitorUI`,
+  `MonitorPresentation` and `OpenCineMulticam`; Android depends on `monitor-ui` and `multicam` from
+  the included OpenCine build. Never copy these into the app: change them in OpenCine (keep the
+  SwiftUI and Compose sides in step) and bump the pin. Multicam app code: `ios/Runner/Multicam*.swift`
+  and `Apps/Android/app/.../multicam/`; Nikon member policy lives in OpenCineNikon
+  (`NikonMulticam.swift`).
 - `Tests/OpenZCineCoreTests/` — Swift shared-core tests.
 - `ios/Runner/` — production SwiftUI iOS app shell.
 - `Apps/Android/` — production Jetpack Compose app, platform adapters, and Wear OS companion.
