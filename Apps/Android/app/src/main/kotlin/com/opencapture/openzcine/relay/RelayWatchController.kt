@@ -4,6 +4,7 @@ import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlException
 import com.opencapture.opencine.nikon.CameraFocusPoint
 import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -403,6 +404,8 @@ class RelayCameraSession(private val controller: RelayWatchController) : CameraS
     override val state: StateFlow<CameraSessionState> = mutableState.asStateFlow()
 
     private val mutableRecording = MutableStateFlow(CameraRecordingState.STANDBY)
+    private val mutableReportedRecording = MutableStateFlow<Boolean?>(null)
+    override val reportedRecording: StateFlow<Boolean?> = mutableReportedRecording.asStateFlow()
     override val recordingState: StateFlow<CameraRecordingState> = mutableRecording.asStateFlow()
 
     internal fun adopt(displayName: String) {
@@ -413,11 +416,13 @@ class RelayCameraSession(private val controller: RelayWatchController) : CameraS
     }
 
     internal fun applyState(state: MonitorRelayWire.State) {
+        mutableReportedRecording.value = state.isRecording
         mutableRecording.value =
             if (state.isRecording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
     }
 
     internal fun close() {
+        mutableReportedRecording.value = null
         mutableState.value = CameraSessionState.Disconnected
     }
 
@@ -430,6 +435,11 @@ class RelayCameraSession(private val controller: RelayWatchController) : CameraS
     }
 
     override suspend fun setRecording(recording: Boolean) {
+        // The legacy wire has only a toggle. Unknown cannot resolve an explicit target, and
+        // a retry of an already reported target must never invert the host's take.
+        val reported = mutableReportedRecording.value ?: throw CameraRecordingException.Unsupported
+        if (reported == recording) return
+        if (!controller.ui.value.holdsControl) throw CameraRecordingException.CommandRejected
         controller.sendCommand(MonitorRelayWire.Command.ToggleRecording)
     }
 

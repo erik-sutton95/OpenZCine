@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenZCineCore
 import os
 
 /// Container format for baked media exports.

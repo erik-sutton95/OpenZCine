@@ -2,6 +2,10 @@ package com.opencapture.openzcine
 
 import android.content.ContentValues
 import android.content.Context
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Environment
@@ -268,9 +272,14 @@ class FocusFeedComposeTest {
                 context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE),
             ).also { it.hapticsEnabled.value = false }
         composeRule.setContent {
+            val scope = rememberCoroutineScope()
+            val common = remember(session) { NikonOpenCineSession(session, scope) }
+            val control = remember(common) { MonitorControlModel(scope).also { it.bind(common) } }
             OpenZCineTheme {
                 MonitorScreen(
                     session = session,
+                    commonSession = common,
+                    commonControl = control,
                     frameSource = source,
                     assist = AssistState(FeedEffects.NONE, null),
                     operatorSettings = settings,

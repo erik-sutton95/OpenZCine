@@ -4,7 +4,6 @@ import UIKit
 
 /// A real member link: the same PTP session type the single-camera monitor runs.
 extension NativeCameraSession: MulticamMemberLink {
-    var serialNumber: String { identity.serialNumber }
     func configureMemberLiveView() async { await configureLiveView() }
 }
 
