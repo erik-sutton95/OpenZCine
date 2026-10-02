@@ -126,8 +126,23 @@ keepalive and pushed-event readers. Saved namespaces, credentials and joining re
 Both shells reuse one common session through connection and monitor, with ShellModel navigation
 and MonitorControlModel pending edits/terminal receipts. Borrowed members drain their readers
 before returning without CloseSession, EndLiveView or stop-record. HDMI picture remains separately
-owned. The native single-camera monitor is still a temporary slot; shared monitor, settings and
-media screen composition remain the later Z-1/Z-2/Z-3 slices. Physical behavior is untested.
+owned. Physical behavior is untested.
+
+SHELL-03 Z-1: both native shells now compose the actual shared AppKit MonitorScreen,
+MonitorStatusChrome, MonitorSystemControls and shared capture readouts, drums and record button.
+The former common portrait/landscape monitor assembly and whole command monitor are removed.
+Picture and acquisition have separate lifetimes: DISP command mode releases preview demand while
+keeping the native host mounted; Settings/Media covers and control loss also keep that host.
+Movie shutter/aperture join ISO/WB through camera-reported common descriptors. Stills press/release,
+MF drive, shutter TV-lock, codec/focus mode tabs, scopes and native assist renderers remain bounded
+Nikon adapters. Relay/demo record binding and generic native runtime are explicit Z-3 followups;
+Operator Setup and media workflow ownership remain Z-2 until their shared screens land.
+
+The shared layout changes the visible viewport and chrome placement. Persisted FIT/FILL meanings
+and preference keys stay intact; pinch magnifies the chosen picture without changing FIT/FILL.
+Installed SIMULATED host tests cover rotation, DISP and front covers. A hosted iOS composition
+also covers owned close once, borrowed return without close, and held HDMI through control loss.
+These checks do not qualify physical Nikon/HDMI behavior.
 
 ## What changes for users
 
