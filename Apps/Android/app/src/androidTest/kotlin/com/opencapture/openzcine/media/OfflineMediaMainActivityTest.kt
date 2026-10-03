@@ -11,10 +11,9 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
-import androidx.test.uiautomator.UiScrollable
-import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.pairing.SavedCameraRecord
@@ -124,11 +123,7 @@ class OfflineMediaMainActivityTest {
         assertNotNull(device.waitForCamerasAction("Media library"))
         device.waitForCamerasAction("Settings").click()
         device.waitForText("Operator Setup")
-        val tabs = UiScrollable(UiSelector().scrollable(true)).setAsHorizontalList()
-        check(tabs.scrollIntoView(UiSelector().description("Storage"))) {
-            "The actual settings rail did not reveal Storage"
-        }
-        device.waitForDescription("Storage").click()
+        device.revealSettingsTab("Storage").click()
         device.waitForText("Clear").click()
         assertNotNull(
             device.wait(
@@ -193,6 +188,29 @@ class OfflineMediaMainActivityTest {
     private fun UiDevice.waitForText(text: String): UiObject2 =
         wait(Until.findObject(By.text(text)), UI_TIMEOUT_MILLIS)
             ?: throw AssertionError("Timed out waiting for text: $text")
+
+    private fun UiDevice.revealSettingsTab(description: String): UiObject2 {
+        repeat(8) {
+            findObject(By.desc(description))?.let { tab ->
+                val observedBounds = tab.visibleBounds
+                waitForIdle()
+                findObject(By.desc(description))?.let { current ->
+                    if (current.visibleBounds == observedBounds) return current
+                }
+            }
+            val rail = wait(
+                Until.findObject(By.clazz("android.widget.HorizontalScrollView").scrollable(true)),
+                UI_TIMEOUT_MILLIS,
+            ) ?: throw AssertionError("The native settings tab rail is missing")
+            val bounds = rail.visibleBounds
+            val inset = bounds.width() / 10
+            rail.setGestureMargins(inset, 0, inset, 0)
+            // Native scroll holds before releasing its swipe, avoiding residual fling.
+            rail.scroll(Direction.RIGHT, 0.8f, 600)
+            waitForIdle()
+        }
+        return waitForDescription(description)
+    }
 
     private fun UiDevice.waitForCamerasAction(description: String): UiObject2 {
         waitForDescription(description)
