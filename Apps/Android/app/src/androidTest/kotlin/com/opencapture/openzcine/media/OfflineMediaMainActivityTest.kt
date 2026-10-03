@@ -105,7 +105,7 @@ class OfflineMediaMainActivityTest {
             )
 
         // The shared cameras header opens the same offline library without a session.
-        val entry = device.waitForDescription("Media library")
+        val entry = device.waitForCamerasAction("Media library")
         saveDeviceScreenshot("openzcine-android-offline-media-startup.png")
         entry.click()
 
@@ -121,8 +121,9 @@ class OfflineMediaMainActivityTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
 
-        assertNotNull(device.waitForDescription("Media library"))
-        device.waitForDescription("Settings").click()
+        assertNotNull(device.waitForCamerasAction("Media library"))
+        device.waitForCamerasAction("Settings").click()
+        device.waitForText("Operator Setup")
         val tabs = UiScrollable(UiSelector().scrollable(true)).setAsHorizontalList()
         check(tabs.scrollIntoView(UiSelector().description("Storage"))) {
             "The actual settings rail did not reveal Storage"
@@ -139,7 +140,7 @@ class OfflineMediaMainActivityTest {
         device.pressBack()
         // The common cameras header keeps the entry point after clearing the cache.
         // Empty caches open an empty offline library.
-        assertNotNull(device.waitForDescription("Media library"))
+        assertNotNull(device.waitForCamerasAction("Media library"))
     }
 
     @Test
@@ -151,7 +152,7 @@ class OfflineMediaMainActivityTest {
                 Intent(context, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
-            device.waitForDescription("Media library").click()
+            device.waitForCamerasAction("Media library").click()
             device.setOrientationLeft()
             device.waitForDescription("Show Photos media").click()
             device.waitForIdle()
@@ -180,7 +181,7 @@ class OfflineMediaMainActivityTest {
                 Intent(context, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
-            device.waitForDescription("Media library").click()
+            device.waitForCamerasAction("Media library").click()
             assertNotNull(device.waitForText(CACHED_FILENAME))
             assertEquals(retained, index.viewOptions(MediaLibrarySource.LOCAL))
         } finally {
@@ -192,6 +193,15 @@ class OfflineMediaMainActivityTest {
     private fun UiDevice.waitForText(text: String): UiObject2 =
         wait(Until.findObject(By.text(text)), UI_TIMEOUT_MILLIS)
             ?: throw AssertionError("Timed out waiting for text: $text")
+
+    private fun UiDevice.waitForCamerasAction(description: String): UiObject2 {
+        waitForDescription(description)
+        check(wait(Until.gone(By.desc("OpenZCine")), UI_TIMEOUT_MILLIS)) {
+            "The native startup splash still covers the cameras header"
+        }
+        waitForIdle()
+        return waitForDescription(description)
+    }
 
     private fun UiDevice.waitForDescription(description: String): UiObject2 =
         wait(Until.findObject(By.desc(description)), UI_TIMEOUT_MILLIS)
