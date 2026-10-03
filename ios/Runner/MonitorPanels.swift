@@ -3851,7 +3851,10 @@ struct OperatorSettingsPanel: View {
         MonitorSettingsGroupCard(
             title: "DISP Button Order",
             caption: "Drag to reorder; tap to enable or disable modes.",
-            onReset: { model.resetDispPreferences() },
+            onReset: {
+                settingsFeedback()
+                model.resetDispPreferences()
+            },
             content: {
                 DisplayOrderStrip()
                     .environment(model)
@@ -3875,7 +3878,10 @@ struct OperatorSettingsPanel: View {
         MonitorSettingsGroupCard(
             title: "DISP \(dispNumber(mode)) · \(mode.title)",
             caption: dispCaption(mode),
-            onReset: { model.resetChromeVisibility(for: mode, capture: capture) },
+            onReset: {
+                settingsFeedback()
+                model.resetChromeVisibility(for: mode, capture: capture)
+            },
             expansion: Binding(
                 get: { expandedDispSection == mode },
                 set: { expandedDispSection = $0 ? mode : nil }),
