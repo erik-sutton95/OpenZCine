@@ -136,13 +136,20 @@ keeping the native host mounted; Settings/Media covers and control loss also kee
 Movie shutter/aperture join ISO/WB through camera-reported common descriptors. Stills press/release,
 MF drive, shutter TV-lock, codec/focus mode tabs, scopes and native assist renderers remain bounded
 Nikon adapters. Relay/demo record binding and generic native runtime are explicit Z-3 followups;
-Operator Setup and media workflow ownership remain Z-2 until their shared screens land.
+Operator Setup uses the shared page and migrated typed settings sections. Media uses shared
+catalog controls, filter form and native selection; its cell rendering, catalog/cache, playback
+and delivery owners still require Z-2 adoption.
 
 The shared layout changes the visible viewport and chrome placement. Persisted FIT/FILL meanings
 and preference keys stay intact; pinch magnifies the chosen picture without changing FIT/FILL.
 Installed SIMULATED host tests cover rotation, DISP and front covers. A hosted iOS composition
 also covers owned close once, borrowed return without close, and held HDMI through control loss.
 These checks do not qualify physical Nikon/HDMI behavior.
+
+SHELL-03 Z-2 conform candidate: `OpenCineMedia.MonitorConformPreview` owns preview math and
+labels; `OpenZCineCore.ConformPreview` is a public compatibility alias. Android delegates
+availability and finite-rate math to the same media module, retaining its nullable/nonfinite
+speed adapter. Nikon's asset metadata probe and playback/audio lifecycle remain app-owned.
 
 ## What changes for users
 
