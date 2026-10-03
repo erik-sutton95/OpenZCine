@@ -221,8 +221,7 @@ struct MediaBrowserView: View {
     @State private var isSelecting = false
     @State private var selectedClipIDs: Set<String> = []
     @State private var isBatchDeleteConfirmPresented = false
-    /// Realised grid cells' frames in ``MediaGridSpace`` — the sweep-select hit-test registry.
-    @State private var cellFrames: [String: CGRect] = [:]
+    @State private var selectionState = MonitorMediaSelectionState()
     /// Set by the post-hop share resume: the player opens with its share popup already on this
     /// destination. Cleared when the player dismisses.
     @State private var resumeShareDestination: MediaDeliveryDestination?
@@ -678,14 +677,13 @@ struct MediaBrowserView: View {
                             onToggleFavorite: { model.toggleClipFavorite(clip) }
                         )
                         .environment(model)
+                        .background(MonitorMediaSelectionAnchor(id: clip.id, state: selectionState))
                     }
                 }
                 .padding(.bottom, 24)
+                .background(selectionHost)
             }
         } else {
-            // PLAIN ScrollView on purpose: a `.scrollPosition`-tracked host re-rendered the grid
-            // every frame mid-gesture. Sweep edge auto-scroll instead drives `contentOffset`
-            // directly via `MediaSweepSelectGesture` (UIKit recogniser + CADisplayLink).
             ScrollView { gridCells }
         }
     }
@@ -710,41 +708,34 @@ struct MediaBrowserView: View {
                     onToggleSelection: { toggleSelection(clip) },
                     onToggleFavorite: { model.toggleClipFavorite(clip) }
                 )
-                .background(
-                    GeometryReader { geo in
-                        // Emit only while selecting: during plain browsing each lazily-realised
-                        // cell would churn the preference tree. Cells re-render when `isSelecting`
-                        // flips, so entering selection re-emits every frame.
-                        Color.clear.preference(
-                            key: MediaCellFramesKey.self,
-                            value: isSelecting
-                                ? [clip.id: geo.frame(in: .named(MediaGridSpace.name))] : [:]
-                        )
-                    }
-                )
+                .background(MonitorMediaSelectionAnchor(id: clip.id, state: selectionState))
             }
         }
         .padding(.bottom, 24)
-        // Named space on the grid CONTENT, not the ScrollView: content-space cell frames are
-        // static while scrolling, so the preference only fires on real layout changes — measuring
-        // in scroll space re-rendered the whole browser every scrolled frame.
-        .coordinateSpace(name: MediaGridSpace.name)
-        // Photos-style sweep multi-select with edge auto-scroll; see `MediaSweepSelectGesture`.
-        // Inert outside selection mode.
-        .background(
-            MediaSweepSelectGesture(
-                orderedIDs: displayedClips.map(\.id),
-                cellFrames: cellFrames,
-                isActive: isSelecting,
-                selectedIDs: $selectedClipIDs
-            )
+        .background(selectionHost)
+    }
+
+    private var selectionHost: some View {
+        MonitorMediaSelectionHost(
+            state: selectionState,
+            ids: displayedClips.map(\.id), selected: selectedClipIDs,
+            selecting: isSelecting,
+            context: [
+                model.mediaBrowserSource.rawValue, model.mediaBrowserLayout.rawValue,
+                model.mediaCategoryTab.rawValue,
+                model.shell.control.session?.id.description ?? "no-active-session",
+            ].joined(separator: "/"),
+            configuration: MonitorMediaSelectionConfiguration(
+                holdMilliseconds: 180, movementTolerance: 40,
+                allowsSelectionEntry: false, sweepsSideways: false,
+                edgeBand: 90, maximumEdgeSpeed: 620, edgeCurve: .linear,
+                viewportEdgeLimitRatio: nil, roundsScrollSteps: true),
+            feedback: { event in
+                if event == .began { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+                UISelectionFeedbackGenerator().selectionChanged()
+            },
+            publish: { selectedClipIDs = $0 }
         )
-        // Track cell frames only while selecting: otherwise each lazy cell realisation would
-        // write state and re-render the browser mid-scroll. Entering selection mode re-renders
-        // the cells, which re-emits the preference and fills the registry on the spot.
-        .onPreferenceChange(MediaCellFramesKey.self) { frames in
-            if isSelecting { cellFrames = frames }
-        }
     }
 
     /// Authoritative re-enumeration on demand (#296): the camera's inventory is the truth, and
@@ -1291,241 +1282,6 @@ private struct MediaClipListRow: View {
     }
 }
 
-/// Named coordinate space for the media grid — cell frames and sweep-drag locations must share
-/// one space for hit-testing.
-enum MediaGridSpace {
-    static let name = "mediaGrid"
-}
-
-extension UIView {
-    /// Nearest ancestor `UIScrollView` (the one SwiftUI creates for the enclosing `ScrollView`).
-    fileprivate var mediaEnclosingScrollView: UIScrollView? {
-        var candidate = superview
-        while let view = candidate {
-            if let scrollView = view as? UIScrollView { return scrollView }
-            candidate = view.superview
-        }
-        return nil
-    }
-}
-
-/// Photos-style one-finger sweep multi-select with edge auto-scroll. iOS 17 has no
-/// `UIGestureRecognizerRepresentable`, so a zero-size `UIViewRepresentable` probe walks up to the
-/// enclosing `UIScrollView` and attaches a short-press `UILongPressGestureRecognizer`:
-///
-/// - The hold disambiguates sweep from scroll — a quick drag never trips it, so scrolling stays
-///   native; only a deliberate press-then-drag arms selection.
-/// - `.began` locks scrolling and anchors on the pressed cell, whose state fixes the paint mode.
-/// - `.changed` range-paints `[anchor…current]` over the pre-sweep snapshot, so dragging back
-///   un-paints.
-/// - A `CADisplayLink` auto-scrolls in the top/bottom edge band (speed ramps with depth),
-///   re-hit-testing the finger each frame; rounded offset steps avoid sub-pixel shimmer.
-/// - Every terminal state restores scrolling and stops the loop.
-///
-/// Enabled only in selection mode — completely inert during plain browse.
-private struct MediaSweepSelectGesture: UIViewRepresentable {
-    /// Clip ids in display order — the range paint works on indices, not geometry.
-    let orderedIDs: [String]
-    /// Cell hit-test registry (``MediaGridSpace`` == the scroll view's content coordinate space).
-    let cellFrames: [String: CGRect]
-    /// Selection mode gate; the recognizer is disabled otherwise.
-    let isActive: Bool
-    @Binding var selectedIDs: Set<String>
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.isUserInteractionEnabled = false
-        view.backgroundColor = .clear
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.orderedIDs = orderedIDs
-        coordinator.cellFrames = cellFrames
-        coordinator.readSelection = { selectedIDs }
-        coordinator.writeSelection = { selectedIDs = $0 }
-        coordinator.isActive = isActive
-        // The enclosing UIScrollView isn't in the hierarchy during the first layout pass — defer
-        // the superview walk one run-loop cycle (the SwiftUI-Introspect technique).
-        DispatchQueue.main.async { coordinator.attachIfNeeded(probe: uiView) }
-    }
-
-    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-        coordinator.detach()
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var orderedIDs: [String] = []
-        var cellFrames: [String: CGRect] = [:]
-        var readSelection: () -> Set<String> = { [] }
-        var writeSelection: (Set<String>) -> Void = { _ in }
-        var isActive = false {
-            didSet { recognizer?.isEnabled = isActive }
-        }
-
-        private weak var scrollView: UIScrollView?
-        private var recognizer: UILongPressGestureRecognizer?
-        private var displayLink: CADisplayLink?
-        private var autoScrollSpeed: CGFloat = 0
-
-        private var anchorIndex: Int?
-        private var paintSelect = true
-        private var snapshot: Set<String> = []
-        private var lastRange: ClosedRange<Int>?
-
-        private let edgeBand: CGFloat = 90
-        private let maxScrollSpeed: CGFloat = 620  // points/sec at the very edge
-
-        func attachIfNeeded(probe: UIView) {
-            guard recognizer == nil, let scrollView = probe.mediaEnclosingScrollView else { return }
-            self.scrollView = scrollView
-            let press = UILongPressGestureRecognizer(target: self, action: #selector(handle(_:)))
-            press.minimumPressDuration = 0.18
-            press.allowableMovement = 40
-            press.cancelsTouchesInView = false
-            press.delegate = self
-            press.isEnabled = isActive
-            scrollView.addGestureRecognizer(press)
-            recognizer = press
-        }
-
-        func detach() {
-            stopAutoScroll()
-            if let recognizer, let scrollView { scrollView.removeGestureRecognizer(recognizer) }
-            recognizer = nil
-        }
-
-        @objc private func handle(_ gesture: UILongPressGestureRecognizer) {
-            guard isActive, let scrollView else { return }
-            switch gesture.state {
-            case .began:
-                scrollView.isScrollEnabled = false
-                snapshot = readSelection()
-                lastRange = nil
-                if let index = index(atContentPoint: gesture.location(in: scrollView)) {
-                    anchorIndex = index
-                    paintSelect = !snapshot.contains(orderedIDs[index])
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    paint(to: index)
-                } else {
-                    anchorIndex = nil
-                }
-            case .changed:
-                let content = gesture.location(in: scrollView)
-                if let index = index(atContentPoint: content) { paint(to: index) }
-                updateAutoScroll(viewportY: content.y - scrollView.contentOffset.y)
-            case .ended, .cancelled, .failed:
-                stopAutoScroll()
-                scrollView.isScrollEnabled = true
-                anchorIndex = nil
-                lastRange = nil
-            default:
-                break
-            }
-        }
-
-        private func index(atContentPoint point: CGPoint) -> Int? {
-            guard let id = cellFrames.first(where: { $0.value.contains(point) })?.key else {
-                return nil
-            }
-            return orderedIDs.firstIndex(of: id)
-        }
-
-        /// Selection = snapshot with the contiguous `[anchor…current]` range painted, so shrinking
-        /// the range reverts the trailing cells to their pre-sweep state (Photos "swipe back").
-        private func paint(to currentIndex: Int) {
-            guard let anchor = anchorIndex else { return }
-            let range = min(anchor, currentIndex)...max(anchor, currentIndex)
-            guard range != lastRange else { return }
-            lastRange = range
-            var selection = snapshot
-            for index in range where index < orderedIDs.count {
-                if paintSelect {
-                    selection.insert(orderedIDs[index])
-                } else {
-                    selection.remove(orderedIDs[index])
-                }
-            }
-            writeSelection(selection)
-            UISelectionFeedbackGenerator().selectionChanged()
-        }
-
-        private func updateAutoScroll(viewportY: CGFloat) {
-            guard let scrollView else { return }
-            let height = scrollView.bounds.height
-            if viewportY < edgeBand {
-                autoScrollSpeed = -maxScrollSpeed * min(1, (edgeBand - viewportY) / edgeBand)
-                startAutoScroll()
-            } else if viewportY > height - edgeBand {
-                autoScrollSpeed =
-                    maxScrollSpeed * min(1, (viewportY - (height - edgeBand)) / edgeBand)
-                startAutoScroll()
-            } else {
-                stopAutoScroll()
-            }
-        }
-
-        private func startAutoScroll() {
-            guard displayLink == nil else { return }
-            let link = CADisplayLink(target: self, selector: #selector(step(_:)))
-            link.add(to: .main, forMode: .common)
-            displayLink = link
-        }
-
-        private func stopAutoScroll() {
-            displayLink?.invalidate()
-            displayLink = nil
-        }
-
-        @objc private func step(_ link: CADisplayLink) {
-            guard let scrollView, let recognizer else {
-                stopAutoScroll()
-                return
-            }
-            var offset = scrollView.contentOffset
-            let minY = -scrollView.adjustedContentInset.top
-            let maxY =
-                max(scrollView.contentSize.height, scrollView.bounds.height)
-                - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
-            // Frame-rate independent + rounded so integer offset steps don't shimmer the tracked cell.
-            let delta = (autoScrollSpeed * CGFloat(link.duration)).rounded()
-            let target = min(max(offset.y + delta, minY), maxY)
-            guard target != offset.y else {
-                stopAutoScroll()
-                return
-            }
-            offset.y = target
-            scrollView.setContentOffset(offset, animated: false)
-            // The finger is fixed but content moved — its location in content space is now a new cell.
-            if let index = index(atContentPoint: recognizer.location(in: scrollView)) {
-                paint(to: index)
-            }
-        }
-
-        // Coexist with the scroll pan; the hold + `isScrollEnabled` toggle do the real arbitration.
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
-        ) -> Bool { true }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            isActive
-        }
-    }
-}
-
-/// Realised grid cells' frames, keyed by clip id, in ``MediaGridSpace``.
-private struct MediaCellFramesKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
-    }
-}
-
 /// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
 /// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
 /// action. A series that loses frames until one remains degrades back to a normal grid cell.
@@ -1885,9 +1641,8 @@ private struct MediaClipCell: View {
                 }
             }
             // Plain long-press ENTERS selection mode (and picks this cell). Once selecting, the
-            // press-and-drag sweep + edge auto-scroll is owned by the grid-level UIKit recogniser
-            // (`MediaSweepSelectGesture`), which only arms in selection mode — keeping cell touches
-            // scroll-safe during plain browsing.
+            // common native host owns the subsequent selecting sweep and edge clock.
+            // Browsing entry stays on this cell, so the original hold cannot toggle twice.
             .onLongPressGesture(minimumDuration: 0.4) {
                 guard !isSelecting else { return }
                 onBeginSelection?()

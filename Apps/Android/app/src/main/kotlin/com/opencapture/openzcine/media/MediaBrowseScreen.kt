@@ -13,6 +13,10 @@ import com.opencapture.monitorui.MonitorMediaStorageChoices
 import com.opencapture.monitorui.MonitorPageHeading
 import com.opencapture.monitorui.MonitorPageScaffold
 import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaSelectionConfiguration
+import com.opencapture.monitorui.MonitorMediaSelectionFeedback
+import com.opencapture.monitorui.MonitorMediaSelectionHost
+import com.opencapture.monitorui.MonitorMediaHitTarget
 
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.openzcine.LocalOperatorHaptics
@@ -27,20 +31,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import android.view.HapticFeedbackConstants
-import android.view.View
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalViewConfiguration
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -85,7 +82,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -97,16 +93,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -1046,10 +1039,7 @@ internal fun MediaBrowseScreen(
         shareMessage = null
     }
 
-    fun toggleSelection(clip: MediaClipRecord) {
-        if (shareInProgress) return
-        selectedIDs = MediaLibrarySelection.toggle(selectedIDs, clipKey(clip))
-    }
+
 
     fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
@@ -1540,7 +1530,6 @@ internal fun MediaBrowseScreen(
                             selectedIDs = selectedIDs,
                             onOpen = ::open,
                             onBeginSelection = { identity -> if (!shareInProgress) beginSelection(identity) },
-                            onToggleSelection = { identity -> if (!shareInProgress) toggleSelection(identity) },
                             onSweepSelection = { next -> if (!shareInProgress) selectedIDs = next },
                             onToggleFavorite = ::toggleFavorite,
                             onRetry = { reloadKey += 1 },
@@ -2496,7 +2485,6 @@ private fun MediaLibraryBody(
     selectedIDs: Set<String>,
     onOpen: (MediaClipRecord) -> Unit,
     onBeginSelection: (MediaClipRecord) -> Unit,
-    onToggleSelection: (MediaClipRecord) -> Unit,
     /** Full selection set after a Photos-style range paint (not a delta). */
     onSweepSelection: (Set<String>) -> Unit,
     onToggleFavorite: (MediaClipRecord) -> Unit,
@@ -2529,7 +2517,6 @@ private fun MediaLibraryBody(
                         selectedIDs = selectedIDs,
                         onOpen = onOpen,
                         onBeginSelection = onBeginSelection,
-                        onToggleSelection = onToggleSelection,
                         onSweepSelection = onSweepSelection,
                         onToggleFavorite = onToggleFavorite,
                     )
@@ -2549,7 +2536,6 @@ private fun MediaLibraryBody(
                         selectedIDs = selectedIDs,
                         onOpen = onOpen,
                         onBeginSelection = onBeginSelection,
-                        onToggleSelection = onToggleSelection,
                         onSweepSelection = onSweepSelection,
                         onToggleFavorite = onToggleFavorite,
                     )
@@ -2558,13 +2544,28 @@ private fun MediaLibraryBody(
     }
 }
 
-/**
- * Adaptive grid with iOS Photos-style multi-select:
- * long-press a cell to enter selection, then long-press + drag to range-paint
- * select/deselect (shrinking the drag restores the pre-sweep snapshot).
- *
- * While selecting, cells drop their own clickables and a full-size overlay owns
- * tap-toggle + long-press range paint so LazyGrid scroll cannot steal the gesture.
+/** Source-native hold/slop plus the actual 72dp band; common frames replace per-MOVE steps. */
+@Composable
+private fun rememberSelectionInputPolicy(): MonitorMediaSelectionConfiguration {
+    val density = LocalDensity.current.density
+    val nativeInput = LocalViewConfiguration.current
+    return remember(nativeInput.longPressTimeoutMillis, nativeInput.touchSlop, density) {
+        MonitorMediaSelectionConfiguration(
+            holdMilliseconds = nativeInput.longPressTimeoutMillis,
+            movementTolerance = nativeInput.touchSlop / density,
+            allowsSelectionEntry = false,
+            sweepsSideways = false,
+            edgeBand = 72f,
+            maximumEdgeSpeed = 620f,
+            edgeCurve = MonitorMediaSelectionConfiguration.EdgeCurve.LINEAR,
+            viewportEdgeLimitRatio = null,
+        )
+    }
+}
+
+/** Actual source cards consume the common mounted-hit and native input owner.
+ * Browsing entry remains on the cells; a subsequent selecting touch arms a hold.
+ * Native vertical scrolling and frame-clock edge scrolling share the real lazy state.
  */
 @Composable
 private fun MediaClipGrid(
@@ -2583,108 +2584,64 @@ private fun MediaClipGrid(
     selectedIDs: Set<String>,
     onOpen: (MediaClipRecord) -> Unit,
     onBeginSelection: (MediaClipRecord) -> Unit,
-    onToggleSelection: (MediaClipRecord) -> Unit,
     onSweepSelection: (Set<String>) -> Unit,
     onToggleFavorite: (MediaClipRecord) -> Unit,
 ) {
-    val cellFrames = remember { mutableStateMapOf<String, Rect>() }
-    var gridOrigin by remember { mutableStateOf(Offset.Zero) }
     val gridState = rememberLazyGridState()
-    val sweepScope = rememberCoroutineScope()
-    val orderedIDs = remember(clips) { clips.map(clipIdentity) }
-    // Live map/origin for mid-drag hit tests (edge auto-scroll moves cells without
-    // waiting for a rememberUpdatedState snapshot).
-    val currentSelected by rememberUpdatedState(selectedIDs)
-    val currentClips by rememberUpdatedState(clips)
-    val currentIdentity by rememberUpdatedState(clipIdentity)
-    val currentSweep by rememberUpdatedState(onSweepSelection)
-    val currentToggle by rememberUpdatedState(onToggleSelection)
+    val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
     val view = LocalView.current
-    val density = LocalDensity.current
-    val edgeBandPx = with(density) { 72.dp.toPx() }
-
-    LaunchedEffect(clips) { cellFrames.clear() }
-
-    Box(
-        Modifier.fillMaxSize()
-            .onGloballyPositioned { coordinates -> gridOrigin = coordinates.positionInRoot() },
-    ) {
+    val selectionInput = rememberSelectionInputPolicy()
+    MonitorMediaSelectionHost(
+        ids = orderedIDs,
+        selecting = isSelecting,
+        selected = selectedIDs,
+        scroll = gridState,
+        onOpen = { id -> clips.firstOrNull { clipIdentity(it) == id }?.let(onOpen) },
+        onSelectionChange = { _, next -> onSweepSelection(next) },
+        modifier = Modifier.fillMaxSize(),
+        sessionKey = source to connectionOwner,
+        configuration = selectionInput,
+        onFeedback = { event ->
+            view.performOperatorHaptic(
+                if (event == MonitorMediaSelectionFeedback.BEGAN) HapticFeedbackConstants.LONG_PRESS
+                else HapticFeedbackConstants.CLOCK_TICK,
+            )
+        },
+    ) { registry ->
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
-            // Column gap unchanged; tight row gap for a dense vertical rhythm (iOS LazyVGrid
-            // spacing 16→8→4 — less dead space between rows).
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
-            // Overlay owns movement while selecting; plain scroll resumes after exit.
-            userScrollEnabled = !isSelecting,
         ) {
             items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
                 val identity = clipIdentity(clip)
-                // Scrolled-away cells are disposed but used to leave their last rect behind, and
-                // the hit test is first-match-wins over an unordered map — so a tap could resolve
-                // to an off-screen clip and silently toggle the wrong thing.
-                DisposableEffect(identity) { onDispose { cellFrames.remove(identity) } }
-                MediaClipCell(
-                    clip = clip,
-                    source = source,
-                    cameraID = cameraIDFor(clip),
-                    hasRawSibling = hasRawSibling(clip),
-                    burstCount = burstCountOf(clip),
-                    cameraConnected = cameraConnected,
-                    connectionOwner = connectionOwner,
-                    cacheStore = cacheStore,
-                    favorite = identity in favorites,
-                    selected = identity in selectedIDs,
-                    isSelecting = isSelecting,
-                    // Cells only open / enter selection outside multi-select; the overlay
-                    // owns toggle + paint once [isSelecting] is true.
-                    onClick = { onOpen(clip) },
-                    onLongPress = { onBeginSelection(clip) },
-                    onToggleFavorite = { onToggleFavorite(clip) },
-                    modifier =
-                        Modifier.onGloballyPositioned { coordinates ->
-                            cellFrames[identity] = coordinates.boundsInRoot()
-                        },
-                )
+                MonitorMediaHitTarget(registry = registry, id = identity) {
+                    MediaClipCell(
+                        clip = clip,
+                        source = source,
+                        cameraID = cameraIDFor(clip),
+                        hasRawSibling = hasRawSibling(clip),
+                        burstCount = burstCountOf(clip),
+                        cameraConnected = cameraConnected,
+                        connectionOwner = connectionOwner,
+                        cacheStore = cacheStore,
+                        favorite = identity in favorites,
+                        selected = identity in selectedIDs,
+                        isSelecting = isSelecting,
+                        onClick = { onOpen(clip) },
+                        onLongPress = { onBeginSelection(clip) },
+                        onToggleFavorite = { onToggleFavorite(clip) },
+                    )
+                }
             }
-        }
-
-        // Full-size gesture layer above cells so combinedClickable cannot steal long-press
-        // and so vertical drags cannot reach LazyGrid while selecting.
-        if (isSelecting) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .mediaSelectionGestures(
-                        orderedIDs = orderedIDs,
-                        frames = { cellFrames },
-                        origin = { gridOrigin },
-                        selectedIDs = { currentSelected },
-                        clips = { currentClips },
-                        clipIdentity = { currentIdentity(it) },
-                        onToggle = { currentToggle(it) },
-                        onSweep = { currentSweep(it) },
-                        onScrollBy = { delta ->
-                            sweepScope.launch { gridState.scrollBy(delta) }
-                        },
-                        onEdgeScroll = { delta, finger, paintAt ->
-                            sweepScope.launch {
-                                gridState.scrollBy(delta)
-                                paintAt(finger)
-                            }
-                        },
-                        view = view,
-                        edgeBandPx = edgeBandPx,
-                    ),
-            )
         }
     }
 }
 
-/** List arrangement uses the same core-authorized records and favorite state. */
+/** List arrangement keeps the same source-authorized records and actions. */
 @Composable
 private fun MediaClipList(
     clips: List<MediaClipRecord>,
@@ -2701,244 +2658,59 @@ private fun MediaClipList(
     selectedIDs: Set<String>,
     onOpen: (MediaClipRecord) -> Unit,
     onBeginSelection: (MediaClipRecord) -> Unit,
-    onToggleSelection: (MediaClipRecord) -> Unit,
     onSweepSelection: (Set<String>) -> Unit,
     onToggleFavorite: (MediaClipRecord) -> Unit,
 ) {
-    val rowFrames = remember { mutableStateMapOf<String, Rect>() }
-    var listOrigin by remember { mutableStateOf(Offset.Zero) }
     val listState = rememberLazyListState()
-    val sweepScope = rememberCoroutineScope()
-    val orderedIDs = remember(clips) { clips.map(clipIdentity) }
-    val currentSelected by rememberUpdatedState(selectedIDs)
-    val currentClips by rememberUpdatedState(clips)
-    val currentIdentity by rememberUpdatedState(clipIdentity)
-    val currentToggle by rememberUpdatedState(onToggleSelection)
-    val currentSweep by rememberUpdatedState(onSweepSelection)
+    val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
     val view = LocalView.current
-    val density = LocalDensity.current
-    val edgeBandPx = with(density) { 72.dp.toPx() }
-
-    LaunchedEffect(clips) { rowFrames.clear() }
-
-    Box(
-        Modifier.fillMaxSize()
-            .onGloballyPositioned { coordinates -> listOrigin = coordinates.positionInRoot() },
-    ) {
+    val selectionInput = rememberSelectionInputPolicy()
+    MonitorMediaSelectionHost(
+        ids = orderedIDs,
+        selecting = isSelecting,
+        selected = selectedIDs,
+        scroll = listState,
+        onOpen = { id -> clips.firstOrNull { clipIdentity(it) == id }?.let(onOpen) },
+        onSelectionChange = { _, next -> onSweepSelection(next) },
+        modifier = Modifier.fillMaxSize(),
+        sessionKey = source to connectionOwner,
+        configuration = selectionInput,
+        onFeedback = { event ->
+            view.performOperatorHaptic(
+                if (event == MonitorMediaSelectionFeedback.BEGAN) HapticFeedbackConstants.LONG_PRESS
+                else HapticFeedbackConstants.CLOCK_TICK,
+            )
+        },
+    ) { registry ->
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
-            userScrollEnabled = !isSelecting,
         ) {
             items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
                 val identity = clipIdentity(clip)
-                // Same stale-rect eviction as the grid — see MediaClipGrid.
-                DisposableEffect(identity) { onDispose { rowFrames.remove(identity) } }
-                MediaClipListRow(
-                    clip = clip,
-                    source = source,
-                    cameraID = cameraIDFor(clip),
-                    hasRawSibling = hasRawSibling(clip),
-                    cameraConnected = cameraConnected,
-                    connectionOwner = connectionOwner,
-                    cacheStore = cacheStore,
-                    favorite = identity in favorites,
-                    selected = identity in selectedIDs,
-                    isSelecting = isSelecting,
-                    onClick = { onOpen(clip) },
-                    onLongPress = { onBeginSelection(clip) },
-                    onToggleFavorite = { onToggleFavorite(clip) },
-                    modifier =
-                        Modifier.onGloballyPositioned { coordinates ->
-                            rowFrames[identity] = coordinates.boundsInRoot()
-                        },
-                )
+                MonitorMediaHitTarget(registry = registry, id = identity) {
+                    MediaClipListRow(
+                        clip = clip,
+                        source = source,
+                        cameraID = cameraIDFor(clip),
+                        hasRawSibling = hasRawSibling(clip),
+                        cameraConnected = cameraConnected,
+                        connectionOwner = connectionOwner,
+                        cacheStore = cacheStore,
+                        favorite = identity in favorites,
+                        selected = identity in selectedIDs,
+                        isSelecting = isSelecting,
+                        onClick = { onOpen(clip) },
+                        onLongPress = { onBeginSelection(clip) },
+                        onToggleFavorite = { onToggleFavorite(clip) },
+                    )
+                }
             }
-        }
-
-        if (isSelecting) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .mediaSelectionGestures(
-                        orderedIDs = orderedIDs,
-                        frames = { rowFrames },
-                        origin = { listOrigin },
-                        selectedIDs = { currentSelected },
-                        clips = { currentClips },
-                        clipIdentity = { currentIdentity(it) },
-                        onToggle = { currentToggle(it) },
-                        onSweep = { currentSweep(it) },
-                        onScrollBy = { delta ->
-                            sweepScope.launch { listState.scrollBy(delta) }
-                        },
-                        onEdgeScroll = { delta, finger, paintAt ->
-                            sweepScope.launch {
-                                listState.scrollBy(delta)
-                                paintAt(finger)
-                            }
-                        },
-                        view = view,
-                        edgeBandPx = edgeBandPx,
-                    ),
-            )
         }
     }
 }
-
-/**
- * Photos-style multi-select overlay gestures:
- * - short tap toggles the hit clip
- * - long-press + drag range-paints select/deselect from a pre-gesture snapshot
- * - vertical drag before long-press scrolls the list/grid (content follows the finger)
- *
- * The overlay sits above the lazy list so native user-scroll cannot see the pointer;
- * finger pans are applied with [onScrollBy] instead.
- */
-private fun Modifier.mediaSelectionGestures(
-    orderedIDs: List<String>,
-    frames: () -> Map<String, Rect>,
-    origin: () -> Offset,
-    selectedIDs: () -> Set<String>,
-    clips: () -> List<MediaClipRecord>,
-    clipIdentity: (MediaClipRecord) -> String,
-    onToggle: (MediaClipRecord) -> Unit,
-    onSweep: (Set<String>) -> Unit,
-    onScrollBy: (delta: Float) -> Unit,
-    onEdgeScroll: (delta: Float, finger: Offset, paintAt: (Offset) -> Unit) -> Unit,
-    view: View,
-    edgeBandPx: Float,
-): Modifier =
-    pointerInput(orderedIDs) {
-        fun indexAt(local: Offset): Int? {
-            val id = hitClipID(frames(), origin(), local) ?: return null
-            return orderedIDs.indexOf(id).takeIf { it >= 0 }
-        }
-        // Resolve through the already-built index rather than re-deriving every clip's key: this
-        // runs inside the gesture handler, so a linear scan here delayed the toggle itself. The
-        // identity check keeps the old semantics if the list ever moves under a live gesture.
-        fun clipAt(local: Offset): MediaClipRecord? {
-            val id = hitClipID(frames(), origin(), local) ?: return null
-            val list = clips()
-            val byIndex = orderedIDs.indexOf(id).takeIf { it >= 0 }?.let(list::getOrNull)
-            return byIndex?.takeIf { clipIdentity(it) == id }
-                ?: list.firstOrNull { clipIdentity(it) == id }
-        }
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            down.consume()
-            val touchSlop = viewConfiguration.touchSlop
-            val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-
-            // null = long-press timeout (start paint)
-            // "up" = short tap (toggle)
-            // Offset = moved past slop before long-press (scroll from that position)
-            val early: Any? =
-                withTimeoutOrNull(longPressTimeout) {
-                    var current = down
-                    while (current.pressed) {
-                        val event = awaitPointerEvent(PointerEventPass.Main)
-                        val change =
-                            event.changes.firstOrNull { it.id == down.id }
-                                ?: return@withTimeoutOrNull "up"
-                        change.consume()
-                        if (!change.pressed) return@withTimeoutOrNull "up"
-                        if ((change.position - down.position).getDistance() > touchSlop) {
-                            return@withTimeoutOrNull change.position
-                        }
-                        current = change
-                    }
-                    "up"
-                }
-
-            when (early) {
-                // Same tick the sweep-paint path gives — without it a toggle has no confirmation,
-                // which is what made a registered tap read as a missed one.
-                "up" ->
-                    clipAt(down.position)?.let {
-                        onToggle(it)
-                        view.performOperatorHaptic(HapticFeedbackConstants.CLOCK_TICK)
-                    }
-                is Offset -> {
-                    // Finger moved before long-press: pan the list with the finger.
-                    // scrollBy(positive) moves content up; finger up (y decreases) → positive.
-                    var lastY = early.y
-                    // Include the slop-crossing delta from the down point so the first
-                    // move feels immediate rather than waiting for the next event.
-                    val initialDelta = down.position.y - early.y
-                    if (initialDelta != 0f) onScrollBy(initialDelta)
-                    var pressed = true
-                    while (pressed) {
-                        val event = awaitPointerEvent(PointerEventPass.Main)
-                        val change = event.changes.firstOrNull { it.id == down.id }
-                        if (change == null) break
-                        change.consume()
-                        if (change.pressed) {
-                            val delta = lastY - change.position.y
-                            if (delta != 0f) onScrollBy(delta)
-                            lastY = change.position.y
-                        }
-                        pressed = change.pressed
-                    }
-                }
-                null -> {
-                    val startIndex = indexAt(down.position)
-                    if (startIndex == null) {
-                        waitForUpOrCancellation()
-                        return@awaitEachGesture
-                    }
-                    val snapshot = selectedIDs()
-                    val paintSelect = orderedIDs[startIndex] !in snapshot
-                    var lastIndex: Int? = null
-                    fun paintTo(index: Int) {
-                        if (index == lastIndex) return
-                        lastIndex = index
-                        onSweep(
-                            MediaLibrarySelection.paintRange(
-                                snapshot = snapshot,
-                                orderedIDs = orderedIDs,
-                                anchorIndex = startIndex,
-                                currentIndex = index,
-                                paintSelect = paintSelect,
-                            ),
-                        )
-                        view.performOperatorHaptic(HapticFeedbackConstants.CLOCK_TICK)
-                    }
-                    fun paintAt(local: Offset) {
-                        indexAt(local)?.let(::paintTo)
-                    }
-                    view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
-                    paintTo(startIndex)
-
-                    val height = size.height.toFloat()
-                    while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Main)
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        change.consume()
-                        if (!change.pressed) break
-                        paintAt(change.position)
-                        // Edge auto-scroll (iOS edgeBand ≈ 90pt).
-                        val y = change.position.y
-                        val delta =
-                            when {
-                                y < edgeBandPx ->
-                                    -((edgeBandPx - y) / edgeBandPx * 28f).coerceAtLeast(4f)
-                                y > height - edgeBandPx ->
-                                    ((y - (height - edgeBandPx)) / edgeBandPx * 28f)
-                                        .coerceAtLeast(4f)
-                                else -> 0f
-                            }
-                        if (delta != 0f) {
-                            onEdgeScroll(delta, change.position, ::paintAt)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
 /** Grid card with action-safe metadata; a long press starts library selection. */
 @Composable
 private fun MediaClipCell(
@@ -2958,7 +2730,7 @@ private fun MediaClipCell(
     onToggleFavorite: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // While multi-selecting the parent overlay owns all pointer input; cell clickables
+    // While multi-selecting the common native host owns selecting pointer input; cell clickables
     // would steal long-press and re-enable scroll competition.
     val interaction =
         if (isSelecting) {
@@ -3553,12 +3325,3 @@ private fun clipAccessibilityLabel(
         append(clipActionLabel(clip).lowercase())
         if (isSelecting) append(if (selected) ", selected" else ", not selected")
     }
-
-private fun hitClipID(
-    frames: Map<String, Rect>,
-    gridOrigin: Offset,
-    localPoint: Offset,
-): String? {
-    val rootPoint = Offset(gridOrigin.x + localPoint.x, gridOrigin.y + localPoint.y)
-    return frames.entries.firstOrNull { (_, frame) -> frame.contains(rootPoint) }?.key
-}

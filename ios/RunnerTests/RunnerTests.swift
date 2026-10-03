@@ -3018,6 +3018,119 @@ private final class NativeDefaultFilterFixture {
 }
 
 @MainActor
+@Suite("SIMULATED native media selection ownership")
+struct NikonMediaSelectionNativeOwnerTests {
+    @Test("Actual grid/list scroll owners mount native policy and retire old recognizers")
+    func nativeOwnerMountsAndRetires() async throws {
+        let state = NikonSelectionNativeFixtureState()
+        let scene = try #require(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(rootView: NikonSelectionNativeFixture(state: state))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            originalKeyWindow?.makeKeyAndVisible()
+        }
+        try await settle(host) { scroll(host.view).map { recognizers($0).count == 2 } ?? false }
+        let grid = try #require(scroll(host.view))
+        let hold = try #require(
+            recognizers(grid).compactMap { $0 as? UILongPressGestureRecognizer }.first)
+        #expect(hold.minimumPressDuration == 0.18)
+        #expect(hold.allowableMovement == 40)
+        #expect(grid.contentSize.height > grid.bounds.height)
+        state.list = true
+        try await settle(host) {
+            guard let current = scroll(host.view), current !== grid else { return false }
+            return recognizers(current).count == 2 && recognizers(grid).isEmpty
+        }
+        let list = try #require(scroll(host.view))
+        #expect(list !== grid)
+        #expect(list.contentSize.height > list.bounds.height)
+        state.present = false
+        try await settle(host) { scroll(host.view) == nil && recognizers(list).isEmpty }
+        #expect(recognizers(grid).isEmpty && recognizers(list).isEmpty)
+    }
+
+    private func recognizers(_ scroll: UIScrollView) -> [UIGestureRecognizer] {
+        (scroll.gestureRecognizers ?? []).filter {
+            $0.delegate.map {
+                String(describing: type(of: $0)).contains("MonitorMediaSelectionInteraction")
+            } ?? false
+        }
+    }
+
+    private func scroll(_ view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView, scroll.bounds.height > 100 { return scroll }
+        return view.subviews.compactMap { scroll($0) }.first
+    }
+
+    private func settle(_ host: UIViewController, until predicate: () -> Bool) async throws {
+        for _ in 0..<500 {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+            if predicate() { return }
+        }
+        try #require(predicate(), "The actual native selection scroll owner did not settle")
+    }
+}
+
+@MainActor
+@Observable
+private final class NikonSelectionNativeFixtureState {
+    let owner = MonitorMediaSelectionState()
+    var list = false
+    var present = true
+}
+
+@MainActor
+private struct NikonSelectionNativeFixture: View {
+    let state: NikonSelectionNativeFixtureState
+    private let ids = (0..<40).map { "SIMULATED-selection-\($0)" }
+    var body: some View {
+        if state.present {
+            ScrollView {
+                Group {
+                    if state.list {
+                        LazyVStack { cells }
+                    } else {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())]) { cells }
+                    }
+                }
+                .background(
+                    MonitorMediaSelectionHost(
+                        state: state.owner, ids: ids, selected: [], selecting: false,
+                        context: state.list ? "SIMULATED-list" : "SIMULATED-grid",
+                        configuration: MonitorMediaSelectionConfiguration(
+                            holdMilliseconds: 180, movementTolerance: 40,
+                            allowsSelectionEntry: false,
+                            sweepsSideways: false, edgeBand: 90, maximumEdgeSpeed: 620,
+                            edgeCurve: .linear, viewportEdgeLimitRatio: nil, roundsScrollSteps: true
+                        ),
+                        publish: { _ in }
+                    ))
+            }
+            .id(state.list)
+        }
+    }
+    private var cells: some View {
+        ForEach(ids, id: \.self) { id in
+            Text(id).frame(height: 50)
+                .background(MonitorMediaSelectionAnchor(id: id, state: state.owner))
+        }
+    }
+}
+
+@MainActor
 private struct NativeDefaultFilterFixtureView: View {
     var state: NativeDefaultFilterFixture
     var body: some View {
