@@ -102,8 +102,8 @@ class OfflineMediaMainActivityTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
 
-        // iOS openCachedMediaLibrary: intro-card Media Library, not a per-row button.
-        val entry = device.waitForText("Media Library")
+        // The shared cameras header opens the same offline library without a session.
+        val entry = device.waitForDescription("Media library")
         saveDeviceScreenshot("openzcine-android-offline-media-startup.png")
         entry.click()
 
@@ -112,22 +112,17 @@ class OfflineMediaMainActivityTest {
     }
 
     @Test
-    fun clearingStandaloneSettingsStillLeavesMediaLibraryEntryOnIntroCard() {
+    fun clearingStandaloneSettingsStillLeavesMediaLibraryEntryInCamerasHeader() {
         scenario =
             ActivityScenario.launch(
                 Intent(context, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
 
-        assertNotNull(device.waitForText("Media Library"))
-        device.waitForText("Settings").click()
-        val clearAction =
-            device.wait(
-                Until.findObject(By.desc("Clear local media cache")),
-                UI_TIMEOUT_MILLIS,
-            ) ?: throw AssertionError("Timed out waiting for the clear-cache action")
-        clearAction.click()
-        device.waitForText("Clear cache").click()
+        assertNotNull(device.waitForDescription("Media library"))
+        device.waitForDescription("Settings").click()
+        device.waitForDescription("Storage").click()
+        device.waitForText("Clear").click()
         assertNotNull(
             device.wait(
                 Until.findObject(By.textStartsWith("Removed ")),
@@ -136,9 +131,9 @@ class OfflineMediaMainActivityTest {
         )
 
         device.pressBack()
-        // Intro Media Library remains (iOS always shows it); emptied caches open
-        // an empty offline library instead of hiding the entry point.
-        assertNotNull(device.waitForText("Media Library"))
+        // The common cameras header keeps the entry point after clearing the cache.
+        // Empty caches open an empty offline library.
+        assertNotNull(device.waitForDescription("Media library"))
     }
 
     @Test
@@ -150,7 +145,7 @@ class OfflineMediaMainActivityTest {
                 Intent(context, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
-            device.waitForText("Media Library").click()
+            device.waitForDescription("Media library").click()
             device.setOrientationLeft()
             device.waitForDescription("Show Photos media").click()
             device.waitForIdle()
@@ -179,7 +174,7 @@ class OfflineMediaMainActivityTest {
                 Intent(context, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
-            device.waitForText("Media Library").click()
+            device.waitForDescription("Media library").click()
             assertNotNull(device.waitForText(CACHED_FILENAME))
             assertEquals(retained, index.viewOptions(MediaLibrarySource.LOCAL))
         } finally {
