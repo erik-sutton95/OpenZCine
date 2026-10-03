@@ -1,10 +1,10 @@
 import AVFoundation
 import ImageIO
+import MonitorPresentation
+import MonitorUI
+import OpenZCineCore
 import SwiftUI
 import UIKit
-import OpenZCineCore
-import MonitorUI
-import MonitorPresentation
 
 /// Decodes cell images downsampled to a bounded pixel size, off the main actor (same pattern as
 /// `FrameDecoder`). Cells must never decode a full-resolution still — a 45 MP HEIF is ~180 MB
@@ -513,10 +513,13 @@ struct MediaBrowserView: View {
                             MonitorMediaNavigationCategory(id: $0.id, title: $0.rawValue)
                         }, selectedID: model.mediaCategoryTab.id, vertical: !portrait
                     ) { id in
-                        guard let category = MediaCategoryTab.allCases.first(where: { $0.id == id }) else { return }
+                        guard let category = MediaCategoryTab.allCases.first(where: { $0.id == id })
+                        else { return }
                         model.mediaCategoryTab = category
                     }
-                    if !portrait, model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
+                    if !portrait, model.mediaBrowserSource == .camera,
+                        !model.mediaStorageSlots.isEmpty
+                    {
                         storageCards
                     }
                 }
@@ -571,7 +574,8 @@ struct MediaBrowserView: View {
                         if model.mediaBrowserSource == .camera { refreshButton }
                         if model.mediaFetchInProgress { ProgressView().controlSize(.small) }
                     }
-                    if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }),
+                    if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }
+                    ),
                         let progress = model.mediaDownloadProgress[streamingClip.id]
                     {
                         clipCacheHeaderBar(filename: streamingClip.filename, progress: progress)
