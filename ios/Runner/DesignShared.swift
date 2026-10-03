@@ -1,6 +1,9 @@
 import SwiftUI
 import OpenZCineCore
 
+/// Nikon's saved assist identifiers remain owned by its existing Codable preferences.
+typealias MonitorAssistTool = OpenZCineCore.MonitorAssistTool
+
 /// Shared visual constants used by the startup and live-monitor design systems.
 enum DesignTokens {
     /// Primary corner radius for panels, cards, buttons, popups, and media cells.

@@ -2204,7 +2204,7 @@ extension RunnerTests {
                 "\(tool.rawValue)'s eye disagrees with what the toggle can reach")
         }
         // The three the audit found: an eye on any of these was inert.
-        for tool: MonitorAssistTool in [.lut, .evMeter, .instantReview] {
+        for tool: OpenZCineCore.MonitorAssistTool in [.lut, .evMeter, .instantReview] {
             XCTAssertFalse(model.canToggleAssistToolbarVisibility(tool))
         }
         // And a flip actually flips for one that does offer the eye.
