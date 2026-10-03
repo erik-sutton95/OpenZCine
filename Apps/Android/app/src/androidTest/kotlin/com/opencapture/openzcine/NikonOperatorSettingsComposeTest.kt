@@ -5,6 +5,10 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
@@ -141,6 +145,36 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNodeWithContentDescription("Midtone").assertExists()
     }
 
+    @Test fun narrowNativeZonesWrapControlsAndKeepCompleteColorTargets() {
+        val colors = listOf("White", "Amber", "Red").map {
+            com.opencapture.monitorui.settings.MonitorSettingsColorDot(it, androidx.compose.ui.graphics.Color.White)
+        }
+        val entry = com.opencapture.monitorui.MonitorZebraNumberEntry(80, 100, {}, "narrow.native.threshold")
+        val zone = com.opencapture.monitorui.MonitorZebraNumberZone(false, entry,
+            com.opencapture.opencine.media.MonitorZebraPaint.WHITE, colors, onEnabled = {}, onPaint = {})
+        composeRule.setContent {
+            OpenZCineTheme {
+                androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier
+                    .width(230.dp).testTag("narrow.native.zone")) {
+                    com.opencapture.monitorui.MonitorZebraMenu(units = listOf("Native", "IRE"), unit = "IRE",
+                        title = { it }, onUnit = {}, unitsHelp = "", highlightHelp = "", midtoneHelp = "",
+                        highlight = zone, midtone = zone)
+                }
+            }
+        }
+        val root = composeRule.onNodeWithTag("narrow.native.zone").fetchSemanticsNode().boundsInRoot
+        val density = ApplicationProvider.getApplicationContext<Context>().resources.displayMetrics.density
+        for (label in listOf("White", "Amber", "Red")) {
+            val targets = composeRule.onAllNodesWithContentDescription(label).fetchSemanticsNodes()
+            assertEquals(2, targets.size)
+            targets.forEach {
+                val bounds = it.boundsInRoot
+                assertTrue("$label keeps its complete touch target", bounds.width >= 44f * density - 1f)
+                assertTrue("$label stays inside its narrow host", bounds.left >= root.left && bounds.right <= root.right + 1f)
+            }
+        }
+    }
+
     @Test fun actualCommonAssistMenusPersistIndependentValuesAndKnownSourceReference() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("z2-settings-assist-menus", Context.MODE_PRIVATE)
@@ -164,6 +198,15 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNodeWithText("Read").assertDoesNotExist()
         composeRule.onNodeWithText("LOG").assertDoesNotExist()
         composeRule.onNodeWithText("REFERENCE KEY").performScrollTo().assertIsDisplayed()
+        val key = composeRule.onNodeWithTag("monitor.false-color.reference")
+            .performScrollTo().fetchSemanticsNode().boundsInRoot
+        val density = context.resources.displayMetrics.density
+        for (label in listOf("Min", "−3", "18%", "Skin", "+2", "Max")) {
+            val caption = composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
+            assertTrue("$label must fit in the caption band without inherited body line spacing",
+                caption.height <= key.height - 40f * density + 1f)
+            assertTrue("$label must clear the key's bottom inset", caption.bottom <= key.bottom - 7f * density + 1f)
+        }
         composeRule.runOnIdle {
             val reloaded = OperatorSettings(preferences)
             assertEquals(com.opencapture.openzcine.settings.ScopeWaveformMode.LUMA, reloaded.scopeAssistConfiguration.waveformMode)
