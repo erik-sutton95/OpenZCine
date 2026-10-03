@@ -4,6 +4,7 @@ import MonitorUI
 import Network
 import OpenCineApple
 import OpenCineCore
+import Observation
 import SwiftUI
 import Testing
 import UIKit
@@ -13,6 +14,97 @@ import XCTest
 @testable import Runner
 
 final class RunnerTests: XCTestCase {
+
+    @MainActor
+    func testDefaultSharedMediaFilterFormKeepsNativeCalendarColourAndClear() async throws {
+        let state = NativeDefaultFilterFixture()
+        // The real form is rebuilt from observed choices after each native accessibility action.
+        let content = NativeDefaultFilterFixtureView(state: state)
+        let host = UIHostingController(rootView: content)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
+            state.formats = []
+            state.colours = []
+            state.picks = []
+            window.frame.size = size
+            host.view.frame.size = size
+            let start = try await nativeFilterElement("Start", host: host)
+            let end = try await nativeFilterElement("End", host: host)
+            XCTAssertEqual(start.accessibilityValue, "Any")
+            XCTAssertEqual(end.accessibilityValue, "Any")
+            let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
+            XCTAssertFalse(labels.contains("SIZE"))
+            XCTAssertFalse(labels.contains("STORAGE"))
+            XCTAssertFalse(labels.contains("TODAY"))
+            XCTAssertTrue(start.accessibilityActivate())
+            XCTAssertTrue(end.accessibilityActivate())
+            XCTAssertEqual(state.picks, ["start", "end"])
+            let mov = try await nativeFilterElement("MOV", host: host)
+            XCTAssertTrue(mov.accessibilityActivate())
+            XCTAssertEqual(state.formats, ["MOV"])
+            let log = try await nativeFilterElement("LOG", host: host)
+            XCTAssertTrue(log.accessibilityActivate())
+            XCTAssertEqual(state.colours, [9])
+            let clear = try await nativeFilterElement("Clear all filters", host: host)
+            XCTAssertTrue(clear.accessibilityActivate())
+            XCTAssertTrue(state.formats.isEmpty && state.colours.isEmpty)
+            let attachment = XCTAttachment(
+                image: UIGraphicsImageRenderer(size: size).image { _ in
+                    host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+                })
+            attachment.name = "SIMULATED-default-filter-\(Int(size.width))x\(Int(size.height))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    @MainActor
+    private func nativeFilterElements(_ root: NSObject) -> [NSObject] {
+        var seen = Set<ObjectIdentifier>()
+        var result: [NSObject] = []
+        func visit(_ object: NSObject) {
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            result.append(object)
+            let count = object.accessibilityElementCount()
+            if count > 0 && count < 256 {
+                for index in 0..<count {
+                    if let child = object.accessibilityElement(at: index) as? NSObject {
+                        visit(child)
+                    }
+                }
+            }
+            if let view = object as? UIView {
+                for child in view.subviews { visit(child) }
+            }
+        }
+        visit(root)
+        return result
+    }
+
+    @MainActor
+    private func nativeFilterElement(_ label: String, host: UIViewController) async throws
+        -> NSObject
+    {
+        for _ in 0..<200 {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            await Task.yield()
+            if let element = nativeFilterElements(host.view).first(where: {
+                $0.accessibilityLabel == label && $0.accessibilityTraits.contains(.button)
+            }) {
+                return element
+            }
+        }
+        XCTFail("Default common form did not expose its native \(label) button")
+        return try XCTUnwrap(
+            nativeFilterElements(host.view).first { $0.accessibilityLabel == label })
+    }
 
     @MainActor
     func testActualMediaFilterAdapterUsesOfferedMetadataAndComposesTypedSelections() throws {
@@ -2915,4 +3007,39 @@ struct NikonSettingsScrollTests {
 private final class NikonSettingsScrollFixture {
     var tab: MonitorSettingsTab = .display
     var offsets: [String: CGFloat] = ["Display": 180, "View Assist": 75]
+}
+
+@MainActor
+@Observable
+private final class NativeDefaultFilterFixture {
+    var formats: Set<String> = []
+    var colours: Set<UInt8> = []
+    var picks: [String] = []
+}
+
+@MainActor
+private struct NativeDefaultFilterFixtureView: View {
+    var state: NativeDefaultFilterFixture
+    var body: some View {
+        ScrollView {
+            MonitorMediaFilterForm(
+                formats: ["MOV", "MP4"], resolutions: ["4K"],
+                colors: [.init(id: 9, label: "LOG")],
+                formatSelection: state.formats, resolutionSelection: [],
+                colorSelection: state.colours,
+                dateStartLabel: nil, dateEndLabel: nil, hasDates: true,
+                onToggleFormat: { state.formats.formSymmetricDifference([$0]) },
+                onToggleResolution: { _ in },
+                onToggleColor: { state.colours.formSymmetricDifference([$0]) },
+                onPickStart: { state.picks.append("start") },
+                onPickEnd: { state.picks.append("end") },
+                onClear: {
+                    state.formats = []
+                    state.colours = []
+                }
+            )
+            .padding(16)
+        }
+        .background(Color.black)
+    }
 }

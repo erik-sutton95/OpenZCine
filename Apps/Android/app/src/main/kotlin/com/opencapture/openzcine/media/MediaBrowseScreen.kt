@@ -2368,6 +2368,7 @@ internal fun MediaFilterDialog(
                 Column(
                     Modifier
                         .fillMaxWidth()
+                        .weight(1f, fill = false)
                         .heightIn(max = 290.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
