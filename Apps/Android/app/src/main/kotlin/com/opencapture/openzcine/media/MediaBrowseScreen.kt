@@ -1,5 +1,13 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.monitorui.MonitorCatalogDisplayControls
+import com.opencapture.monitorui.MonitorCatalogHeader
+import com.opencapture.monitorui.MonitorMediaNavigation
+import com.opencapture.monitorui.MonitorMediaNavigationCategory
+import com.opencapture.monitorui.MonitorPageHeading
+import com.opencapture.monitorui.MonitorPageScaffold
+import com.opencapture.monitorui.MonitorThumbnailSize
+
 import com.opencapture.openzcine.performOperatorHaptic
 
 import android.content.Context
@@ -1433,9 +1441,6 @@ internal fun MediaBrowseScreen(
                     bottom = bottomPad.dp,
                 )
 
-            // iOS MediaBrowserView: no Camera/On-device source chrome. Landscape =
-            // 172pt category sidebar with grid/list density controls at the
-            // bottom; portrait = category strip + bottom density band.
             val showsGridControls =
                 !isSelecting && !shareInProgress && !frameioPreparationInProgress
             val showRefresh =
@@ -1443,22 +1448,48 @@ internal fun MediaBrowseScreen(
             val refreshInProgress =
                 state is BrowseState.Loading ||
                     (state as? BrowseState.Loaded)?.isLoadingMore == true
-            if (portrait) {
-                Column(contentModifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MediaCategoryStrip(
-                        selected = options.category,
-                        modifier = Modifier.padding(start = 45.dp),
-                        onSelect = { category -> updateOptions(options.copy(category = category)) },
-                    )
-                    if (visibleStorageSlots.isNotEmpty() && effectiveCameraConnected) {
-                        MediaStorageSlotSelector(
-                            slots = visibleStorageSlots,
+            MonitorPageScaffold(
+                modifier = contentModifier,
+                navigationWidth = 206f,
+                heading = {
+                    Box(Modifier.padding(start = if (portrait) 45.dp else 0.dp)) {
+                        MonitorPageHeading(title = "Media", kicker = "OpenZCine")
+                    }
+                },
+                navigation = { navigationPortrait ->
+                    if (navigationPortrait) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MediaCategoryStrip(
+                                selected = options.category,
+                                onSelect = { category -> updateOptions(options.copy(category = category)) },
+                            )
+                            if (visibleStorageSlots.isNotEmpty() && effectiveCameraConnected) {
+                                MediaStorageSlotSelector(
+                                    slots = visibleStorageSlots,
+                                    selectedStorageId = filters.storageId,
+                                    horizontal = true,
+                                    onSelect = ::toggleStorageSlot,
+                                )
+                            }
+                        }
+                    } else {
+                        MediaLibraryRail(
+                            category = options.category,
+                            storageSlots = if (effectiveCameraConnected) visibleStorageSlots else emptyList(),
                             selectedStorageId = filters.storageId,
-                            horizontal = true,
-                            onSelect = ::toggleStorageSlot,
-                            modifier = Modifier.padding(start = 45.dp),
+                            onCategoryChange = { category -> updateOptions(options.copy(category = category)) },
+                            onStorageSelect = ::toggleStorageSlot,
+                            showsGridControls = showsGridControls,
+                            layout = options.layout,
+                            thumbnailSize = options.thumbnailSize,
+                            onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
+                            onThumbnailSizeChange = { size -> updateOptions(options.copy(thumbnailSize = size)) },
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
+                },
+            ) {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MediaLibraryHeader(
                         state = state,
                         category = options.category,
@@ -1471,18 +1502,14 @@ internal fun MediaBrowseScreen(
                         frameioInternetHopState = internetHopState,
                         sortOrder = options.sortOrder,
                         activeFilterCount = filters.activeCount,
-                        deleteAvailable =
-                            librarySource == MediaLibrarySource.CAMERA &&
-                                effectiveCameraConnected,
+                        deleteAvailable = librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
                         showRefresh = showRefresh,
                         refreshInProgress = refreshInProgress,
+                        compact = portrait,
                         onRefresh = { reloadKey += 1 },
                         onExitSelection = ::cancelActiveShareOrExitSelection,
                         onDelete = { deleteConfirmTargets = selectedSeriesClips },
-                        onShare = {
-                            // Unified Share sheet (native + Frame.io), like iOS.
-                            presentNativeDelivery()
-                        },
+                        onShare = { presentNativeDelivery() },
                         onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                         onShowFilters = { filterDialogPresented = true },
                     )
@@ -1505,114 +1532,23 @@ internal fun MediaBrowseScreen(
                             isSelecting = isSelecting,
                             selectedIDs = selectedIDs,
                             onOpen = ::open,
-                            onBeginSelection = { identity ->
-                                if (!shareInProgress) beginSelection(identity)
-                            },
-                            onToggleSelection = { identity ->
-                                if (!shareInProgress) toggleSelection(identity)
-                            },
-                            onSweepSelection = { next ->
-                                if (!shareInProgress) selectedIDs = next
-                            },
+                            onBeginSelection = { identity -> if (!shareInProgress) beginSelection(identity) },
+                            onToggleSelection = { identity -> if (!shareInProgress) toggleSelection(identity) },
+                            onSweepSelection = { next -> if (!shareInProgress) selectedIDs = next },
                             onToggleFavorite = ::toggleFavorite,
                             onRetry = { reloadKey += 1 },
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.fillMaxSize()
+                                .padding(bottom = if (portrait && showsGridControls) 84.dp else 0.dp),
                         )
-                        if (showsGridControls) {
-                            // iOS portraitGridControlsBand: fade + layout/density capsule.
+                        if (portrait && showsGridControls) {
                             PortraitMediaGridControlsBand(
                                 layout = options.layout,
                                 thumbnailSize = options.thumbnailSize,
-                                onLayoutChange = { layout ->
-                                    updateOptions(options.copy(layout = layout))
-                                },
-                                onThumbnailSizeChange = { size ->
-                                    updateOptions(options.copy(thumbnailSize = size))
-                                },
+                                onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
+                                onThumbnailSizeChange = { size -> updateOptions(options.copy(thumbnailSize = size)) },
                                 modifier = Modifier.align(Alignment.BottomCenter),
                             )
                         }
-                    }
-                }
-            } else {
-                Row(contentModifier, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    MediaLibraryRail(
-                        category = options.category,
-                        storageSlots =
-                            if (effectiveCameraConnected) visibleStorageSlots else emptyList(),
-                        selectedStorageId = filters.storageId,
-                        onCategoryChange = { category ->
-                            updateOptions(options.copy(category = category))
-                        },
-                        onStorageSelect = ::toggleStorageSlot,
-                        showsGridControls = showsGridControls,
-                        layout = options.layout,
-                        thumbnailSize = options.thumbnailSize,
-                        onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
-                        onThumbnailSizeChange = { size ->
-                            updateOptions(options.copy(thumbnailSize = size))
-                        },
-                        modifier = Modifier.width(172.dp).fillMaxHeight(),
-                    )
-                    Column(
-                        Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        MediaLibraryHeader(
-                            state = state,
-                            category = options.category,
-                            displayedCount = displayedClips.size,
-                            isSelecting = isSelecting,
-                            selectedCount = selectedClips.size,
-                            shareInProgress = shareInProgress,
-                            frameioPreparationInProgress = frameioPreparationInProgress,
-                            frameioDeliveryState = frameioController.deliveryState,
-                            frameioInternetHopState = internetHopState,
-                            sortOrder = options.sortOrder,
-                            activeFilterCount = filters.activeCount,
-                            deleteAvailable =
-                                librarySource == MediaLibrarySource.CAMERA &&
-                                    effectiveCameraConnected,
-                            showRefresh = showRefresh,
-                            refreshInProgress = refreshInProgress,
-                            onRefresh = { reloadKey += 1 },
-                            onExitSelection = ::cancelActiveShareOrExitSelection,
-                            onDelete = { deleteConfirmTargets = selectedSeriesClips },
-                            onShare = { presentNativeDelivery() },
-                            onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
-                            onShowFilters = { filterDialogPresented = true },
-                        )
-                        MediaLibraryBody(
-                            state = state,
-                            clips = gridClips,
-                            source = librarySource,
-                            layout = options.layout,
-                            thumbnailSize = options.thumbnailSize,
-                            cameraID = cameraID,
-                            cameraIDFor = ::ownerCameraID,
-                            clipIdentity = ::clipKey,
-                            hasRawSibling = ::hasRawSibling,
-                            burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
-                            cameraConnected = cameraConnected,
-                            connectionOwner = connectionOwner,
-                            cacheStore = cacheStore,
-                            favorites = favorites,
-                            isSelecting = isSelecting,
-                            selectedIDs = selectedIDs,
-                            onOpen = ::open,
-                            onBeginSelection = { identity ->
-                                if (!shareInProgress) beginSelection(identity)
-                            },
-                            onToggleSelection = { identity ->
-                                if (!shareInProgress) toggleSelection(identity)
-                            },
-                            onSweepSelection = { next ->
-                                if (!shareInProgress) selectedIDs = next
-                            },
-                            onToggleFavorite = ::toggleFavorite,
-                            onRetry = { reloadKey += 1 },
-                            modifier = Modifier.weight(1f),
-                        )
                     }
                 }
             }
@@ -1869,23 +1805,18 @@ private fun MediaCategoryStrip(
     onSelect: (MediaLibraryCategory) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        MediaLibraryCategory.entries.forEach { category ->
-            MediaCategoryButton(
-                category = category,
-                active = category == selected,
-                onClick = { onSelect(category) },
-                compact = true,
-            )
-        }
-    }
+    val scroll = rememberScrollState()
+    MonitorMediaNavigation(
+        categories = mediaNavigationCategories,
+        selectedID = selected.name,
+        vertical = false,
+        onSelect = { id -> MediaLibraryCategory.entries.firstOrNull { it.name == id }?.let(onSelect) },
+        modifier = modifier.horizontalScroll(scroll),
+    )
+}
+
+private val mediaNavigationCategories = MediaLibraryCategory.entries.map {
+    MonitorMediaNavigationCategory(id = it.name, title = it.title)
 }
 
 /** Ordered, selectable capacity cards shared by portrait and landscape media layouts. */
@@ -2006,50 +1937,32 @@ internal fun MediaLibraryRail(
     onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier.padding(4.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Column(
-            Modifier
-                .fillMaxWidth()
-                .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                .padding(4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            MediaLibraryCategory.entries.forEach { candidate ->
-                MediaCategoryButton(
-                    category = candidate,
-                    active = candidate == category,
-                    onClick = { onCategoryChange(candidate) },
+            MonitorMediaNavigation(
+                categories = mediaNavigationCategories,
+                selectedID = category.name,
+                vertical = true,
+                onSelect = { id -> MediaLibraryCategory.entries.firstOrNull { it.name == id }?.let(onCategoryChange) },
+            )
+            if (storageSlots.isNotEmpty()) {
+                MediaStorageSlotSelector(
+                    slots = storageSlots,
+                    selectedStorageId = selectedStorageId,
+                    horizontal = false,
+                    onSelect = onStorageSelect,
                 )
             }
         }
-        if (storageSlots.isNotEmpty()) {
-            MediaStorageSlotSelector(
-                slots = storageSlots,
-                selectedStorageId = selectedStorageId,
-                horizontal = false,
-                onSelect = onStorageSelect,
-            )
-        }
-        Spacer(Modifier.weight(1f))
         if (showsGridControls) {
-            MediaGridLayoutControls(
-                layout = layout,
-                thumbnailSize = thumbnailSize,
-                onLayoutChange = onLayoutChange,
-                onThumbnailSizeChange = onThumbnailSizeChange,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            MediaGridLayoutControls(layout, thumbnailSize, onLayoutChange, onThumbnailSizeChange)
         }
     }
 }
 
-/**
- * iOS sidebarGridControls / portraitGridControlsBand capsule: layout toggle
- * (grid↔list) + S/M/L square density icons (not text labels in the header).
- */
 @Composable
 private fun MediaGridLayoutControls(
     layout: MediaLibraryLayout,
@@ -2058,72 +1971,23 @@ private fun MediaGridLayoutControls(
     onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val buttonSize = 37.dp
-    val corner = LiveDesign.CORNER_RADIUS_DP.dp
-    Row(
-        modifier
-            .glass(CapsuleShape)
-            .padding(horizontal = 6.dp, vertical = 6.dp)
-            .semantics { contentDescription = "Media layout and thumbnail size" },
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier
-                .size(buttonSize)
-                .clip(RoundedCornerShape(corner))
-                .background(LiveDesign.glassBright)
-                .semantics {
-                    contentDescription = layout.accessibilityLabel
-                    role = Role.Button
-                }
-                .chromeClickable {
-                    onLayoutChange(
-                        if (layout == MediaLibraryLayout.GRID) {
-                            MediaLibraryLayout.LIST
-                        } else {
-                            MediaLibraryLayout.GRID
-                        },
-                    )
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            // iOS: list.bullet when grid active (tap → list), grid when list.
-            Text(
-                if (layout == MediaLibraryLayout.GRID) "☰" else "⊞",
-                style = chromeStyle(14f, FontWeight.SemiBold),
-                color = LiveDesign.muted,
-            )
-        }
-        MediaThumbnailSize.entries.forEach { size ->
-            val active = size == thumbnailSize
-            val iconSp =
-                when (size) {
-                    MediaThumbnailSize.SMALL -> 9.sp
-                    MediaThumbnailSize.MEDIUM -> 12.sp
-                    MediaThumbnailSize.LARGE -> 15.sp
-                }
-            Box(
-                Modifier
-                    .size(buttonSize)
-                    .clip(RoundedCornerShape(corner))
-                    .background(if (active) LiveDesign.accentDim else Color.Transparent)
-                    .semantics {
-                        contentDescription = size.accessibilityLabel
-                        role = Role.RadioButton
-                    }
-                    .chromeClickable { onThumbnailSizeChange(size) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "■",
-                    fontSize = iconSp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (active) LiveDesign.accent else LiveDesign.muted,
-                )
-            }
-        }
-    }
+    MonitorCatalogDisplayControls(
+        list = layout == MediaLibraryLayout.LIST,
+        thumbnailSize = when (thumbnailSize) {
+            MediaThumbnailSize.SMALL -> MonitorThumbnailSize.SMALL
+            MediaThumbnailSize.MEDIUM -> MonitorThumbnailSize.MEDIUM
+            MediaThumbnailSize.LARGE -> MonitorThumbnailSize.LARGE
+        },
+        onList = { onLayoutChange(if (it) MediaLibraryLayout.LIST else MediaLibraryLayout.GRID) },
+        onThumbnailSize = {
+            onThumbnailSizeChange(when (it) {
+                MonitorThumbnailSize.SMALL -> MediaThumbnailSize.SMALL
+                MonitorThumbnailSize.MEDIUM -> MediaThumbnailSize.MEDIUM
+                MonitorThumbnailSize.LARGE -> MediaThumbnailSize.LARGE
+            })
+        },
+        modifier = modifier,
+    )
 }
 
 /** iOS portrait bottom band: gradient fade + layout/density capsule. */
@@ -2160,30 +2024,6 @@ private fun PortraitMediaGridControlsBand(
     }
 }
 
-/** One accessible category tab. */
-@Composable
-private fun MediaCategoryButton(
-    category: MediaLibraryCategory,
-    active: Boolean,
-    onClick: () -> Unit,
-    compact: Boolean = false,
-) {
-    Text(
-        category.title,
-        style = chromeStyle(12f, if (active) FontWeight.SemiBold else FontWeight.Medium),
-        color = if (active) LiveDesign.accent else LiveDesign.muted,
-        modifier =
-            Modifier.then(if (compact) Modifier else Modifier.fillMaxWidth())
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (active) LiveDesign.accentDim else Color.Transparent)
-                .semantics {
-                    contentDescription = "Show ${category.title} media"
-                    role = Role.Tab
-                }.chromeClickable(onClick)
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-    )
-}
-
 /**
  * Main title/header — iOS mainHeader: MULTIMEDIA identity + FILTER/SORT only.
  * Layout density controls live in the sidebar / portrait bottom band.
@@ -2204,6 +2044,7 @@ private fun MediaLibraryHeader(
     deleteAvailable: Boolean,
     showRefresh: Boolean,
     refreshInProgress: Boolean,
+    compact: Boolean,
     onRefresh: () -> Unit,
     onExitSelection: () -> Unit,
     onDelete: () -> Unit,
@@ -2226,53 +2067,21 @@ private fun MediaLibraryHeader(
         return
     }
 
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Box(Modifier.weight(1f)) {
-            MediaHeaderIdentity(state, category, displayedCount)
-        }
-        if (showRefresh) {
-            RefreshControl(enabled = !refreshInProgress, onClick = onRefresh)
-        }
-        FilterControl(activeCount = activeFilterCount, onClick = onShowFilters)
-        SortControl(sortOrder = sortOrder, onSelect = onSortChange)
-    }
-}
-
-@Composable
-private fun MediaHeaderIdentity(
-    state: BrowseState,
-    category: MediaLibraryCategory,
-    displayedCount: Int,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            "MULTIMEDIA",
-            style = chromeStyle(10f, FontWeight.Bold, mono = true).copy(letterSpacing = 0.8.sp),
-            color = LiveDesign.muted,
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val orders = MediaLibrarySortOrder.entries
+        MonitorCatalogHeader(
+            title = category.titleForHeader(),
+            subtitle = itemCountLabel(state, displayedCount),
+            compact = compact,
+            sort = sortOrder.title,
+            filterActive = activeFilterCount > 0,
+            filterCount = activeFilterCount,
+            onSort = { onSortChange(orders[(orders.indexOf(sortOrder) + 1) % orders.size]) },
+            onFilter = onShowFilters,
+            modifier = Modifier.weight(1f),
         )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                category.titleForHeader(),
-                style = chromeStyle(26f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text("·", style = chromeStyle(18f, FontWeight.Medium), color = LiveDesign.faint)
-            Text(
-                itemCountLabel(state, displayedCount),
-                style = chromeStyle(14f, FontWeight.Medium),
-                color = LiveDesign.muted,
-                maxLines = 1,
-            )
-        }
+        if (showRefresh) RefreshControl(enabled = !refreshInProgress, onClick = onRefresh)
+        if (refreshInProgress) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
     }
 }
 
@@ -2487,45 +2296,6 @@ private fun DeliverySelectionAction(
 }
 
 /** Sort popup uses explicit menu choices rather than cycling a hidden state. */
-@Composable
-private fun SortControl(sortOrder: MediaLibrarySortOrder, onSelect: (MediaLibrarySortOrder) -> Unit) {
-    // iOS: a blind-cycle "SORT" pill — tapping advances to the next order.
-    val orders = MediaLibrarySortOrder.entries
-    val next = orders[(orders.indexOf(sortOrder) + 1) % orders.size]
-    Text(
-        "SORT",
-        style = chromeStyle(10f, FontWeight.Bold, mono = true),
-        color = LiveDesign.muted,
-        modifier =
-            Modifier.glass(CapsuleShape)
-                .semantics { contentDescription = "Sort media: ${sortOrder.title}" }
-                .chromeClickable { onSelect(next) }
-                .padding(horizontal = 10.dp, vertical = 9.dp),
-    )
-}
-
-/** Grid/list switch retained across launches in [MediaLibraryIndex]. */
-@Composable
-private fun LayoutControl(layout: MediaLibraryLayout, onToggle: (MediaLibraryLayout) -> Unit) {
-    val next = if (layout == MediaLibraryLayout.GRID) MediaLibraryLayout.LIST else MediaLibraryLayout.GRID
-    Box(
-        modifier =
-            Modifier.size(36.dp)
-                .glass(CircleShape)
-                .semantics {
-                    contentDescription = layout.accessibilityLabel
-                    role = Role.Button
-                }.chromeClickable { onToggle(next) },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            if (layout == MediaLibraryLayout.GRID) "☷" else "▦",
-            style = chromeStyle(18f, FontWeight.Medium),
-            color = LiveDesign.muted,
-        )
-    }
-}
-
 /** iOS gallery REFRESH — an on-demand authoritative re-enumeration. */
 @Composable
 private fun RefreshControl(enabled: Boolean, onClick: () -> Unit) {
@@ -2550,74 +2320,6 @@ private fun RefreshControl(enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Opens the composable filter sheet and exposes its active-group count. */
-@Composable
-private fun FilterControl(activeCount: Int, onClick: () -> Unit) {
-    // iOS: FILTER pill with optional accent count badge.
-    Row(
-        Modifier.glass(CapsuleShape)
-            .semantics {
-                contentDescription =
-                    if (activeCount > 0) "$activeCount active media filters" else "Filter media"
-                role = Role.Button
-            }.chromeClickable(onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            "FILTER",
-            style = chromeStyle(10f, FontWeight.Bold, mono = true),
-            color = if (activeCount > 0) LiveDesign.accent else LiveDesign.muted,
-        )
-        if (activeCount > 0) {
-            Text(
-                "$activeCount",
-                style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = LiveDesign.background,
-                modifier =
-                    Modifier
-                        .clip(CapsuleShape)
-                        .background(LiveDesign.accent)
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
-            )
-        }
-    }
-}
-
-/** Three persisted adaptive-grid density presets. */
-@Composable
-private fun ThumbnailSizeControl(
-    selected: MediaThumbnailSize,
-    onSelect: (MediaThumbnailSize) -> Unit,
-) {
-    Row(
-        Modifier.glass(CapsuleShape).padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        MediaThumbnailSize.entries.forEach { size ->
-            val active = size == selected
-            Text(
-                size.name.take(1),
-                style = chromeStyle(10f, FontWeight.Bold, mono = true),
-                color = if (active) LiveDesign.accent else LiveDesign.muted,
-                modifier =
-                    Modifier.clip(CircleShape)
-                        .background(if (active) LiveDesign.accentDim else Color.Transparent)
-                        .semantics {
-                            contentDescription = size.accessibilityLabel
-                            role = Role.RadioButton
-                        }.chromeClickable { onSelect(size) }
-                        .padding(horizontal = 9.dp, vertical = 6.dp),
-            )
-        }
-    }
-}
-
-/**
- * Camera-scoped filter controls. iOS presents a ~400pt glass popup over a
- * dimmed backdrop — not a Material AlertDialog.
- */
 @Composable
 private fun MediaFilterDialog(
     filters: MediaLibraryFilters,

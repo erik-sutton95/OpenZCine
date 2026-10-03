@@ -3,6 +3,8 @@ import ImageIO
 import SwiftUI
 import UIKit
 import OpenZCineCore
+import MonitorUI
+import MonitorPresentation
 
 /// Decodes cell images downsampled to a bounded pixel size, off the main actor (same pattern as
 /// `FrameDecoder`). Cells must never decode a full-resolution still — a 45 MP HEIF is ~180 MB
@@ -224,6 +226,7 @@ struct MediaPopupPlacement: Equatable {
 struct MediaBrowserView: View {
     var safeArea: MonitorEdgeInsets = .zero
     @Environment(NativeAppModel.self) private var model
+    @Environment(\.monitorWindowGeometry) private var windowGeometry
     @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
     @State private var playingClip: MediaClip?
     @State private var viewingPhoto: MediaClip?
@@ -244,8 +247,6 @@ struct MediaBrowserView: View {
     @State private var deliveryAnchorFrame: CGRect = .zero
     @State private var isFilterPopupPresented = false
     @State private var filterButtonFrame: CGRect = .zero
-
-    private let sidebarWidth: CGFloat = 172
 
     private var gridColumns: [GridItem] {
         [
@@ -290,40 +291,20 @@ struct MediaBrowserView: View {
         ZStack(alignment: .topLeading) {
             LiveDesign.background
 
-            GeometryReader { proxy in
-                let portrait = proxy.size.height > proxy.size.width
-
-                Group {
-                    if portrait {
-                        VStack(alignment: .leading, spacing: 8) {
-                            categoryStrip
-                            mainHeader
-                            gridContent
-                                // Band lives in the bottom safe area: rows scroll under it
-                                // (visible through the fade) and the last row can always clear it.
-                                .safeAreaInset(edge: .bottom, spacing: 0) {
-                                    portraitGridControlsBand
-                                }
+            MonitorPage(
+                safeArea: resolvedSafeArea, navigationWidth: 206,
+                heading: MonitorPageHeading(brand: "OpenZCine", title: "Media"),
+                backLabel: "Back", back: { model.dismissMediaLibrary() }
+            ) { portrait in
+                mediaNavigation(portrait: portrait)
+            } detail: { portrait in
+                VStack(alignment: .leading, spacing: 8) {
+                    mainHeader(portrait: portrait)
+                    gridContent
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            if portrait, showsThumbnailSizeControl { portraitGridControlsBand }
                         }
-                    } else {
-                        HStack(alignment: .top, spacing: 16) {
-                            sidebar
-                                .frame(width: sidebarWidth)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                mainHeader
-                                gridContent
-                            }
-                            .frame(
-                                maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        }
-                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, max(CGFloat(safeArea.top) + 6, 16))
-                .padding(.leading, max(CGFloat(safeArea.leading) + 6, portrait ? 16 : 64))
-                .padding(.trailing, max(CGFloat(safeArea.trailing) + 6, 20))
-                .padding(.bottom, max(CGFloat(safeArea.bottom) + 4, 14))
             }
 
             if let deliveryToast = deliveryCoordinator.completionToast,
@@ -371,11 +352,9 @@ struct MediaBrowserView: View {
                 .zIndex(50)
             }
 
-            CloseButton(size: 37)
-                .padding(.leading, 16)
-                .padding(.top, max(CGFloat(safeArea.top) + 6, 22))
         }
         .ignoresSafeArea()
+        .observeMonitorWindowGeometry()
         .overlay(alignment: .bottom) {
             if let masterNotice {
                 Text(masterNotice)
@@ -499,18 +478,36 @@ struct MediaBrowserView: View {
         !deliveryCoordinator.isActive && deliveryRequest == nil && !isSelecting
     }
 
-    /// Layout metrics for sidebar grid controls — sized to fit the 172pt sidebar without clipping.
-    private enum SidebarGridControlMetrics {
-        static let buttonSize: CGFloat = 37
-        static let buttonSpacing: CGFloat = 4
-        static let capsuleHorizontalPadding: CGFloat = 6
-        static let capsuleVerticalPadding: CGFloat = 6
-        static let buttonCornerRadius = DesignTokens.cornerRadius
-        static let toggleIconSize: CGFloat = 14
+    private var resolvedSafeArea: EdgeInsets {
+        if windowGeometry.validSize != nil { return windowGeometry.safeArea }
+        return EdgeInsets(
+            top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
+            bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing))
     }
 
-    /// Portrait's bottom band: the same layout-toggle + thumbnail-size capsule the landscape
-    /// sidebar carries, floating on a fade so grid rows visibly scroll away beneath it.
+    private var commonThumbnailSize: MonitorThumbnailSize {
+        switch model.mediaThumbnailSize {
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        }
+    }
+
+    private var displayControls: some View {
+        MonitorCatalogDisplayControls(
+            layout: model.mediaBrowserLayout == .grid ? .grid : .list,
+            thumbnailSize: commonThumbnailSize,
+            onLayout: { model.mediaBrowserLayout = $0 == .grid ? .grid : .list },
+            onThumbnailSize: { size in
+                switch size {
+                case .small: model.mediaThumbnailSize = .small
+                case .medium: model.mediaThumbnailSize = .medium
+                case .large: model.mediaThumbnailSize = .large
+                }
+            })
+    }
+
+    /// The inset keeps the last row clear of the existing floating density controls.
     private var portraitGridControlsBand: some View {
         ZStack(alignment: .bottom) {
             LinearGradient(
@@ -518,164 +515,40 @@ struct MediaBrowserView: View {
                 startPoint: .top, endPoint: .bottom
             )
             .allowsHitTesting(false)
-            sidebarGridControls
-                .padding(.bottom, 4)
+            displayControls.padding(.bottom, 4)
         }
         .frame(height: 84)
         .frame(maxWidth: .infinity)
     }
 
-    private var sidebarGridControls: some View {
-        HStack(spacing: SidebarGridControlMetrics.buttonSpacing) {
-            layoutToggleButton
-
-            ForEach(MediaThumbnailSize.allCases) { size in
-                thumbnailSizeButton(size)
-            }
-        }
-        .padding(.horizontal, SidebarGridControlMetrics.capsuleHorizontalPadding)
-        .padding(.vertical, SidebarGridControlMetrics.capsuleVerticalPadding)
-        .liquidGlass(in: Capsule(), interactive: false)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Media layout and thumbnail size")
-    }
-
-    private var layoutToggleButton: some View {
-        Button {
-            model.mediaBrowserLayout = model.mediaBrowserLayout == .grid ? .list : .grid
-        } label: {
-            Image(systemName: model.mediaBrowserLayout.toggleIcon)
-                .font(.system(size: SidebarGridControlMetrics.toggleIconSize, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-                .frame(
-                    width: SidebarGridControlMetrics.buttonSize,
-                    height: SidebarGridControlMetrics.buttonSize
-                )
-                .background(
-                    LiveDesign.glassBright,
-                    in: RoundedRectangle(
-                        cornerRadius: SidebarGridControlMetrics.buttonCornerRadius,
-                        style: .continuous
-                    )
-                )
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(model.mediaBrowserLayout.accessibilityLabel)
-    }
-
-    private func thumbnailSizeButton(_ size: MediaThumbnailSize) -> some View {
-        let active = model.mediaThumbnailSize == size
-        return Button {
-            model.mediaThumbnailSize = size
-        } label: {
-            Image(systemName: "square.fill")
-                .font(.system(size: size.gridIconSize, weight: .bold))
-                .foregroundStyle(active ? LiveDesign.accent : LiveDesign.muted)
-                .frame(
-                    width: SidebarGridControlMetrics.buttonSize,
-                    height: SidebarGridControlMetrics.buttonSize
-                )
-                .background(
-                    active ? LiveDesign.accentDim : Color.clear,
-                    in: RoundedRectangle(
-                        cornerRadius: SidebarGridControlMetrics.buttonCornerRadius,
-                        style: .continuous
-                    )
-                )
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(size.accessibilityLabel)
-        .accessibilityAddTraits(active ? .isSelected : [])
-    }
-
-    // MARK: - Sidebar
-
-    private var sidebar: some View {
+    private func mediaNavigation(portrait: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            categoryTabs
-
-            if model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
-                storageCards
+            ScrollView(portrait ? .horizontal : .vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    MonitorMediaNavigation(
+                        categories: MediaCategoryTab.allCases.map {
+                            MonitorMediaNavigationCategory(id: $0.id, title: $0.rawValue)
+                        }, selectedID: model.mediaCategoryTab.id, vertical: !portrait
+                    ) { id in
+                        guard let category = MediaCategoryTab.allCases.first(where: { $0.id == id }) else { return }
+                        model.mediaCategoryTab = category
+                    }
+                    if !portrait, model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
+                        storageCards
+                    }
+                }
             }
-
-            Spacer(minLength: 0)
-
-            if showsThumbnailSizeControl {
-                sidebarGridControls
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .monitorScrollFade(portrait ? .horizontal : .vertical)
+            .frame(height: portrait ? 44 : nil)
+            if !portrait, showsThumbnailSizeControl {
+                displayControls
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .frame(maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {
-            if isSelecting {
-                exitSelectionMode()
-            }
+            if !portrait, isSelecting { exitSelectionMode() }
         }
-    }
-
-    private var categoryTabs: some View {
-        VStack(spacing: 4) {
-            ForEach(MediaCategoryTab.allCases) { tab in
-                categoryTabButton(tab)
-            }
-        }
-        .padding(4)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-            interactive: false)
-    }
-
-    /// Horizontal category strip for portrait: the same tab buttons the sidebar's ``categoryTabs``
-    /// renders, laid out in a scrollable row above the header instead of a vertical rail.
-    private var categoryStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(MediaCategoryTab.allCases) { tab in
-                    // The strip scrolls — never let a pill truncate its label ("Vide…").
-                    categoryTabButton(tab)
-                        .fixedSize()
-                }
-            }
-            .padding(4)
-        }
-        // Glass on the SCROLL VIEW, not its content: glass-on-content made the bar as wide as
-        // every pill and it ran dead off the trailing edge.
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-            interactive: false
-        )
-        // Inset past the root's floating CloseButton, which overlays this corner in portrait
-        // (landscape clears it via the 64pt sidebar leading floor instead).
-        .padding(.leading, 45)
-    }
-
-    /// A single category tab button — shared by the vertical sidebar (``categoryTabs``) and the
-    /// horizontal portrait strip (``categoryStrip``).
-    private func categoryTabButton(_ tab: MediaCategoryTab) -> some View {
-        let active = model.mediaCategoryTab == tab
-        return Button {
-            model.mediaCategoryTab = tab
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: tab.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 16)
-                Text(tab.rawValue)
-                    .font(.system(size: 12, weight: active ? .semibold : .medium))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(active ? LiveDesign.accent : LiveDesign.muted)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                active ? LiveDesign.accentDim : Color.clear,
-                in: RoundedRectangle(
-                    cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-        }
-        .buttonStyle(.zcTapTarget)
     }
 
     private var storageCards: some View {
@@ -698,58 +571,28 @@ struct MediaBrowserView: View {
 
     // MARK: - Main column
 
-    private var mainHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func mainHeader(portrait: Bool) -> some View {
+        Group {
             if isSelecting {
                 selectionHeader
             } else {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("MULTIMEDIA")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .kerning(0.8)
-                            .foregroundStyle(LiveDesign.muted)
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(headerTitle)
-                                .font(.system(size: 26, weight: .semibold))
-                                .foregroundStyle(LiveDesign.text)
-                            Text("·")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(LiveDesign.faint)
-                            if model.mediaFetchInProgress {
-                                HStack(spacing: 6) {
-                                    ProgressView().controlSize(.small).tint(LiveDesign.muted)
-                                    Text(headerItemCountLabel)
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(LiveDesign.muted)
-                                }
-                            } else {
-                                Text(headerItemCountLabel)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(LiveDesign.muted)
-                            }
-                        }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
+                        MonitorCatalogHeader(
+                            title: headerTitle, subtitle: headerItemCountLabel,
+                            compact: portrait, sort: model.mediaSortOrder.pillLabel,
+                            filterCount: model.mediaActiveFilterCount,
+                            onSort: { model.cycleMediaSortOrder() },
+                            onFilter: { isFilterPopupPresented.toggle() },
+                            onFilterFrameChange: { filterButtonFrame = $0 })
+                        if model.mediaBrowserSource == .camera { refreshButton }
+                        if model.mediaFetchInProgress { ProgressView().controlSize(.small) }
                     }
-
-                    Spacer(minLength: 8)
-
-                    HStack(alignment: .center, spacing: 8) {
-                        if model.mediaBrowserSource == .camera {
-                            refreshButton
-                        }
-                        filterButton
-                        sortButton
+                    if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }),
+                        let progress = model.mediaDownloadProgress[streamingClip.id]
+                    {
+                        clipCacheHeaderBar(filename: streamingClip.filename, progress: progress)
                     }
-                    // Both pills keep their intrinsic width; the title absorbs any squeeze. The
-                    // active-filter badge used to steal the difference from these two, wrapping
-                    // the label to "FILTE / R" and clipping SORT to "SO…" on a 393pt phone.
-                    .fixedSize()
-                }
-
-                if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }),
-                    let progress = model.mediaDownloadProgress[streamingClip.id]
-                {
-                    clipCacheHeaderBar(filename: streamingClip.filename, progress: progress)
                 }
             }
         }
@@ -917,16 +760,6 @@ struct MediaBrowserView: View {
         }
     }
 
-    private var sortButton: some View {
-        MediaActionPill(
-            icon: "arrow.up.arrow.down",
-            title: model.mediaSortOrder.pillLabel,
-            isActive: false
-        ) {
-            model.cycleMediaSortOrder()
-        }
-    }
-
     /// Authoritative re-enumeration on demand (#296): the camera's inventory is the truth, and
     /// after a card format the operator wants a way to say "ask it again" without reconnecting.
     /// Refresh probes reused PTP handles so a recycled generation cannot keep stale filenames.
@@ -949,47 +782,6 @@ struct MediaBrowserView: View {
         .buttonStyle(.zcTapTarget)
         .disabled(model.mediaFetchInProgress)
         .accessibilityLabel("Refresh camera media")
-    }
-
-    private var filterButton: some View {
-        Button {
-            isFilterPopupPresented.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("FILTER")
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                if model.mediaActiveFilterCount > 0 {
-                    Text("\(model.mediaActiveFilterCount)")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LiveDesign.background)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(LiveDesign.accent, in: Capsule())
-                }
-            }
-            .foregroundStyle(
-                model.mediaActiveFilterCount > 0 ? LiveDesign.accent : LiveDesign.muted
-            )
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                model.mediaActiveFilterCount > 0 ? LiveDesign.accentDim : Color.clear,
-                in: Capsule()
-            )
-            .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { filterButtonFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        filterButtonFrame = frame
-                    }
-            }
-        }
     }
 
     private func clipCacheHeaderBar(filename: String, progress: Double) -> some View {

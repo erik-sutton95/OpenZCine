@@ -22,6 +22,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import org.junit.After
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -140,9 +141,60 @@ class OfflineMediaMainActivityTest {
         assertNotNull(device.waitForText("Media Library"))
     }
 
+    @Test
+    fun actualSharedMediaShellKeepsCategoriesLayoutAndDensityAcrossRotationAndRelaunch() {
+        val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
+        index.saveViewOptions(MediaLibraryViewOptions(source = MediaLibrarySource.LOCAL))
+        try {
+            scenario = ActivityScenario.launch(
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+            device.waitForText("Media Library").click()
+            device.setOrientationLeft()
+            device.waitForDescription("Show Photos media").click()
+            device.waitForIdle()
+            assertEquals(MediaLibraryCategory.PHOTOS, index.viewOptions(MediaLibrarySource.LOCAL).category)
+            device.waitForDescription("Show Videos media").click()
+            assertNotNull(device.waitForText(CACHED_FILENAME))
+            device.waitForDescription("List view").click()
+            device.waitForIdle()
+            assertEquals(MediaLibraryLayout.LIST, index.viewOptions(MediaLibrarySource.LOCAL).layout)
+            device.waitForDescription("Grid view").click()
+            for (size in MediaThumbnailSize.entries) {
+                device.waitForDescription(size.accessibilityLabel).click()
+                device.waitForIdle()
+                assertEquals(size, index.viewOptions(MediaLibrarySource.LOCAL).thumbnailSize)
+            }
+            device.setOrientationNatural()
+            assertNotNull(device.waitForText(CACHED_FILENAME))
+            device.waitForDescription("List view").click()
+            device.waitForIdle()
+            val retained = index.viewOptions(MediaLibrarySource.LOCAL)
+            assertEquals(MediaLibraryCategory.VIDEOS, retained.category)
+            assertEquals(MediaLibraryLayout.LIST, retained.layout)
+            assertEquals(MediaThumbnailSize.LARGE, retained.thumbnailSize)
+            scenario?.close()
+            scenario = ActivityScenario.launch(
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+            device.waitForText("Media Library").click()
+            assertNotNull(device.waitForText(CACHED_FILENAME))
+            assertEquals(retained, index.viewOptions(MediaLibrarySource.LOCAL))
+        } finally {
+            device.setOrientationNatural()
+            device.unfreezeRotation()
+        }
+    }
+
     private fun UiDevice.waitForText(text: String): UiObject2 =
         wait(Until.findObject(By.text(text)), UI_TIMEOUT_MILLIS)
             ?: throw AssertionError("Timed out waiting for text: $text")
+
+    private fun UiDevice.waitForDescription(description: String): UiObject2 =
+        wait(Until.findObject(By.desc(description)), UI_TIMEOUT_MILLIS)
+            ?: throw AssertionError("Timed out waiting for description: $description")
 
     private fun SharedPreferences.stringSnapshot(): Map<String, String> =
         all.mapValues { (key, value) ->
