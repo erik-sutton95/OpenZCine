@@ -60,9 +60,7 @@ final class RunnerTests: XCTestCase {
         }
         let host = UIHostingController(
             rootView:
-                MonitorViewAssistSettings(sections: [
-                    .zebra(NikonAssistMenuAdapter(model: model, compact: true).zebra)
-                ]).environment(model))
+                ScrollView { NikonViewAssistSettings() }.environment(model))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
         window.rootViewController = host
         window.makeKeyAndVisible()
