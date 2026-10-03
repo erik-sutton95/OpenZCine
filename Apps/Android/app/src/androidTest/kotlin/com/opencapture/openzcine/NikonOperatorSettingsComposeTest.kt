@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
@@ -129,6 +130,7 @@ class NikonOperatorSettingsComposeTest {
             composeRule.onNodeWithTag("settings.zebra.threshold.Highlight", useUnmergedTree = true).performScrollTo()
             composeRule.onNode(threshold and hasClickAction(), useUnmergedTree = true).performClick()
             val editor = composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true)
+            editor.assertIsFocused()
             editor.performTextReplacement(text)
             editor.performImeAction()
             composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true).assertDoesNotExist()
@@ -154,7 +156,9 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNode(threshold and hasClickAction(), useUnmergedTree = true).performClick()
         composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true).performTextReplacement("120")
         val midtone = hasAnyAncestor(hasTestTag("settings.zebra.threshold.Midtone"))
+        composeRule.onNodeWithTag("settings.zebra.threshold.Midtone", useUnmergedTree = true).performScrollTo()
         composeRule.onNode(midtone and hasClickAction(), useUnmergedTree = true).performClick()
+        composeRule.onNode(midtone and hasSetTextAction(), useUnmergedTree = true).assertIsFocused()
         composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true).assertDoesNotExist()
         composeRule.runOnIdle {
             assertEquals(zebraMonitorPercent(input, FeedZebraUnit.NATIVE, 120f),
