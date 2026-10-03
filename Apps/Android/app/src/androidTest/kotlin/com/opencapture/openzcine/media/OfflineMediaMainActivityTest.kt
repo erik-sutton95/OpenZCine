@@ -13,6 +13,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import androidx.test.uiautomator.UiScrollable
+import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.pairing.SavedCameraRecord
@@ -121,6 +123,10 @@ class OfflineMediaMainActivityTest {
 
         assertNotNull(device.waitForDescription("Media library"))
         device.waitForDescription("Settings").click()
+        val tabs = UiScrollable(UiSelector().scrollable(true)).setAsHorizontalList()
+        check(tabs.scrollIntoView(UiSelector().description("Storage"))) {
+            "The actual settings rail did not reveal Storage"
+        }
         device.waitForDescription("Storage").click()
         device.waitForText("Clear").click()
         assertNotNull(
