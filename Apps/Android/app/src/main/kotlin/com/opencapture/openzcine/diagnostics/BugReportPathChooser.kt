@@ -32,7 +32,7 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.settings.PanelCloseButton
-import com.opencapture.openzcine.settings.SettingsGroupCard
+import com.opencapture.monitorui.settings.MonitorSettingsGroupCard
 
 /**
  * Lets a person choose between the minimal account-free form and GitHub's
@@ -79,7 +79,7 @@ internal fun BugReportPathChooser(
                 color = LiveDesign.text,
             )
 
-            SettingsGroupCard(
+            MonitorSettingsGroupCard(
                 title = stringResource(R.string.bug_report_path_anonymous_title),
                 caption = stringResource(R.string.bug_report_path_anonymous_caption),
                 captionMaxLines = Int.MAX_VALUE,
@@ -95,7 +95,7 @@ internal fun BugReportPathChooser(
                 }
             }
 
-            SettingsGroupCard(
+            MonitorSettingsGroupCard(
                 title = stringResource(R.string.bug_report_path_github_title),
                 caption = stringResource(R.string.bug_report_path_github_caption),
                 captionMaxLines = Int.MAX_VALUE,

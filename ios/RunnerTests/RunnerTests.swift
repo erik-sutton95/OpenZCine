@@ -15,6 +15,91 @@ import XCTest
 final class RunnerTests: XCTestCase {
 
     @MainActor
+    func testActualZebraRowsUseCommonNumberPadClampAndDoneWithNativeConversion() async throws {
+        let model = NativeAppModel()
+        let original = model.preferences
+        let originalAssist = model.assistConfiguration
+        model.preferences = OperatorPreferences.defaults
+        model.assistConfiguration.zebra = .init()
+        defer {
+            model.preferences = original
+            model.assistConfiguration = originalAssist
+        }
+        let host = UIHostingController(
+            rootView:
+                AssistQuickSettingsContent(tool: .zebra).environment(model))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        func fields(_ view: UIView) -> [UITextField] {
+            if let field = view as? UITextField { return [field] }
+            return view.subviews.flatMap(fields)
+        }
+        for _ in 0..<200 {
+            host.view.layoutIfNeeded()
+            await Task.yield()
+        }
+        let threshold = try XCTUnwrap(fields(host.view).first)
+        XCTAssertEqual(
+            fields(host.view).count, 2, "The real highlight and midtone rows use native fields")
+        XCTAssertEqual(threshold.keyboardType, .numberPad)
+
+        func enterAndFinish(_ text: String) async throws -> String? {
+            XCTAssertTrue(threshold.becomeFirstResponder())
+            threshold.text = text
+            threshold.sendActions(for: .editingChanged)
+            let bar = try XCTUnwrap(threshold.inputAccessoryView as? UIToolbar)
+            let done = try XCTUnwrap(
+                bar.items?.first { $0.title == MonitorSettingsNumberField.doneTitle })
+            let selector = try XCTUnwrap(done.action)
+            XCTAssertTrue(
+                UIApplication.shared.sendAction(selector, to: done.target, from: done, for: nil))
+            let committed = threshold.text
+            for _ in 0..<200 {
+                host.view.layoutIfNeeded()
+                await Task.yield()
+            }
+            XCTAssertFalse(threshold.isFirstResponder, "Done dismisses the actual native keyboard")
+            return committed
+        }
+
+        let clampedIRE = try await enterAndFinish("999")
+        XCTAssertEqual(clampedIRE, "100")
+        XCTAssertEqual(threshold.text, "100")
+        XCTAssertEqual(model.assistConfiguration.zebra.highlightIRE, 100)
+        model.assistConfiguration.zebra.unit = .native
+        for _ in 0..<200 {
+            host.view.layoutIfNeeded()
+            await Task.yield()
+        }
+        let clampedNative = try await enterAndFinish("999")
+        XCTAssertEqual(clampedNative, "255")
+        XCTAssertEqual(
+            model.assistConfiguration.zebra.highlightIRE,
+            model.exposureSignalMapping.monitorPercent(signalNative: 255), accuracy: 0.0001)
+        // Codes above the tone curve's clipping point map to the existing normalized maximum.
+        // After committing, the real binding displays that converted threshold again.
+        XCTAssertEqual(
+            threshold.text,
+            String(
+                model.assistConfiguration.zebra.displayValue(
+                    for: model.assistConfiguration.zebra.highlightIRE,
+                    mapping: model.exposureSignalMapping)))
+        _ = try await enterAndFinish("128")
+        XCTAssertEqual(
+            model.assistConfiguration.zebra.highlightIRE,
+            model.exposureSignalMapping.monitorPercent(signalNative: 128), accuracy: 0.0001)
+        let retained = model.assistConfiguration.zebra.highlightIRE
+        _ = try await enterAndFinish("")
+        XCTAssertEqual(threshold.text, "128")
+        XCTAssertEqual(model.assistConfiguration.zebra.highlightIRE, retained)
+    }
+
+    @MainActor
     func testActualSharedNikonMonitorKeepsNativePictureThroughOwnedAndBorrowedLifetimes()
         async throws
     {

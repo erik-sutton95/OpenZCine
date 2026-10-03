@@ -1,3 +1,4 @@
+import MonitorUI
 import SwiftUI
 import UIKit
 import OpenZCineCore
@@ -332,83 +333,6 @@ struct SettingActionCard: View {
     }
 }
 
-struct SettingsGroupCard<Content: View>: View {
-    let title: String
-    let caption: String
-    var onReset: (() -> Void)? = nil
-    /// When bound, the card collapses to its header and the whole header toggles it. Long tabs
-    /// (Display carries three DISP sections) read as a short list of sections this way instead of
-    /// one unbroken scroll of controls.
-    var expansion: Binding<Bool>? = nil
-    @ViewBuilder let content: Content
-
-    init(
-        title: String, caption: String, onReset: (() -> Void)? = nil,
-        expansion: Binding<Bool>? = nil,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.title = title
-        self.caption = caption
-        self.onReset = onReset
-        self.expansion = expansion
-        self.content = content()
-    }
-
-    private var isExpanded: Bool { expansion?.wrappedValue ?? true }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            if let expansion {
-                Button {
-                    withAnimation(.easeOut(duration: 0.18)) { expansion.wrappedValue.toggle() }
-                } label: {
-                    header
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            } else {
-                header
-            }
-            if isExpanded {
-                content
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-    }
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold, design: .default))
-                    .foregroundStyle(LiveDesign.text)
-                // Wraps rather than truncating: a card whose caption has to explain a rule
-                // (clean view, monitor chrome) loses the explanation to a `…` at one line.
-                Text(caption)
-                    .font(.system(size: 11.5, weight: .regular, design: .default))
-                    .foregroundStyle(LiveDesign.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-            if let onReset, isExpanded {
-                SettingsResetButton(action: onReset)
-            }
-            if expansion != nil {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(LiveDesign.muted)
-                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                    .frame(width: 28, height: 28)
-            }
-        }
-        .contentShape(Rectangle())
-    }
-}
-
 struct SettingsActionRow: View {
     let title: String
     let value: String
@@ -665,7 +589,7 @@ struct CleanViewPinStrip: View {
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], spacing: 7) {
             ForEach(MonitorAssistTool.activeCases) { tool in
-                DisplayToggleItem(
+                MonitorSettingsDisplayToggle(
                     title: tool.displaySettingsTitle,
                     isOn: model.preferences.cleanViewPinnedTools.contains(tool)
                 ) {
@@ -716,38 +640,6 @@ struct DisplayOrderStrip: View {
             .accessibilityLabel("\(mode.title), position \(index + 1)")
             .accessibilityHint("Tap the eye to toggle visibility. Drag to reorder.")
         }
-    }
-}
-
-struct DisplayToggleItem: View {
-    let title: String
-    let isOn: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Text(title)
-                    .font(.system(size: 11.5, weight: .semibold, design: .default))
-                    .foregroundStyle(LiveDesign.text)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.64)
-                Spacer(minLength: 0)
-                SettingsSwitchGraphic(isOn: isOn)
-                    .scaleEffect(0.86)
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 46)
-            .background(
-                LiveDesign.background.opacity(0.38),
-                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                    .stroke(LiveDesign.hairline, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.zcTapTarget)
     }
 }
 
@@ -1037,57 +929,6 @@ struct SettingsPercentSlider: View {
 }
 
 /// Amber action pill (`settings-action`).
-struct SettingsActionPill: View {
-    let title: String
-    /// Optional leading SF Symbol (e.g. the Disconnect pill's broken-link glyph).
-    var systemImage: String? = nil
-    /// Draws the standard SF slash treatment over the symbol — for glyphs the font ships no
-    /// slashed variant of (there is no `link.slash`; a slashed `link` reads as a cut chain).
-    var slashesIcon = false
-    var tint: Color = LiveDesign.accent
-    var background: Color = LiveDesign.accentDim
-    /// Stretches the capsule to the height its row offers — used to match the link tile.
-    var fillsHeight = false
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .semibold))
-                        .overlay {
-                            if slashesIcon {
-                                // SF's slash runs top-left → bottom-right; the wider casing
-                                // stroke in the pill's background color separates the slash
-                                // from the glyph, matching the system slash idiom.
-                                ZStack {
-                                    Capsule()
-                                        .fill(background)
-                                        .frame(width: 4.2, height: 19)
-                                    Capsule()
-                                        .fill(tint)
-                                        .frame(width: 1.7, height: 19)
-                                }
-                                .rotationEffect(.degrees(-45))
-                            }
-                        }
-                }
-                Text(title.uppercased())
-                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                    .kerning(0.6)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(tint)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .frame(maxHeight: fillsHeight ? .infinity : nil)
-            .background(background, in: Capsule())
-            .overlay(Capsule().stroke(tint.opacity(0.5), lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-}
-
 /// Chrome treatment for settings row cards. Prefer `.surface` inside scroll regions with many cards —
 /// native Liquid Glass is expensive to recomposite while scrolling.
 enum SettingsRowChrome {
@@ -1302,32 +1143,6 @@ struct SettingsColorDots: View {
                 .accessibilityLabel(dot.name)
             }
         }
-    }
-}
-
-/// Small numeric field used by the zebra threshold rows (the mockup's `settings-num`).
-struct SettingsNumberField: View {
-    @Binding var value: Int
-    var maximum: Int = 100
-
-    var body: some View {
-        TextField("", value: $value, format: .number)
-            .keyboardType(.numberPad)
-            .multilineTextAlignment(.center)
-            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-            .foregroundStyle(LiveDesign.text)
-            .frame(width: 44, height: 30)
-            .background(
-                LiveDesign.background.opacity(0.5),
-                in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                    .stroke(LiveDesign.hairline, lineWidth: 1)
-            )
-            .onChange(of: value) { _, newValue in
-                value = min(max(newValue, 0), maximum)
-            }
     }
 }
 

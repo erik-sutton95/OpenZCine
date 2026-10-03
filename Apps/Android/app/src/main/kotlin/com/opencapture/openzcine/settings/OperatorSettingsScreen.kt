@@ -1,8 +1,19 @@
 package com.opencapture.openzcine.settings
 
+import com.opencapture.monitorui.settings.MonitorSettingsActionPill
+import com.opencapture.monitorui.settings.MonitorSettingsDisplayToggle
+import com.opencapture.monitorui.settings.MonitorSettingsGroupCard
+import com.opencapture.monitorui.settings.MonitorSupportAction
+import com.opencapture.monitorui.settings.MonitorSupportSettings
+import androidx.compose.ui.platform.testTag
+
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
 import com.opencapture.monitorui.settings.MonitorOperatorSafetySettings
+import com.opencapture.monitorui.settings.MonitorAppInformationSettings
+import com.opencapture.monitorui.settings.MonitorCacheSettings
+import com.opencapture.monitorui.settings.MonitorProjectLegalSettings
+import com.opencapture.monitorui.settings.MonitorSettingsNumberField
 import com.opencapture.monitorui.settings.MonitorSettingsPage
 import com.opencapture.monitorui.settings.MonitorSettingsRowCard
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
@@ -612,10 +623,10 @@ private fun SharingRows(
                 help = stringResource(R.string.help_sharing_control_requested),
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SettingsActionPill(stringResource(R.string.sharing_decline)) {
+                    MonitorSettingsActionPill(stringResource(R.string.sharing_decline)) {
                         sharing?.declinePendingControl()
                     }
-                    SettingsActionPill(stringResource(R.string.sharing_grant)) {
+                    MonitorSettingsActionPill(stringResource(R.string.sharing_grant)) {
                         sharing?.grantPendingControl()
                     }
                 }
@@ -631,7 +642,7 @@ private fun SharingRows(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     SettingsValueText(holder)
-                    SettingsActionPill(stringResource(R.string.sharing_take_back)) {
+                    MonitorSettingsActionPill(stringResource(R.string.sharing_take_back)) {
                         sharing?.reclaimControl()
                     }
                 }
@@ -1112,11 +1123,13 @@ private fun ZebraZoneRow(
                 SettingsSwitchGraphic(isOn = enabled)
             }
             if (editorValue != null) {
-                SettingsNumberField(
-                    value = editorValue.roundToInt().coerceIn(0, maximum),
-                    maximum = maximum,
-                ) { value ->
-                    zebraMonitorPercent(cameraInput, unit, value.toFloat())?.let(onThreshold)
+                Box(Modifier.testTag("settings.zebra.threshold.$title")) {
+                    MonitorSettingsNumberField(
+                        value = editorValue.roundToInt().coerceIn(0, maximum),
+                        maximum = maximum,
+                    ) { value ->
+                        zebraMonitorPercent(cameraInput, unit, value.toFloat())?.let(onThreshold)
+                    }
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -1891,7 +1904,7 @@ private fun DisplayRows(
     var expandedSection by rememberSaveable { mutableStateOf<MonitorDisplayMode?>(null) }
     var pickedCapture by rememberSaveable { mutableStateOf<CaptureLayoutMode?>(null) }
     val capture = pickedCapture ?: liveCaptureMode
-    SettingsGroupCard(
+    MonitorSettingsGroupCard(
         title = stringResource(R.string.settings_layout_for),
         caption = stringResource(R.string.settings_layout_for_help),
         captionMaxLines = 3,
@@ -1907,7 +1920,7 @@ private fun DisplayRows(
         }
     }
     MonitorDisplayMode.entries.forEach { mode ->
-        SettingsGroupCard(
+        MonitorSettingsGroupCard(
             title = "DISP ${mode.ordinal + 1} · ${stringResource(mode.labelResource())}",
             caption = stringResource(dispSectionCaption(mode)),
             onReset = {
@@ -1948,7 +1961,7 @@ private fun DisplayRows(
                             },
                     )
                 } else {
-                    SettingsActionPill(
+                    MonitorSettingsActionPill(
                         title = stringResource(R.string.settings_edit_view),
                         onClick = { onEditView(mode) },
                     )
@@ -2005,7 +2018,7 @@ private fun DisplayRows(
             }
         }
     }
-    SettingsGroupCard(
+    MonitorSettingsGroupCard(
         title = stringResource(R.string.settings_disp_order),
         caption = stringResource(R.string.settings_disp_order_caption),
         onReset = {
@@ -2061,7 +2074,7 @@ private fun DisplayToggleGrid(
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                 ) {
                     rowEntries.forEach { entry ->
-                        DisplayToggleItem(
+                        MonitorSettingsDisplayToggle(
                             entry.title,
                             isOn = entry.isOn,
                             modifier = Modifier.weight(1f),
@@ -2137,39 +2150,14 @@ private fun StorageRows(
             }
         }
     }
-    SettingsRowCard {
-        if (condensed) {
-            CondensedStorageRow(
-                title = stringResource(R.string.cache_cached_media),
-                help = stringResource(R.string.help_storage_cache),
-                showTopDivider = false,
-            ) {
-                SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
-            }
-            CondensedStorageRow(
-                title = stringResource(R.string.cache_clear),
-                help = stringResource(R.string.help_storage_clear_cache),
-            ) {
-                StorageClearAction(clearing, ::clearNow)
-            }
-        } else {
-            SettingsInlineRow(
-                title = stringResource(R.string.cache_cached_media),
-                help = stringResource(R.string.help_storage_cache),
-                showTopDivider = false,
-            ) {
-                SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
-            }
-            // Same label as iOS, deliberately different scope, so the help says so: this
-            // clears COMPLETED entries and leaves a transfer that is still running alone
-            // (MediaCacheStore.clearCompletedEntries). iOS clears the lot.
-            SettingsInlineRow(
-                title = stringResource(R.string.cache_clear),
-                help = stringResource(R.string.help_storage_clear_cache),
-            ) {
-                StorageClearAction(clearing, ::clearNow)
-            }
-        }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        MonitorCacheSettings(
+            sizeLabel = cacheSizeLabel(context, snapshot?.usage?.totalBytes),
+            clearing = clearing,
+            scopeHelp = stringResource(R.string.help_storage_cache),
+            clearHelp = stringResource(R.string.help_storage_clear_cache),
+            clear = ::clearNow,
+        )
         snapshot?.clearResult?.let { result ->
             Text(
                 clearResultLabel(context, result),
@@ -2311,58 +2299,6 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
     }
 }
 
-/** Short landscape storage row that preserves a 48dp clear-cache target. */
-@Composable
-private fun CondensedStorageRow(
-    title: String,
-    help: String? = null,
-    showTopDivider: Boolean = true,
-    trailing: @Composable () -> Unit,
-) {
-    Column {
-        if (showTopDivider) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
-        }
-        Row(
-            Modifier.fillMaxWidth().height(44.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                title,
-                style = chromeStyle(12.5f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-                maxLines = 1,
-            )
-            help?.let { SettingsHelpBadge(it) }
-            Spacer(Modifier.weight(1f))
-            trailing()
-        }
-    }
-}
-
-/** Accessible destructive-cache action used in regular and short layouts. */
-@Composable
-private fun StorageClearAction(clearing: Boolean, onClick: () -> Unit) {
-    if (clearing) {
-        SettingsValueText(stringResource(R.string.cache_clearing))
-    } else {
-        val description = stringResource(R.string.cache_clear_description)
-        Box(
-            Modifier.size(48.dp)
-                .settingsClickable(role = Role.Button, onClick = onClick)
-                .semantics { contentDescription = description },
-            contentAlignment = Alignment.CenterEnd,
-        ) {
-            Text(
-                stringResource(R.string.action_clear),
-                style = chromeStyle(13f, FontWeight.SemiBold),
-                color = LiveDesign.accent,
-            )
-        }
-    }
-}
-
 private fun cacheSizeLabel(context: Context, bytes: Long?): String =
     when {
         bytes == null -> context.getString(R.string.status_calculating)
@@ -2407,71 +2343,47 @@ internal fun SystemRows(
         }
     }
 
-    // iOS System uses titled SettingsRowCard sections (no captions / no licenses row).
-    SettingsRowCard(title = stringResource(R.string.system_help_feedback)) {
-        SettingsInlineRow(stringResource(R.string.system_support), showTopDivider = false) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_support),
-            ) { runAction(actions::openSupport) }
-        }
-        SettingsInlineRow(stringResource(R.string.system_report_problem)) {
-            SettingsActionPill(stringResource(R.string.action_report)) { onReportProblem() }
-        }
-        SettingsInlineRow(stringResource(R.string.system_request_feature)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_request),
-                stringResource(R.string.system_request_feature),
-            ) {
-                runAction(actions::requestFeature)
-            }
-        }
-        SettingsInlineRow(stringResource(R.string.system_share_diagnostics)) {
-            SettingsActionPill(stringResource(R.string.action_share)) {
-                runAction(actions::shareDiagnostics)
-            }
-        }
-        SettingsInlineRow(stringResource(R.string.system_live_view_guide)) {
-            SettingsActionPill(stringResource(R.string.action_show_again)) {
-                if (onShowGuideNow != null) {
-                    onShowGuideNow()
-                } else {
-                    onShowGuideOnNextRealFrame()
-                }
-            }
-        }
-    }
+    MonitorSupportSettings(
+        reportTitle = stringResource(R.string.system_report_problem),
+        reportHelp = "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue.",
+        reportActionTitle = stringResource(R.string.action_report),
+        report = onReportProblem,
+        actions = listOf(
+            MonitorSupportAction(id = "support.open", title = stringResource(R.string.system_support),
+                actionTitle = stringResource(R.string.action_open),
+                accessibilityLabel = stringResource(R.string.system_open_support),
+                action = { runAction(actions::openSupport) }),
+            MonitorSupportAction(id = "support.feature", title = stringResource(R.string.system_request_feature),
+                actionTitle = stringResource(R.string.action_request),
+                accessibilityLabel = stringResource(R.string.system_request_feature),
+                action = { runAction(actions::requestFeature) }),
+            MonitorSupportAction(id = "support.diagnostics", title = stringResource(R.string.system_share_diagnostics),
+                actionTitle = stringResource(R.string.action_share),
+                accessibilityLabel = stringResource(R.string.system_share_diagnostics),
+                action = { runAction(actions::shareDiagnostics) }),
+            MonitorSupportAction(id = "support.guide", title = stringResource(R.string.system_live_view_guide),
+                actionTitle = stringResource(R.string.action_show_again),
+                accessibilityLabel = "Show Live View Guide Again",
+                action = {
+                    if (onShowGuideNow != null) onShowGuideNow()
+                    else onShowGuideOnNextRealFrame()
+                }),
+        ),
+    )
 
-    SettingsRowCard(title = stringResource(R.string.system_project_legal)) {
-        SettingsInlineRow(stringResource(R.string.system_source_code), showTopDivider = false) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_source_code),
-            ) { runAction(actions::openSource) }
-        }
-        SettingsInlineRow(stringResource(R.string.system_privacy)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_privacy),
-            ) { runAction(actions::openPrivacy) }
-        }
-        SettingsInlineRow(stringResource(R.string.system_terms)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_terms),
-            ) { runAction(actions::openTerms) }
-        }
-    }
-
-    SettingsRowCard(title = stringResource(R.string.system_app_information)) {
-        SettingsInlineRow(stringResource(R.string.system_theme), showTopDivider = false) {
-            SettingsValueText(stringResource(R.string.system_theme_warm_dark))
-        }
-        SettingsInlineRow(stringResource(R.string.system_protocol)) {
-            SettingsValueText("PTP / PTP-IP")
-        }
-        SettingsInlineRow(stringResource(R.string.system_app_version)) {
-            SettingsValueText(appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE))
-        }
-    }
+    MonitorProjectLegalSettings(
+        sourceHelp = "View the OpenZCine project and contribute on GitHub.",
+        termsHelp = "Read the OpenZCine terms of use.",
+        source = { runAction(actions::openSource) },
+        privacy = { runAction(actions::openPrivacy) },
+        terms = { runAction(actions::openTerms) },
+    )
+    MonitorAppInformationSettings(
+        theme = stringResource(R.string.system_theme_warm_dark),
+        protocolName = "PTP / PTP-IP",
+        version = appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+        themeHelp = "Dark earth interface tuned for low reflection on set.",
+        protocolHelp = "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
+        versionHelp = "Current OpenZCine build from the native project metadata.",
+    )
 }

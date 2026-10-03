@@ -52,7 +52,7 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.settings.PanelCloseButton
-import com.opencapture.openzcine.settings.SettingsGroupCard
+import com.opencapture.monitorui.settings.MonitorSettingsGroupCard
 import java.util.concurrent.CancellationException
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -178,7 +178,7 @@ internal fun BugReportScreen(
                 )
             }
 
-            SettingsGroupCard(
+            MonitorSettingsGroupCard(
                 title = stringResource(R.string.bug_report_details_title),
                 caption = stringResource(R.string.bug_report_details_caption),
             ) {
@@ -232,7 +232,7 @@ internal fun BugReportScreen(
                 )
             }
 
-            SettingsGroupCard(
+            MonitorSettingsGroupCard(
                 title = stringResource(R.string.bug_report_context_title),
                 caption = stringResource(R.string.bug_report_context_caption),
             ) {
@@ -266,7 +266,7 @@ internal fun BugReportScreen(
                 )
             }
 
-            SettingsGroupCard(
+            MonitorSettingsGroupCard(
                 title = stringResource(R.string.bug_report_attachments_title),
                 caption = stringResource(R.string.bug_report_attachments_caption),
             ) {
@@ -377,7 +377,7 @@ internal fun BugReportScreen(
                 }
             }
 
-            SettingsGroupCard(
+            MonitorSettingsGroupCard(
                 title = stringResource(R.string.bug_report_privacy_title),
                 caption = stringResource(R.string.bug_report_privacy_caption),
             ) {

@@ -2,12 +2,19 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.test.performScrollTo
+import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
+import com.opencapture.monitorui.settings.MonitorSettingsPage
+import com.opencapture.monitorui.settings.MonitorSettingsScrollContext
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
@@ -93,6 +100,55 @@ class SettingsDirectReorderComposeTest {
             assertEquals(MonitorDisplayMode.COMMAND, settings.displayModeOrder.first())
             assertEquals(setOf(MonitorDisplayMode.COMMAND), settings.enabledDisplayModes)
         }
+        preferences.edit().clear().commit()
+    }
+
+    @Test
+    fun actualSharedPageEdgeScrollsDuringGripDragAndRetiresOnRelease() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-settings-page-edge", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val settings = OperatorSettings(preferences)
+        var pageScroll: MonitorSettingsScrollContext? = null
+        var interactions = 0
+        composeRule.setContent {
+            OpenZCineTheme {
+                MonitorSettingsPage(
+                    brand = "SIMULATED", selection = MonitorSettingsTab.DISPLAY, onSelect = {},
+                    isLive = false, phaseLabel = "SIMULATED", disconnect = null,
+                    modifier = Modifier.size(width = 400.dp, height = 500.dp),
+                ) {
+                    val scroll = checkNotNull(LocalMonitorSettingsScrollContext.current)
+                    SideEffect { pageScroll = scroll }
+                    AssistToolbarOrderList(
+                        settings = settings, onInteraction = { interactions += 1 },
+                        parentScrollState = scroll.scrollState, viewportBounds = scroll.viewportBounds,
+                    )
+                }
+            }
+        }
+        val grip = composeRule.onNodeWithContentDescription("Reorder LUT, position 1")
+        grip.performScrollTo()
+        val initial = checkNotNull(pageScroll).scrollState.value
+        val gripBounds = grip.fetchSemanticsNode().boundsInRoot
+        val viewport = checkNotNull(checkNotNull(pageScroll).viewportBounds)
+        grip.performTouchInput {
+            down(center)
+            advanceEventTime(700)
+            moveTo(Offset(center.x, viewport.bottom - gripBounds.top - 8f))
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) {
+            checkNotNull(pageScroll).scrollState.value > initial + 40
+        }
+        composeRule.onRoot().performTouchInput { up() }
+        composeRule.runOnIdle {
+            assertTrue(settings.assistToolbarOrder.indexOf(AssistTool.LUT) >= 2)
+            assertTrue(settings.isAssistToolbarToolVisible(AssistTool.LUT))
+            assertEquals(1, interactions)
+        }
+        val settled = checkNotNull(pageScroll).scrollState.value
+        composeRule.mainClock.advanceTimeBy(400)
+        composeRule.runOnIdle { assertEquals(settled, checkNotNull(pageScroll).scrollState.value) }
         preferences.edit().clear().commit()
     }
 

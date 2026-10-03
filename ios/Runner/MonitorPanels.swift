@@ -2302,7 +2302,7 @@ struct AssistQuickSettingsContent: View {
                         SettingsSwitchGraphic(isOn: enabled)
                     }
                     .buttonStyle(.zcTapTarget)
-                    SettingsNumberField(value: value, maximum: maxValue)
+                    MonitorSettingsNumberField(value: value, maximum: maxValue)
                     Spacer(minLength: 4)
                     SettingsColorDots(
                         dots: colors, selected: selectedColor, compact: true, onSelect: onColor)
@@ -2316,7 +2316,7 @@ struct AssistQuickSettingsContent: View {
                         SettingsSwitchGraphic(isOn: enabled)
                     }
                     .buttonStyle(.zcTapTarget)
-                    SettingsNumberField(value: value, maximum: maxValue)
+                    MonitorSettingsNumberField(value: value, maximum: maxValue)
                     SettingsColorDots(dots: colors, selected: selectedColor, onSelect: onColor)
                 }
             }
@@ -3342,6 +3342,30 @@ private struct RelayPasscodeField: View {
     }
 }
 
+/// The settings cover has its own presentation environment. Observe its containing window
+/// here so rotation cannot replace a physical cutout lane with child GeometryReader insets.
+private struct NikonSettingsViewport<Content: View>: View {
+    @Environment(\.monitorWindowGeometry) private var windowGeometry
+    let fallback: MonitorEdgeInsets
+    @ViewBuilder let content: (EdgeInsets, Bool) -> Content
+
+    var body: some View {
+        GeometryReader { proxy in
+            let insets =
+                windowGeometry.validSize == nil
+                ? EdgeInsets(
+                    top: CGFloat(fallback.top), leading: CGFloat(fallback.leading),
+                    bottom: CGFloat(fallback.bottom), trailing: CGFloat(fallback.trailing))
+                : EdgeInsets(
+                    top: windowGeometry.safeArea.top + windowGeometry.topControlInset,
+                    leading: windowGeometry.safeArea.leading,
+                    bottom: windowGeometry.safeArea.bottom,
+                    trailing: windowGeometry.safeArea.trailing)
+            content(insets, proxy.size.height > proxy.size.width)
+        }
+    }
+}
+
 struct OperatorSettingsPanel: View {
     /// Real device safe-area insets (carries the landscape Dynamic Island lane) so the full-screen
     /// surface can fill the physical screen yet keep its content clear of the cutout.
@@ -3377,11 +3401,9 @@ struct OperatorSettingsPanel: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
+        NikonSettingsViewport(fallback: safeArea) { insets, portrait in
             MonitorSettingsPage(
-                safeArea: EdgeInsets(
-                    top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
-                    bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing)),
+                safeArea: insets,
                 brand: "OpenZCine",
                 selection: Binding(get: { selectedTab }, set: { selectedTab = $0 }),
                 isLive: isConnected,
@@ -3397,9 +3419,10 @@ struct OperatorSettingsPanel: View {
                 onClose: { model.dismissMediaLibrary() },
                 disconnect: { model.disconnect() }
             ) { _ in
-                settingsRows(portrait: proxy.size.height > proxy.size.width)
+                settingsRows(portrait: portrait)
             }
         }
+        .observeMonitorWindowGeometry()
         .sheet(item: $diagnosticsShareItem) { item in
             DiagnosticsShareSheet(url: item.url)
         }
@@ -3566,8 +3589,8 @@ struct OperatorSettingsPanel: View {
                     "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
             ) {
                 HStack(spacing: 8) {
-                    SettingsActionPill(title: "Decline") { model.declineRelayControl() }
-                    SettingsActionPill(title: "Grant to \(requester)") {
+                    MonitorSettingsActionPill(title: "Decline") { model.declineRelayControl() }
+                    MonitorSettingsActionPill(title: "Grant to \(requester)") {
                         model.grantRelayControl()
                     }
                 }
@@ -3581,7 +3604,7 @@ struct OperatorSettingsPanel: View {
             ) {
                 HStack(spacing: 8) {
                     SettingsValueText(value: holder)
-                    SettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
+                    MonitorSettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
                 }
             }
         }
@@ -3825,7 +3848,7 @@ struct OperatorSettingsPanel: View {
         dispSectionCard(.clean)
         dispSectionCard(.command)
 
-        SettingsGroupCard(
+        MonitorSettingsGroupCard(
             title: "DISP Button Order",
             caption: "Drag to reorder; tap to enable or disable modes.",
             onReset: { model.resetDispPreferences() },
@@ -3849,7 +3872,7 @@ struct OperatorSettingsPanel: View {
 
     @ViewBuilder private func dispSectionCard(_ mode: DispMode) -> some View {
         let capture = editedCaptureMode
-        SettingsGroupCard(
+        MonitorSettingsGroupCard(
             title: "DISP \(dispNumber(mode)) · \(mode.title)",
             caption: dispCaption(mode),
             onReset: { model.resetChromeVisibility(for: mode, capture: capture) },
@@ -3879,7 +3902,7 @@ struct OperatorSettingsPanel: View {
                 }
                 displayToggleGrid(chromeToggles(for: mode, capture: capture))
             } else {
-                SettingsActionPill(title: "Edit view") { model.beginChromeEditing(mode) }
+                MonitorSettingsActionPill(title: "Edit view") { model.beginChromeEditing(mode) }
                     .accessibilityHint(
                         "Opens the monitor with an eye on each element you can show or hide")
                 if mode == .clean {
@@ -3936,97 +3959,49 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var systemRows: some View {
-        SettingsRowCard(title: "Help & Feedback") {
-            SettingsInlineRow(
-                title: "Support",
-                help: "Connection guides, camera controls, media workflows, and troubleshooting.",
-                showTopDivider: false
-            ) {
-                systemLinkButton("Open", destination: .support, label: "Open Support")
-            }
-            SettingsInlineRow(
-                title: "Report a Problem",
-                help:
-                    "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue."
-            ) {
-                SettingsActionPill(title: "Report") {
-                    requestInternetDestination(.reportProblem)
-                }
-                .accessibilityLabel("Report a Problem")
-            }
-            SettingsInlineRow(
-                title: "Request a Feature",
-                help: "Start an idea in the project’s feature-request discussion category."
-            ) {
-                systemLinkButton(
-                    "Request", destination: .featureRequest, label: "Request a Feature")
-            }
-            SettingsInlineRow(
-                title: "Share Diagnostics",
-                help:
-                    "Create a local report with recent app events and Apple diagnostics. Review it before sharing."
-            ) {
-                SettingsActionPill(
-                    title: isPreparingDiagnostics ? "Preparing…" : "Share"
-                ) {
-                    prepareDiagnosticsReport()
-                }
-                .disabled(isPreparingDiagnostics)
-                .accessibilityLabel("Share Diagnostics")
-            }
-            SettingsInlineRow(
-                title: "Live View Guide",
-                help:
-                    "Show the short control guide now when live view is open, or again on the next live view."
-            ) {
-                SettingsActionPill(title: "Show Again") {
-                    model.replayLiveViewGuide()
-                }
-                .accessibilityLabel("Show Live View Guide Again")
-            }
-        }
+        MonitorSupportSettings(
+            reportTitle: "Report a Problem",
+            reportHelp: "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue.",
+            reportActionTitle: "Report",
+            actions: [
+                MonitorSupportAction(id: "support.open", title: "Support",
+                    help: "Connection guides, camera controls, media workflows, and troubleshooting.",
+                    actionTitle: "Open", accessibilityLabel: "Open Support") {
+                        requestInternetDestination(.support)
+                    },
+                MonitorSupportAction(id: "support.feature", title: "Request a Feature",
+                    help: "Start an idea in the project’s feature-request discussion category.",
+                    actionTitle: "Request", accessibilityLabel: "Request a Feature") {
+                        requestInternetDestination(.featureRequest)
+                    },
+                MonitorSupportAction(id: "support.diagnostics", title: "Share Diagnostics",
+                    help: "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
+                    actionTitle: isPreparingDiagnostics ? "Preparing…" : "Share",
+                    accessibilityLabel: "Share Diagnostics", enabled: !isPreparingDiagnostics) {
+                        prepareDiagnosticsReport()
+                    },
+                MonitorSupportAction(id: "support.guide", title: "Live View Guide",
+                    help: "Show the short control guide now when live view is open, or again on the next live view.",
+                    actionTitle: "Show Again", accessibilityLabel: "Show Live View Guide Again") {
+                        model.replayLiveViewGuide()
+                    },
+            ],
+            report: { requestInternetDestination(.reportProblem) }
+        )
 
-        SettingsRowCard(title: "Project & Legal") {
-            SettingsInlineRow(
-                title: "Source Code",
-                help: "View the OpenZCine project and contribute on GitHub.",
-                showTopDivider: false
-            ) {
-                systemLinkButton(
-                    "Open", destination: .sourceCode, label: "Open Source Code")
-            }
-            SettingsInlineRow(title: "Privacy", help: "Read the OpenZCine privacy policy.") {
-                systemLinkButton(
-                    "Open", destination: .privacyPolicy, label: "Open Privacy Policy")
-            }
-            SettingsInlineRow(title: "Terms", help: "Read the OpenZCine terms of use.") {
-                systemLinkButton(
-                    "Open", destination: .termsOfUse, label: "Open Terms of Use")
-            }
-        }
-
-        SettingsRowCard(title: "App Information") {
-            SettingsInlineRow(
-                title: "Theme",
-                help: "Dark earth interface tuned for low reflection on set.",
-                showTopDivider: false
-            ) {
-                SettingsValueText(value: "Warm Dark")
-            }
-            SettingsInlineRow(
-                title: "Protocol Implementation",
-                help:
-                    "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required."
-            ) {
-                SettingsValueText(value: "PTP / PTP-IP")
-            }
-            SettingsInlineRow(
-                title: "App Version",
-                help: "Current OpenZCine build from the native project metadata."
-            ) {
-                SettingsValueText(value: Self.appVersionText)
-            }
-        }
+        MonitorProjectLegalSettings(
+            sourceHelp: "View the OpenZCine project and contribute on GitHub.",
+            termsHelp: "Read the OpenZCine terms of use.",
+            source: { requestInternetDestination(.sourceCode) },
+            privacy: { requestInternetDestination(.privacyPolicy) },
+            terms: { requestInternetDestination(.termsOfUse) }
+        )
+        MonitorAppInformationSettings(
+            theme: "Warm Dark", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
+            themeHelp: "Dark earth interface tuned for low reflection on set.",
+            protocolHelp: "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
+            versionHelp: "Current OpenZCine build from the native project metadata."
+        )
     }
 
     private func presentBugReport() {
@@ -4036,18 +4011,6 @@ struct OperatorSettingsPanel: View {
         } else {
             model.isBugReportPresented = true
         }
-    }
-
-    private func systemLinkButton(
-        _ title: String,
-        destination: SettingsInternetDestination,
-        label: String
-    ) -> some View {
-        Button(title) { requestInternetDestination(destination) }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(LiveDesign.accent)
-            .buttonStyle(.zcTapTarget)
-            .accessibilityLabel(label)
     }
 
     private func requestInternetDestination(_ destination: SettingsInternetDestination) {
@@ -4179,30 +4142,13 @@ struct OperatorSettingsPanel: View {
             )
         }
 
-        SettingsRowCard {
-            SettingsInlineRow(
-                title: "Local Media Cache",
-                help:
-                    "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
-                showTopDivider: false
-            ) {
-                SettingsValueText(value: cacheSizeLabel)
-            }
-            SettingsInlineRow(
-                title: "Clear Cache",
-                help:
-                    "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
-            ) {
-                Button {
-                    model.clearAllMediaCaches()
-                    cacheSizeBytes = model.totalMediaCacheByteCount()
-                } label: {
-                    Text("Clear")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(.systemRed))
-                }
-                .buttonStyle(.zcTapTarget)
-            }
+        MonitorCacheSettings(
+            sizeLabel: cacheSizeLabel,
+            scopeHelp: "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
+            clearHelp: "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
+        ) {
+            model.clearAllMediaCaches()
+            cacheSizeBytes = model.totalMediaCacheByteCount()
         }
         .onAppear { cacheSizeBytes = model.totalMediaCacheByteCount() }
     }
@@ -4289,7 +4235,7 @@ struct OperatorSettingsPanel: View {
     ) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], spacing: 7) {
             ForEach(items.indices, id: \.self) { index in
-                DisplayToggleItem(
+                MonitorSettingsDisplayToggle(
                     title: items[index].title, isOn: items[index].isOn,
                     action: items[index].action)
             }
@@ -5487,7 +5433,7 @@ struct MFDriveVerticalScrub: View {
                         .foregroundStyle(LiveDesign.muted)
                         .lineLimit(1)
                 }
-                SettingsActionPill(title: status == nil ? "Start" : "Restart") {
+                MonitorSettingsActionPill(title: status == nil ? "Start" : "Restart") {
                     DemoHarness.startLiveViewCapture()
                     status = DemoHarness.liveViewCaptureStatus()
                 }
