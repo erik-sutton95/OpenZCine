@@ -1,10 +1,12 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -110,6 +112,66 @@ class NikonOperatorSettingsComposeTest {
         composeRule.runOnIdle {
             assertEquals(listOf("source", "privacy", "terms", "support"), called)
             assertFalse(preferences.contains("cache.originals"))
+        }
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun unsupportedReadAndUnknownCalibrationOmitCommonControls() {
+        val colors = listOf(com.opencapture.monitorui.settings.MonitorSettingsColorDot("White", androidx.compose.ui.graphics.Color.White))
+        val absent = com.opencapture.monitorui.MonitorZebraNumberZone(false, null,
+            com.opencapture.opencine.media.MonitorZebraPaint.WHITE, colors, onEnabled = {}, onPaint = {})
+        composeRule.setContent {
+            OpenZCineTheme {
+                androidx.compose.foundation.layout.Column {
+                    com.opencapture.monitorui.MonitorFalseColorMenu(
+                        scales = listOf("Stops", "IRE"), scale = "IRE", onScale = {}, title = { it },
+                        readChoice = null, reference = null, referenceEnabled = false, onReferenceEnabled = {},
+                        scaleHelp = "SIMULATED missing calibration", readHelp = "", referenceHelp = "")
+                    com.opencapture.monitorui.MonitorZebraMenu(units = listOf("Native", "IRE"), unit = "IRE",
+                        title = { it }, onUnit = {}, unitsHelp = "", highlightHelp = "", midtoneHelp = "",
+                        highlight = absent, midtone = absent)
+                }
+            }
+        }
+        composeRule.onNodeWithText("Read").assertDoesNotExist()
+        composeRule.onNodeWithText("LOG").assertDoesNotExist()
+        composeRule.onNodeWithText("REFERENCE KEY").assertDoesNotExist()
+        composeRule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        composeRule.onNodeWithContentDescription("Highlight").assertExists()
+        composeRule.onNodeWithContentDescription("Midtone").assertExists()
+    }
+
+    @Test fun actualCommonAssistMenusPersistIndependentValuesAndKnownSourceReference() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-settings-assist-menus", Context.MODE_PRIVATE)
+        preferences.edit().clear().putString("unrelated.operator.choice", "retained").commit()
+        val settings = OperatorSettings(preferences)
+        val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "settings-assists"))
+        runBlocking { session.connect() }
+        val originalParade = settings.scopeAssistConfiguration.paradeMode
+        show(settings, OperatorSettingsTab.ASSIST, session)
+        fun choose(card: String, text: String) {
+            composeRule.onNode(hasText(text) and hasAnyAncestor(hasTestTag("settings.assist.$card")))
+                .performScrollTo().performClick()
+        }
+        choose("waveform", "Luma")
+        composeRule.runOnIdle { assertEquals(originalParade, settings.scopeAssistConfiguration.paradeMode) }
+        choose("parade", "YRGB")
+        choose("vectorscope", "4x")
+        choose("peaking", "High")
+        composeRule.onNode(hasContentDescription("1.0") and hasAnyAncestor(hasTestTag("settings.assist.trafficLights")))
+            .performScrollTo().performClick()
+        composeRule.onNodeWithText("Read").assertDoesNotExist()
+        composeRule.onNodeWithText("LOG").assertDoesNotExist()
+        composeRule.onNodeWithText("REFERENCE KEY").performScrollTo().assertIsDisplayed()
+        composeRule.runOnIdle {
+            val reloaded = OperatorSettings(preferences)
+            assertEquals(com.opencapture.openzcine.settings.ScopeWaveformMode.LUMA, reloaded.scopeAssistConfiguration.waveformMode)
+            assertEquals(com.opencapture.openzcine.settings.ScopeParadeMode.YRGB, reloaded.scopeAssistConfiguration.paradeMode)
+            assertEquals(com.opencapture.openzcine.settings.ScopeVectorscopeZoom.X4, reloaded.scopeAssistConfiguration.vectorscopeZoom)
+            assertEquals(FeedPeakingSensitivity.HIGH, reloaded.feedEffectsConfiguration.peakingSensitivity)
+            assertEquals(com.opencapture.openzcine.settings.ScopeCrushClipCompensation.ONE, reloaded.scopeCrushClipCompensation)
+            assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
         }
         preferences.edit().clear().commit()
     }

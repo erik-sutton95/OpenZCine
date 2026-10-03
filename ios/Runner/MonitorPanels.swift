@@ -1,4 +1,5 @@
 import OpenCineApple
+import OpenCineMedia
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
@@ -1958,369 +1959,302 @@ struct AssistQuickSettingsContent: View {
     }
 
     private var falseColorRows: some View {
-        Group {
-            SettingsInlineRow(
-                title: "Scale",
-                help:
-                    "The camera signal selects Log3G10 or N-Log automatically. ZC Stops marks minimum exposure, −3, 18% gray, skin, +2, and three clip-relative highlight levels over luminance grayscale. IRE uses RED Video Mode-style monitor ranges after curve-aware display mapping, with 18% gray at 42 IRE and the camera clip at 100. Limits paints only shadow and highlight warnings, leaving other colors untouched.",
-                showTopDivider: false,
-                stacked: compact
-            ) {
-                SettingsSegmented(
-                    options: ["ZC Stops", "IRE", "Limits"],
-                    selected: falseColorScaleLabel,
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    model.assistConfiguration.falseColorScale = falseColorScale(for: $0)
+        MonitorFalseColorMenu(
+            scales: FalseColorScale.allCases,
+            scale: Binding(
+                get: { model.assistConfiguration.falseColorScale },
+                set: { model.assistConfiguration.falseColorScale = $0 }),
+            referenceEnabled: Binding(
+                get: { model.assistConfiguration.falseColorReferenceEnabled },
+                set: { model.assistConfiguration.falseColorReferenceEnabled = $0 }),
+            optionalReference: falseColorReference,
+            title: { scale in
+                switch scale {
+                case .stops: "ZC Stops"
+                case .ire: "IRE"
+                case .limits: "Limits"
                 }
-            }
-            SettingsSwitchInlineRow(
-                title: "Reference Display",
-                help: "Show a compact color key over live view while False Color is active.",
-                stacked: compact,
-                isOn: model.assistConfiguration.falseColorReferenceEnabled
-            ) {
-                model.assistConfiguration.falseColorReferenceEnabled.toggle()
-                if model.assistConfiguration.falseColorReferenceEnabled {
-                    model.setAssist(.falseColor, visible: true)
-                }
-            }
-        }
+            },
+            scaleHelp:
+                "The camera signal selects Log3G10 or N-Log automatically. ZC Stops marks minimum exposure, −3, 18% gray, skin, +2, and clip-relative highlight levels. IRE reads the curve-aware monitoring scale. Limits paints shadow and highlight warnings.",
+            readHelp: "",
+            referenceHelp: "Show a compact color key over live view while False Color is active.",
+            compact: compact, selectionFeedback: selectionFeedback,
+            referenceFeedback: selectionFeedback,
+            onReferenceEnabled: { model.setAssist(.falseColor, visible: true) })
     }
 
-    private var falseColorScaleLabel: String {
-        switch model.assistConfiguration.falseColorScale {
-        case .stops: "ZC Stops"
-        case .ire: "IRE"
-        case .limits: "Limits"
+    private var falseColorReference: MonitorFalseColorReferenceValues {
+        let scale = model.assistConfiguration.falseColorScale
+        let mapping = model.exposureSignalMapping
+        let subtitle: String
+        switch mapping.curve {
+        case .redLog3G10: subtitle = "L3G10"
+        case .nikonNLog: subtitle = "N-Log"
+        case .srgb: subtitle = "sRGB"
+        case .hlg: subtitle = "HLG"
         }
-    }
-
-    private func falseColorScale(for label: String) -> FalseColorScale {
-        switch label {
-        case "IRE": .ire
-        case "Limits": .limits
-        default: .stops
+        let axes: [String]
+        switch scale {
+        case .stops: axes = []
+        case .ire: axes = ["clip / shadows", "18%", "skin hi", "highlights → clip"]
+        case .limits: axes = ["crushed", "midtones untouched", "clipped"]
         }
+        return MonitorFalseColorReferenceValues(
+            subtitle: subtitle,
+            segments: FalseColorReference.segments(scale: scale, mapping: mapping).map {
+                MonitorFalseColorReferenceSegment(
+                    id: $0.id,
+                    lowerFraction: $0.lowerFraction, upperFraction: $0.upperFraction,
+                    red: $0.band.red, green: $0.band.green, blue: $0.band.blue)
+            },
+            markers: scale == .stops
+                ? FalseColorReference.stopAxisMarkers(mapping: mapping).map {
+                    MonitorFalseColorReferenceMarker(
+                        id: $0.id, label: $0.label, fraction: $0.fraction)
+                } : [], axisLabels: axes)
     }
 
     private var zebraRows: some View {
-        Group {
-            SettingsInlineRow(
-                title: "Units",
-                help:
-                    "Switch between Nikon-style native 0-255 codes and OpenZCine's normalized 0-100 monitoring IRE scale.",
-                showTopDivider: false,
-                stacked: compact
-            ) {
-                SettingsSegmented(
-                    options: ["0-255", "IRE"],
-                    selected: model.assistConfiguration.zebra.unit == .native
-                        ? "0-255" : "IRE",
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    model.assistConfiguration.zebra.unit = $0 == "0-255" ? .native : .ire
+        MonitorZebraMenu(
+            units: AssistConfiguration.Zebra.Unit.allCases,
+            unit: Binding(
+                get: { model.assistConfiguration.zebra.unit },
+                set: { model.assistConfiguration.zebra.unit = $0 }),
+            title: { $0 == .native ? "0-255" : "IRE" }, unitsTitle: "Units",
+            unitsHelp:
+                "Switch between Nikon-style native 0-255 codes and OpenZCine's normalized 0-100 monitoring IRE scale.",
+            highlightHelp:
+                "High zebra warns when bright detail approaches clipping after the active log curve is compensated.",
+            midtoneHelp:
+                "Midtone zebra marks the chosen monitoring level after curve compensation.",
+            highlight: zebraZone(highlight: true), midtone: zebraZone(highlight: false),
+            compact: compact, selectionFeedback: selectionFeedback,
+            toggleFeedback: selectionFeedback)
+    }
+
+    private func zebraZone(highlight: Bool) -> MonitorZebraNumberZone<
+        AssistConfiguration.Zebra.StripeColor
+    > {
+        let enabled = Binding(
+            get: {
+                highlight
+                    ? model.assistConfiguration.zebra.highlightEnabled
+                    : model.assistConfiguration.zebra.midtoneEnabled
+            },
+            set: {
+                if highlight {
+                    model.assistConfiguration.zebra.highlightEnabled = $0
+                } else {
+                    model.assistConfiguration.zebra.midtoneEnabled = $0
                 }
+            })
+        let threshold = Binding(
+            get: {
+                let zebra = model.assistConfiguration.zebra
+                return zebra.displayValue(
+                    for: highlight ? zebra.highlightIRE : zebra.midtoneIRE,
+                    mapping: model.exposureSignalMapping)
+            },
+            set: {
+                if highlight {
+                    model.assistConfiguration.zebra.setHighlight(
+                        fromDisplay: $0, mapping: model.exposureSignalMapping)
+                } else {
+                    model.assistConfiguration.zebra.setMidtone(
+                        fromDisplay: $0, mapping: model.exposureSignalMapping)
+                }
+            })
+        let colors = (highlight ? SettingsPalette.highlight : SettingsPalette.midtone).compactMap {
+            dot in
+            AssistConfiguration.Zebra.StripeColor(rawValue: dot.name).map {
+                MonitorSettingsColorDot(value: $0, title: dot.name, color: dot.color)
             }
-            zebraZoneRow(
-                title: "Highlight",
-                help:
-                    "High zebra warns when bright detail approaches clipping after the active log curve is compensated.",
-                enabled: model.assistConfiguration.zebra.highlightEnabled,
-                onEnabledToggle: { model.assistConfiguration.zebra.highlightEnabled.toggle() },
-                value: Binding(
-                    get: {
-                        model.assistConfiguration.zebra.displayValue(
-                            for: model.assistConfiguration.zebra.highlightIRE,
-                            mapping: model.exposureSignalMapping)
-                    },
-                    set: {
-                        model.assistConfiguration.zebra.setHighlight(
-                            fromDisplay: $0, mapping: model.exposureSignalMapping)
-                    }),
-                maxValue: model.assistConfiguration.zebra.unit == .native ? 255 : 100,
-                colors: SettingsPalette.highlight,
-                selectedColor: model.assistConfiguration.zebra.highlightColor.rawValue,
-                onColor: { color in
-                    if let parsed = AssistConfiguration.Zebra.StripeColor(rawValue: color) {
-                        model.assistConfiguration.zebra.highlightColor = parsed
-                    }
-                })
-            zebraZoneRow(
-                title: "Midtone",
-                help:
-                    "Midtone zebra gives a curve-compensated reference band for faces or key subject exposure.",
-                enabled: model.assistConfiguration.zebra.midtoneEnabled,
-                onEnabledToggle: { model.assistConfiguration.zebra.midtoneEnabled.toggle() },
-                value: Binding(
-                    get: {
-                        model.assistConfiguration.zebra.displayValue(
-                            for: model.assistConfiguration.zebra.midtoneIRE,
-                            mapping: model.exposureSignalMapping)
-                    },
-                    set: {
-                        model.assistConfiguration.zebra.setMidtone(
-                            fromDisplay: $0, mapping: model.exposureSignalMapping)
-                    }),
-                maxValue: model.assistConfiguration.zebra.unit == .native ? 255 : 100,
-                colors: SettingsPalette.midtone,
-                selectedColor: model.assistConfiguration.zebra.midtoneColor.rawValue,
-                onColor: { color in
-                    if let parsed = AssistConfiguration.Zebra.StripeColor(rawValue: color) {
-                        model.assistConfiguration.zebra.midtoneColor = parsed
-                    }
-                })
         }
+        return MonitorZebraNumberZone(
+            enabled: enabled,
+            entry: MonitorZebraNumberEntry(
+                value: threshold,
+                maximum: model.assistConfiguration.zebra.unit == .native ? 255 : 100,
+                identifier: "settings.zebra.threshold.\(highlight ? "Highlight" : "Midtone")"),
+            colors: colors,
+            paint: Binding(
+                get: {
+                    highlight
+                        ? model.assistConfiguration.zebra.highlightColor
+                        : model.assistConfiguration.zebra.midtoneColor
+                },
+                set: {
+                    if highlight {
+                        model.assistConfiguration.zebra.highlightColor = $0
+                    } else {
+                        model.assistConfiguration.zebra.midtoneColor = $0
+                    }
+                }))
     }
 
     private var waveformRows: some View {
-        Group {
-            SettingsInlineRow(title: "Mode", showTopDivider: false, stacked: compact) {
-                SettingsSegmented(
-                    options: AssistConfiguration.Scopes.WaveformMode.allCases.map(\.rawValue),
-                    selected: model.assistConfiguration.scopes.waveformMode.rawValue,
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    if let mode = AssistConfiguration.Scopes.WaveformMode(rawValue: $0) {
-                        model.assistConfiguration.scopes.waveformMode = mode
-                    }
-                }
-            }
-            SettingsInlineRow(
-                title: "Brightness",
-                help: "Raise trace intensity when the waveform is hard to read in bright light.",
-                stacked: compact
-            ) {
-                SettingsPercentSlider(
-                    value: Binding(
-                        get: { model.assistConfiguration.scopes.waveformBrightness },
-                        set: {
-                            model.assistConfiguration.scopes.waveformBrightness =
-                                AssistConfiguration.Scopes.clampedBrightness($0)
-                        }),
-                    range: AssistConfiguration.Scopes.brightnessRange)
-            }
-            SettingsSwitchInlineRow(
-                title: "Safe Border Clip",
-                stacked: compact,
-                isOn: model.assistConfiguration.scopes.waveformGuides.clip
-            ) { model.assistConfiguration.scopes.waveformGuides.clip.toggle() }
-            SettingsSwitchInlineRow(
-                title: "Safe Border Crush",
-                stacked: compact,
-                isOn: model.assistConfiguration.scopes.waveformGuides.crush
-            ) { model.assistConfiguration.scopes.waveformGuides.crush.toggle() }
-            SettingsSwitchInlineRow(
-                title: "Middle Gray",
-                stacked: compact,
-                isOn: model.assistConfiguration.scopes.waveformGuides.middle
-            ) { model.assistConfiguration.scopes.waveformGuides.middle.toggle() }
-        }
+        MonitorScopeTraceMenu(
+            modes: AssistConfiguration.Scopes.WaveformMode.allCases,
+            mode: Binding(
+                get: { model.assistConfiguration.scopes.waveformMode },
+                set: { model.assistConfiguration.scopes.waveformMode = $0 }),
+            brightness: Binding(
+                get: { model.assistConfiguration.scopes.waveformBrightness },
+                set: {
+                    model.assistConfiguration.scopes.waveformBrightness = AssistConfiguration.Scopes
+                        .clampedBrightness($0)
+                }),
+            guides: scopeGuides(parade: false), title: { $0.rawValue },
+            brightnessHelp: "Raise trace intensity when the preview is dark or low contrast.",
+            compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
     }
 
     private var paradeRows: some View {
-        Group {
-            SettingsInlineRow(title: "Mode", showTopDivider: false, stacked: compact) {
-                SettingsSegmented(
-                    options: AssistConfiguration.Scopes.ParadeMode.allCases.map(\.rawValue),
-                    selected: model.assistConfiguration.scopes.paradeMode.rawValue,
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    if let mode = AssistConfiguration.Scopes.ParadeMode(rawValue: $0) {
-                        model.assistConfiguration.scopes.paradeMode = mode
-                    }
+        MonitorScopeTraceMenu(
+            modes: AssistConfiguration.Scopes.ParadeMode.allCases,
+            mode: Binding(
+                get: { model.assistConfiguration.scopes.paradeMode },
+                set: { model.assistConfiguration.scopes.paradeMode = $0 }),
+            brightness: Binding(
+                get: { model.assistConfiguration.scopes.paradeBrightness },
+                set: {
+                    model.assistConfiguration.scopes.paradeBrightness = AssistConfiguration.Scopes
+                        .clampedBrightness($0)
+                }),
+            guides: scopeGuides(parade: true), title: { $0.rawValue },
+            brightnessHelp: "Raise trace intensity for the separated channel lanes.",
+            compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
+    }
+
+    private func scopeGuides(parade: Bool) -> Binding<MonitorScopeGuides> {
+        Binding(
+            get: {
+                let guides =
+                    parade
+                    ? model.assistConfiguration.scopes.paradeGuides
+                    : model.assistConfiguration.scopes.waveformGuides
+                return MonitorScopeGuides(
+                    clip: guides.clip, crush: guides.crush, middle: guides.middle)
+            },
+            set: {
+                let guides = AssistConfiguration.Scopes.GuideLines(
+                    clip: $0.clip, crush: $0.crush, middle: $0.middle)
+                if parade {
+                    model.assistConfiguration.scopes.paradeGuides = guides
+                } else {
+                    model.assistConfiguration.scopes.waveformGuides = guides
                 }
-            }
-            SettingsInlineRow(
-                title: "Brightness",
-                help: "Raise trace intensity when channel separation is hard to see.",
-                stacked: compact
-            ) {
-                SettingsPercentSlider(
-                    value: Binding(
-                        get: { model.assistConfiguration.scopes.paradeBrightness },
-                        set: {
-                            model.assistConfiguration.scopes.paradeBrightness =
-                                AssistConfiguration.Scopes.clampedBrightness($0)
-                        }),
-                    range: AssistConfiguration.Scopes.brightnessRange)
-            }
-            SettingsSwitchInlineRow(
-                title: "Safe Border Clip",
-                stacked: compact,
-                isOn: model.assistConfiguration.scopes.paradeGuides.clip
-            ) { model.assistConfiguration.scopes.paradeGuides.clip.toggle() }
-            SettingsSwitchInlineRow(
-                title: "Safe Border Crush",
-                stacked: compact,
-                isOn: model.assistConfiguration.scopes.paradeGuides.crush
-            ) { model.assistConfiguration.scopes.paradeGuides.crush.toggle() }
-            SettingsSwitchInlineRow(
-                title: "Middle Gray",
-                stacked: compact,
-                isOn: model.assistConfiguration.scopes.paradeGuides.middle
-            ) { model.assistConfiguration.scopes.paradeGuides.middle.toggle() }
-        }
+            })
     }
 
     private var vectorscopeRows: some View {
-        Group {
-            SettingsInlineRow(
-                title: "Trace Zoom",
-                help:
-                    "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the monitor image (your active LUT, or the built-in display tone map), where chroma is meaningful.",
-                showTopDivider: false,
-                stacked: compact
-            ) {
-                SettingsSegmented(
-                    options: AssistConfiguration.Scopes.VectorscopeZoom.allCases.map(\.rawValue),
-                    selected: model.assistConfiguration.scopes.vectorscopeZoom.rawValue,
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    if let zoom = AssistConfiguration.Scopes.VectorscopeZoom(rawValue: $0) {
-                        model.assistConfiguration.scopes.vectorscopeZoom = zoom
+        MonitorVectorscopeMenu(
+            zoom: Binding(
+                get: {
+                    switch model.assistConfiguration.scopes.vectorscopeZoom {
+                    case .x1: .x1
+                    case .x2: .x2
+                    case .x4: .x4
                     }
+                },
+                set: {
+                    switch $0 {
+                    case .x1: model.assistConfiguration.scopes.vectorscopeZoom = .x1
+                    case .x2: model.assistConfiguration.scopes.vectorscopeZoom = .x2
+                    case .x4: model.assistConfiguration.scopes.vectorscopeZoom = .x4
+                    }
+                }),
+            brightness: Binding(
+                get: { model.assistConfiguration.scopes.vectorscopeBrightness },
+                set: {
+                    model.assistConfiguration.scopes.vectorscopeBrightness = AssistConfiguration
+                        .Scopes.clampedBrightness($0)
+                }),
+            zoomHelp:
+                "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the monitor image after its active LUT or display tone map.",
+            brightnessHelp: "Raise trace intensity when the chroma plot is hard to read.",
+            compact: compact, zoomFeedback: selectionFeedback)
+    }
+
+    private var compensation: Binding<MonitorCrushClipCompensation> {
+        Binding(
+            get: {
+                switch model.assistConfiguration.scopes.crushClipCompensation {
+                case .zero: .zero
+                case .quarter: .quarter
+                case .half: .half
+                case .threeQuarter: .threeQuarter
+                case .one: .one
                 }
-            }
-            SettingsInlineRow(
-                title: "Brightness",
-                help: "Raise trace intensity when the chroma plot is hard to read.",
-                stacked: compact
-            ) {
-                SettingsPercentSlider(
-                    value: Binding(
-                        get: { model.assistConfiguration.scopes.vectorscopeBrightness },
-                        set: {
-                            model.assistConfiguration.scopes.vectorscopeBrightness =
-                                AssistConfiguration.Scopes.clampedBrightness($0)
-                        }),
-                    range: AssistConfiguration.Scopes.brightnessRange)
-            }
-        }
+            },
+            set: {
+                if let value = AssistConfiguration.CrushClipCompensation(rawValue: $0.rawValue) {
+                    model.assistConfiguration.scopes.crushClipCompensation = value
+                }
+            })
     }
 
     private var histogramRows: some View {
-        Group {
-            SettingsSwitchInlineRow(
-                title: "Traffic Lights",
-                help: "Show small RGB edge blocks for crushed and clipped channels.",
-                showTopDivider: false,
-                stacked: compact,
-                isOn: model.assistConfiguration.scopes.histogramTrafficLights
-            ) { model.assistConfiguration.scopes.histogramTrafficLights.toggle() }
-            SettingsInlineRow(
-                title: "Crush/Clip Compensation",
-                help:
-                    "Stops of crush/clip tolerance before a traffic light glows. Shared with the goal-post meter.",
-                stacked: compact
-            ) {
-                SettingsCrushClipSegmented(
-                    selected: model.assistConfiguration.scopes.crushClipCompensation,
-                    compact: compact
-                ) { match in
-                    model.assistConfiguration.scopes.crushClipCompensation = match
-                }
-            }
-        }
+        MonitorHistogramMenu(
+            trafficLights: Binding(
+                get: { model.assistConfiguration.scopes.histogramTrafficLights },
+                set: { model.assistConfiguration.scopes.histogramTrafficLights = $0 }),
+            compensation: compensation,
+            trafficHelp: "Show small RGB edge blocks for crushed and clipped channels.",
+            compensationHelp:
+                "Stops of crush/clip tolerance before a traffic light glows. Shared with the goal-post meter.",
+            compact: compact, trafficFeedback: selectionFeedback)
     }
 
     private var trafficLightsRows: some View {
-        Group {
-            SettingsInlineRow(
-                title: "Crush/Clip Compensation",
-                help:
-                    "Stops of crush/clip tolerance before a channel indicator glows. Shared with the histogram traffic lights.",
-                showTopDivider: false,
-                stacked: compact
-            ) {
-                SettingsCrushClipSegmented(
-                    selected: model.assistConfiguration.scopes.crushClipCompensation,
-                    compact: compact
-                ) { match in
-                    model.assistConfiguration.scopes.crushClipCompensation = match
-                }
-            }
-        }
+        MonitorCrushClipMenu(
+            compensation: compensation,
+            help:
+                "Stops of crush/clip tolerance before a channel indicator glows. Shared with histogram traffic lights.",
+            compact: compact, showTopDivider: false)
     }
 
     private var peakingRows: some View {
-        Group {
-            SettingsInlineRow(
-                title: "Sensitivity",
-                help:
-                    "Higher sensitivity catches finer edges but can get noisy on detailed scenes.",
-                showTopDivider: false,
-                stacked: compact
-            ) {
-                SettingsSegmented(
-                    options: Peaking.Sensitivity.allCases.map(\.rawValue),
-                    selected: model.assistConfiguration.peakingSensitivity.rawValue,
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    if let level = Peaking.Sensitivity(rawValue: $0) {
-                        model.assistConfiguration.peakingSensitivity = level
+        MonitorPeakingMenu(
+            options: Binding(
+                get: {
+                    let color: MonitorPeakingColor
+                    switch model.assistConfiguration.peakingColor {
+                    case .white: color = .white
+                    case .blue: color = .blue
+                    case .red: color = .red
+                    case .green: color = .green
                     }
-                }
-            }
-            SettingsInlineRow(
-                title: "Color",
-                help: "Choose the edge color that stays readable over your typical scene.",
-                stacked: compact
-            ) {
-                SettingsColorDots(
-                    dots: SettingsPalette.peaking,
-                    selected: model.assistConfiguration.peakingColor.rawValue,
-                    compact: compact
-                ) {
-                    if let color = Peaking.Color(rawValue: $0) {
+                    let sense: MonitorPeakingSense
+                    switch model.assistConfiguration.peakingSensitivity {
+                    case .low: sense = .low
+                    case .medium: sense = .medium
+                    case .high: sense = .high
+                    }
+                    return MonitorPeakingOptions(color: color, sensitivity: sense)
+                },
+                set: {
+                    if let color = Peaking.Color(rawValue: $0.color.rawValue),
+                        let sensitivity = Peaking.Sensitivity(rawValue: $0.sensitivity.rawValue)
+                    {
                         model.assistConfiguration.peakingColor = color
+                        model.assistConfiguration.peakingSensitivity = sensitivity
                     }
+                }),
+            colors: SettingsPalette.peaking.compactMap { dot in
+                MonitorPeakingColor(rawValue: dot.name).map {
+                    MonitorSettingsColorDot(value: $0, title: dot.name, color: dot.color)
                 }
-            }
-        }
+            },
+            sensitivityHelp:
+                "Higher sensitivity catches finer edges but can get noisy on detailed scenes.",
+            colorHelp: "Choose the edge color that stays readable over your typical scene.",
+            compact: compact, feedback: selectionFeedback)
     }
 
-    private func zebraZoneRow(
-        title: String, help: String, enabled: Bool, onEnabledToggle: @escaping () -> Void,
-        value: Binding<Int>, maxValue: Int, colors: [SettingsColorDots.Dot],
-        selectedColor: String, onColor: @escaping (String) -> Void
-    ) -> some View {
-        SettingsInlineRow(title: title, help: help, stacked: compact) {
-            if compact {
-                HStack(spacing: 8) {
-                    Button {
-                        OperatorSettingsHaptics.selection(
-                            enabled: model.preferences.hapticsEnabled)
-                        onEnabledToggle()
-                    } label: {
-                        SettingsSwitchGraphic(isOn: enabled)
-                    }
-                    .buttonStyle(.zcTapTarget)
-                    MonitorSettingsNumberField(value: value, maximum: maxValue)
-                    Spacer(minLength: 4)
-                    SettingsColorDots(
-                        dots: colors, selected: selectedColor, compact: true, onSelect: onColor)
-                }
-            } else {
-                HStack(spacing: 8) {
-                    Button {
-                        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-                        onEnabledToggle()
-                    } label: {
-                        SettingsSwitchGraphic(isOn: enabled)
-                    }
-                    .buttonStyle(.zcTapTarget)
-                    MonitorSettingsNumberField(value: value, maximum: maxValue)
-                    SettingsColorDots(dots: colors, selected: selectedColor, onSelect: onColor)
-                }
-            }
-        }
+    private func selectionFeedback() {
+        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
 }
 
@@ -3624,15 +3558,15 @@ struct OperatorSettingsPanel: View {
             caption: linkHealthCaption,
             score: model.linkHealth)
 
-        SettingsRowCard(title: "Connection") {
-            SettingsInlineRow(
-                title: "Current Transport",
-                help:
-                    "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
-                showTopDivider: false
-            ) {
-                SettingsValueText(value: transportLabel)
-            }
+        MonitorConnectionSettings(
+            transport: transportLabel,
+            transportHelp: "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
+            phase: model.connection.label,
+            phaseHelp: "The current connection state reported by this device."
+        )
+        if (selectableVideoSources.count > 1 && model.monitorAvailability.offersSourceSwitch)
+            || model.videoSource == .hdmiCapture || model.videoSource == .relay {
+            SettingsRowCard(title: "Picture Source") {
             // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
             // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
             // offering a single choice is a readout pretending to be a control. Stating the rule
@@ -3674,6 +3608,7 @@ struct OperatorSettingsPanel: View {
                         value: model.relayHoldsControl
                             ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
                 }
+            }
             }
         }
 

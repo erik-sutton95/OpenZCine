@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.settings
 
 import com.opencapture.monitorui.settings.MonitorSettingsActionPill
+import com.opencapture.monitorui.settings.MonitorConnectionSettings
 import com.opencapture.monitorui.settings.MonitorSupportAction
 import com.opencapture.monitorui.settings.MonitorSupportSettings
 import androidx.compose.ui.platform.testTag
@@ -659,14 +660,17 @@ private fun LinkRows(
         score = if (linked) health.score else 0,
     )
 
-    SettingsRowCard {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_current_transport),
-            help = stringResource(R.string.help_link_transport),
-            showTopDivider = false,
-        ) {
-            SettingsValueText(transportValue)
-        }
+    MonitorConnectionSettings(
+        transport = transportValue,
+        transportHelp = stringResource(R.string.help_link_transport),
+        phase = when (state) {
+            is CameraSessionState.Connected -> "Connected"
+            CameraSessionState.Connecting -> "Connecting"
+            CameraSessionState.Disconnected -> "Disconnected"
+        },
+        phaseHelp = "The current connection state reported by this device.",
+    )
+    SettingsRowCard(title = "Picture") {
         // A watcher drives nothing until the broadcaster hands over the token, so the Link tab
         // says who is holding it (iOS `linkRows`, videoSource == .relay). The ask/give-back
         // itself stays on the live view, not in a settings sheet.
@@ -786,7 +790,6 @@ private fun AssistRows(
             }
             return
         }
-        val configuration = settings.feedEffectsConfiguration
         SettingsRowCard(
             title = stringResource(R.string.settings_false_color),
             onReset = {
@@ -795,35 +798,7 @@ private fun AssistRows(
                 onInteraction()
             },
         ) {
-            SettingsInlineRow(
-                title = stringResource(R.string.settings_scale),
-                showTopDivider = false,
-                stacked = true,
-            ) {
-                SettingsSegmented(
-                    options = FeedFalseColorScale.entries.map { it.label },
-                    selected = assistState.selectedFalseColorScale.label,
-                ) { label ->
-                    FeedFalseColorScale.entries.firstOrNull { it.label == label }?.let { scale ->
-                        assistState.selectFalseColorScale(scale)
-                        onInteraction()
-                    }
-                }
-            }
-            SettingsSwitchRow(
-                stringResource(R.string.settings_reference_display),
-                isOn = configuration.falseColorReferenceEnabled,
-                stacked = true,
-            ) {
-                val enabled = !configuration.falseColorReferenceEnabled
-                settings.feedEffectsConfiguration =
-                    configuration.copy(falseColorReferenceEnabled = enabled)
-                if (enabled && !assistState.isOn(AssistTool.FALSE)) {
-                    onAssistToggle(AssistTool.FALSE)
-                } else {
-                    onInteraction()
-                }
-            }
+            Column(Modifier.testTag("settings.assist.falseColor")) { NikonFalseColorSettings(settings, assistState, cameraInput, onAssistToggle, onInteraction) }
         }
     }
 
@@ -877,461 +852,58 @@ private fun AssistRows(
 private val imageEffectTools: Set<AssistTool> =
     setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
 
-@Composable
-private fun feedLutLabel(lut: FeedLut): String =
-    stringResource(
-        when (lut) {
-            FeedLut.LOG3G10_709 -> R.string.lut_log_709
-            FeedLut.NLOG_709 -> R.string.lut_nlog_709
-            FeedLut.MONO -> R.string.lut_mono
-            FeedLut.R3D_NE_MONITOR -> R.string.lut_r3d_ne_monitor
-        },
-    )
-
-@Composable
-private fun peakingSensitivityLabel(value: FeedPeakingSensitivity): String =
-    stringResource(
-        when (value) {
-            FeedPeakingSensitivity.LOW -> R.string.peaking_low
-            FeedPeakingSensitivity.MEDIUM -> R.string.peaking_medium
-            FeedPeakingSensitivity.HIGH -> R.string.peaking_high
-        },
-    )
-
-@Composable
-private fun peakingColorLabel(value: FeedPeakingColor): String =
-    stringResource(
-        when (value) {
-            FeedPeakingColor.WHITE -> R.string.color_white
-            FeedPeakingColor.BLUE -> R.string.color_blue
-            FeedPeakingColor.RED -> R.string.color_red
-            FeedPeakingColor.GREEN -> R.string.color_green
-        },
-    )
-
-@Composable
-private fun zebraColorLabel(value: FeedZebraStripeColor): String =
-    stringResource(
-        when (value) {
-            FeedZebraStripeColor.WHITE -> R.string.color_white
-            FeedZebraStripeColor.AMBER -> R.string.color_amber
-            FeedZebraStripeColor.RED -> R.string.color_red
-            FeedZebraStripeColor.CYAN -> R.string.color_cyan
-            FeedZebraStripeColor.GREEN -> R.string.color_green
-        },
-    )
-
-/** iOS peaking rows: segmented sensitivity + colour dots (not text chips). */
-@Composable
-private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.feedEffectsConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_peaking),
-        onReset = {
-            settings.resetPeakingConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_sensitivity),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = FeedPeakingSensitivity.entries.map { it.label },
-                selected = configuration.peakingSensitivity.label,
-            ) { label ->
-                FeedPeakingSensitivity.entries.firstOrNull { it.label == label }?.let { sensitivity ->
-                    settings.feedEffectsConfiguration =
-                        configuration.copy(peakingSensitivity = sensitivity)
-                    onInteraction()
-                }
-            }
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_color), stacked = true) {
-            SettingsColorDots(
-                dots = SettingsPalette.peaking,
-                selectedName = configuration.peakingColor.label,
-            ) { name ->
-                FeedPeakingColor.entries.firstOrNull { it.label == name }?.let { color ->
-                    settings.feedEffectsConfiguration = configuration.copy(peakingColor = color)
-                    onInteraction()
-                }
-            }
-        }
-    }
-}
-
-/** iOS zebra: units segmented + compact zone rows (switch + number + colour dots). */
-@Composable
-private fun ZebraSettingsRows(
-    settings: OperatorSettings,
-    cameraInput: ExposureAssistCameraInput,
-    onInteraction: () -> Unit,
-) {
-    val configuration = settings.feedEffectsConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_zebra),
-        onReset = {
-            settings.resetZebraConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_units),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = FeedZebraUnit.entries.map { it.label },
-                selected = configuration.zebraUnit.label,
-            ) { label ->
-                FeedZebraUnit.entries.firstOrNull { it.label == label }?.let { unit ->
-                    settings.feedEffectsConfiguration = configuration.copy(zebraUnit = unit)
-                    onInteraction()
-                }
-            }
-        }
-        ZebraZoneRow(
-            title = stringResource(R.string.settings_highlight),
-            enabled = configuration.zebraHighlightEnabled,
-            onEnabledToggle = {
-                settings.feedEffectsConfiguration =
-                    configuration.copy(zebraHighlightEnabled = !configuration.zebraHighlightEnabled)
-                onInteraction()
-            },
-            cameraInput = cameraInput,
-            unit = configuration.zebraUnit,
-            monitorPercent = configuration.zebraHighlightIre,
-            onThreshold = { percent ->
-                settings.feedEffectsConfiguration = configuration.copy(zebraHighlightIre = percent)
-                onInteraction()
-            },
-            palette = SettingsPalette.highlight,
-            selectedColor = configuration.zebraHighlightColor.label,
-            onColor = { name ->
-                FeedZebraStripeColor.entries.firstOrNull { it.label == name }?.let { color ->
-                    settings.feedEffectsConfiguration =
-                        configuration.copy(zebraHighlightColor = color)
-                    onInteraction()
-                }
-            },
-        )
-        ZebraZoneRow(
-            title = stringResource(R.string.settings_midtone),
-            enabled = configuration.zebraMidtoneEnabled,
-            onEnabledToggle = {
-                settings.feedEffectsConfiguration =
-                    configuration.copy(zebraMidtoneEnabled = !configuration.zebraMidtoneEnabled)
-                onInteraction()
-            },
-            cameraInput = cameraInput,
-            unit = configuration.zebraUnit,
-            monitorPercent = configuration.zebraMidtoneIre,
-            onThreshold = { percent ->
-                settings.feedEffectsConfiguration = configuration.copy(zebraMidtoneIre = percent)
-                onInteraction()
-            },
-            palette = SettingsPalette.midtone,
-            selectedColor = configuration.zebraMidtoneColor.label,
-            onColor = { name ->
-                FeedZebraStripeColor.entries.firstOrNull { it.label == name }?.let { color ->
-                    settings.feedEffectsConfiguration =
-                        configuration.copy(zebraMidtoneColor = color)
-                    onInteraction()
-                }
-            },
-        )
-    }
-}
-
-/**
- * iOS `zebraZoneRow` (compact): title stacked above switch + number field + colour
- * dots on one control row.
- */
-@Composable
-private fun ZebraZoneRow(
-    title: String,
-    enabled: Boolean,
-    onEnabledToggle: () -> Unit,
-    cameraInput: ExposureAssistCameraInput,
-    unit: FeedZebraUnit,
-    monitorPercent: Float,
-    onThreshold: (Float) -> Unit,
-    palette: List<SettingsColorDot>,
-    selectedColor: String,
-    onColor: (String) -> Unit,
-) {
-    val editorValue =
-        remember(cameraInput, unit, monitorPercent) {
-            zebraEditorValue(cameraInput, unit, monitorPercent)
-        }
-    val maximum = if (unit == FeedZebraUnit.NATIVE) 255 else 100
-    SettingsInlineRow(title = title, stacked = true) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.settingsClickable(role = Role.Switch, onClick = onEnabledToggle)) {
-                SettingsSwitchGraphic(isOn = enabled)
-            }
-            if (editorValue != null) {
-                Box(Modifier.testTag("settings.zebra.threshold.$title")) {
-                    MonitorSettingsNumberField(
-                        value = editorValue.roundToInt().coerceIn(0, maximum),
-                        maximum = maximum,
-                    ) { value ->
-                        zebraMonitorPercent(cameraInput, unit, value.toFloat())?.let(onThreshold)
-                    }
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            SettingsColorDots(
-                dots = palette,
-                selectedName = selectedColor,
-                compact = true,
-                onSelect = onColor,
-            )
-        }
-    }
-}
-
 /** Digits-only direct entry with the same closed-range clamp as iOS. */
 internal fun normalizedZebraEntry(raw: String, maximum: Int): Int? =
     raw.toIntOrNull()?.coerceIn(0, maximum)
 
-/** Canvas-only scope controls. Each option below has a corresponding render/sampler path. */
-/** Waveform card — iOS segmented mode, percent slider, guide switches. */
+@Composable
+private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
+    SettingsRowCard(title = stringResource(R.string.settings_peaking), onReset = {
+        settings.resetPeakingConfiguration(); onInteraction()
+    }) { Column(Modifier.testTag("settings.assist.peaking")) { NikonPeakingSettings(settings, onInteraction) } }
+}
+
+@Composable
+private fun ZebraSettingsRows(settings: OperatorSettings, cameraInput: ExposureAssistCameraInput,
+    onInteraction: () -> Unit) {
+    SettingsRowCard(title = stringResource(R.string.settings_zebra), onReset = {
+        settings.resetZebraConfiguration(); onInteraction()
+    }) { Column(Modifier.testTag("settings.assist.zebra")) { NikonZebraSettings(settings, cameraInput, onInteraction) } }
+}
+
 @Composable
 private fun WaveformSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.scopeAssistConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_waveform),
-        onReset = {
-            settings.resetWaveformConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_mode),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = ScopeWaveformMode.entries.map { it.label },
-                selected = configuration.waveformMode.label,
-            ) { label ->
-                ScopeWaveformMode.entries.firstOrNull { it.label == label }?.let { mode ->
-                    settings.scopeAssistConfiguration = configuration.copy(waveformMode = mode)
-                    onInteraction()
-                }
-            }
-        }
-        ScopeBrightnessRow(
-            brightness = configuration.waveformBrightness,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(waveformBrightness = value)
-                onInteraction()
-            },
-        )
-        ScopeGuideRows(
-            guides = configuration.waveformGuides,
-            onChange = { guides ->
-                settings.scopeAssistConfiguration = configuration.copy(waveformGuides = guides)
-                onInteraction()
-            },
-        )
-    }
+    SettingsRowCard(title = stringResource(R.string.settings_waveform), onReset = {
+        settings.resetWaveformConfiguration(); onInteraction()
+    }) { Column(Modifier.testTag("settings.assist.waveform")) { NikonScopeTraceSettings(settings, parade = false, onInteraction) } }
 }
 
-/** Parade card — iOS segmented mode, percent slider, guide switches. */
 @Composable
 private fun ParadeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.scopeAssistConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_parade),
-        onReset = {
-            settings.resetParadeConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_mode),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = ScopeParadeMode.entries.map { it.label },
-                selected = configuration.paradeMode.label,
-            ) { label ->
-                ScopeParadeMode.entries.firstOrNull { it.label == label }?.let { mode ->
-                    settings.scopeAssistConfiguration = configuration.copy(paradeMode = mode)
-                    onInteraction()
-                }
-            }
-        }
-        ScopeBrightnessRow(
-            brightness = configuration.paradeBrightness,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(paradeBrightness = value)
-                onInteraction()
-            },
-        )
-        ScopeGuideRows(
-            guides = configuration.paradeGuides,
-            onChange = { guides ->
-                settings.scopeAssistConfiguration = configuration.copy(paradeGuides = guides)
-                onInteraction()
-            },
-        )
-    }
+    SettingsRowCard(title = stringResource(R.string.settings_parade), onReset = {
+        settings.resetParadeConfiguration(); onInteraction()
+    }) { Column(Modifier.testTag("settings.assist.parade")) { NikonScopeTraceSettings(settings, parade = true, onInteraction) } }
 }
 
-/** Vectorscope card — iOS trace zoom + brightness slider. */
 @Composable
 private fun VectorscopeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.scopeAssistConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_vectorscope),
-        onReset = {
-            settings.resetVectorscopeConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_trace_zoom),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = ScopeVectorscopeZoom.entries.map { it.label },
-                selected = configuration.vectorscopeZoom.label,
-            ) { label ->
-                ScopeVectorscopeZoom.entries.firstOrNull { it.label == label }?.let { zoom ->
-                    settings.scopeAssistConfiguration = configuration.copy(vectorscopeZoom = zoom)
-                    onInteraction()
-                }
-            }
-        }
-        ScopeBrightnessRow(
-            brightness = configuration.vectorscopeBrightness,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(vectorscopeBrightness = value)
-                onInteraction()
-            },
-        )
-    }
+    SettingsRowCard(title = stringResource(R.string.settings_vectorscope), onReset = {
+        settings.resetVectorscopeConfiguration(); onInteraction()
+    }) { Column(Modifier.testTag("settings.assist.vectorscope")) { NikonVectorscopeSettings(settings, onInteraction) } }
 }
 
-/**
- * Histogram card — iOS: Traffic Lights switch + Crush/Clip Compensation (panel
- * scale is not an operator-setup control on iOS).
- */
 @Composable
 private fun HistogramSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(
-        title = stringResource(R.string.settings_histogram),
-        onReset = {
-            settings.resetHistogramConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsSwitchRow(
-            stringResource(R.string.settings_traffic_lights),
-            isOn = settings.histogramTrafficLightsEnabled.value,
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            settings.histogramTrafficLightsEnabled.toggle()
-            onInteraction()
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_crush_clip), stacked = true) {
-            CrushClipSegmentedControl(
-                selected = settings.scopeCrushClipCompensation,
-                onSelect = { compensation ->
-                    settings.scopeCrushClipCompensation = compensation
-                    onInteraction()
-                },
-            )
-        }
-    }
+    SettingsRowCard(title = stringResource(R.string.settings_histogram), onReset = {
+        settings.resetHistogramConfiguration(); onInteraction()
+    }) { Column(Modifier.testTag("settings.assist.histogram")) { NikonHistogramSettings(settings, onInteraction) } }
 }
 
-/** Traffic Lights card — iOS: Crush/Clip Compensation only (shared with histogram). */
 @Composable
 private fun TrafficLightsSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(
-        title = stringResource(R.string.settings_traffic_lights),
-        onReset = {
-            settings.resetTrafficLightsConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_crush_clip),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            CrushClipSegmentedControl(
-                selected = settings.scopeCrushClipCompensation,
-                onSelect = { compensation ->
-                    settings.scopeCrushClipCompensation = compensation
-                    onInteraction()
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun CrushClipSegmentedControl(
-    selected: ScopeCrushClipCompensation,
-    onSelect: (ScopeCrushClipCompensation) -> Unit,
-) {
-    SettingsCrushClipSegmented(
-        options = ScopeCrushClipCompensation.entries.map { it.label to it.compactLabel },
-        selectedLabel = selected.label,
-    ) { label ->
-        ScopeCrushClipCompensation.entries.firstOrNull { it.label == label }?.let(onSelect)
-    }
-}
-
-@Composable
-private fun ScopeBrightnessRow(brightness: Int, onSelect: (Int) -> Unit) {
-    SettingsInlineRow(title = stringResource(R.string.settings_brightness), stacked = true) {
-        SettingsPercentSlider(
-            value = brightness,
-            range =
-                ScopeAssistConfiguration.MIN_BRIGHTNESS..ScopeAssistConfiguration.MAX_BRIGHTNESS,
-            onChange = onSelect,
-        )
-    }
-}
-
-@Composable
-private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) -> Unit) {
-    SettingsSwitchRow(
-        stringResource(R.string.settings_safe_border_clip),
-        isOn = guides.clip,
-        stacked = true,
-    ) {
-        onChange(guides.copy(clip = !guides.clip))
-    }
-    SettingsSwitchRow(
-        stringResource(R.string.settings_safe_border_crush),
-        isOn = guides.crush,
-        stacked = true,
-    ) {
-        onChange(guides.copy(crush = !guides.crush))
-    }
-    SettingsSwitchRow(
-        stringResource(R.string.settings_middle_gray),
-        isOn = guides.middle,
-        stacked = true,
-    ) {
-        onChange(guides.copy(middle = !guides.middle))
-    }
+    SettingsRowCard(title = stringResource(R.string.settings_traffic_lights), onReset = {
+        settings.resetTrafficLightsConfiguration(); onInteraction()
+    }) { Column(Modifier.testTag("settings.assist.trafficLights")) { NikonCrushClipSettings(settings, onInteraction) } }
 }
 
 /** Controls whose effects stay wholly within the Android shell. */

@@ -15,6 +15,39 @@ import XCTest
 final class RunnerTests: XCTestCase {
 
     @MainActor
+    func testCommonZebraUnknownEditorOmitsNativeFieldsWithoutLosingZoneControls() async throws {
+        let absent = MonitorZebraNumberZone(
+            enabled: .constant(false), entry: nil,
+            colors: [MonitorSettingsColorDot(value: "White", title: "White", color: .white)],
+            paint: .constant("White"))
+        let content = MonitorZebraMenu(
+            units: ["Native", "IRE"], unit: .constant("IRE"), title: { $0 },
+            unitsTitle: "Units", unitsHelp: "SIMULATED missing calibration", highlightHelp: "",
+            midtoneHelp: "", highlight: absent, midtone: absent, compact: true)
+        let host = UIHostingController(rootView: content)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        for _ in 0..<200 {
+            host.view.layoutIfNeeded()
+            await Task.yield()
+        }
+        func fields(_ view: UIView) -> [UITextField] {
+            if let field = view as? UITextField { return [field] }
+            return view.subviews.flatMap(fields)
+        }
+        XCTAssertTrue(
+            fields(host.view).isEmpty,
+            "Unknown calibration cannot manufacture a numeric field or zero threshold")
+        XCTAssertGreaterThan(host.view.bounds.width, 0)
+    }
+
+
+    @MainActor
     func testActualZebraRowsUseCommonNumberPadClampAndDoneWithNativeConversion() async throws {
         let model = NativeAppModel()
         let original = model.preferences
