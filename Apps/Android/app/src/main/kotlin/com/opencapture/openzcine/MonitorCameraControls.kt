@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
+
 import androidx.activity.compose.BackHandler
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.MonitorCaptureField
@@ -88,7 +90,6 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.settings.PortraitFeedAspect
-import com.opencapture.openzcine.settings.SettingsSwitchGraphic
 import com.opencapture.openzcine.relay.MonitorRelayWire
 import kotlin.math.cos
 import kotlin.math.max
@@ -2033,7 +2034,7 @@ private fun MfScrubToggleRow(enabled: Boolean, onToggle: () -> Unit) {
             maxLines = 1,
             modifier = Modifier.weight(1f),
         )
-        SettingsSwitchGraphic(isOn = enabled)
+        MonitorSettingsSwitchGraphic(isOn = enabled)
     }
 }
 

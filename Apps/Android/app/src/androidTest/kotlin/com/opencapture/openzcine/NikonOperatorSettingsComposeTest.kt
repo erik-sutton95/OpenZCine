@@ -60,7 +60,7 @@ class NikonOperatorSettingsComposeTest {
         val settings = OperatorSettings(preferences)
         show(settings, OperatorSettingsTab.CONTROLS)
 
-        for (label in listOf("Record confirmation", "Keep screen awake", "Haptics")) {
+        for (label in listOf("Record confirmation", "Keep screen awake", "Haptics", "Bluetooth Remote Shutter", "Auto-Rotate Feed")) {
             composeRule.onNodeWithContentDescription(label).performScrollTo().performClick()
         }
         composeRule.runOnIdle {
@@ -71,6 +71,10 @@ class NikonOperatorSettingsComposeTest {
             assertFalse(preferences.getBoolean("controls.recordConfirmation", true))
             assertFalse(preferences.getBoolean("controls.keepScreenAwake", true))
             assertFalse(preferences.getBoolean("controls.haptics", true))
+            assertFalse(reloaded.mediaRemoteShutterEnabled.value)
+            assertFalse(reloaded.autoRotateFeedEnabled.value)
+            assertFalse(preferences.getBoolean("controls.mediaRemoteShutter.v1", true))
+            assertFalse(preferences.getBoolean("controls.autoRotateFeed", true))
             assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
         }
         for (tab in OperatorSettingsTab.entries) {
@@ -145,6 +149,48 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNodeWithContentDescription("Midtone").assertExists()
     }
 
+    @Test fun commonAssistCardsOmitUnavailableResetsAndUnknownInputChoices() {
+        composeRule.setContent {
+            OpenZCineTheme {
+                androidx.compose.foundation.layout.Column {
+                    com.opencapture.monitorui.settings.MonitorViewAssistSettings(listOf(
+                        com.opencapture.monitorui.settings.MonitorAssistSettingsSection.Unavailable(
+                            com.opencapture.monitorui.MonitorAssistTool.FALSE, "SIMULATED unavailable processor")))
+                    com.opencapture.monitorui.settings.MonitorInputOrientationSettings(rotationHelp = "")
+                }
+            }
+        }
+        composeRule.onNodeWithText("SIMULATED unavailable processor").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Reset to defaults").assertDoesNotExist()
+        composeRule.onNodeWithText("Input & orientation").assertDoesNotExist()
+        composeRule.onNodeWithText("Remote shutter").assertDoesNotExist()
+        composeRule.onNodeWithText("Auto-Rotate Feed").assertDoesNotExist()
+        composeRule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+    }
+
+    @Test fun compactAssistCardKeepsEveryFractionTargetInsideItsActualHost() {
+        var selected = com.opencapture.opencine.media.MonitorCrushClipCompensation.ZERO
+        composeRule.setContent {
+            OpenZCineTheme {
+                androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.width(300.dp).testTag("compact.assist")) {
+                    com.opencapture.monitorui.settings.MonitorViewAssistSettings(listOf(
+                        com.opencapture.monitorui.settings.MonitorAssistSettingsSection.TrafficLights(
+                            selected, { selected = it }, "SIMULATED tolerance")))
+                }
+            }
+        }
+        val host = composeRule.onNodeWithTag("compact.assist").fetchSemanticsNode().boundsInRoot
+        val density = ApplicationProvider.getApplicationContext<Context>().resources.displayMetrics.density
+        for (value in com.opencapture.opencine.media.MonitorCrushClipCompensation.entries) {
+            val node = composeRule.onNodeWithContentDescription(value.label)
+            val bounds = node.fetchSemanticsNode().boundsInRoot
+            assertTrue("${value.label} retains a complete touch target", bounds.width >= 44f * density - 1f)
+            assertTrue("${value.label} is inside the common card", bounds.left >= host.left && bounds.right <= host.right + 1f)
+            node.performClick()
+            composeRule.runOnIdle { assertEquals(value, selected) }
+        }
+    }
+
     @Test fun narrowNativeZonesWrapControlsAndKeepCompleteColorTargets() {
         val colors = listOf("White", "Amber", "Red").map {
             com.opencapture.monitorui.settings.MonitorSettingsColorDot(it, androidx.compose.ui.graphics.Color.White)
@@ -191,8 +237,26 @@ class NikonOperatorSettingsComposeTest {
         choose("waveform", "Luma")
         composeRule.runOnIdle { assertEquals(originalParade, settings.scopeAssistConfiguration.paradeMode) }
         choose("parade", "YRGB")
+        composeRule.onNode(hasContentDescription("Reset to defaults") and hasAnyAncestor(hasTestTag("settings.assist.waveform")))
+            .performScrollTo().performClick()
+        composeRule.runOnIdle {
+            assertEquals(com.opencapture.openzcine.settings.ScopeAssistConfiguration().waveformMode,
+                settings.scopeAssistConfiguration.waveformMode)
+            assertEquals(com.opencapture.openzcine.settings.ScopeParadeMode.YRGB,
+                settings.scopeAssistConfiguration.paradeMode)
+        }
+        choose("waveform", "Luma")
         choose("vectorscope", "4x")
         choose("peaking", "High")
+        composeRule.onNode(hasContentDescription("1.0") and hasAnyAncestor(hasTestTag("settings.assist.trafficLights")))
+            .performScrollTo().performClick()
+        composeRule.onNode(hasContentDescription("Reset to defaults") and hasAnyAncestor(hasTestTag("settings.assist.histogram")))
+            .performScrollTo().performClick()
+        composeRule.runOnIdle {
+            assertEquals(com.opencapture.openzcine.settings.ScopeCrushClipCompensation.QUARTER,
+                settings.scopeCrushClipCompensation)
+            assertEquals(FeedPeakingSensitivity.HIGH, settings.feedEffectsConfiguration.peakingSensitivity)
+        }
         composeRule.onNode(hasContentDescription("1.0") and hasAnyAncestor(hasTestTag("settings.assist.trafficLights")))
             .performScrollTo().performClick()
         composeRule.onNodeWithText("Read").assertDoesNotExist()

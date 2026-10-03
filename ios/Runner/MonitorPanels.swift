@@ -1881,84 +1881,12 @@ struct AccentDrumWheel: View {
     }
 }
 
-struct AssistQuickSettingsContent: View {
-    @Environment(NativeAppModel.self) private var model
-    let tool: MonitorAssistTool
-    /// Narrow two-column operator-setup cards pass `true` so segmented controls share column width.
+/// Supplies current source-calibrated bindings to the concrete shared assist menus.
+@MainActor struct NikonAssistMenuAdapter {
+    let model: NativeAppModel
     var compact: Bool = false
 
-    var body: some View {
-        switch tool {
-        case .falseColor:
-            falseColorRows
-        case .zebra:
-            zebraRows
-        case .waveform:
-            waveformRows
-        case .parade:
-            paradeRows
-        case .histogram:
-            histogramRows
-        case .vectorscope:
-            vectorscopeRows
-        case .trafficLights:
-            trafficLightsRows
-        case .peaking:
-            peakingRows
-        case .instantReview:
-            instantReviewRows
-        default:
-            EmptyView()
-        }
-    }
-
-    private var instantReviewRows: some View {
-        Group {
-            SettingsInlineRow(
-                title: "Review Duration",
-                help:
-                    "How long the captured frame stays up after a release. ∞ keeps it until tapped. A held burst reviews its last frame once the run ends.",
-                showTopDivider: false,
-                stacked: compact
-            ) {
-                SettingsSegmented(
-                    options: ["3s", "5s", "7s", "∞"],
-                    selected: instantReviewDurationLabel,
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    model.assistConfiguration.instantReviewSeconds = Self.reviewSeconds(for: $0)
-                }
-            }
-            SettingsSwitchInlineRow(
-                title: "Focus Point",
-                help: "Overlay the AF box the shot focused with on the review.",
-                stacked: compact,
-                isOn: model.assistConfiguration.instantReviewShowsFocusPoint
-            ) {
-                model.assistConfiguration.instantReviewShowsFocusPoint.toggle()
-            }
-            SettingsSwitchInlineRow(
-                title: "Capture Info",
-                help: "Show the shot's ISO, shutter, iris, and quality under the review.",
-                stacked: compact,
-                isOn: model.assistConfiguration.instantReviewShowsCaptureInfo
-            ) {
-                model.assistConfiguration.instantReviewShowsCaptureInfo.toggle()
-            }
-        }
-    }
-
-    private var instantReviewDurationLabel: String {
-        let seconds = model.assistConfiguration.instantReviewSeconds
-        return seconds > 0 ? "\(seconds)s" : "∞"
-    }
-
-    private static func reviewSeconds(for label: String) -> Int {
-        label == "∞" ? 0 : Int(label.dropLast()) ?? 5
-    }
-
-    private var falseColorRows: some View {
+    var falseColor: MonitorFalseColorMenu<FalseColorScale> {
         MonitorFalseColorMenu(
             scales: FalseColorScale.allCases,
             scale: Binding(
@@ -2015,7 +1943,7 @@ struct AssistQuickSettingsContent: View {
                 } : [], axisLabels: axes)
     }
 
-    private var zebraRows: some View {
+    var zebra: MonitorZebraMenu<AssistConfiguration.Zebra.Unit, AssistConfiguration.Zebra.StripeColor> {
         MonitorZebraMenu(
             units: AssistConfiguration.Zebra.Unit.allCases,
             unit: Binding(
@@ -2093,7 +2021,7 @@ struct AssistQuickSettingsContent: View {
                 }))
     }
 
-    private var waveformRows: some View {
+    var waveform: MonitorScopeTraceMenu<AssistConfiguration.Scopes.WaveformMode> {
         MonitorScopeTraceMenu(
             modes: AssistConfiguration.Scopes.WaveformMode.allCases,
             mode: Binding(
@@ -2110,7 +2038,7 @@ struct AssistQuickSettingsContent: View {
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
     }
 
-    private var paradeRows: some View {
+    var parade: MonitorScopeTraceMenu<AssistConfiguration.Scopes.ParadeMode> {
         MonitorScopeTraceMenu(
             modes: AssistConfiguration.Scopes.ParadeMode.allCases,
             mode: Binding(
@@ -2148,7 +2076,7 @@ struct AssistQuickSettingsContent: View {
             })
     }
 
-    private var vectorscopeRows: some View {
+    var vectorscope: MonitorVectorscopeMenu {
         MonitorVectorscopeMenu(
             zoom: Binding(
                 get: {
@@ -2195,7 +2123,7 @@ struct AssistQuickSettingsContent: View {
             })
     }
 
-    private var histogramRows: some View {
+    var histogram: MonitorHistogramMenu {
         MonitorHistogramMenu(
             trafficLights: Binding(
                 get: { model.assistConfiguration.scopes.histogramTrafficLights },
@@ -2207,7 +2135,7 @@ struct AssistQuickSettingsContent: View {
             compact: compact, trafficFeedback: selectionFeedback)
     }
 
-    private var trafficLightsRows: some View {
+    var trafficLights: MonitorCrushClipMenu {
         MonitorCrushClipMenu(
             compensation: compensation,
             help:
@@ -2215,7 +2143,7 @@ struct AssistQuickSettingsContent: View {
             compact: compact, showTopDivider: false)
     }
 
-    private var peakingRows: some View {
+    var peaking: MonitorPeakingMenu {
         MonitorPeakingMenu(
             options: Binding(
                 get: {
@@ -2256,6 +2184,87 @@ struct AssistQuickSettingsContent: View {
     private func selectionFeedback() {
         OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
+}
+
+struct AssistQuickSettingsContent: View {
+    @Environment(NativeAppModel.self) private var model
+    let tool: MonitorAssistTool
+    /// Narrow two-column operator-setup cards pass `true` so segmented controls share column width.
+    var compact: Bool = false
+
+    var body: some View {
+        let menus = NikonAssistMenuAdapter(model: model, compact: compact)
+        switch tool {
+        case .falseColor:
+            menus.falseColor
+        case .zebra:
+            menus.zebra
+        case .waveform:
+            menus.waveform
+        case .parade:
+            menus.parade
+        case .histogram:
+            menus.histogram
+        case .vectorscope:
+            menus.vectorscope
+        case .trafficLights:
+            menus.trafficLights
+        case .peaking:
+            menus.peaking
+        case .instantReview:
+            instantReviewRows
+        default:
+            EmptyView()
+        }
+    }
+
+    private var instantReviewRows: some View {
+        Group {
+            MonitorSettingsInlineRow(
+                title: "Review Duration",
+                help:
+                    "How long the captured frame stays up after a release. ∞ keeps it until tapped. A held burst reviews its last frame once the run ends.",
+                showTopDivider: false,
+                stacked: compact
+            ) {
+                NikonSettingsChoices(
+                    options: ["3s", "5s", "7s", "∞"],
+                    selected: instantReviewDurationLabel,
+                    compact: compact,
+                    stacked: compact
+                ) {
+                    model.assistConfiguration.instantReviewSeconds = Self.reviewSeconds(for: $0)
+                }
+            }
+            NikonSettingsSwitch(
+                title: "Focus Point",
+                help: "Overlay the AF box the shot focused with on the review.",
+                stacked: compact,
+                isOn: model.assistConfiguration.instantReviewShowsFocusPoint
+            ) {
+                model.assistConfiguration.instantReviewShowsFocusPoint.toggle()
+            }
+            NikonSettingsSwitch(
+                title: "Capture Info",
+                help: "Show the shot's ISO, shutter, iris, and quality under the review.",
+                stacked: compact,
+                isOn: model.assistConfiguration.instantReviewShowsCaptureInfo
+            ) {
+                model.assistConfiguration.instantReviewShowsCaptureInfo.toggle()
+            }
+        }
+    }
+
+    private var instantReviewDurationLabel: String {
+        let seconds = model.assistConfiguration.instantReviewSeconds
+        return seconds > 0 ? "\(seconds)s" : "∞"
+    }
+
+    private static func reviewSeconds(for label: String) -> Int {
+        label == "∞" ? 0 : Int(label.dropLast()) ?? 5
+    }
+
+
 }
 
 /// Popup width for long-press assist options — matches LUT / grid / level popups (guides is wider).
@@ -3160,17 +3169,22 @@ struct AssistLibraryPanel: View {
 /// live-view processor grows real support; for now they match the prototype's in-memory behaviour.
 
 enum SettingsPalette {
-    static let highlight: [SettingsColorDots.Dot] = [
+    struct Dot {
+        let name: String
+        let color: Color
+    }
+
+    static let highlight: [SettingsPalette.Dot] = [
         .init(name: "White", color: LiveDesign.text),
         .init(name: "Amber", color: LiveDesign.accent),
         .init(name: "Red", color: LiveDesign.rec),
     ]
-    static let midtone: [SettingsColorDots.Dot] = [
+    static let midtone: [SettingsPalette.Dot] = [
         .init(name: "Amber", color: LiveDesign.accent),
         .init(name: "Cyan", color: LiveDesign.info),
         .init(name: "Green", color: LiveDesign.good),
     ]
-    static let peaking: [SettingsColorDots.Dot] = [
+    static let peaking: [SettingsPalette.Dot] = [
         .init(name: "White", color: LiveDesign.text),
         .init(name: "Blue", color: LiveDesign.info),
         .init(name: "Red", color: LiveDesign.rec),
@@ -3434,18 +3448,18 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var sharingRows: some View {
-        SettingsRowCard {
+        MonitorSettingsRowCard {
             if model.videoSource == .relay {
                 // A watcher rebroadcasting would daisy-chain feeds — a second generation of
                 // encode, a second hop of latency, and a control-token tangle. Sharing is done
                 // from the device that holds the camera.
-                SettingsInlineRow(
+                MonitorSettingsInlineRow(
                     title: "Watching",
                     help:
                         "This device is watching another device's broadcast. Sharing is done from the broadcasting device — re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.",
                     showTopDivider: false
                 ) {
-                    SettingsValueText(value: model.cameraState.cameraName)
+                    MonitorSettingsValueText(value: model.cameraState.cameraName)
                 }
             } else {
                 sharingBroadcasterRows
@@ -3454,13 +3468,13 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var sharingBroadcasterRows: some View {
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title: "Share This Feed",
             help:
                 "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi — its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
             showTopDivider: false
         ) {
-            SettingsSegmented(
+            NikonSettingsChoices(
                 options: ["Off", "On"],
                 selected: model.isRelayBroadcasting ? "On" : "Off"
             ) { value in
@@ -3468,22 +3482,22 @@ struct OperatorSettingsPanel: View {
             }
         }
         if model.isRelayBroadcasting {
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title: "Watching",
                 help:
                     "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control."
             ) {
-                SettingsValueText(
+                MonitorSettingsValueText(
                     value: model.relayPeerCount == 1
                         ? "1 device" : "\(model.relayPeerCount) devices")
             }
         }
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title: "Broadcast Priority",
             help:
                 "Low latency is the tightest glass-to-glass path — the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
         ) {
-            SettingsSegmented(
+            NikonSettingsChoices(
                 options: RelayEncoderProfile.allCases.map(\.title),
                 selected: model.preferences.relayEncoderProfile.title
             ) { value in
@@ -3495,7 +3509,7 @@ struct OperatorSettingsPanel: View {
                 model.setRelayEncoderProfile(profile)
             }
         }
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title: "Watcher Passcode",
             help:
                 "Watchers must enter this code once per device before they receive anything — no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave."
@@ -3504,12 +3518,12 @@ struct OperatorSettingsPanel: View {
                 code: model.preferences.relayWatcherPasscode,
                 onCommit: { model.setRelayWatcherPasscode($0) })
         }
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title: "Control Requests",
             help:
                 "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way."
         ) {
-            SettingsSegmented(
+            NikonSettingsChoices(
                 options: ["Off", "On"],
                 selected: model.preferences.relayAllowsControlRequests ? "On" : "Off"
             ) { value in
@@ -3517,7 +3531,7 @@ struct OperatorSettingsPanel: View {
             }
         }
         if let requester = model.relayPendingControlRequest {
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title: "Control Requested",
                 help:
                     "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
@@ -3531,13 +3545,13 @@ struct OperatorSettingsPanel: View {
             }
         }
         if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title: "Camera Control",
                 help:
                     "Take the camera back. This device holds the link, so it never has to ask."
             ) {
                 HStack(spacing: 8) {
-                    SettingsValueText(value: holder)
+                    MonitorSettingsValueText(value: holder)
                     MonitorSettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
                 }
             }
@@ -3566,18 +3580,18 @@ struct OperatorSettingsPanel: View {
         )
         if (selectableVideoSources.count > 1 && model.monitorAvailability.offersSourceSwitch)
             || model.videoSource == .hdmiCapture || model.videoSource == .relay {
-            SettingsRowCard(title: "Picture Source") {
+            MonitorSettingsRowCard(title: "Picture Source") {
             // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
             // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
             // offering a single choice is a readout pretending to be a control. Stating the rule
             // this way also means any future source that narrows the list hides it too.
             if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
-                SettingsInlineRow(
+                MonitorSettingsInlineRow(
                     title: "Picture Source",
                     help:
                         "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
                 ) {
-                    SettingsSegmented(
+                    NikonSettingsChoices(
                         options: selectableVideoSources.map(\.title),
                         selected: model.videoSource.title
                     ) { value in
@@ -3589,22 +3603,22 @@ struct OperatorSettingsPanel: View {
                 }
             }
             if model.videoSource == .hdmiCapture {
-                SettingsInlineRow(
+                MonitorSettingsInlineRow(
                     title: "Capture Device",
                     help:
                         "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR."
                 ) {
-                    SettingsValueText(value: model.hdmiCaptureState.shortStatus)
+                    MonitorSettingsValueText(value: model.hdmiCaptureState.shortStatus)
                 }
             }
             if model.videoSource == .relay {
                 // The ask/give-back moved onto the live view itself (bottom centre) — control
                 // is exercised while watching, not inside a settings sheet. The readout stays.
-                SettingsInlineRow(
+                MonitorSettingsInlineRow(
                     title: "Held By",
                     help: "Which device the camera is currently taking commands from."
                 ) {
-                    SettingsValueText(
+                    MonitorSettingsValueText(
                         value: model.relayHoldsControl
                             ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
                 }
@@ -3615,14 +3629,14 @@ struct OperatorSettingsPanel: View {
         // The tab was one undifferentiated stack of rows. Three cards instead, because they answer
         // three different questions: what the link IS, what the camera SENDS, and what this device
         // DOES with it on the way to the panel.
-        SettingsRowCard(title: "Picture") {
-            SettingsInlineRow(
+        MonitorSettingsRowCard(title: "Picture") {
+            MonitorSettingsInlineRow(
                 title: "Stream Preset",
                 help:
                     "Combines Nikon live-view stream size and compression grade into three operator-facing choices.",
                 showTopDivider: false
             ) {
-                SettingsSegmented(
+                NikonSettingsChoices(
                     options: OperatorPreferences.StreamPreset.allCases.map(\.rawValue),
                     selected: model.preferences.streamPreset.rawValue
                 ) { value in
@@ -3631,7 +3645,7 @@ struct OperatorSettingsPanel: View {
                     }
                 }
             }
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title: "Quality Bias",
                 help:
                     "Steers the selected stream preset toward smaller frames or more image detail."
@@ -3640,7 +3654,7 @@ struct OperatorSettingsPanel: View {
                 // name the middle one, so a stored `.balanced` displayed as "Size" — the same label
                 // Android wrote as `.latency`, i.e. one label meaning two different bytes across
                 // the two shells.
-                SettingsSegmented(
+                NikonSettingsChoices(
                     options: OperatorPreferences.QualityBias.allCases.map(\.settingsLabel),
                     selected: model.preferences.qualityBias.settingsLabel
                 ) { value in
@@ -3656,18 +3670,18 @@ struct OperatorSettingsPanel: View {
 
         // What this device does to the picture after the camera has sent it. Separate from
         // "Picture" above, which is what the camera is asked to send in the first place.
-        SettingsRowCard(title: "Processing") {
+        MonitorSettingsRowCard(title: "Processing") {
             // Only what this device can actually run is listed, and the row disappears entirely
             // when that is just the floor — an option that quietly does nothing is worse than no
             // option at all.
             if FeedUpscaler.supportedOnThisDevice.count > 1 {
-                SettingsInlineRow(
+                MonitorSettingsInlineRow(
                     title: "Feed Upscaler",
                     help:
                         "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
                     showTopDivider: false
                 ) {
-                    SettingsSegmented(
+                    NikonSettingsChoices(
                         options: FeedUpscaler.supportedOnThisDevice.map(\.rawValue),
                         selected: FeedUpscaleSwitch.shared.upscaler.rawValue,
                         compact: true
@@ -3682,16 +3696,16 @@ struct OperatorSettingsPanel: View {
             {
                 // The filter gave up mid-session. Say so where the switch was, rather than leaving
                 // a toggle sitting armed over something that has stopped running.
-                SettingsInlineRow(
+                MonitorSettingsInlineRow(
                     title: "Feed Noise Reduction",
                     help:
                         "The noise filter turned itself off after the camera sent something it could not take. Reconnecting the camera gives it another go.",
                     showTopDivider: FeedUpscaler.supportedOnThisDevice.count > 1
                 ) {
-                    SettingsValueText(value: reason)
+                    MonitorSettingsValueText(value: reason)
                 }
             } else if LiveDenoiseSwitch.isSupportedOnThisDevice {
-                SettingsSwitchInlineRow(
+                NikonSettingsSwitch(
                     title: "Feed Noise Reduction",
                     help:
                         "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames — the blocky structure of a compressed stream stays put — and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
@@ -3702,7 +3716,7 @@ struct OperatorSettingsPanel: View {
                 }
             }
             #if DEBUG
-                SettingsInlineRow(
+                MonitorSettingsInlineRow(
                     title: "Capture Frames",
                     help:
                         "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end."
@@ -3723,23 +3737,14 @@ struct OperatorSettingsPanel: View {
                 "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load. Disable tools you are not using. iOS may still dim when the device overheats.",
             feedback: settingsFeedback
         )
-        MonitorSettingsRowCard(title: "Input & orientation") {
-            MonitorSettingsSwitchInlineRow(
-                title: "Bluetooth Remote Shutter",
-                help:
-                    "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
-                showTopDivider: false,
-                isOn: model.preferences.bluetoothShutterEnabled,
-                feedback: settingsFeedback
-            ) { model.preferences.bluetoothShutterEnabled.toggle() }
-            MonitorSettingsSwitchInlineRow(
-                title: "Auto-Rotate Feed",
-                help:
-                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected.",
-                isOn: model.preferences.autoRotateFeedEnabled,
-                feedback: settingsFeedback
-            ) { model.preferences.autoRotateFeedEnabled.toggle() }
-        }
+        MonitorInputOrientationSettings(
+            remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
+            remoteTitle: "Bluetooth Remote Shutter",
+            remoteHelp: "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
+            autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
+            rotationHelp: "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected.",
+            feedback: settingsFeedback
+        )
     }
 
     /// Supplies stored Nikon layouts and admitted actions to the common Display section.
@@ -4005,8 +4010,8 @@ struct OperatorSettingsPanel: View {
     /// (standalone settings from the startup home) — sign in to Frame.io before a shoot, clear
     /// cache after one.
     @ViewBuilder private var storageRows: some View {
-        SettingsRowCard {
-            SettingsInlineRow(
+        MonitorSettingsRowCard {
+            MonitorSettingsInlineRow(
                 title: "Frame.io",
                 help:
                     "Sign in once here and the share sheet's Frame.io option unlocks everywhere. On the camera's Wi‑Fi, \"Sign in over internet\" hops to home Wi‑Fi or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.",
@@ -4023,7 +4028,7 @@ struct OperatorSettingsPanel: View {
                     }
                     .buttonStyle(.zcTapTarget)
                 } else if !model.isFrameioConfigured {
-                    SettingsValueText(value: "Not set up in this build")
+                    MonitorSettingsValueText(value: "Not set up in this build")
                 } else if frameioSigningIn {
                     ProgressView().tint(LiveDesign.accent)
                 } else if model.isOnCameraAccessPoint {
@@ -4126,7 +4131,7 @@ struct OperatorSettingsPanel: View {
         case .sharing:
             sharingRows
         case .assist:
-            ViewAssistSettingsRows(portrait: portrait)
+            NikonViewAssistSettings()
                 .environment(model)
         case .controls:
             controlsRows
@@ -5091,58 +5096,25 @@ where Value.RawValue == String {
 
 /// View Assist settings tab — isolated from the panel shell so assist-configuration updates do
 /// not invalidate link/display/system rows.
-struct ViewAssistSettingsRows: View {
+struct NikonViewAssistSettings: View {
     @Environment(NativeAppModel.self) private var model
-    var portrait: Bool = false
 
     var body: some View {
-        if portrait {
-            // Single full-width column: the two-column masonry below is cramped and right-clips
-            // on portrait phones (spec G3). Reading order matches the masonry's column-major
-            // order (left column then right column).
-            VStack(spacing: 8) {
-                ViewAssistToolSettingsCard(
-                    title: "False Color", tool: .falseColor, onReset: resetFalseColor)
-                ViewAssistToolSettingsCard(title: "Zebra", tool: .zebra, onReset: resetZebra)
-                ViewAssistToolSettingsCard(
-                    title: "Waveform", tool: .waveform, onReset: resetWaveform)
-                ViewAssistToolSettingsCard(title: "Parade", tool: .parade, onReset: resetParade)
-                ViewAssistToolSettingsCard(
-                    title: "Histogram", tool: .histogram, onReset: resetHistogram)
-                ViewAssistToolSettingsCard(
-                    title: "Vectorscope", tool: .vectorscope, onReset: resetVectorscope)
-                ViewAssistToolSettingsCard(title: "Peaking", tool: .peaking, onReset: resetPeaking)
-                ViewAssistToolSettingsCard(
-                    title: "Traffic Lights", tool: .trafficLights, onReset: resetTrafficLights)
-            }
-        } else {
-            // Two-column masonry (not LazyVGrid): each column packs its cards tightly, so a short
-            // card like False Color no longer leaves a gap matching the tallest card in its row.
-            // Reading-order split — left column = odd cards, right = even — preserves the grid order.
-            HStack(alignment: .top, spacing: 8) {
-                VStack(spacing: 8) {
-                    ViewAssistToolSettingsCard(
-                        title: "False Color", tool: .falseColor, onReset: resetFalseColor)
-                    ViewAssistToolSettingsCard(
-                        title: "Waveform", tool: .waveform, onReset: resetWaveform)
-                    ViewAssistToolSettingsCard(
-                        title: "Histogram", tool: .histogram, onReset: resetHistogram)
-                    ViewAssistToolSettingsCard(
-                        title: "Peaking", tool: .peaking, onReset: resetPeaking)
-                }
-                .frame(maxWidth: .infinity, alignment: .top)
-                VStack(spacing: 8) {
-                    ViewAssistToolSettingsCard(title: "Zebra", tool: .zebra, onReset: resetZebra)
-                    ViewAssistToolSettingsCard(title: "Parade", tool: .parade, onReset: resetParade)
-                    ViewAssistToolSettingsCard(
-                        title: "Vectorscope", tool: .vectorscope, onReset: resetVectorscope)
-                    ViewAssistToolSettingsCard(
-                        title: "Traffic Lights", tool: .trafficLights, onReset: resetTrafficLights)
-                }
-                .frame(maxWidth: .infinity, alignment: .top)
-            }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        }
+        let menus = NikonAssistMenuAdapter(model: model, compact: true)
+        MonitorViewAssistSettings(sections: [
+            .falseColor(menus.falseColor, reset: { resetFeedback(); resetFalseColor() }),
+            .zebra(menus.zebra, reset: { resetFeedback(); resetZebra() }),
+            .waveform(menus.waveform, reset: { resetFeedback(); resetWaveform() }),
+            .parade(menus.parade, reset: { resetFeedback(); resetParade() }),
+            .histogram(menus.histogram, reset: { resetFeedback(); resetHistogram() }),
+            .vectorscope(menus.vectorscope, reset: { resetFeedback(); resetVectorscope() }),
+            .peaking(menus.peaking, reset: { resetFeedback(); resetPeaking() }),
+            .trafficLights(menus.trafficLights, reset: { resetFeedback(); resetTrafficLights() }),
+        ])
+    }
+
+    private func resetFeedback() {
+        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
 
     private func resetFalseColor() {
@@ -5191,21 +5163,6 @@ struct ViewAssistSettingsRows: View {
         let defaults = AssistConfiguration.defaults.scopes
         model.assistConfiguration.scopes.vectorscopeZoom = defaults.vectorscopeZoom
         model.assistConfiguration.scopes.vectorscopeBrightness = defaults.vectorscopeBrightness
-    }
-}
-
-/// One View Assist tool card in the operator-setup two-column grid.
-private struct ViewAssistToolSettingsCard: View {
-    let title: String
-    let tool: MonitorAssistTool
-    let onReset: () -> Void
-
-    var body: some View {
-        SettingsRowCard(title: title, onReset: onReset) {
-            AssistQuickSettingsContent(tool: tool, compact: true)
-        }
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
-        .gridCellAnchor(.top)
     }
 }
 

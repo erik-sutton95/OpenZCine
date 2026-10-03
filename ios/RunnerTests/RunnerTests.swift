@@ -24,7 +24,7 @@ final class RunnerTests: XCTestCase {
             units: ["Native", "IRE"], unit: .constant("IRE"), title: { $0 },
             unitsTitle: "Units", unitsHelp: "SIMULATED missing calibration", highlightHelp: "",
             midtoneHelp: "", highlight: absent, midtone: absent, compact: true)
-        let host = UIHostingController(rootView: content)
+        let host = UIHostingController(rootView: MonitorViewAssistSettings(sections: [.zebra(content)]))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
         window.rootViewController = host
         window.makeKeyAndVisible()
@@ -60,7 +60,9 @@ final class RunnerTests: XCTestCase {
         }
         let host = UIHostingController(
             rootView:
-                AssistQuickSettingsContent(tool: .zebra).environment(model))
+                MonitorViewAssistSettings(sections: [
+                    .zebra(NikonAssistMenuAdapter(model: model, compact: true).zebra)
+                ]).environment(model))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
         window.rootViewController = host
         window.makeKeyAndVisible()

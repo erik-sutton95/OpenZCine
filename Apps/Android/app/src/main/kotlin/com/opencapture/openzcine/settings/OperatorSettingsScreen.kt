@@ -1,18 +1,22 @@
 package com.opencapture.openzcine.settings
 
+import com.opencapture.monitorui.settings.MonitorSettingsInlineRow
+import com.opencapture.monitorui.settings.MonitorSettingsValueText
+import com.opencapture.monitorui.settings.MonitorSettingsSegmented
+import com.opencapture.monitorui.settings.MonitorSettingsChoices
+
 import com.opencapture.monitorui.settings.MonitorSettingsActionPill
 import com.opencapture.monitorui.settings.MonitorConnectionSettings
 import com.opencapture.monitorui.settings.MonitorSupportAction
 import com.opencapture.monitorui.settings.MonitorSupportSettings
-import androidx.compose.ui.platform.testTag
 
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
 import com.opencapture.monitorui.settings.MonitorOperatorSafetySettings
+import com.opencapture.monitorui.settings.MonitorInputOrientationSettings
 import com.opencapture.monitorui.settings.MonitorAppInformationSettings
 import com.opencapture.monitorui.settings.MonitorCacheSettings
 import com.opencapture.monitorui.settings.MonitorProjectLegalSettings
-import com.opencapture.monitorui.settings.MonitorSettingsNumberField
 import com.opencapture.monitorui.settings.MonitorSettingsPage
 import com.opencapture.monitorui.settings.MonitorSettingsRowCard
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
@@ -22,13 +26,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
-import android.os.Build
 import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -36,10 +37,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
@@ -65,8 +64,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -79,26 +76,16 @@ import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
-import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.ExposureAssistCameraInput
-import com.opencapture.openzcine.FeedPeakingColor
-import com.opencapture.openzcine.FeedPeakingSensitivity
-import com.opencapture.openzcine.FeedZebraStripeColor
-import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.LiveViewGuideController
 import com.opencapture.openzcine.prefersPhotographyChrome
-import com.opencapture.openzcine.zebraEditorValue
-import com.opencapture.openzcine.zebraMonitorPercent
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
-import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.openzcine.FeedFalseColorScale
-import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioNetworkState
@@ -117,7 +104,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
 
 /** Shared navigation vocabulary; existing debug enum names remain unchanged. */
 public typealias OperatorSettingsTab = MonitorSettingsTab
@@ -318,10 +304,10 @@ internal fun OperatorSettingsScreen(
                         session, settings, linkHealth, liveViewSource, activeTransportLabel,
                         relayWatchUi, onDisconnect, onReconnect, emitHaptic,
                     )
-                    OperatorSettingsTab.ASSIST -> AssistRows(
-                        settings, assistState, cameraInput, toggleSetting, toggleAssist, emitHaptic,
+                    OperatorSettingsTab.ASSIST -> NikonViewAssistSettings(
+                        settings, assistState, cameraInput, toggleAssist, emitHaptic,
                     )
-                    OperatorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic, toggleSetting)
+                    OperatorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic)
                     OperatorSettingsTab.DISPLAY -> NikonDisplaySettings(
                         settings, compact, toggleSetting, emitHaptic,
                         checkNotNull(scroll).scrollState, scroll.viewportBounds,
@@ -454,13 +440,13 @@ private fun SharingRows(
     // (relay/RelayWatchController.kt). iOS keys the same branch off `videoSource == .relay`.
     if (session is RelayCameraSession) {
         val state by session.state.collectAsState()
-        SettingsRowCard {
-            SettingsInlineRow(
+        MonitorSettingsRowCard {
+            MonitorSettingsInlineRow(
                 title = stringResource(R.string.sharing_watching),
                 help = stringResource(R.string.help_sharing_watcher),
                 showTopDivider = false,
             ) {
-                SettingsValueText(
+                MonitorSettingsValueText(
                     (state as? CameraSessionState.Connected)?.identity?.name
                         ?: stringResource(R.string.camera_none),
                 )
@@ -470,17 +456,17 @@ private fun SharingRows(
     }
     val ui = if (sharing == null) null else sharing.ui.collectAsState().value
     var passcodeDraft by remember { mutableStateOf(settings.relayWatcherPasscode.value) }
-    SettingsRowCard {
+    MonitorSettingsRowCard {
         if (sharing == null) {
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title = stringResource(R.string.sharing_share_this_feed),
                 help = stringResource(R.string.help_sharing_share_feed),
                 showTopDivider = false,
             ) {
-                SettingsValueText(stringResource(R.string.sharing_share_unavailable))
+                MonitorSettingsValueText(stringResource(R.string.sharing_share_unavailable))
             }
         } else {
-            SettingsSwitchRow(
+            MonitorSettingsSwitchInlineRow(
                 stringResource(R.string.sharing_share_this_feed),
                 isOn = enabled,
                 help = stringResource(R.string.help_sharing_share_feed),
@@ -505,17 +491,17 @@ private fun SharingRows(
             )
         }
         if (ui != null) {
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title = stringResource(R.string.sharing_watching),
                 help = stringResource(R.string.help_sharing_watching),
             ) {
-                SettingsValueText(stringResource(R.string.sharing_watching_count, ui.watcherCount))
+                MonitorSettingsValueText(stringResource(R.string.sharing_watching_count, ui.watcherCount))
             }
         }
         // Between Watching and the passcode, exactly where the iOS Sharing panel puts it. The
         // option words come from the shared core rather than a string resource, so the two shells
         // cannot end up offering differently-named stances.
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title = stringResource(R.string.sharing_broadcast_priority),
             help = stringResource(R.string.help_sharing_priority),
         ) {
@@ -523,7 +509,7 @@ private fun SharingRows(
                 com.opencapture.openzcine.core.RelayEncoderProfile.fromWireValue(
                     settings.relayEncoderProfile.value
                 )
-            SettingsSegmented(
+            MonitorSettingsSegmented(
                 options =
                     com.opencapture.openzcine.core.RelayEncoderProfile.entries.map { it.title },
                 selected = profile.title,
@@ -531,13 +517,13 @@ private fun SharingRows(
                 val picked =
                     com.opencapture.openzcine.core.RelayEncoderProfile.entries.firstOrNull {
                         it.title == value
-                    } ?: return@SettingsSegmented
+                    } ?: return@MonitorSettingsSegmented
                 settings.relayEncoderProfile.value = picked.wireValue
                 sharing?.encoderProfile = picked
                 onInteraction()
             }
         }
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title = stringResource(R.string.sharing_watcher_passcode),
             help = stringResource(R.string.help_sharing_passcode),
         ) {
@@ -563,7 +549,7 @@ private fun SharingRows(
                 modifier = Modifier.width(96.dp),
             )
         }
-        SettingsSwitchRow(
+        MonitorSettingsSwitchInlineRow(
             stringResource(R.string.sharing_control_requests),
             isOn = settings.relayAllowsControlRequests.value,
             help = stringResource(R.string.help_sharing_control_requests),
@@ -573,7 +559,7 @@ private fun SharingRows(
             onInteraction()
         }
         ui?.pendingControlRequestName?.let {
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title = stringResource(R.string.sharing_control_requested),
                 help = stringResource(R.string.help_sharing_control_requested),
             ) {
@@ -588,7 +574,7 @@ private fun SharingRows(
             }
         }
         ui?.controlHolderName?.let { holder ->
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title = stringResource(R.string.sharing_control_held_by),
                 help = stringResource(R.string.help_sharing_camera_control),
             ) {
@@ -596,7 +582,7 @@ private fun SharingRows(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    SettingsValueText(holder)
+                    MonitorSettingsValueText(holder)
                     MonitorSettingsActionPill(stringResource(R.string.sharing_take_back)) {
                         sharing?.reclaimControl()
                     }
@@ -670,16 +656,16 @@ private fun LinkRows(
         },
         phaseHelp = "The current connection state reported by this device.",
     )
-    SettingsRowCard(title = "Picture") {
+    MonitorSettingsRowCard(title = "Picture") {
         // A watcher drives nothing until the broadcaster hands over the token, so the Link tab
         // says who is holding it (iOS `linkRows`, videoSource == .relay). The ask/give-back
         // itself stays on the live view, not in a settings sheet.
         if (session is RelayCameraSession) {
-            SettingsInlineRow(
+            MonitorSettingsInlineRow(
                 title = stringResource(R.string.sharing_control_held_by),
                 help = stringResource(R.string.help_link_held_by),
             ) {
-                SettingsValueText(
+                MonitorSettingsValueText(
                     when {
                         relayWatchUi == null -> stringResource(R.string.settings_control_broadcaster)
                         relayWatchUi.holdsControl -> stringResource(R.string.settings_control_this_device)
@@ -690,42 +676,25 @@ private fun LinkRows(
                 )
             }
         }
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title = stringResource(R.string.settings_stream_preset),
             help = stringResource(R.string.help_link_stream_preset),
         ) {
-            Row(
-                Modifier.selectableGroup(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                LiveViewStreamPreset.entries.forEach { preset ->
-                    AssistChoice(
-                        label = preset.label,
-                        selected = settings.streamPreset == preset,
-                    ) {
-                        settings.streamPreset = preset
-                        onInteraction()
-                    }
-                }
+            MonitorSettingsChoices(options = LiveViewStreamPreset.entries, selected = settings.streamPreset,
+                compact = false, title = { it.label }) { preset ->
+                settings.streamPreset = preset
+                onInteraction()
             }
         }
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title = stringResource(R.string.settings_quality_bias),
             help = stringResource(R.string.help_link_quality_bias),
         ) {
-            Row(
-                Modifier.selectableGroup(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                LiveViewQualityBias.entries.forEach { bias ->
-                    AssistChoice(
-                        label = stringResource(bias.settingsLabelResource),
-                        selected = settings.qualityBias == bias,
-                    ) {
-                        settings.qualityBias = bias
-                        onInteraction()
-                    }
-                }
+            val resources = LocalResources.current
+            MonitorSettingsChoices(options = LiveViewQualityBias.entries, selected = settings.qualityBias,
+                compact = false, title = { resources.getString(it.settingsLabelResource) }) { bias ->
+                settings.qualityBias = bias
+                onInteraction()
             }
         }
         // "Health Threshold" (which rendered the stream-preset word "Balanced" under a health
@@ -738,117 +707,24 @@ private fun LinkRows(
     // the Android counterpart (Play services' Media Enhancement API) is researched but not built.
     // See docs/android-feed-enhancement.md. Shown on every device because a promise, unlike an
     // option, does not have to be gated on what the hardware can run.
-    SettingsRowCard(title = stringResource(R.string.settings_processing)) {
-        SettingsInlineRow(
+    MonitorSettingsRowCard(title = stringResource(R.string.settings_processing)) {
+        MonitorSettingsInlineRow(
             title = stringResource(R.string.settings_feed_upscaler),
             help = stringResource(R.string.help_link_feed_upscaler),
             showTopDivider = false,
         ) {
-            SettingsValueText(stringResource(R.string.settings_coming_soon))
+            MonitorSettingsValueText(stringResource(R.string.settings_coming_soon))
         }
-        SettingsInlineRow(
+        MonitorSettingsInlineRow(
             title = stringResource(R.string.settings_feed_noise_reduction),
             help = stringResource(R.string.help_link_feed_noise_reduction),
         ) {
-            SettingsValueText(stringResource(R.string.settings_coming_soon))
+            MonitorSettingsValueText(stringResource(R.string.settings_coming_soon))
         }
     }
 }
 
-/**
- * View Assist tab — 1:1 with iOS `ViewAssistSettingsRows`: eight per-tool cards
- * (False Color, Zebra, Waveform, Parade, Histogram, Vectorscope, Peaking,
- * Traffic Lights). Landscape uses the same two-column masonry reading order;
- * portrait is a single full-width column. Tool on/off and LUT library stay on
- * the monitor toolbar popups, matching iOS.
- */
-@Composable
-private fun AssistRows(
-    settings: OperatorSettings,
-    assistState: AssistState,
-    cameraInput: ExposureAssistCameraInput,
-    onSettingToggle: (OperatorSettings.Toggle) -> Unit,
-    onAssistToggle: (AssistTool) -> Unit,
-    onInteraction: () -> Unit,
-) {
-    @Suppress("UNUSED_PARAMETER")
-    val unusedSettingToggle = onSettingToggle
-    val imageEffectsAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
-    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
-
-    @Composable
-    fun FalseColorCard() {
-        if (!imageEffectsAvailable) {
-            SettingsRowCard(title = stringResource(R.string.settings_false_color)) {
-                SettingsInlineRow(
-                    title = stringResource(R.string.settings_image_processing),
-                    showTopDivider = false,
-                    stacked = true,
-                ) {
-                    SettingsValueText(stringResource(R.string.settings_image_processing_unavailable))
-                }
-            }
-            return
-        }
-        SettingsRowCard(
-            title = stringResource(R.string.settings_false_color),
-            onReset = {
-                assistState.resetFalseColorSelection()
-                settings.resetFalseColorConfiguration()
-                onInteraction()
-            },
-        ) {
-            Column(Modifier.testTag("settings.assist.falseColor")) { NikonFalseColorSettings(settings, assistState, cameraInput, onAssistToggle, onInteraction) }
-        }
-    }
-
-    @Composable
-    fun PeakingCard() {
-        if (!imageEffectsAvailable) return
-        PeakingSettingsRows(settings, onInteraction)
-    }
-
-    @Composable
-    fun ZebraCard() {
-        if (!imageEffectsAvailable) return
-        ZebraSettingsRows(settings, cameraInput, onInteraction)
-    }
-
-    if (isPortrait) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FalseColorCard()
-            ZebraCard()
-            WaveformSettingsCard(settings, onInteraction)
-            ParadeSettingsCard(settings, onInteraction)
-            HistogramSettingsCard(settings, onInteraction)
-            VectorscopeSettingsCard(settings, onInteraction)
-            PeakingCard()
-            TrafficLightsSettingsCard(settings, onInteraction)
-        }
-    } else {
-        // iOS masonry: left = odd cards (FC, Waveform, Histogram, Peaking),
-        // right = even (Zebra, Parade, Vectorscope, Traffic Lights).
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FalseColorCard()
-                WaveformSettingsCard(settings, onInteraction)
-                HistogramSettingsCard(settings, onInteraction)
-                PeakingCard()
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ZebraCard()
-                ParadeSettingsCard(settings, onInteraction)
-                VectorscopeSettingsCard(settings, onInteraction)
-                TrafficLightsSettingsCard(settings, onInteraction)
-            }
-        }
-    }
-}
-
+/** Image processing controls use source availability rather than a settings-page default. */
 private val imageEffectTools: Set<AssistTool> =
     setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
 
@@ -856,62 +732,11 @@ private val imageEffectTools: Set<AssistTool> =
 internal fun normalizedZebraEntry(raw: String, maximum: Int): Int? =
     raw.toIntOrNull()?.coerceIn(0, maximum)
 
-@Composable
-private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(title = stringResource(R.string.settings_peaking), onReset = {
-        settings.resetPeakingConfiguration(); onInteraction()
-    }) { Column(Modifier.testTag("settings.assist.peaking")) { NikonPeakingSettings(settings, onInteraction) } }
-}
-
-@Composable
-private fun ZebraSettingsRows(settings: OperatorSettings, cameraInput: ExposureAssistCameraInput,
-    onInteraction: () -> Unit) {
-    SettingsRowCard(title = stringResource(R.string.settings_zebra), onReset = {
-        settings.resetZebraConfiguration(); onInteraction()
-    }) { Column(Modifier.testTag("settings.assist.zebra")) { NikonZebraSettings(settings, cameraInput, onInteraction) } }
-}
-
-@Composable
-private fun WaveformSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(title = stringResource(R.string.settings_waveform), onReset = {
-        settings.resetWaveformConfiguration(); onInteraction()
-    }) { Column(Modifier.testTag("settings.assist.waveform")) { NikonScopeTraceSettings(settings, parade = false, onInteraction) } }
-}
-
-@Composable
-private fun ParadeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(title = stringResource(R.string.settings_parade), onReset = {
-        settings.resetParadeConfiguration(); onInteraction()
-    }) { Column(Modifier.testTag("settings.assist.parade")) { NikonScopeTraceSettings(settings, parade = true, onInteraction) } }
-}
-
-@Composable
-private fun VectorscopeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(title = stringResource(R.string.settings_vectorscope), onReset = {
-        settings.resetVectorscopeConfiguration(); onInteraction()
-    }) { Column(Modifier.testTag("settings.assist.vectorscope")) { NikonVectorscopeSettings(settings, onInteraction) } }
-}
-
-@Composable
-private fun HistogramSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(title = stringResource(R.string.settings_histogram), onReset = {
-        settings.resetHistogramConfiguration(); onInteraction()
-    }) { Column(Modifier.testTag("settings.assist.histogram")) { NikonHistogramSettings(settings, onInteraction) } }
-}
-
-@Composable
-private fun TrafficLightsSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(title = stringResource(R.string.settings_traffic_lights), onReset = {
-        settings.resetTrafficLightsConfiguration(); onInteraction()
-    }) { Column(Modifier.testTag("settings.assist.trafficLights")) { NikonCrushClipSettings(settings, onInteraction) } }
-}
-
 /** Controls whose effects stay wholly within the Android shell. */
 @Composable
 private fun ControlsRows(
     settings: OperatorSettings,
     feedback: () -> Unit,
-    onToggle: (OperatorSettings.Toggle) -> Unit,
 ) {
     MonitorOperatorSafetySettings(
         recordConfirmation = settings.recordConfirmationEnabled.value,
@@ -923,43 +748,16 @@ private fun ControlsRows(
         keepScreenAwakeHelp = "Keeps the live monitor or clip playback awake while the app is active.",
         feedback = feedback,
     )
-    MonitorSettingsRowCard(title = "Input & orientation") {
-        MonitorSettingsSwitchInlineRow(
-            title = stringResource(R.string.settings_media_remote),
-            isOn = settings.mediaRemoteShutterEnabled.value,
-            showTopDivider = false,
-        ) { onToggle(settings.mediaRemoteShutterEnabled) }
-        Text(
-            stringResource(R.string.settings_media_remote_caption),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-            modifier = Modifier.padding(bottom = 6.dp),
-        )
-        MonitorSettingsSwitchInlineRow(
-            title = stringResource(R.string.settings_auto_rotate_feed),
-            isOn = settings.autoRotateFeedEnabled.value,
-            help = stringResource(R.string.help_controls_auto_rotate_feed),
-        ) { onToggle(settings.autoRotateFeedEnabled) }
-    }
-}
-
-/** Compact active/inactive choice chip shared by the local image-assist settings. */
-@Composable
-private fun AssistChoice(label: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        style = chromeStyle(10f, FontWeight.SemiBold, mono = true),
-        color = if (selected) LiveDesign.accent else LiveDesign.muted,
-        maxLines = 1,
-        modifier =
-            Modifier
-                .background(
-                    if (selected) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
-                    ChromeShape,
-                )
-                .border(1.dp, if (selected) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
-                .settingsClickable(role = Role.RadioButton, onClick = onClick)
-                .padding(horizontal = 6.dp, vertical = 5.dp),
+    MonitorInputOrientationSettings(
+        remoteShutter = settings.mediaRemoteShutterEnabled.value,
+        onRemoteShutter = { settings.mediaRemoteShutterEnabled.value = it },
+        remoteTitle = stringResource(R.string.settings_media_remote),
+        remoteCaption = stringResource(R.string.settings_media_remote_caption),
+        autoRotateFeed = settings.autoRotateFeedEnabled.value,
+        onAutoRotateFeed = { settings.autoRotateFeedEnabled.value = it },
+        rotationTitle = stringResource(R.string.settings_auto_rotate_feed),
+        rotationHelp = stringResource(R.string.help_controls_auto_rotate_feed),
+        feedback = feedback,
     )
 }
 
@@ -1093,31 +891,31 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
         }
 
     // iOS Storage: single "Frame.io" row with Log out / Sign in / status value.
-    SettingsRowCard {
-        SettingsInlineRow(
+    MonitorSettingsRowCard {
+        MonitorSettingsInlineRow(
             title = stringResource(R.string.frameio_delivery),
             help = stringResource(R.string.help_storage_frameio),
             showTopDivider = false,
         ) {
             when {
-                hopBusy -> SettingsValueText(stringResource(R.string.frameio_switching_networks))
+                hopBusy -> MonitorSettingsValueText(stringResource(R.string.frameio_switching_networks))
                 controller.connectionState == FrameioConnectionState.CONNECTED ->
-                    SettingsLinkAction(stringResource(R.string.action_log_out)) {
+                    MonitorSettingsActionPill(stringResource(R.string.action_log_out)) {
                         controller.disconnect()
                     }
                 controller.connectionState == FrameioConnectionState.UNCONFIGURED ->
-                    SettingsValueText(stringResource(R.string.frameio_not_set_up))
+                    MonitorSettingsValueText(stringResource(R.string.frameio_not_set_up))
                 controller.connectionState == FrameioConnectionState.SIGNED_OUT ->
                     if (settingsActionNeedsInternetHop(controller.networkState)) {
-                        SettingsLinkAction(stringResource(R.string.frameio_sign_in_over_internet)) {
+                        MonitorSettingsActionPill(stringResource(R.string.frameio_sign_in_over_internet)) {
                             requestSignIn()
                         }
                     } else {
-                        SettingsLinkAction(stringResource(R.string.action_sign_in)) { beginSignIn() }
+                        MonitorSettingsActionPill(stringResource(R.string.action_sign_in)) { beginSignIn() }
                     }
                 controller.connectionState == FrameioConnectionState.ERROR ->
-                    SettingsLinkAction(stringResource(R.string.action_try_again)) { requestSignIn() }
-                else -> SettingsValueText(connectionLabel)
+                    MonitorSettingsActionPill(stringResource(R.string.action_try_again)) { requestSignIn() }
+                else -> MonitorSettingsValueText(connectionLabel)
             }
         }
         controller.errorMessage?.let { message ->

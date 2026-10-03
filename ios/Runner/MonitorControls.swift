@@ -333,109 +333,7 @@ struct SettingActionCard: View {
     }
 }
 
-struct SettingsActionRow: View {
-    let title: String
-    let value: String
-    var destructive = false
-    var action: () -> Void = {}
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.system(size: 11, weight: .semibold, design: .default))
-                        .foregroundStyle(destructive ? LiveDesign.rec : LiveDesign.text)
-                    Text(value)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(
-                            destructive
-                                ? LiveDesign.rec.opacity(0.84)
-                                : LiveDesign.muted
-                        )
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.62)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: destructive ? "xmark.circle" : "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(destructive ? LiveDesign.rec : LiveDesign.faint)
-            }
-            .frame(minHeight: 38)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                destructive ? LiveDesign.rec.opacity(0.10) : LiveDesign.background.opacity(0.42),
-                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                    .stroke(destructive ? LiveDesign.rec.opacity(0.32) : LiveDesign.hairline)
-            )
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-}
-
-struct SettingsSwitchGraphic: View {
-    let isOn: Bool
-
-    var body: some View {
-        Capsule()
-            .fill(isOn ? LiveDesign.accentDim : LiveDesign.surface)
-            .frame(width: 39, height: 22)
-            .overlay(alignment: isOn ? .trailing : .leading) {
-                Circle()
-                    .fill(isOn ? LiveDesign.accent : LiveDesign.muted)
-                    .frame(width: 15, height: 15)
-                    .padding(3.5)
-            }
-            .overlay(Capsule().stroke(isOn ? LiveDesign.accentDim : LiveDesign.hairline))
-    }
-}
-
-struct SettingsResetButton: View {
-    @Environment(NativeAppModel.self) private var model
-    let action: () -> Void
-
-    var body: some View {
-        Button {
-            OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-            action()
-        } label: {
-            Image(systemName: "arrow.counterclockwise")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-                .frame(width: 28, height: 28)
-                .background(LiveDesign.background.opacity(0.42), in: Circle())
-                .overlay(Circle().stroke(LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Reset to defaults")
-    }
-}
-
-/// Horizontal settings strip that scrolls internally without expanding the parent card width.
-struct SettingsHorizontalStrip<Content: View>: View {
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            content()
-                .padding(.vertical, 1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-// MARK: - Mockup-parity settings primitives
-//
-// These mirror the HTML operator-setup surface (settings-seg, settings-row, dash-scale, …) so the
-// native panel matches the prototype 1:1. Controls that the core model already backs are wired to
-// it; the rest are presentation-only for now (see `SettingsUIState`).
-
-/// The mockup's per-row `?` help affordance — taps reveal a one-line explanation in a popover.
+/// Media delivery retains this help popover until its separate shared workflow adoption.
 struct HelpBadge: View {
     let text: String
     @State private var showing = false
@@ -464,324 +362,41 @@ struct HelpBadge: View {
     }
 }
 
-/// Compact inline segmented control sized to its options (the mockup's `settings-seg`).
-struct SettingsSegmented: View {
+/// Converts the existing source-owned selection callback into a common binding.
+struct NikonSettingsChoices: View {
     @Environment(NativeAppModel.self) private var model
     let options: [String]
     let selected: String
-    /// When true, segments share the row width equally — use inside two-column settings grids so
-    /// intrinsic segment width cannot blow out the panel.
-    var compact: Bool = false
-    /// When true, labels sit below the title in a stacked card row instead of beside it.
-    var stacked: Bool = false
+    var compact = false
+    var stacked = false
     let onSelect: (String) -> Void
 
-    private var segmentFontSize: CGFloat {
-        if stacked { return 12 }
-        return compact ? 11 : 11
-    }
-
     var body: some View {
-        HStack(spacing: compact || stacked ? 3 : 3) {
-            ForEach(options, id: \.self) { option in
-                let active = option == selected
-                Button {
-                    guard option != selected else { return }
-                    OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-                    onSelect(option)
-                } label: {
-                    Text(option)
-                        .font(
-                            .system(
-                                size: segmentFontSize, weight: active ? .semibold : .medium)
-                        )
-                        .foregroundStyle(active ? LiveDesign.text : LiveDesign.muted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(stacked ? 1 : (compact ? 0.85 : 1))
-                        .padding(.horizontal, stacked ? 8 : (compact ? 8 : 11))
-                        .padding(.vertical, stacked ? 7 : (compact ? 6 : 6))
-                        .frame(maxWidth: compact || stacked ? .infinity : nil)
-                        .frame(minHeight: stacked ? 32 : nil)
-                        .background(
-                            active ? LiveDesign.surface : Color.clear,
-                            in: RoundedRectangle(
-                                cornerRadius: DesignTokens.cornerRadius, style: .continuous))
-                }
-                .buttonStyle(.zcTapTarget)
-            }
-        }
-        .padding(3)
-        .background(
-            LiveDesign.background.opacity(0.5),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-        .modifier(SettingsSegmentedWidthStyle(compact: compact || stacked))
+        MonitorSegmentedControl(options: options,
+            selection: Binding(get: { selected }, set: onSelect),
+            compact: compact, stacked: stacked, title: { $0 },
+            onSelectionFeedback: {
+                OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+            })
+            .buttonStyle(MonitorSettingsButtonStyle())
     }
 }
 
-/// Stop-picker for crush/clip compensation — short labels and larger touch targets in
-/// compact operator-setup cards.
-struct SettingsCrushClipSegmented: View {
+/// Source-specific panel switches retain the existing feedback preference before mutation.
+struct NikonSettingsSwitch: View {
     @Environment(NativeAppModel.self) private var model
-    let selected: AssistConfiguration.CrushClipCompensation
-    var compact: Bool = false
-    let onSelect: (AssistConfiguration.CrushClipCompensation) -> Void
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(AssistConfiguration.CrushClipCompensation.allCases) { option in
-                let active = option == selected
-                Button {
-                    guard option != selected else { return }
-                    OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-                    onSelect(option)
-                } label: {
-                    // Fraction glyphs in both variants: the quarter-stop decimals ("0.25")
-                    // truncate in the side-by-side quick-settings row. Full value stays in the
-                    // accessibility label below.
-                    Text(option.compactLabel)
-                        .font(
-                            .system(size: compact ? 12 : 11, weight: active ? .semibold : .medium)
-                        )
-                        .foregroundStyle(active ? LiveDesign.text : LiveDesign.muted)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        // Segment labels are single glyphs, so the row's intrinsic width collapsed
-                        // to about a finger's worth for all five stops — and the wide card form
-                        // shrink-wraps to intrinsic width. The floor is what makes each stop
-                        // tappable.
-                        .frame(minWidth: 46, minHeight: 34)
-                        .background(
-                            active ? LiveDesign.surface : Color.clear,
-                            in: RoundedRectangle(
-                                cornerRadius: DesignTokens.cornerRadius, style: .continuous))
-                }
-                .buttonStyle(.zcTapTarget)
-                .accessibilityLabel(option.label)
-            }
-        }
-        .padding(4)
-        .background(
-            LiveDesign.background.opacity(0.5),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-        .frame(maxWidth: .infinity)
-    }
-}
-
-extension AssistConfiguration.CrushClipCompensation {
-    /// Presentation in-app compact label (full stop value remains in accessibility).
-    fileprivate var compactLabel: String {
-        switch self {
-        case .zero: "0"
-        case .quarter: "¼"
-        case .half: "½"
-        case .threeQuarter: "¾"
-        case .one: "1"
-        }
-    }
-}
-
-/// Wide single-column cards keep intrinsic segment width; compact grid cards fill their column.
-private struct SettingsSegmentedWidthStyle: ViewModifier {
-    let compact: Bool
-
-    func body(content: Content) -> some View {
-        if compact {
-            content.frame(maxWidth: .infinity)
-        } else {
-            // Without this the row's layout compresses the segments and truncates
-            // "Fast/Balanced/Quality" to ellipses.
-            content.fixedSize(horizontal: true, vertical: false)
-        }
-    }
-}
-
-/// One label-plus-trailing-control row for a divider-separated card (the mockup's `settings-row`).
-struct SettingsInlineRow<Trailing: View>: View {
     let title: String
     var help: String? = nil
     var showTopDivider = true
-    /// When true, the trailing control sits below the label — use in narrow two-column cards.
-    var stacked: Bool = false
-    @ViewBuilder let trailing: Trailing
+    var stacked = false
+    let isOn: Bool
+    let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            if showTopDivider {
-                Rectangle().fill(LiveDesign.hairline).frame(height: 1)
-            }
-            if stacked {
-                stackedRow
-            } else {
-                // Inline when the control fits beside the label; otherwise the row WRAPS into
-                // the stacked form instead of running off the trailing edge — narrow widths
-                // (portrait, Display Zoom, small phones) hit this on every segmented row.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        labelRow
-                        Spacer(minLength: 12)
-                        trailing
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    // Stay greedy so a divided row card fills its full grid span instead of
-                    // shrink-wrapping to the rows' intrinsic width (which would clip titles).
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    stackedRow
-                }
-            }
-        }
-    }
-
-    private var stackedRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            labelRow
-            trailing
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 44)
-    }
-
-    private var labelRow: some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(stacked ? 2 : 1)
-                .fixedSize(horizontal: !stacked, vertical: false)
-                .layoutPriority(1)
-            if let help { HelpBadge(text: help) }
-            if !stacked { Spacer(minLength: 0) }
-        }
-    }
-}
-
-/// Plain monospace value text (`settings-value`).
-struct SettingsValueText: View {
-    let value: String
-    var body: some View {
-        Text(value)
-            .font(.system(size: 12.5, weight: .medium, design: .monospaced))
-            .foregroundStyle(LiveDesign.muted)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-    }
-}
-
-/// Range slider with a trailing percent readout (the mockup's `wave-brightness-control`).
-struct SettingsPercentSlider: View {
-    @Environment(NativeAppModel.self) private var model
-    @Binding var value: Int
-    let range: ClosedRange<Int>
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Slider(
-                value: Binding(
-                    get: { Double(value) },
-                    set: { newValue in
-                        let rounded = Int(newValue.rounded())
-                        guard rounded != value else { return }
-                        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-                        value = rounded
-                    }),
-                in: Double(range.lowerBound)...Double(range.upperBound),
-                step: 1
-            )
-            .tint(LiveDesign.accent)
-            // A Slider has no intrinsic width, and `SettingsInlineRow` measures its trailing
-            // control with `fixedSize(horizontal:)` so `ViewThatFits` can decide between the
-            // inline and stacked forms. Fixed to nothing is exactly what it collapsed to: the
-            // bare thumb, reading as a pill jammed against the percentage. An ideal width gives
-            // that measurement something to resolve to; the minimum keeps it draggable if the
-            // row ever squeezes, and the stacked form still stretches it edge to edge.
-            .frame(minWidth: 120, idealWidth: 190)
-            Text("\(value)%")
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .frame(width: 40, alignment: .trailing)
-                .monospacedDigit()
-        }
-    }
-}
-
-/// Amber action pill (`settings-action`).
-/// Chrome treatment for settings row cards. Prefer `.surface` inside scroll regions with many cards —
-/// native Liquid Glass is expensive to recomposite while scrolling.
-enum SettingsRowChrome {
-    case liquidGlass
-    case surface
-}
-
-/// A card whose rows are divider-separated with no per-row borders (the mockup's wide row card).
-struct SettingsRowCard<Content: View>: View {
-    var title: String? = nil
-    var onReset: (() -> Void)? = nil
-    var chrome: SettingsRowChrome = .liquidGlass
-    @ViewBuilder let content: Content
-
-    init(
-        title: String? = nil, onReset: (() -> Void)? = nil,
-        chrome: SettingsRowChrome = .liquidGlass,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.title = title
-        self.onReset = onReset
-        self.chrome = chrome
-        self.content = content()
-    }
-
-    private var cardShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let title {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                    Spacer(minLength: 0)
-                    if let onReset {
-                        SettingsResetButton(action: onReset)
-                    }
-                }
-                .frame(minHeight: 24, alignment: .topLeading)
-                .padding(.top, 11)
-                .padding(.bottom, 2)
-            }
-            content
-        }
-        .padding(.horizontal, 13)
-        .padding(.bottom, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(SettingsRowChromeStyle(chrome: chrome, shape: cardShape))
-    }
-}
-
-private struct SettingsRowChromeStyle: ViewModifier {
-    let chrome: SettingsRowChrome
-    let shape: RoundedRectangle
-
-    func body(content: Content) -> some View {
-        switch chrome {
-        case .liquidGlass:
-            content.liquidGlass(in: shape)
-        case .surface:
-            content
-                .background(LiveDesign.surface, in: shape)
-                .overlay(shape.stroke(LiveDesign.hairline, lineWidth: 1))
-        }
+        MonitorSettingsSwitchInlineRow(title: title, help: help,
+            showTopDivider: showTopDivider, stacked: stacked, isOn: isOn,
+            feedback: { OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled) },
+            action: action)
     }
 }
 
@@ -892,71 +507,8 @@ struct SettingsDashScale: View {
 }
 
 /// Selectable inline colour dots (the mockup's `zebra-color` / peaking colour group).
-struct SettingsColorDots: View {
-    @Environment(NativeAppModel.self) private var model
-    struct Dot: Identifiable {
-        let name: String
-        let color: Color
-        var id: String { name }
-    }
-    let dots: [Dot]
-    let selected: String
-    var compact: Bool = false
-    let onSelect: (String) -> Void
-
-    private var dotDiameter: CGFloat { compact ? 15 : 13 }
-    private var hitTarget: CGFloat { 44 }
-
-    var body: some View {
-        HStack(spacing: compact ? 4 : 6) {
-            ForEach(dots) { dot in
-                Button {
-                    guard dot.name != selected else { return }
-                    OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-                    onSelect(dot.name)
-                } label: {
-                    Circle()
-                        .fill(dot.color)
-                        .frame(width: dotDiameter, height: dotDiameter)
-                        .frame(width: hitTarget, height: hitTarget)
-                        .background(LiveDesign.background.opacity(0.5), in: Circle())
-                        .overlay(
-                            Circle().stroke(
-                                dot.name == selected ? dot.color : LiveDesign.hairline,
-                                lineWidth: dot.name == selected ? 2 : 1))
-                }
-                .buttonStyle(.zcTapTarget)
-                .accessibilityLabel(dot.name)
-            }
-        }
-    }
-}
 
 /// An inline on/off switch row (label + help + switch) for the divided assist/controls cards.
-struct SettingsSwitchInlineRow: View {
-    @Environment(NativeAppModel.self) private var model
-    let title: String
-    var help: String? = nil
-    var showTopDivider = true
-    /// When true, the switch sits below the label — use in narrow two-column cards.
-    var stacked: Bool = false
-    let isOn: Bool
-    let action: () -> Void
-
-    var body: some View {
-        SettingsInlineRow(
-            title: title, help: help, showTopDivider: showTopDivider, stacked: stacked
-        ) {
-            Button {
-                OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-                action()
-            } label: {
-                SettingsSwitchGraphic(isOn: isOn)
-            }
-            .buttonStyle(.zcTapTarget)
-        }
-    }
-}
 
 struct CloseButton: View {
     @Environment(NativeAppModel.self) private var model

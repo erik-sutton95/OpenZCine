@@ -4,21 +4,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import com.opencapture.monitorui.MonitorCrushClipMenu
-import com.opencapture.monitorui.MonitorFalseColorMenu
 import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
 import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
 import com.opencapture.monitorui.MonitorFalseColorReferenceValues
-import com.opencapture.monitorui.MonitorHistogramMenu
-import com.opencapture.monitorui.MonitorPeakingMenu
 import com.opencapture.monitorui.MonitorScopeGuides
-import com.opencapture.monitorui.MonitorScopeTraceMenu
-import com.opencapture.monitorui.MonitorVectorscopeMenu
 import com.opencapture.monitorui.MonitorVectorscopeZoom
-import com.opencapture.monitorui.MonitorZebraMenu
 import com.opencapture.monitorui.MonitorZebraNumberEntry
 import com.opencapture.monitorui.MonitorZebraNumberZone
 import com.opencapture.monitorui.settings.MonitorSettingsColorDot
+import com.opencapture.monitorui.settings.MonitorAssistSettingsSection
+import com.opencapture.monitorui.settings.MonitorViewAssistSettings
+import android.os.Build
+import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.media.MonitorCrushClipCompensation
 import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
@@ -39,16 +36,35 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+/** Actual stores/actions supply finite tool inputs; the common owner assembles all cards. */
+@Composable
+internal fun NikonViewAssistSettings(settings: OperatorSettings, assistState: AssistState,
+    cameraInput: ExposureAssistCameraInput, onAssistToggle: (AssistTool) -> Unit, onInteraction: () -> Unit) {
+    val processingAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
+    MonitorViewAssistSettings(listOfNotNull(
+        if (processingAvailable) NikonFalseColorSettings(settings, assistState, cameraInput, onAssistToggle, onInteraction)
+        else MonitorAssistSettingsSection.Unavailable(com.opencapture.monitorui.MonitorAssistTool.FALSE,
+            androidx.compose.ui.res.stringResource(com.opencapture.openzcine.R.string.settings_image_processing_unavailable)),
+        if (processingAvailable) NikonZebraSettings(settings, cameraInput, onInteraction) else null,
+        NikonScopeTraceSettings(settings, parade = false, onInteraction),
+        NikonScopeTraceSettings(settings, parade = true, onInteraction),
+        NikonHistogramSettings(settings, onInteraction),
+        NikonVectorscopeSettings(settings, onInteraction),
+        if (processingAvailable) NikonPeakingSettings(settings, onInteraction) else null,
+        NikonCrushClipSettings(settings, onInteraction),
+    ))
+}
+
 /** Settings keep their existing stores; common menus receive only current values and actions. */
 @Composable
 internal fun NikonFalseColorSettings(settings: OperatorSettings, assistState: AssistState,
-    cameraInput: ExposureAssistCameraInput, onAssistToggle: (AssistTool) -> Unit, onInteraction: () -> Unit) {
+    cameraInput: ExposureAssistCameraInput, onAssistToggle: (AssistTool) -> Unit, onInteraction: () -> Unit): MonitorAssistSettingsSection {
     val scale = assistState.selectedFalseColorScale
     val reference by produceState<MonitorFalseColorReferenceValues?>(null, scale, cameraInput) {
         value = null
         value = withContext(Dispatchers.Default) { nikonFalseColorReference(scale, cameraInput) }
     }
-    MonitorFalseColorMenu(scales = FeedFalseColorScale.entries, scale = scale,
+    return MonitorAssistSettingsSection.FalseColor(scales = FeedFalseColorScale.entries, scale = scale,
         onScale = { assistState.selectFalseColorScale(it); onInteraction() }, title = { it.label },
         readChoice = null, reference = reference,
         referenceEnabled = settings.feedEffectsConfiguration.falseColorReferenceEnabled,
@@ -56,7 +72,8 @@ internal fun NikonFalseColorSettings(settings: OperatorSettings, assistState: As
             settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(falseColorReferenceEnabled = it)
             if (it && !assistState.isOn(AssistTool.FALSE)) onAssistToggle(AssistTool.FALSE) else onInteraction()
         }, scaleHelp = "The camera signal supplies the curve and reference calibration.", readHelp = "",
-        referenceHelp = "Show a compact color key over live view while False Color is active.")
+        referenceHelp = "Show a compact color key over live view while False Color is active.",
+        reset = { assistState.resetFalseColorSelection(); settings.resetFalseColorConfiguration(); onInteraction() })
 }
 
 internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
@@ -86,9 +103,9 @@ internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
 }
 
 @Composable
-internal fun NikonPeakingSettings(settings: OperatorSettings, onInteraction: () -> Unit) {
+internal fun NikonPeakingSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
     val configuration = settings.feedEffectsConfiguration
-    MonitorPeakingMenu(sensitivity = when (configuration.peakingSensitivity) {
+    return MonitorAssistSettingsSection.Peaking(sensitivity = when (configuration.peakingSensitivity) {
         FeedPeakingSensitivity.LOW -> MonitorPeakingSense.LOW
         FeedPeakingSensitivity.MEDIUM -> MonitorPeakingSense.MED
         FeedPeakingSensitivity.HIGH -> MonitorPeakingSense.HIGH
@@ -107,21 +124,22 @@ internal fun NikonPeakingSettings(settings: OperatorSettings, onInteraction: () 
         }, onColor = {
             settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(peakingColor = FeedPeakingColor.valueOf(it.name))
             onInteraction()
-        })
+        }, reset = { settings.resetPeakingConfiguration(); onInteraction() })
 }
 
 @Composable
 internal fun NikonZebraSettings(settings: OperatorSettings, cameraInput: ExposureAssistCameraInput,
-    onInteraction: () -> Unit) {
+    onInteraction: () -> Unit): MonitorAssistSettingsSection {
     val unit = settings.feedEffectsConfiguration.zebraUnit
-    MonitorZebraMenu(units = FeedZebraUnit.entries, unit = unit, title = { it.label },
+    return MonitorAssistSettingsSection.ZebraNumbers(units = FeedZebraUnit.entries, unit = unit, title = { it.label },
         onUnit = {
             settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(zebraUnit = it); onInteraction()
         }, unitsHelp = "Switch between native 0-255 codes and the normalized 0-100 monitoring IRE scale.",
         highlightHelp = "High zebra warns when bright detail approaches clipping after curve compensation.",
         midtoneHelp = "Midtone zebra marks the chosen monitoring level after curve compensation.",
         highlight = zebraNumberZone(settings, cameraInput, highlight = true, onInteraction),
-        midtone = zebraNumberZone(settings, cameraInput, highlight = false, onInteraction))
+        midtone = zebraNumberZone(settings, cameraInput, highlight = false, onInteraction),
+        reset = { settings.resetZebraConfiguration(); onInteraction() })
 }
 
 @Composable
@@ -162,7 +180,7 @@ private fun zebraNumberZone(settings: OperatorSettings, input: ExposureAssistCam
 }
 
 @Composable
-internal fun NikonScopeTraceSettings(settings: OperatorSettings, parade: Boolean, onInteraction: () -> Unit) {
+internal fun NikonScopeTraceSettings(settings: OperatorSettings, parade: Boolean, onInteraction: () -> Unit): MonitorAssistSettingsSection {
     val configuration = settings.scopeAssistConfiguration
     val guides = if (parade) configuration.paradeGuides else configuration.waveformGuides
     val brightness = if (parade) configuration.paradeBrightness else configuration.waveformBrightness
@@ -178,44 +196,47 @@ internal fun NikonScopeTraceSettings(settings: OperatorSettings, parade: Boolean
         onInteraction()
     }
     val commonGuides = MonitorScopeGuides(guides.clip, guides.crush, guides.middle)
-    if (parade) {
-        MonitorScopeTraceMenu(ScopeParadeMode.entries, configuration.paradeMode, onMode = {
+    return if (parade) {
+        MonitorAssistSettingsSection.Trace.parade(ScopeParadeMode.entries, configuration.paradeMode, onMode = {
             settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(paradeMode = it); onInteraction()
-        }, title = { it.label }, brightness = brightness, onBrightness = onBrightness, guides = commonGuides, onGuides = onGuides)
+        }, title = { it.label }, brightness = brightness, onBrightness = onBrightness, guides = commonGuides, onGuides = onGuides,
+            reset = { settings.resetParadeConfiguration(); onInteraction() })
     } else {
-        MonitorScopeTraceMenu(ScopeWaveformMode.entries, configuration.waveformMode, onMode = {
+        MonitorAssistSettingsSection.Trace.waveform(ScopeWaveformMode.entries, configuration.waveformMode, onMode = {
             settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(waveformMode = it); onInteraction()
-        }, title = { it.label }, brightness = brightness, onBrightness = onBrightness, guides = commonGuides, onGuides = onGuides)
+        }, title = { it.label }, brightness = brightness, onBrightness = onBrightness, guides = commonGuides, onGuides = onGuides,
+            reset = { settings.resetWaveformConfiguration(); onInteraction() })
     }
 }
 
 @Composable
-internal fun NikonVectorscopeSettings(settings: OperatorSettings, onInteraction: () -> Unit) {
+internal fun NikonVectorscopeSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
     val configuration = settings.scopeAssistConfiguration
-    MonitorVectorscopeMenu(MonitorVectorscopeZoom.valueOf(configuration.vectorscopeZoom.name), onZoom = {
+    return MonitorAssistSettingsSection.Vectorscope(MonitorVectorscopeZoom.valueOf(configuration.vectorscopeZoom.name), onZoom = {
         settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(vectorscopeZoom = ScopeVectorscopeZoom.valueOf(it.name))
         onInteraction()
     }, brightness = configuration.vectorscopeBrightness, onBrightness = {
         settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(vectorscopeBrightness = it); onInteraction()
-    })
+    }, reset = { settings.resetVectorscopeConfiguration(); onInteraction() })
 }
 
 @Composable
-internal fun NikonHistogramSettings(settings: OperatorSettings, onInteraction: () -> Unit) {
-    MonitorHistogramMenu(trafficLights = settings.histogramTrafficLightsEnabled.value,
+internal fun NikonHistogramSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
+    return MonitorAssistSettingsSection.Histogram(trafficLights = settings.histogramTrafficLightsEnabled.value,
         onTrafficLights = { settings.histogramTrafficLightsEnabled.toggle(); onInteraction() },
         compensation = MonitorCrushClipCompensation.valueOf(settings.scopeCrushClipCompensation.name),
         onCompensation = { settings.scopeCrushClipCompensation = ScopeCrushClipCompensation.valueOf(it.name); onInteraction() },
         trafficHelp = "Show small RGB edge blocks for crushed and clipped channels.",
-        compensationHelp = "Stops of crush/clip tolerance before a traffic light glows. Shared with the goal-post meter.")
+        compensationHelp = "Stops of crush/clip tolerance before a traffic light glows. Shared with the goal-post meter.",
+        reset = { settings.resetHistogramConfiguration(); onInteraction() })
 }
 
 @Composable
-internal fun NikonCrushClipSettings(settings: OperatorSettings, onInteraction: () -> Unit) {
-    MonitorCrushClipMenu(MonitorCrushClipCompensation.valueOf(settings.scopeCrushClipCompensation.name),
+internal fun NikonCrushClipSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
+    return MonitorAssistSettingsSection.TrafficLights(MonitorCrushClipCompensation.valueOf(settings.scopeCrushClipCompensation.name),
         onCompensation = { settings.scopeCrushClipCompensation = ScopeCrushClipCompensation.valueOf(it.name); onInteraction() },
         help = "Stops of crush/clip tolerance before a channel indicator glows. Shared with histogram traffic lights.",
-        showTopDivider = false)
+        reset = { settings.resetTrafficLightsConfiguration(); onInteraction() })
 }
 
 private fun commonColors(colors: List<SettingsColorDot>): List<MonitorSettingsColorDot> =
