@@ -2,18 +2,25 @@ package com.opencapture.openzcine.media
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Point
 import android.graphics.Rect
+import android.graphics.Region
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.PixelCopy
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
+import androidx.test.uiautomator.Condition
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.StaleObjectException
@@ -25,6 +32,10 @@ import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Comparator
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -69,7 +80,6 @@ class NikonMediaSelectionMainActivityTest {
         )
         savedCameraStore.replace(listOf(record))
         originalRotation = device.displayRotation
-        device.setOrientationNatural()
         val clips = (1..40).map { number ->
             MediaClipRecord(
                 handle = number.toLong(), storageId = 65_537, sizeBytes = 4,
@@ -95,8 +105,12 @@ class NikonMediaSelectionMainActivityTest {
         }
         scenario = ActivityScenario.launch(Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+        // Launch can replace the orientation measured while the test host was active.
+        device.setOrientationNatural()
+        settleNaturalOrientation()
         requireNotNull(device.wait(Until.findObject(By.desc("Media library")), 15_000)).click()
         row("01")
+        settleNaturalOrientation()
     }
 
     @After
@@ -206,10 +220,408 @@ class NikonMediaSelectionMainActivityTest {
         trace("edge-terminal")
     }
 
+    @Test
+    fun actualGridFavoritePersistsAndBrowseAdmissionKeepsSelectionSeparate() {
+        pressControl("Grid view")
+        awaitStableCatalogGeometry(expectGrid = true)
+        val first = stableRowBounds("01")
+        val second = stableRowBounds("02")
+        assertTrue("Small Grid must mount two distinct columns", first.centerX() != second.centerX())
+        pressControl("Add SIMULATED-SEL-01.R3D to favorites")
+        val removed = waitForCurrentFavoriteControl("Remove SIMULATED-SEL-01.R3D from favorites")
+        if (removed == null) nativeDiagnostic("favorite-remove-not-mounted", includeFavorites = true)
+        assertNotNull(removed)
+        requireNotNull(scenario).recreate()
+        pressControl("Media library")
+        assertNotNull(waitForCurrentFavoriteControl("Remove SIMULATED-SEL-01.R3D from favorites"))
+        val restoredFirst = stableRowBounds("01")
+        val restoredSecond = stableRowBounds("02")
+        assertTrue("Persisted Grid must retain its native columns", restoredFirst.centerX() != restoredSecond.centerX())
+        tap(center(restoredSecond))
+        assertNotNull(device.wait(Until.findObject(By.text(
+            "SIMULATED-SEL-02.R3D is a camera master; preview is unavailable.")), 5_000))
+        assertTrue(device.wait(Until.gone(By.desc("Exit media selection")), 5_000))
+        trace("grid-master-admission-and-favorite")
+        hold(center(stableRowBounds("01")), 650)
+        selectedCount(1)
+        traceMatrixFinalTap("grid-native-hold-and-tap", "02")
+        matrixSelected("grid-native-hold-and-tap", names("01", "02"))
+        traceMatrixSelection("grid-native-hold-and-tap")
+    }
+
+    @Test
+    fun actualGridSweepReversesMixedSelectionWithoutLosingOriginalItems() {
+        pressControl("Grid view")
+        hold(center(stableRowBounds("01")), 650)
+        selectedCount(1)
+        tap(center(stableRowBounds("04")))
+        selectedCount(2)
+        val viewport = catalogViewport()
+        val second = center(stableRowBounds("02"))
+        val third = center(stableRowBounds("03"))
+        val fourth = center(stableRowBounds("04"))
+        assertEquals(names("01", "04"), nativeRowsSnapshot(viewport).selected)
+        val down = SystemClock.uptimeMillis()
+        pointerTrace = JSONArray()
+        try {
+            inject(MotionEvent.ACTION_DOWN, second, down)
+            SystemClock.sleep(650)
+            assertEquals(names("01", "02", "04"), nativeRowsSnapshot(viewport).selected)
+            move(second, third, down, 210)
+            move(third, fourth, down, 210)
+            assertEquals(names("01", "02", "03", "04"), nativeRowsSnapshot(viewport).selected)
+            move(fourth, third, down, 210)
+            move(third, second, down, 210)
+            assertEquals(names("01", "02", "04"), nativeRowsSnapshot(viewport).selected)
+        } finally {
+            inject(MotionEvent.ACTION_UP, second, down)
+            finishMatrixTrace("reversible-grid")
+        }
+        selectedCount(3)
+        trace("grid-reversible-mixed-set")
+    }
+
+    @Test
+    fun actualHeldRotationRetiresOldPointerAndLeavesFreshInputUsable() {
+        hold(center(stableRowBounds("01")), 650)
+        selectedCount(1)
+        val start = center(stableRowBounds("02"))
+        val down = SystemClock.uptimeMillis()
+        var terminal = start
+        pointerTrace = JSONArray()
+        try {
+            inject(MotionEvent.ACTION_DOWN, start, down)
+            SystemClock.sleep(650)
+            selectedCount(2)
+            assertEquals(names("01", "02"), nativeRowsSnapshot(catalogViewport()).selected)
+            device.setOrientationLeft()
+            assertTrue("Actual native window must be landscape", device.displayWidth > device.displayHeight)
+            awaitStableCatalogGeometry(expectGrid = false)
+            stableRowBounds("01")
+            val viewport = catalogViewport()
+            terminal = center(stableRowBounds("03"))
+            assertEquals(names("01", "02"), nativeRowsSnapshot(viewport).selected)
+            inject(MotionEvent.ACTION_MOVE, terminal, down)
+            SystemClock.sleep(125)
+        } finally {
+            inject(MotionEvent.ACTION_UP, terminal, down)
+            finishMatrixTrace("rotation-retired-pointer")
+        }
+        val viewport = catalogViewport()
+        assertEquals(names("01", "02"), nativeRowsSnapshot(viewport).selected)
+        selectedCount(2)
+        tap(center(stableRowBounds("03")))
+        selectedCount(3)
+        trace("list-landscape-fresh-input-after-retirement")
+        pressControl("Exit media selection")
+        assertTrue(device.wait(Until.gone(By.text("3 selected")), 5_000))
+        val before = visibleRows()
+        swipe(Point(viewport.centerX(), viewport.bottom - 30),
+            Point(viewport.centerX(), viewport.top + 40), 420)
+        assertNotEquals(before, visibleRows())
+        trace("list-landscape-scroll-after-retirement")
+    }
+
+    @Test
+    fun actualBackCancellationAllowsLayoutDensityAndCategoryRemount() {
+        hold(center(stableRowBounds("01")), 650)
+        selectedCount(1)
+        val start = center(stableRowBounds("02"))
+        val down = SystemClock.uptimeMillis()
+        var terminal = start
+        pointerTrace = JSONArray()
+        try {
+            inject(MotionEvent.ACTION_DOWN, start, down)
+            SystemClock.sleep(650)
+            selectedCount(2)
+            val backRequested = SystemClock.uptimeMillis()
+            val backAcknowledged = device.pressBack()
+            println("SIMULATED_SELECTION_BACK=" + JSONObject()
+                .put("requestedMs", backRequested).put("returnedMs", SystemClock.uptimeMillis())
+                .put("accessibilityEventAcknowledged", backAcknowledged))
+            // UiAutomator 2.3 waits for event2048; that acknowledgement can time
+            // out after the actual Back callback already retired selection.
+            assertTrue(device.wait(Until.gone(By.desc("Exit media selection")), 5_000))
+            assertEquals(emptySet<String>(), nativeRowsSnapshot(catalogViewport()).selected)
+            terminal = center(stableRowBounds("03"))
+            inject(MotionEvent.ACTION_MOVE, terminal, down)
+            SystemClock.sleep(125)
+        } finally {
+            inject(MotionEvent.ACTION_UP, terminal, down)
+            finishMatrixTrace("back-retired-pointer")
+        }
+        assertTrue(device.wait(Until.gone(By.desc("Exit media selection")), 5_000))
+        assertTrue(device.wait(Until.gone(By.text(
+            "SIMULATED-SEL-03.R3D is a camera master; preview is unavailable.")), 5_000))
+        val viewport = catalogViewport()
+        pressControl("Grid view")
+        val small = stableRowBounds("01")
+        pressControl("Large thumbnails")
+        val large = stableRowBounds("01")
+        assertTrue("Large density must change drawn native card width", large.width() > small.width())
+        pressControl("Small thumbnails")
+        assertEquals(small.width(), stableRowBounds("01").width())
+        pressControl("List view")
+        assertTrue(stableRowBounds("01").width() > small.width())
+        pressControl("Add SIMULATED-SEL-01.R3D to favorites")
+        pressControl("Show Favorites media")
+        assertEquals(names("01").toList(), nativeVisibleRows(viewport))
+        pressControl("Show All media")
+        assertTrue(nativeVisibleRows(viewport).size > 1)
+        pressControl("Grid view")
+        hold(center(stableRowBounds("01")), 650)
+        selectedCount(1)
+        traceMatrixFinalTap("grid-remounted-after-back-layout-density-category", "02")
+        val current = matrixSelected("grid-remounted-after-back-layout-density-category", names("01", "02"))
+        traceMatrixSelection("grid-remounted-after-back-layout-density-category", renderedWindowMatch = current)
+        pressControl("Exit media selection")
+        val before = visibleRows()
+        swipe(Point(viewport.centerX(), viewport.bottom - 60),
+            Point(viewport.centerX(), viewport.top + 80), 420)
+        assertNotEquals(before, visibleRows())
+        trace("grid-scroll-after-context-remount")
+    }
+
+    private fun waitForCurrentFavoriteControl(description: String): UiObject2? {
+        val selector = By.desc(description)
+        return device.wait(object : Condition<UiDevice, UiObject2> {
+            override fun apply(device: UiDevice): UiObject2? {
+                freshAccessibility()
+                return device.findObject(selector)
+            }
+        }, 5_000)
+    }
+
+    private fun names(vararg numbers: String): Set<String> =
+        numbers.map { "SIMULATED-SEL-$it.R3D" }.toSet()
+
+    private fun pressControl(description: String) {
+        var previous: Rect? = null
+        var stable = 0
+        repeat(50) {
+            freshAccessibility()
+            try {
+                val target = device.findObject(By.desc(description))
+                val bounds = target?.visibleBounds
+                if (bounds != null && !bounds.isEmpty && nativeControlPointAvailable(description, bounds)) {
+                    stable = if (bounds == previous) stable + 1 else 0
+                    previous = Rect(bounds)
+                    if (stable >= 2) {
+                        println("SIMULATED_SELECTION_CONTROL=" + JSONObject()
+                            .put("description", description).put("bounds", bounds.toShortString())
+                            .put("rotation", device.displayRotation)
+                            .put("displayWidth", device.displayWidth).put("displayHeight", device.displayHeight))
+                        val previousTrace = pointerTrace
+                        pointerTrace = JSONArray()
+                        try { tap(center(bounds)) } finally {
+                            println("SIMULATED_SELECTION_CONTROL_TIMING=" + JSONObject()
+                                .put("description", description).put("bounds", bounds.toShortString())
+                                .put("x", bounds.centerX()).put("y", bounds.centerY()).put("events", pointerTrace))
+                            pointerTrace = previousTrace
+                        }
+                        return
+                    }
+                } else {
+                    stable = 0
+                    previous = null
+                }
+            } catch (_: StaleObjectException) {
+                stable = 0
+                previous = null
+            }
+            SystemClock.sleep(100)
+        }
+        nativeDiagnostic("control-did-not-settle", includeFavorites = true)
+        error("Actual visible control did not settle: $description")
+    }
+
+    private fun nativeControlPointAvailable(description: String, targetBounds: Rect): Boolean {
+        val started = SystemClock.uptimeMillis()
+        val windows = instrumentation.uiAutomation.windows
+        val matching = linkedMapOf<Int, Int>()
+        fun containsCurrentTarget(node: AccessibilityNodeInfo, windowID: Int): Boolean {
+            val bounds = Rect().also(node::getBoundsInScreen)
+            if (node.isVisibleToUser && node.windowId == windowID &&
+                node.packageName?.toString() == context.packageName &&
+                node.contentDescription?.toString() == description && bounds == targetBounds) return true
+            for (index in 0 until node.childCount) {
+                val child = node.getChild(index)
+                if (child != null && containsCurrentTarget(child, windowID)) return true
+            }
+            return false
+        }
+        for (window in windows) {
+            if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+            val root = window.root ?: continue
+            if (root.packageName?.toString() == context.packageName && containsCurrentTarget(root, window.id)) {
+                matching[window.id] = window.layer
+            }
+        }
+        val blocked = JSONArray()
+        val targetLayer = matching.values.singleOrNull()
+        if (targetLayer != null) {
+            for (window in windows) {
+                if (window.type != AccessibilityWindowInfo.TYPE_SYSTEM || window.layer <= targetLayer) continue
+                val region = Region().also(window::getRegionInScreen)
+                if (region.contains(targetBounds.centerX(), targetBounds.centerY())) {
+                    blocked.put(JSONObject().put("id", window.id).put("type", window.type)
+                        .put("layer", window.layer).put("region", region.toString()))
+                }
+            }
+        }
+        val elapsed = SystemClock.uptimeMillis() - started
+        println("SIMULATED_SELECTION_CONTROL_WINDOW=" + JSONObject()
+            .put("description", description).put("bounds", targetBounds.toShortString())
+            .put("x", targetBounds.centerX()).put("y", targetBounds.centerY())
+            .put("matchingWindowIDs", JSONArray(matching.keys.toList()))
+            .put("targetLayer", targetLayer ?: JSONObject.NULL).put("blockedBy", blocked)
+            .put("elapsedMs", elapsed))
+        assertTrue("Native control window lookup must fit the original observer bound", elapsed < stationaryIntervalMs)
+        return matching.size == 1 && blocked.length() == 0
+    }
+
+    private fun settleNaturalOrientation() {
+        var stable = 0
+        repeat(50) {
+            stable = if (device.displayRotation == 0 && device.displayHeight > device.displayWidth) stable + 1 else 0
+            if (stable >= 3) {
+                println("SIMULATED_SELECTION_ORIENTATION=" + JSONObject()
+                    .put("rotation", device.displayRotation).put("displayWidth", device.displayWidth)
+                    .put("displayHeight", device.displayHeight).put("uptimeMs", SystemClock.uptimeMillis()))
+                return
+            }
+            SystemClock.sleep(100)
+        }
+        assertEquals("Actual launched fixture must settle in natural portrait", 0, device.displayRotation)
+        assertTrue(device.displayHeight > device.displayWidth)
+        error("Actual launched fixture orientation did not settle")
+    }
+
+    private data class NativeCatalogGeometry(
+        val rotation: Int,
+        val displayWidth: Int,
+        val displayHeight: Int,
+        val root: Rect,
+        val owner: Rect,
+        val first: Rect,
+        val second: Rect,
+    )
+
+    private fun awaitStableCatalogGeometry(expectGrid: Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        var previous: NativeCatalogGeometry? = null
+        while (SystemClock.uptimeMillis() < deadline) {
+            val current = nativeCatalogGeometry(expectGrid)
+            if (current != null && current == previous) return
+            previous = current
+            SystemClock.sleep(80)
+        }
+        nativeDiagnostic("catalog-geometry-did-not-settle", includeFavorites = true)
+        error("Actual native catalog geometry did not settle within the existing row discovery window")
+    }
+
+    private fun nativeCatalogGeometry(expectGrid: Boolean): NativeCatalogGeometry? {
+        val started = SystemClock.uptimeMillis()
+        freshAccessibility()
+        val root = instrumentation.uiAutomation.rootInActiveWindow ?: run {
+            println("SIMULATED_SELECTION_GEOMETRY_SAMPLE=missing-current-root")
+            return null
+        }
+        assertEquals(context.packageName, root.packageName?.toString())
+        val rotation = device.displayRotation
+        val width = device.displayWidth
+        val height = device.displayHeight
+        val screen = Rect(0, 0, width, height)
+        val rootBounds = Rect().also(root::getBoundsInScreen)
+        var geometry: NativeCatalogGeometry? = null
+        fun visit(node: AccessibilityNodeInfo): Map<String, Rect> {
+            val rows = linkedMapOf<String, Rect>()
+            for (index in 0 until node.childCount) node.getChild(index)?.let { rows.putAll(visit(it)) }
+            val bounds = Rect().also(node::getBoundsInScreen)
+            val description = node.contentDescription?.toString()
+            if (description?.startsWith("SIMULATED-SEL-") == true && node.isVisibleToUser && !bounds.isEmpty) {
+                rows[description.substringBefore(",")] = Rect(bounds)
+            }
+            val containedRows = rows.filterValues { screen.contains(it) && bounds.contains(it) }
+            val first = containedRows["SIMULATED-SEL-01.R3D"]
+            val second = containedRows["SIMULATED-SEL-02.R3D"]
+            val verticalActions = node.actionList.any { it.id in setOf(4096, 8192, 16908344, 16908346) }
+            if (geometry == null && node.isScrollable && verticalActions && node.isVisibleToUser &&
+                screen.contains(rootBounds) && screen.contains(bounds) && first != null && second != null &&
+                containedRows.size >= 3 &&
+                bounds.height() > first.height() * 2 && (!expectGrid || first.centerX() != second.centerX())) {
+                geometry = NativeCatalogGeometry(rotation, width, height, Rect(rootBounds),
+                    Rect(bounds), Rect(first), Rect(second))
+            }
+            return rows
+        }
+        visit(root)
+        val elapsed = SystemClock.uptimeMillis() - started
+        println("SIMULATED_SELECTION_GEOMETRY_SAMPLE=" + JSONObject()
+            .put("elapsedMs", elapsed).put("rotation", rotation).put("displayWidth", width)
+            .put("displayHeight", height).put("rootBounds", rootBounds.toShortString())
+            .put("ownerBounds", geometry?.owner?.toShortString())
+            .put("firstBounds", geometry?.first?.toShortString())
+            .put("secondBounds", geometry?.second?.toShortString()).put("expectGrid", expectGrid))
+        assertTrue("Native geometry sample must fit the original observation window", elapsed < stationaryIntervalMs)
+        return geometry
+    }
+
+    private fun nativeDiagnostic(name: String, includeFavorites: Boolean = false) {
+        val directory = context.cacheDir.resolve("SIMULATED-selection-native").apply { mkdirs() }
+        device.takeScreenshot(directory.resolve("$name.png"))
+        val started = SystemClock.uptimeMillis()
+        freshAccessibility()
+        val fetchStarted = SystemClock.uptimeMillis()
+        val root = requireNotNull(instrumentation.uiAutomation.rootInActiveWindow)
+        val fetched = SystemClock.uptimeMillis()
+        val nodes = JSONArray()
+        fun visit(node: AccessibilityNodeInfo, parentBounds: Rect?) {
+            val bounds = Rect().also(node::getBoundsInScreen)
+            val description = node.contentDescription?.toString()
+            val text = node.text?.toString()
+            if (node.isVisibleToUser && !bounds.isEmpty) {
+                nodes.put(JSONObject().put("description", description).put("text", text)
+                    .put("bounds", bounds.toShortString()).put("parentBounds", parentBounds?.toShortString())
+                    .put("clickable", node.isClickable).put("enabled", node.isEnabled)
+                    .put("selected", node.isSelected).put("scrollable", node.isScrollable)
+                    .put("className", node.className?.toString()).put("actions", JSONArray(
+                        node.actionList.map { action -> JSONObject().put("id", action.id)
+                            .put("label", action.label?.toString()) })))
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let { visit(it, bounds) }
+        }
+        visit(root, null)
+        val elapsed = SystemClock.uptimeMillis() - started
+        val receipt = JSONObject().put("name", name).put("uptimeMs", started)
+            .put("rotation", device.displayRotation).put("displayWidth", device.displayWidth)
+            .put("displayHeight", device.displayHeight).put("package", root.packageName?.toString())
+            .put("elapsedMs", elapsed).put("clearMs", fetchStarted - started)
+            .put("rootFetchMs", fetched - fetchStarted).put("treeWalkMs", SystemClock.uptimeMillis() - fetched)
+            .put("nodes", nodes)
+        if (includeFavorites) receipt.put("persistedFavoriteIDs", JSONArray(
+            MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context)).favoriteIDs(bucket).sorted()))
+        receipt.put("storedViewOptions", MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
+            .viewOptions(MediaLibrarySource.CAMERA).toString())
+        directory.resolve("$name.json").writeText(receipt.toString(2))
+        println("SIMULATED_SELECTION_DIAGNOSTIC=" + JSONObject()
+            .put("name", name).put("rotation", device.displayRotation).put("elapsedMs", elapsed)
+            .put("nodes", nodes.length()).put("persistedFavoriteIDs", receipt.optJSONArray("persistedFavoriteIDs")))
+        assertEquals(context.packageName, root.packageName?.toString())
+        assertTrue("Native diagnostic must fit the existing observation window", elapsed < stationaryIntervalMs)
+    }
+
+    private fun finishMatrixTrace(name: String) {
+        println("SIMULATED_SELECTION_MATRIX_TIMING=" + JSONObject()
+            .put("name", name).put("events", pointerTrace))
+        pointerTrace = null
+    }
+
     private fun row(number: String): UiObject2 {
         freshAccessibility()
-        return requireNotNull(device.wait(
-            Until.findObject(By.descStartsWith("SIMULATED-SEL-$number.R3D")), 10_000))
+        val found = device.wait(Until.findObject(By.descStartsWith("SIMULATED-SEL-$number.R3D")), 10_000)
+        if (found == null) nativeDiagnostic("missing-row-$number", includeFavorites = true)
+        return requireNotNull(found)
     }
 
     private fun selectedCount(count: Int) {
@@ -234,7 +646,11 @@ class NikonMediaSelectionMainActivityTest {
         error("Actual mounted catalog rows did not produce a current native snapshot")
     }
 
-    private fun nativeVisibleRows(viewport: Rect): List<String> {
+    private data class NativeRowsSnapshot(val visible: List<String>, val selected: Set<String>)
+
+    private fun nativeVisibleRows(viewport: Rect): List<String> = nativeRowsSnapshot(viewport).visible
+
+    private fun nativeRowsSnapshot(viewport: Rect): NativeRowsSnapshot {
         // A live list retires UiObject2 IDs during every property refresh. Read
         // one current public native tree without refreshing each row again.
         val started = SystemClock.uptimeMillis()
@@ -244,6 +660,7 @@ class NikonMediaSelectionMainActivityTest {
         val fetched = SystemClock.uptimeMillis()
         assertEquals(context.packageName, root.packageName?.toString())
         val rows = linkedSetOf<String>()
+        val selected = linkedSetOf<String>()
         val rowBounds = JSONArray()
         fun visit(node: AccessibilityNodeInfo) {
             val description = node.contentDescription?.toString()
@@ -252,6 +669,7 @@ class NikonMediaSelectionMainActivityTest {
                 if (bounds.intersect(viewport) && !bounds.isEmpty) {
                     val name = description.substringBefore(",")
                     rows += name
+                    if (description.endsWith(", selected")) selected += name
                     rowBounds.put(JSONObject().put("name", name).put("visibleBounds", bounds.toShortString()))
                 }
             }
@@ -263,11 +681,12 @@ class NikonMediaSelectionMainActivityTest {
             .put("elapsedMs", elapsed).put("clearMs", fetchStarted - started)
             .put("rootFetchMs", fetched - fetchStarted)
             .put("treeWalkMs", SystemClock.uptimeMillis() - fetched)
-            .put("rows", JSONArray(rows.sorted())).put("visibleRowBounds", rowBounds))
+            .put("rows", JSONArray(rows.sorted())).put("selected", JSONArray(selected.sorted()))
+            .put("visibleRowBounds", rowBounds))
         assertTrue("A live catalog snapshot must finish within one stationary measurement interval",
             elapsed < stationaryIntervalMs)
         assertTrue("Current native catalog snapshot must contain visible rows", rows.isNotEmpty())
-        return rows.sorted()
+        return NativeRowsSnapshot(rows.sorted(), selected)
     }
 
     private fun freshAccessibility() {
@@ -288,6 +707,7 @@ class NikonMediaSelectionMainActivityTest {
             if (rows.size >= 3 && bounds.height() > rowHeight * 2) return Rect(bounds)
             parent = parent.parent
         }
+        nativeDiagnostic("missing-viewport", includeFavorites = true)
         error("Actual native catalog owner with mounted fixture rows was not found")
     }
 
@@ -342,9 +762,313 @@ class NikonMediaSelectionMainActivityTest {
         try { check(instrumentation.uiAutomation.injectInputEvent(event, true)) }
         finally {
             pointerTrace?.put(JSONObject().put("action", action).put("eventMs", event.eventTime)
+                .put("x", point.x).put("y", point.y)
                 .put("requestedMs", requested).put("returnedMs", SystemClock.uptimeMillis()))
             event.recycle()
         }
+    }
+
+    private fun traceMatrixFinalTap(name: String, number: String) {
+        val bounds = stableRowBounds(number)
+        val point = center(bounds)
+        val previousTrace = pointerTrace
+        pointerTrace = JSONArray()
+        try { tap(point) } finally {
+            println("SIMULATED_SELECTION_FINAL_TAP=" + JSONObject()
+                .put("name", name).put("row", number).put("bounds", bounds.toShortString())
+                .put("x", point.x).put("y", point.y).put("events", pointerTrace))
+            pointerTrace = previousTrace
+        }
+    }
+
+    private fun matrixSelected(name: String, expected: Set<String>): JSONObject {
+        val started = SystemClock.uptimeMillis()
+        val deadline = started + 5_000
+        var last: JSONObject? = null
+        val matched = device.wait(object : Condition<UiDevice, JSONObject> {
+            override fun apply(device: UiDevice): JSONObject? {
+                if (SystemClock.uptimeMillis() >= deadline) return null
+                val current = readMatrixSelectionSnapshot()
+                last = current
+                if (SystemClock.uptimeMillis() >= deadline || current.optString("status") != "available") {
+                    return null
+                }
+                val selected = current.getJSONArray("selected")
+                val selectedNames = (0 until selected.length()).map { selected.getString(it) }.toSet()
+                return current.takeIf {
+                    it.getString("header") == "${expected.size} selected" && selectedNames == expected
+                }
+            }
+        }, 5_000)
+        if (matched == null) {
+            println("SIMULATED_SELECTION_CURRENT_FAILURE=" + JSONObject()
+                .put("name", name).put("expected", JSONArray(expected.sorted()))
+                .put("startedMs", started).put("deadlineMs", deadline).put("last", last ?: JSONObject.NULL))
+            nativeDiagnostic("$name-current-selection-not-mounted", includeFavorites = true)
+        }
+        assertNotNull(matched)
+        matched?.let { receipt ->
+            val observed = receipt.getJSONArray("rowsObserved")
+            val selectedRows = JSONArray()
+            for (index in 0 until observed.length()) {
+                val row = observed.getJSONObject(index)
+                if (row.getString("description").substringBefore(",") in expected) selectedRows.put(row)
+            }
+            println("SIMULATED_SELECTION_CURRENT_MATCH=" + JSONObject()
+                .put("name", name).put("startedMs", started).put("deadlineMs", deadline)
+                .put("matchedMs", receipt.getLong("returnedMs"))
+                .put("header", receipt.getString("header")).put("selected", receipt.getJSONArray("selected"))
+                .put("selectedRows", selectedRows).put("package", receipt.getString("package"))
+                .put("windowID", receipt.getInt("windowID")).put("matchingWindows", receipt.getJSONArray("matchingWindows"))
+                .put("rootFetchRequestedMs", receipt.getLong("rootFetchRequestedMs"))
+                .put("rootFetchedMs", receipt.getLong("rootFetchedMs")).put("readMs", receipt.getLong("elapsedMs")))
+        }
+        return requireNotNull(matched).put("deadlineMs", deadline)
+    }
+
+    private fun traceMatrixSelection(name: String, renderedWindowMatch: JSONObject? = null) {
+        val directory = context.cacheDir.resolve("SIMULATED-selection-native").apply { mkdirs() }
+        val requested = SystemClock.uptimeMillis()
+        val captured = device.takeScreenshot(directory.resolve("$name.png"))
+        val returned = SystemClock.uptimeMillis()
+        println("SIMULATED_SELECTION_CURRENT_IMAGE=" + JSONObject()
+            .put("name", name).put("requestedMs", requested)
+            .put("returnedMs", returned).put("captured", captured))
+        if (renderedWindowMatch != null) captureRenderedWindow(name, renderedWindowMatch)
+    }
+
+    private fun captureRenderedWindow(name: String, match: JSONObject) {
+        val deadline = match.getLong("deadlineMs")
+        val expectedWindowID = match.getInt("windowID")
+        val retired = AtomicBoolean(false)
+        val completion = CountDownLatch(1)
+        val result = AtomicReference<JSONObject>()
+        val completedBitmap = AtomicReference<Bitmap>()
+        val handler = Handler(Looper.getMainLooper())
+        fun complete(receipt: JSONObject, bitmap: Bitmap? = null) {
+            result.set(receipt)
+            // Only a completed copy transfers ownership. Retired callbacks never write files.
+            if (bitmap != null) {
+                if (retired.get()) bitmap.recycle() else {
+                    completedBitmap.set(bitmap)
+                    if (retired.get()) completedBitmap.getAndSet(null)?.recycle()
+                }
+            }
+            completion.countDown()
+        }
+        fun unavailable(reason: String) {
+            complete(JSONObject().put("status", "unavailable").put("reason", reason))
+        }
+        val posted = handler.post {
+            if (retired.get() || SystemClock.uptimeMillis() >= deadline) {
+                unavailable("deadline-before-window-read")
+            } else {
+                try {
+                    requireNotNull(scenario).onActivity { activity ->
+                        val window = activity.window
+                        val decor = window.peekDecorView()
+                        val component = activity.componentName
+                        val token = decor?.windowToken
+                        val node = decor?.createAccessibilityNodeInfo()
+                        val windowID = node?.windowId
+                        val nodePackage = node?.packageName?.toString()
+                        val location = IntArray(2)
+                        val inWindow = IntArray(2)
+                        decor?.getLocationOnScreen(location)
+                        decor?.getLocationInWindow(inWindow)
+                        val width = decor?.width
+                        val height = decor?.height
+                        val source = if (width != null && height != null) {
+                            Rect(inWindow[0], inWindow[1], inWindow[0] + width, inWindow[1] + height)
+                        } else null
+                        val screen = if (width != null && height != null) {
+                            Rect(location[0], location[1], location[0] + width, location[1] + height)
+                        } else null
+                        val facts = JSONObject().put("component", component.flattenToString())
+                            .put("windowID", windowID ?: JSONObject.NULL)
+                            .put("nodePackage", nodePackage ?: JSONObject.NULL)
+                            .put("windowTokenIdentity", token?.let(System::identityHashCode) ?: JSONObject.NULL)
+                            .put("attached", decor?.isAttachedToWindow ?: JSONObject.NULL)
+                            .put("focused", decor?.hasWindowFocus() ?: JSONObject.NULL)
+                            .put("hardware", decor?.isHardwareAccelerated ?: JSONObject.NULL)
+                            .put("screenBounds", screen?.toShortString() ?: JSONObject.NULL)
+                            .put("sourceBounds", source?.toShortString() ?: JSONObject.NULL)
+                            .put("bitmapWidth", width ?: JSONObject.NULL).put("bitmapHeight", height ?: JSONObject.NULL)
+                            .put("windowReadMs", SystemClock.uptimeMillis())
+                        if (decor == null || token == null || windowID != expectedWindowID || nodePackage != context.packageName ||
+                            component.packageName != context.packageName || component.className != MainActivity::class.java.name ||
+                            activity.isDestroyed || activity.isFinishing || !decor.isAttachedToWindow ||
+                            !decor.hasWindowFocus() || !decor.isHardwareAccelerated || width == null || height == null ||
+                            width <= 0 || height <= 0 || source == null ||
+                            retired.get() || SystemClock.uptimeMillis() >= deadline) {
+                            complete(facts.put("status", "unavailable").put("reason", "unknown-or-changed-window-identity"))
+                        } else {
+                            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                            val requested = SystemClock.uptimeMillis()
+                            if (retired.get() || requested >= deadline) {
+                                bitmap.recycle()
+                                complete(facts.put("status", "unavailable").put("reason", "deadline-before-copy-request"))
+                            } else try {
+                                PixelCopy.request(window, source, bitmap, { status ->
+                                    val returned = SystemClock.uptimeMillis()
+                                    facts.put("requestedMs", requested).put("callbackMs", returned).put("copyStatus", status)
+                                    try {
+                                        val currentNode = decor.createAccessibilityNodeInfo()
+                                        val currentLocation = IntArray(2).also(decor::getLocationOnScreen)
+                                        val currentInWindow = IntArray(2).also(decor::getLocationInWindow)
+                                        val sameWindow = activity.window === window && window.peekDecorView() === decor &&
+                                            decor.windowToken === token && currentNode.windowId == expectedWindowID &&
+                                            currentNode.packageName?.toString() == context.packageName && activity.componentName == component &&
+                                            !activity.isDestroyed && !activity.isFinishing && decor.isAttachedToWindow &&
+                                            decor.hasWindowFocus() && decor.isHardwareAccelerated
+                                        val sameGeometry = decor.width == width && decor.height == height &&
+                                            currentLocation.contentEquals(location) && currentInWindow.contentEquals(inWindow)
+                                        val checked = SystemClock.uptimeMillis()
+                                        facts.put("identityUnchanged", sameWindow).put("geometryUnchanged", sameGeometry)
+                                            .put("callbackCheckedMs", checked)
+                                            .put("callbackScreenBounds", Rect(currentLocation[0], currentLocation[1],
+                                                currentLocation[0] + decor.width, currentLocation[1] + decor.height).toShortString())
+                                            .put("callbackSourceBounds", Rect(currentInWindow[0], currentInWindow[1],
+                                                currentInWindow[0] + decor.width, currentInWindow[1] + decor.height).toShortString())
+                                            .put("status", if (status == PixelCopy.SUCCESS && sameWindow && sameGeometry && checked < deadline) "available" else "unavailable")
+                                    } catch (error: RuntimeException) {
+                                        facts.put("status", "unavailable").put("reason", "callback-window-read-" + error.javaClass.simpleName)
+                                    } finally {
+                                        complete(facts, bitmap)
+                                    }
+                                }, handler)
+                            } catch (error: IllegalArgumentException) {
+                                bitmap.recycle()
+                                complete(facts.put("status", "unavailable").put("reason", "copy-source-unavailable")
+                                    .put("exception", error.javaClass.simpleName))
+                            } catch (error: RuntimeException) {
+                                // An unexpected request error cannot prove that a copy is no longer in flight.
+                                complete(facts.put("status", "unavailable").put("reason", "copy-request-" + error.javaClass.simpleName))
+                            }
+                        }
+                    }
+                } catch (error: RuntimeException) {
+                    unavailable("window-read-" + error.javaClass.simpleName)
+                }
+            }
+        }
+        if (!posted) unavailable("main-handler-unavailable")
+        var interrupted = false
+        val finished = try {
+            completion.await((deadline - SystemClock.uptimeMillis()).coerceAtLeast(0), TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            interrupted = true
+            Thread.currentThread().interrupt()
+            false
+        } finally {
+            retired.set(true)
+        }
+        val bitmap = completedBitmap.getAndSet(null)
+        val receipt = result.get()?.let { JSONObject(it.toString()) }
+            ?: JSONObject().put("status", "unavailable").put("reason", "copy-did-not-complete-before-deadline")
+        receipt.put("name", name).put("deadlineMs", deadline).put("completedWithinWait", finished)
+        if (!finished) receipt.put("status", "unavailable")
+        if (interrupted) receipt.put("reason", "copy-wait-interrupted")
+        val current = if (!interrupted && SystemClock.uptimeMillis() < deadline) {
+            readMatrixSelectionSnapshot().also {
+                if (it.getLong("returnedMs") >= deadline) it.put("status", "unavailable").put("reason", "after-copy-native-read-deadline")
+            }
+        } else JSONObject().put("status", "unavailable").put("reason", "after-copy-native-read-deadline")
+        current.put("name", name).put("deadlineMs", deadline)
+        println("SIMULATED_SELECTION_AFTER_COPY_NATIVE=" + current)
+        try {
+            if (receipt.optString("status") == "available" && bitmap != null) {
+                val target = context.cacheDir.resolve("SIMULATED-selection-native/$name-rendered-window.png")
+                receipt.put("pngWriteRequestedMs", SystemClock.uptimeMillis())
+                target.outputStream().use { stream ->
+                    val written = bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                    receipt.put("pngWritten", written)
+                    if (!written) receipt.put("status", "unavailable").put("reason", "png-write-failed")
+                }
+                receipt.put("pngWriteReturnedMs", SystemClock.uptimeMillis())
+            }
+        } catch (error: Exception) {
+            receipt.put("status", "unavailable").put("reason", "png-write-" + error.javaClass.simpleName)
+        } finally {
+            bitmap?.recycle()
+        }
+        println("SIMULATED_SELECTION_RENDERED_WINDOW=" + receipt)
+    }
+
+    private fun readMatrixSelectionSnapshot(): JSONObject {
+        val started = SystemClock.uptimeMillis()
+        val receipt = JSONObject()
+            .put("requestedMs", started).put("status", "unavailable")
+            .put("header", JSONObject.NULL).put("selected", JSONObject.NULL)
+        try {
+            freshAccessibility()
+            val fetchStarted = SystemClock.uptimeMillis()
+            val root = instrumentation.uiAutomation.rootInActiveWindow
+            val fetched = SystemClock.uptimeMillis()
+            receipt.put("rootFetchRequestedMs", fetchStarted).put("rootFetchedMs", fetched)
+            if (root == null) {
+                receipt.put("reason", "missing-current-root")
+            } else {
+                val packageName = root.packageName?.toString()
+                val windowID = root.windowId
+                val windows = instrumentation.uiAutomation.windows.filter { it.id == windowID }
+                receipt.put("package", packageName ?: JSONObject.NULL).put("windowID", windowID)
+                    .put("matchingWindows", JSONArray(windows.map { window ->
+                        val bounds = Rect().also(window::getBoundsInScreen)
+                        JSONObject().put("id", window.id).put("type", window.type)
+                            .put("layer", window.layer).put("bounds", bounds.toShortString())
+                    }))
+                val headers = JSONArray()
+                val rows = JSONArray()
+                val selected = linkedSetOf<String>()
+                var missingChildren = 0
+                var unknownSelectionLabels = 0
+                fun visit(node: AccessibilityNodeInfo) {
+                    val bounds = Rect().also(node::getBoundsInScreen)
+                    if (node.isVisibleToUser && !bounds.isEmpty) {
+                        val text = node.text?.toString()
+                        if (text?.matches(Regex("[0-9]+ selected")) == true) {
+                            headers.put(JSONObject().put("text", text).put("bounds", bounds.toShortString()))
+                        }
+                        val description = node.contentDescription?.toString()
+                        if (description?.startsWith("SIMULATED-SEL-") == true) {
+                            val isSelected = when {
+                                description.endsWith(", selected") -> true
+                                description.endsWith(", not selected") -> false
+                                else -> null
+                            }
+                            val rowName = description.substringBefore(",")
+                            if (isSelected == true) selected += rowName
+                            if (isSelected == null) unknownSelectionLabels += 1
+                            rows.put(JSONObject().put("description", description)
+                                .put("bounds", bounds.toShortString())
+                                .put("selected", isSelected ?: JSONObject.NULL))
+                        }
+                    }
+                    for (index in 0 until node.childCount) {
+                        val child = node.getChild(index)
+                        if (child == null) missingChildren += 1 else visit(child)
+                    }
+                }
+                visit(root)
+                receipt.put("headersObserved", headers).put("rowsObserved", rows)
+                    .put("selectedObserved", JSONArray(selected.sorted()))
+                    .put("missingChildren", missingChildren).put("unknownSelectionLabels", unknownSelectionLabels)
+                val available = packageName == context.packageName && windows.size == 1 &&
+                    windows.single().type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                    headers.length() == 1 && rows.length() > 0 && missingChildren == 0 && unknownSelectionLabels == 0
+                if (available) {
+                    receipt.put("status", "available").put("header", headers.getJSONObject(0).getString("text"))
+                        .put("selected", JSONArray(selected.sorted()))
+                } else {
+                    receipt.put("reason", "missing-stale-or-ambiguous-current-metadata")
+                }
+            }
+        } catch (error: RuntimeException) {
+            receipt.put("reason", "native-read-unavailable").put("exception", error.javaClass.simpleName)
+        }
+        val returned = SystemClock.uptimeMillis()
+        return receipt.put("returnedMs", returned).put("elapsedMs", returned - started)
     }
 
     private fun trace(name: String) {
