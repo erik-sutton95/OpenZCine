@@ -1,6 +1,12 @@
 package com.opencapture.openzcine.settings
 
 import com.opencapture.openzcine.performOperatorHaptic
+import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
+import com.opencapture.monitorui.settings.MonitorOperatorSafetySettings
+import com.opencapture.monitorui.settings.MonitorSettingsPage
+import com.opencapture.monitorui.settings.MonitorSettingsRowCard
+import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 
 import android.content.Context
 import android.content.Intent
@@ -147,27 +153,8 @@ import kotlinx.coroutines.withContext
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
-/**
- * Operator Setup rail tabs — 1:1 with the iOS `OperatorSettingsTab` set
- * (Link / View Assist / Controls / Display / Storage / System). The Link tab
- * binds to the active Android session; every other tab exposes the same
- * operator controls as the iOS baseline.
- */
-public enum class OperatorSettingsTab(
-    @StringRes public val titleResource: Int,
-    @StringRes public val compactTitleResource: Int,
-    @StringRes public val railSubtitleResource: Int,
-    @StringRes public val subtitleResource: Int,
-    @StringRes public val pillResource: Int,
-) {
-    LINK(R.string.settings_tab_link, R.string.settings_tab_link, R.string.settings_rail_connection, R.string.settings_subtitle_link, R.string.settings_pill_live),
-    SHARING(R.string.settings_tab_sharing, R.string.settings_tab_sharing, R.string.settings_rail_sharing, R.string.settings_subtitle_sharing, R.string.settings_pill_sharing),
-    ASSIST(R.string.settings_tab_assist, R.string.settings_tab_assist_compact, R.string.settings_rail_assist, R.string.settings_subtitle_assist, R.string.settings_pill_assist),
-    CONTROLS(R.string.settings_tab_controls, R.string.settings_tab_controls, R.string.settings_rail_controls, R.string.settings_subtitle_controls, R.string.settings_pill_touch),
-    DISPLAY(R.string.settings_tab_display, R.string.settings_tab_display, R.string.settings_rail_display, R.string.settings_subtitle_display, R.string.settings_pill_visibility),
-    STORAGE(R.string.settings_tab_storage, R.string.settings_tab_storage, R.string.settings_rail_storage, R.string.settings_subtitle_storage, R.string.settings_pill_storage),
-    SYSTEM(R.string.settings_tab_system, R.string.settings_tab_system, R.string.settings_rail_system, R.string.settings_subtitle_system, R.string.settings_pill_app),
-}
+/** Shared navigation vocabulary; existing debug enum names remain unchanged. */
+public typealias OperatorSettingsTab = MonitorSettingsTab
 
 private enum class BugReportDestination {
     CHOOSER,
@@ -324,101 +311,70 @@ internal fun OperatorSettingsScreen(
                 onOpenSecurityAdvisory = systemSettingsActions::openSecurityAdvisory,
                 onClose = { bugReportDestination = null },
             )
-        null ->
-            BoxWithConstraints(
+        null -> BoxWithConstraints(
             Modifier.fillMaxSize()
                 .background(LiveDesign.background)
-                // A hit-testable node at the root keeps every pointer event on
-                // this surface — without it, taps between rows would fall through
-                // to the monitor chrome's buttons underneath (Compose siblings
-                // below stay hit-testable wherever the overlay itself has no
-                // pointer node).
                 .pointerInput(Unit) { detectTapGestures {} }
                 .windowInsetsPadding(WindowInsets.safeDrawing)
         ) {
             val compact = maxWidth < 600.dp
-            Column(
-                Modifier.fillMaxSize()
-                    .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // The floating PanelCloseButton overlays this row's leading corner
-                // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
-                // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
-                SettingsHeader(session, linkHealth, compact, onDisconnect = onDisconnect)
-                if (compact) {
-                    SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
-                    SettingsContentPane(
-                        selectedTab,
-                        session,
-                        relaySharing,
-                        relaySharingEnabled,
-                        onRelayShareToggle,
-                        relayWatchUi,
-                        settings,
-                        assistState,
-                        mediaCacheStore,
-                        frameioController,
-                        cameraInput,
-                        linkHealth,
-                        liveViewSource,
-                        activeTransportLabel,
-                        onDisconnect,
-                        onReconnect,
-                        systemSettingsActions,
-                        liveViewGuideController,
-                        onShowGuideNow,
-                        onShowGuideOnNextRealFrame,
-                        onCompletedMediaCacheCleared,
-                        onSettingToggle = toggleSetting,
-                        onAssistToggle = toggleAssist,
+            val condensed = maxHeight < 300.dp
+            val disconnected = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
+            val state by (session?.state ?: disconnected).collectAsState()
+            val linked = state is CameraSessionState.Connected
+            val phase = when (val current = state) {
+                is CameraSessionState.Connected ->
+                    linkHealth?.presentation?.detail?.takeIf { it.isNotBlank() }
+                        ?: "${current.identity.name} · ${activeTransportLabel ?: "Wi-Fi"}"
+                CameraSessionState.Connecting -> stringResource(R.string.camera_connecting_short)
+                CameraSessionState.Disconnected -> stringResource(R.string.settings_local_only)
+            }
+            MonitorSettingsPage(
+                brand = "OpenZCine",
+                selection = selectedTab,
+                onSelect = { selectedTab = it },
+                isLive = linked,
+                phaseLabel = phase,
+                disconnect = onDisconnect,
+                feedback = emitHaptic,
+                sharingSubtitle = stringResource(R.string.settings_subtitle_sharing),
+                sharingRail = "Broadcast & watchers",
+                modifier = Modifier.padding(start = 61.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
+            ) { tab ->
+                val scroll = LocalMonitorSettingsScrollContext.current
+                when (tab) {
+                    OperatorSettingsTab.SHARING -> SharingRows(
+                        session = session, sharing = relaySharing, settings = settings,
+                        enabled = relaySharingEnabled, onShareToggle = onRelayShareToggle,
                         onInteraction = emitHaptic,
-                        compact = true,
-                        onReportProblem = requestReportProblem,
-                        onClose = onClose,
-                        modifier = Modifier.weight(1f),
                     )
-                } else {
-                    Row(
-                        Modifier.fillMaxWidth().weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
-                        SettingsContentPane(
-                            selectedTab,
-                            session,
-                            relaySharing,
-                            relaySharingEnabled,
-                            onRelayShareToggle,
-                            relayWatchUi,
-                            settings,
-                            assistState,
-                            mediaCacheStore,
-                            frameioController,
-                            cameraInput,
-                            linkHealth,
-                            liveViewSource,
-                            activeTransportLabel,
-                            onDisconnect,
-                            onReconnect,
-                            systemSettingsActions,
-                            liveViewGuideController,
-                            onShowGuideNow,
-                            onShowGuideOnNextRealFrame,
-                            onCompletedMediaCacheCleared,
-                            onSettingToggle = toggleSetting,
-                            onAssistToggle = toggleAssist,
-                            onInteraction = emitHaptic,
-                            compact = false,
-                            onReportProblem = requestReportProblem,
-                            onClose = onClose,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                    OperatorSettingsTab.LINK -> LinkRows(
+                        session, settings, linkHealth, liveViewSource, activeTransportLabel,
+                        relayWatchUi, onDisconnect, onReconnect, emitHaptic,
+                    )
+                    OperatorSettingsTab.ASSIST -> AssistRows(
+                        settings, assistState, cameraInput, toggleSetting, toggleAssist, emitHaptic,
+                    )
+                    OperatorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic, toggleSetting)
+                    OperatorSettingsTab.DISPLAY -> DisplayRows(
+                        settings, compact, toggleSetting, emitHaptic,
+                        checkNotNull(scroll).scrollState, scroll.viewportBounds,
+                        liveCaptureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties)) {
+                            CaptureLayoutMode.PHOTO
+                        } else {
+                            CaptureLayoutMode.VIDEO
+                        },
+                        onEditView = { mode -> settings.beginChromeEditing(mode); onClose() },
+                    )
+                    OperatorSettingsTab.STORAGE -> StorageRows(
+                        mediaCacheStore, frameioController, condensed, onCompletedMediaCacheCleared,
+                    )
+                    OperatorSettingsTab.SYSTEM -> SystemRows(
+                        systemSettingsActions, requestReportProblem, liveViewGuideController,
+                        onShowGuideNow, onShowGuideOnNextRealFrame,
+                    )
                 }
             }
-            // Floats in the very top-left corner, outside the layout flow, at the
-            // iOS metrics (leading 16, top 22).
             Box(Modifier.padding(start = 16.dp, top = 22.dp)) { PanelCloseButton(onClick = onClose) }
         }
     }
@@ -509,421 +465,6 @@ private fun endInternetHopAfterDismiss(controller: FrameioDeliveryController) {
 }
 
 /** Eyebrow + title with the live tile pinned trailing (iOS `settingsTop`). */
-@Composable
-private fun SettingsHeader(
-    session: CameraSession?,
-    linkHealth: AndroidLinkHealthMonitor?,
-    compact: Boolean,
-    onDisconnect: (() -> Unit)? = null,
-) {
-    // Disconnect rides beside the link tile (iOS `settingsTop`): a session-level action
-    // belongs with the session's status, not inside the Link tab.
-    val state by (session?.state
-        ?: remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) })
-        .collectAsState()
-    val disconnect = onDisconnect.takeIf { state is CameraSessionState.Connected }
-    if (compact) {
-        Column(
-            Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 45.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SettingsTitle()
-                Spacer(Modifier.weight(1f))
-                disconnect?.let {
-                    SettingsActionPill(
-                        stringResource(R.string.action_disconnect),
-                        icon = Icons.Filled.LinkOff,
-                        tint = LiveDesign.rec,
-                        background = LiveDesign.rec.copy(alpha = 0.16f),
-                    ) {
-                        it()
-                    }
-                }
-            }
-            SettingsLiveTile(session, linkHealth, Modifier.fillMaxWidth(), expanded = true)
-        }
-    } else {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 45.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            SettingsTitle()
-            Spacer(Modifier.weight(1f))
-            // The pill and the link tile share one intrinsic-height row (iOS `settingsTop`):
-            // destructive red, broken-link glyph, and the pill fills the tile's height.
-            Row(Modifier.height(IntrinsicSize.Min)) {
-                disconnect?.let {
-                    SettingsActionPill(
-                        stringResource(R.string.action_disconnect),
-                        icon = Icons.Filled.LinkOff,
-                        tint = LiveDesign.rec,
-                        background = LiveDesign.rec.copy(alpha = 0.16f),
-                        modifier = Modifier.fillMaxHeight(),
-                    ) {
-                        it()
-                    }
-                    Spacer(Modifier.width(10.dp))
-                }
-                SettingsLiveTile(session, linkHealth, expanded = false)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsTitle(modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(
-            stringResource(R.string.settings_brand),
-            color = LiveDesign.accent,
-            fontSize = 9.5.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp,
-        )
-        Text(
-            stringResource(R.string.settings_title),
-            style = chromeStyle(24f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-    }
-}
-
-/** Link-state tile: status dot, title/detail, meter bars (iOS `SettingsLiveTile`). */
-@Composable
-private fun SettingsLiveTile(
-    session: CameraSession?,
-    linkHealth: AndroidLinkHealthMonitor?,
-    modifier: Modifier = Modifier,
-    expanded: Boolean,
-) {
-    val disconnectedState = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
-    val state by (session?.state ?: disconnectedState).collectAsState()
-    val standalone = session == null
-    val linked = state is CameraSessionState.Connected
-    val health = linkHealth?.presentation ?: LinkHealthPresentation()
-    val tint =
-        when {
-            !linked -> LiveDesign.faint
-            health.signalBars >= 3 -> LiveDesign.good
-            health.signalBars == 2 -> LiveDesign.accent
-            else -> LiveDesign.rec
-        }
-    val detail =
-        if (standalone) {
-            stringResource(R.string.settings_local_only)
-        } else {
-            when (val current = state) {
-                is CameraSessionState.Connected ->
-                    health.detail.ifBlank {
-                        stringResource(
-                            R.string.settings_connected_detail,
-                            current.identity.name,
-                            "PTP-IP",
-                        )
-                    }
-                CameraSessionState.Connecting -> stringResource(R.string.camera_connecting_short)
-                CameraSessionState.Disconnected -> stringResource(R.string.camera_none)
-            }
-        }
-    Row(
-        modifier.background(LiveDesign.surface, ChromeShape)
-            .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).background(tint, CircleShape))
-        Column(
-            if (expanded) Modifier.weight(1f) else Modifier.widthIn(max = 180.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                stringResource(
-                    if (linked) R.string.settings_active_link
-                    else if (standalone) R.string.settings_local_setup
-                    else R.string.settings_no_link,
-                ),
-                style = chromeStyle(12f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-            )
-            Text(
-                detail,
-                style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
-                color = LiveDesign.muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
-            repeat(4) { index ->
-                Box(
-                    Modifier.size(width = 3.dp, height = (6 + index * 3).dp)
-                        .background(
-                            if (index < health.signalBars) tint.copy(alpha = 0.52f + index * 0.12f)
-                            else LiveDesign.hairline,
-                            CircleShape,
-                        )
-                )
-            }
-        }
-    }
-}
-
-/**
- * Horizontal tab selector used when the landscape rail cannot fit — the same
- * tab buttons as the vertical rail (iOS `settingsTabStrip`), scrolled when the
- * strip is wider than the screen.
- */
-@Composable
-private fun SettingsTabStrip(
-    selected: OperatorSettingsTab,
-    onSelect: (OperatorSettingsTab) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth()
-            .glass(ChromeShape)
-            .horizontalScroll(rememberScrollState())
-            .padding(6.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        OperatorSettingsTab.entries.forEach { tab ->
-            Box(Modifier.width(146.dp)) {
-                SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
-            }
-        }
-    }
-}
-
-/** Vertical tab rail, 146dp wide on full-height glass (iOS `settingsRail`). */
-@Composable
-private fun SettingsTabRail(
-    selected: OperatorSettingsTab,
-    onSelect: (OperatorSettingsTab) -> Unit,
-) {
-    Column(
-        Modifier.width(146.dp).fillMaxHeight().glass(ChromeShape).padding(6.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        // Every tab, always — iOS `OperatorSettingsTab.allCases`. Hiding Sharing when no
-        // broadcast controller is attached put the watcher passcode, broadcast priority and
-        // control policy out of reach in exactly the two places an operator sets them up:
-        // standalone setup before a shoot, and a watcher looking for why it cannot re-share.
-        OperatorSettingsTab.entries.forEach { tab ->
-            SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
-        }
-    }
-}
-
-/** One rail tab: accent capsule + title over subtitle (iOS `settingsTabButton`). */
-@Composable
-private fun SettingsTabButton(tab: OperatorSettingsTab, active: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .height(43.dp)
-            .background(if (active) LiveDesign.surface else LiveDesign.surface.copy(alpha = 0f), ChromeShape)
-            .settingsClickable(role = Role.Tab, onClick = onClick)
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(width = 6.dp, height = 26.dp)
-                .background(
-                    if (active) LiveDesign.accent else LiveDesign.accent.copy(alpha = 0f),
-                    CircleShape,
-                )
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                stringResource(tab.titleResource),
-                style = chromeStyle(13f, FontWeight.SemiBold),
-                color = if (active) LiveDesign.text else LiveDesign.muted,
-                maxLines = 1,
-            )
-            Text(
-                stringResource(tab.railSubtitleResource),
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.faint,
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-/** Rounded content pane: tab title/subtitle + pill header over scrolling rows. */
-@Composable
-private fun SettingsContentPane(
-    tab: OperatorSettingsTab,
-    session: CameraSession?,
-    relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
-    relaySharingEnabled: Boolean,
-    onRelayShareToggle: ((Boolean) -> Unit)?,
-    relayWatchUi: RelayWatchUiState?,
-    settings: OperatorSettings,
-    assistState: AssistState,
-    mediaCacheStore: MediaCacheStore,
-    frameioController: FrameioDeliveryController?,
-    cameraInput: ExposureAssistCameraInput,
-    linkHealth: AndroidLinkHealthMonitor?,
-    liveViewSource: SwiftCoreLiveFrameSource?,
-    activeTransportLabel: String?,
-    onDisconnect: (() -> Unit)?,
-    onReconnect: (() -> Unit)?,
-    systemSettingsActions: SystemSettingsActions,
-    liveViewGuideController: LiveViewGuideController,
-    onShowGuideNow: (() -> Unit)?,
-    onShowGuideOnNextRealFrame: () -> Unit,
-    onCompletedMediaCacheCleared: () -> Unit,
-    onSettingToggle: (OperatorSettings.Toggle) -> Unit,
-    onAssistToggle: (AssistTool) -> Unit,
-    onInteraction: () -> Unit,
-    compact: Boolean,
-    onReportProblem: () -> Unit,
-    /** Dismisses Operator Setup — the Edit view is the monitor, so the panel steps aside. */
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(
-        modifier
-            .fillMaxSize()
-            .background(LiveDesign.surface, ChromeShape)
-            .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .padding(12.dp),
-    ) {
-        // A landscape phone exposes only about 250dp of pane height once the
-        // top chrome and safe areas are accounted for. Keep the selected
-        // Storage card complete in that window rather than leaving its clear
-        // result half-hidden below a scroll edge.
-        val condensed = maxHeight < 300.dp
-        // Which capture side the body is actually in — the Display tab opens on that layout.
-        val paneCameraProperties =
-            if (session == null) null else session.cameraProperties.collectAsState().value
-        val liveCaptureMode =
-            if (paneCameraProperties != null && prefersPhotographyChrome(paneCameraProperties)) {
-                CaptureLayoutMode.PHOTO
-            } else {
-                CaptureLayoutMode.VIDEO
-            }
-        Column(
-            Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(if (condensed) 6.dp else 10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(
-                        stringResource(tab.titleResource),
-                        style = chromeStyle(if (condensed) 21f else 24f, FontWeight.SemiBold),
-                        color = LiveDesign.text,
-                    )
-                    if (!condensed) {
-                        Text(
-                            stringResource(tab.subtitleResource),
-                            style = chromeStyle(12.5f, FontWeight.Normal),
-                            color = LiveDesign.muted,
-                            maxLines = 2,
-                        )
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                Text(
-                    stringResource(tab.pillResource),
-                    color = LiveDesign.accent,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.6.sp,
-                    modifier =
-                        Modifier.border(1.dp, LiveDesign.accentDim, CircleShape)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                )
-            }
-            // Fresh scroll position per tab. ponytail: iOS persists per-tab
-            // offsets across panel dismissal; add if the rows ever grow that long.
-            key(tab) {
-                val scrollState = rememberScrollState()
-                var viewportBounds by remember { mutableStateOf<Rect?>(null) }
-                Box(
-                    Modifier.fillMaxSize()
-                        .onGloballyPositioned { viewportBounds = it.boundsInRoot() },
-                ) {
-                    Column(
-                        Modifier.fillMaxSize().verticalScroll(scrollState),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        when (tab) {
-                            OperatorSettingsTab.SHARING ->
-                                SharingRows(
-                                    session = session,
-                                    sharing = relaySharing,
-                                    settings = settings,
-                                    enabled = relaySharingEnabled,
-                                    onShareToggle = onRelayShareToggle,
-                                    onInteraction = onInteraction,
-                                )
-                            OperatorSettingsTab.LINK ->
-                                LinkRows(
-                                    session = session,
-                                    settings = settings,
-                                    linkHealth = linkHealth,
-                                    liveViewSource = liveViewSource,
-                                    activeTransportLabel = activeTransportLabel,
-                                    relayWatchUi = relayWatchUi,
-                                    onDisconnect = onDisconnect,
-                                    onReconnect = onReconnect,
-                                    onInteraction = onInteraction,
-                                )
-                            OperatorSettingsTab.ASSIST ->
-                                AssistRows(
-                                    settings,
-                                    assistState,
-                                    cameraInput,
-                                    onSettingToggle,
-                                    onAssistToggle,
-                                    onInteraction,
-                                )
-                            OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
-                            OperatorSettingsTab.DISPLAY ->
-                                DisplayRows(
-                                    settings,
-                                    compact,
-                                    onSettingToggle,
-                                    onInteraction,
-                                    scrollState,
-                                    viewportBounds,
-                                    liveCaptureMode = liveCaptureMode,
-                                    onEditView = { mode ->
-                                        // The Edit view IS the monitor, so Operator Setup steps
-                                        // aside for it.
-                                        settings.beginChromeEditing(mode)
-                                        onClose()
-                                    },
-                                )
-                            OperatorSettingsTab.STORAGE ->
-                                StorageRows(
-                                    mediaCacheStore,
-                                    frameioController,
-                                    condensed,
-                                    onCompletedMediaCacheCleared,
-                                )
-                            OperatorSettingsTab.SYSTEM ->
-                                SystemRows(
-                                    actions = systemSettingsActions,
-                                    onReportProblem = onReportProblem,
-                                    guideController = liveViewGuideController,
-                                    onShowGuideNow = onShowGuideNow,
-                                    onShowGuideOnNextRealFrame = onShowGuideOnNextRealFrame,
-                                )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /**
  * Sharing tab — 1:1 with iOS `sharingRows`: enable, watcher count, 4-digit watcher passcode,
  * control-requests policy, and the live control rows (requested / held-by with Take Back).
@@ -1830,45 +1371,36 @@ private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) 
 @Composable
 private fun ControlsRows(
     settings: OperatorSettings,
+    feedback: () -> Unit,
     onToggle: (OperatorSettings.Toggle) -> Unit,
 ) {
-    // iOS Controls is one switch card: Record Confirmation, Bluetooth Remote
-    // Shutter, Haptics, Keep Screen Awake, Auto-Rotate Feed. The one caption below is
-    // Android-only, for an Android-only behaviour (see the comment on it).
-    SettingsRowCard {
-        SettingsSwitchRow(
-            stringResource(R.string.settings_record_confirmation),
-            isOn = settings.recordConfirmationEnabled.value,
-            showTopDivider = false,
-        ) { onToggle(settings.recordConfirmationEnabled) }
-        SettingsSwitchRow(
-            stringResource(R.string.settings_media_remote),
+    MonitorOperatorSafetySettings(
+        recordConfirmation = settings.recordConfirmationEnabled.value,
+        haptics = settings.hapticsEnabled.value,
+        keepScreenAwake = settings.keepScreenAwake.value,
+        onRecordConfirmation = { settings.recordConfirmationEnabled.value = it },
+        onHaptics = { settings.hapticsEnabled.value = it },
+        onKeepScreenAwake = { settings.keepScreenAwake.value = it },
+        keepScreenAwakeHelp = "Keeps the live monitor or clip playback awake while the app is active.",
+        feedback = feedback,
+    )
+    MonitorSettingsRowCard(title = "Input & orientation") {
+        MonitorSettingsSwitchInlineRow(
+            title = stringResource(R.string.settings_media_remote),
             isOn = settings.mediaRemoteShutterEnabled.value,
+            showTopDivider = false,
         ) { onToggle(settings.mediaRemoteShutterEnabled) }
-        // Visible, not behind a "?", and shown whether the switch is on or off: Android cannot
-        // tell a Bluetooth remote's key press from the phone's own, so arming this arms Volume
-        // Up/Down and Play/Pause as record toggles. That is a decision an operator has to be
-        // able to make BEFORE flipping the switch — otherwise they find out by stopping a take
-        // with the volume key. iOS has no such caveat, so it carries no such line.
         Text(
             stringResource(R.string.settings_media_remote_caption),
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
             modifier = Modifier.padding(bottom = 6.dp),
         )
-        SettingsSwitchRow(stringResource(R.string.settings_haptics), isOn = settings.hapticsEnabled.value) {
-            onToggle(settings.hapticsEnabled)
-        }
-        SettingsSwitchRow(stringResource(R.string.settings_keep_awake), isOn = settings.keepScreenAwake.value) {
-            onToggle(settings.keepScreenAwake)
-        }
-        SettingsSwitchRow(
-            stringResource(R.string.settings_auto_rotate_feed),
+        MonitorSettingsSwitchInlineRow(
+            title = stringResource(R.string.settings_auto_rotate_feed),
             isOn = settings.autoRotateFeedEnabled.value,
             help = stringResource(R.string.help_controls_auto_rotate_feed),
-        ) {
-            onToggle(settings.autoRotateFeedEnabled)
-        }
+        ) { onToggle(settings.autoRotateFeedEnabled) }
     }
 }
 

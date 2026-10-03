@@ -1,4 +1,6 @@
 import OpenCineApple
+import MonitorPresentation
+import MonitorUI
 import OpenCineAppKit
 import OpenCineNikon
 import OpenZCineCore
@@ -3242,359 +3244,11 @@ enum SettingsPalette {
     ]
 }
 
-private struct ScrollViewportKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-private enum SettingsScrollMetrics {
-    static let bottomCommitMinInterval: CFAbsoluteTime = 1.0 / 15.0
-    static let bottomDeltaThreshold: CGFloat = 10
-    /// Finger within this distance of the viewport top/bottom triggers auto-scroll.
-    static let reorderEdgeThreshold: CGFloat = 56
-    /// Peak auto-scroll speed (points per second) at the viewport edge.
-    static let reorderMaxScrollSpeed: CGFloat = 220
-    static let reorderScrollFrameInterval: UInt64 = 16_666_667
-}
-
-@MainActor
-private final class SettingsScrollViewBox {
-    weak var scrollView: UIScrollView?
-}
-
-/// Finds the enclosing `UIScrollView` so settings can auto-scroll during reorder drags, restore a
-/// saved offset when the tab reappears, and persist scroll position back to session state.
-private struct SettingsScrollViewFinder: UIViewRepresentable {
-    let box: SettingsScrollViewBox
-    var restoreOffset: CGFloat
-    var onOffsetChange: (CGFloat) -> Void
-    var onMoreBelowChange: (CGFloat) -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.isUserInteractionEnabled = false
-        view.backgroundColor = .clear
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        let restore = restoreOffset
-        DispatchQueue.main.async {
-            Task { @MainActor in
-                guard let scrollView = uiView.enclosingScrollView else { return }
-                context.coordinator.attach(
-                    scrollView: scrollView,
-                    box: box,
-                    restoreOffset: restore,
-                    onOffsetChange: onOffsetChange,
-                    onMoreBelowChange: onMoreBelowChange
-                )
-            }
-        }
-    }
-
-    @MainActor
-    final class Coordinator {
-        private weak var observedScrollView: UIScrollView?
-        private var observation: NSKeyValueObservation?
-        private var sizeObservation: NSKeyValueObservation?
-        private var didRestore = false
-        private var lastReported: CGFloat = -1
-        private var lastCommit: CFAbsoluteTime = 0
-        private var lastMoreReported: CGFloat = -1
-        private var onOffsetChange: ((CGFloat) -> Void)?
-        private var onMoreBelowChange: ((CGFloat) -> Void)?
-
-        func attach(
-            scrollView: UIScrollView,
-            box: SettingsScrollViewBox,
-            restoreOffset: CGFloat,
-            onOffsetChange: @escaping (CGFloat) -> Void,
-            onMoreBelowChange: @escaping (CGFloat) -> Void
-        ) {
-            self.onOffsetChange = onOffsetChange
-            self.onMoreBelowChange = onMoreBelowChange
-            box.scrollView = scrollView
-            if observedScrollView !== scrollView {
-                observedScrollView = scrollView
-                didRestore = false
-                observation?.invalidate()
-                sizeObservation?.invalidate()
-                observation = scrollView.observe(\.contentOffset, options: [.new]) {
-                    [weak self] scrollView, change in
-                    guard change.newValue != nil else { return }
-                    Task { @MainActor in
-                        self?.reportOffset(scrollView)
-                        self?.reportMoreBelow(scrollView)
-                    }
-                }
-                // Content height changes on tab switch (and as rows expand) without any scroll, so
-                // the "more below" cue must be recomputed from the size too, not only on offset.
-                sizeObservation = scrollView.observe(\.contentSize, options: [.new]) {
-                    [weak self] scrollView, _ in
-                    Task { @MainActor in
-                        self?.reportMoreBelow(scrollView)
-                    }
-                }
-            }
-            guard !didRestore else { return }
-            didRestore = true
-            scrollView.layoutIfNeeded()
-            // Clamp to the in-bounds range: restoring past maxOffset would land the scroll view
-            // overscrolled and immediately bounce.
-            let maxOffset = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-            let target = min(max(restoreOffset, 0), maxOffset)
-            if target > 0.5 {
-                scrollView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
-            }
-            reportMoreBelow(scrollView)
-        }
-
-        private func reportOffset(_ scrollView: UIScrollView) {
-            guard let onOffsetChange else { return }
-            let offset = scrollView.contentOffset.y
-            let maxOffset = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-            // Only persist SETTLED, in-bounds positions. While the scroll view rubber-bands past
-            // either edge, `contentOffset.y` overshoots (negative at the top, > maxOffset at the
-            // bottom); persisting that bounce position — and restoring it on any later re-find of
-            // the scroll view — re-drives the bounce, which is the "stuck bouncing at the bottom"
-            // glitch. The bottom itself (offset == maxOffset) is in-bounds and still persists.
-            guard offset >= 0, offset <= maxOffset else { return }
-            let now = CFAbsoluteTimeGetCurrent()
-            guard abs(offset - lastReported) > SettingsScrollMetrics.bottomDeltaThreshold else {
-                return
-            }
-            guard now - lastCommit >= SettingsScrollMetrics.bottomCommitMinInterval else { return }
-            lastCommit = now
-            lastReported = offset
-            onOffsetChange(offset)
-        }
-
-        /// Points of content sitting below the viewport bottom. Reading this straight off the
-        /// scroll view (instead of a per-frame SwiftUI `PreferenceKey`) keeps the value from being
-        /// rewritten multiple times during a single layout pass.
-        private func reportMoreBelow(_ scrollView: UIScrollView) {
-            guard let onMoreBelowChange else { return }
-            let below = max(
-                0,
-                scrollView.contentSize.height
-                    - (scrollView.contentOffset.y + scrollView.bounds.height))
-            guard abs(below - lastMoreReported) > 1 else { return }
-            lastMoreReported = below
-            onMoreBelowChange(below)
-        }
-    }
-}
-
-extension UIView {
-    fileprivate var enclosingScrollView: UIScrollView? {
-        var view: UIView? = self
-        while let current = view {
-            if let scrollView = current as? UIScrollView { return scrollView }
-            view = current.superview
-        }
-        return nil
-    }
-}
-
-/// Scroll region for operator settings tabs. Owns the bottom "MORE" cue state so preference
-/// updates during scrolling do not invalidate the tab rail or content header.
-private struct SettingsTabScrollArea<Content: View>: View {
-    let tabID: String
-    @Binding var savedOffset: CGFloat
-    let content: Content
-    @Binding var reorderActive: Bool
-    @State private var moreBelow: CGFloat = 0
-    @State private var viewportHeight: CGFloat = 0
-    @State private var lastOffsetCommit: CFAbsoluteTime = 0
-    @State private var lastCommittedOffset: CGFloat = -1
-    @State private var dragViewportY: CGFloat?
-    @State private var autoScrollTask: Task<Void, Never>?
-    @State private var scrollViewBox = SettingsScrollViewBox()
-
-    init(
-        tabID: String,
-        savedOffset: Binding<CGFloat>,
-        reorderActive: Binding<Bool>,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.tabID = tabID
-        _savedOffset = savedOffset
-        _reorderActive = reorderActive
-        self.content = content()
-    }
-
-    private var showsMoreCue: Bool {
-        moreBelow > 6
-    }
-
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 8) {
-                content
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.bottom, 22)
-        }
-        // `.immediately` posts keyboard hide notifications on every scroll/drag even when no field
-        // is focused — use interactive dismiss so reorder drags do not spuriously poke UIKit.
-        .scrollDismissesKeyboard(.interactively)
-        .coordinateSpace(name: SettingsScrollCoordinateSpace.name)
-        .scrollDisabled(reorderActive)
-        .background(
-            GeometryReader { vp in
-                Color.clear.preference(
-                    key: ScrollViewportKey.self, value: vp.size.height)
-            }
-        )
-        .background(
-            SettingsScrollViewFinder(
-                box: scrollViewBox,
-                restoreOffset: savedOffset,
-                onOffsetChange: commitScrollOffset,
-                onMoreBelowChange: { moreBelow = $0 }
-            )
-        )
-        .onPreferenceChange(ScrollViewportKey.self) { value in
-            guard abs(value - viewportHeight) > 1 else { return }
-            viewportHeight = value
-            updateReorderAutoScroll()
-        }
-        .onPreferenceChange(SettingsReorderActiveKey.self) { reorderActive = $0 }
-        .onPreferenceChange(SettingsReorderDragViewportYKey.self) { dragViewportY = $0 }
-        .onChange(of: dragViewportY) { _, _ in updateReorderAutoScroll() }
-        .onChange(of: reorderActive) { _, active in
-            if !active {
-                dragViewportY = nil
-                stopReorderAutoScroll()
-            } else {
-                updateReorderAutoScroll()
-            }
-        }
-        .onDisappear { stopReorderAutoScroll() }
-        .overlay(alignment: .bottom) {
-            ScrollMoreCue()
-                .opacity(showsMoreCue ? 1 : 0)
-                .allowsHitTesting(false)
-        }
-        .id(tabID)
-    }
-
-    private func commitScrollOffset(_ offset: CGFloat) {
-        let now = CFAbsoluteTimeGetCurrent()
-        guard abs(offset - lastCommittedOffset) > SettingsScrollMetrics.bottomDeltaThreshold else {
-            return
-        }
-        guard now - lastOffsetCommit >= SettingsScrollMetrics.bottomCommitMinInterval else {
-            return
-        }
-        lastOffsetCommit = now
-        lastCommittedOffset = offset
-        if abs(savedOffset - offset) > 0.5 {
-            savedOffset = offset
-        }
-    }
-
-    private func updateReorderAutoScroll() {
-        guard reorderActive, viewportHeight > 0, let dragY = dragViewportY else {
-            stopReorderAutoScroll()
-            return
-        }
-        let edge = SettingsScrollMetrics.reorderEdgeThreshold
-        let inTopZone = dragY < edge
-        let inBottomZone = dragY > viewportHeight - edge
-        guard inTopZone || inBottomZone else {
-            stopReorderAutoScroll()
-            return
-        }
-        guard autoScrollTask == nil else { return }
-
-        autoScrollTask = Task { @MainActor in
-            let frameSeconds =
-                CGFloat(SettingsScrollMetrics.reorderScrollFrameInterval) / 1_000_000_000
-            while !Task.isCancelled {
-                guard reorderActive,
-                    viewportHeight > 0,
-                    let currentDragY = dragViewportY,
-                    let scrollView = scrollViewBox.scrollView
-                else { break }
-
-                let edgeThreshold = SettingsScrollMetrics.reorderEdgeThreshold
-                var delta: CGFloat = 0
-                if currentDragY < edgeThreshold {
-                    let proximity = (edgeThreshold - currentDragY) / edgeThreshold
-                    let intensity = proximity * proximity
-                    delta = -SettingsScrollMetrics.reorderMaxScrollSpeed * intensity * frameSeconds
-                } else if currentDragY > viewportHeight - edgeThreshold {
-                    let proximity =
-                        (currentDragY - (viewportHeight - edgeThreshold)) / edgeThreshold
-                    let intensity = proximity * proximity
-                    delta = SettingsScrollMetrics.reorderMaxScrollSpeed * intensity * frameSeconds
-                }
-
-                guard delta != 0 else { break }
-
-                let maxOffset = max(
-                    scrollView.contentSize.height - scrollView.bounds.height, 0)
-                let nextY = min(max(scrollView.contentOffset.y + delta, 0), maxOffset)
-                guard nextY != scrollView.contentOffset.y else { break }
-                scrollView.setContentOffset(CGPoint(x: 0, y: nextY), animated: false)
-                scrollView.layoutIfNeeded()
-
-                try? await Task.sleep(nanoseconds: SettingsScrollMetrics.reorderScrollFrameInterval)
-            }
-            autoScrollTask = nil
-        }
-    }
-
-    private func stopReorderAutoScroll() {
-        autoScrollTask?.cancel()
-        autoScrollTask = nil
-    }
-}
-
-/// The mockup's bottom "MORE ⌄" affordance: a fade into the panel surface with a hint that more
-/// settings sit below. Non-interactive so it never blocks the scroll gesture underneath.
-struct ScrollMoreCue: View {
-    var body: some View {
-        VStack(spacing: 1) {
-            Spacer(minLength: 0)
-            Text("MORE")
-                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                .kerning(1.2)
-                .foregroundStyle(LiveDesign.muted)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(LiveDesign.muted)
-        }
-        .padding(.bottom, 13)
-        .frame(maxWidth: .infinity)
-        .frame(height: 58)
-        .background(
-            LinearGradient(
-                colors: [LiveDesign.surface.opacity(0), LiveDesign.surface],
-                startPoint: .top, endPoint: .bottom)
-        )
-        .allowsHitTesting(false)
-    }
-}
-
 /// Operator Setup rail tabs — selection and per-tab scroll offsets live in `NativeAppModel` so
 /// they survive dismissing the panel back to live view.
-enum OperatorSettingsTab: String, CaseIterable, Identifiable {
-    case link = "Link"
-    case sharing = "Sharing"
-    case assist = "View Assist"
-    case controls = "Controls"
-    case display = "Display"
-    case storage = "Storage"
-    case system = "System"
-    var id: String { rawValue }
+typealias OperatorSettingsTab = MonitorSettingsTab
 
+extension MonitorSettingsTab {
     /// Screenshot affordance (link/assist/controls/display/storage/system) picking the initial
     /// rail tab. Defaults to Link in normal launches.
     static var demoLaunchTab: OperatorSettingsTab {
@@ -3695,10 +3349,6 @@ struct OperatorSettingsPanel: View {
 
     @Environment(NativeAppModel.self) private var model
     @Environment(\.openURL) private var openURL
-    @State private var settingsReorderActive = false
-    /// Keyboard overlap in points; insets the settings rows so a focused field can scroll
-    /// clear of the number pad (the full-bleed layout opts out of the keyboard safe area).
-    @State private var keyboardInset: CGFloat = 0
     /// Bumped on Frame.io sign-in/out so the Storage card re-reads the (non-observable)
     /// keychain state.
     @State private var frameioAccountStamp = 0
@@ -3726,68 +3376,30 @@ struct OperatorSettingsPanel: View {
         nonmutating set { model.operatorSettingsTab = newValue }
     }
 
-    private var savedScrollOffset: Binding<CGFloat> {
-        Binding(
-            get: { model.operatorSettingsScrollOffsets[selectedTab.id, default: 0] },
-            set: { model.operatorSettingsScrollOffsets[selectedTab.id] = $0 }
-        )
-    }
-
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            LiveDesign.background
-            GeometryReader { proxy in
-                let portrait = proxy.size.height > proxy.size.width
-
-                Group {
-                    if portrait {
-                        // The tab strip leads (with its own leading inset clearing the floating
-                        // CloseButton — see settingsTabStrip); settingsTop's title then renders on
-                        // the row below, entirely clear of the button's corner.
-                        VStack(alignment: .leading, spacing: 8) {
-                            settingsTabStrip
-                            settingsTop(width: proxy.size.width)
-                            settingsContent(portrait: portrait)
-                        }
-                    } else {
-                        VStack(spacing: 8) {
-                            settingsTop(width: proxy.size.width)
-                                // The floating CloseButton overlays this row's leading corner
-                                // whenever no Dynamic Island lane pushes the content past it
-                                // (iPad, non-notched devices); inset the title to clear it. On
-                                // notched iPhones the safe-area padding already clears the
-                                // button and this resolves to 0.
-                                .padding(.leading, closeButtonClearance)
-                            HStack(alignment: .top, spacing: 8) {
-                                settingsRail
-                                settingsContent(portrait: portrait)
-                                    .layoutPriority(1)
-                                    .frame(minWidth: 0, maxWidth: .infinity)
-                            }
-                        }
-                    }
-                }
-                // Fill the full physical screen, insetting only enough to clear the Dynamic Island
-                // on whichever landscape edge it sits (safeArea.leading / .trailing) and a small
-                // margin elsewhere — so the surface uses the whole width instead of the safe-area
-                // frame.
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, max(CGFloat(safeArea.top) + 6, 14))
-                // The island side carries the full inset; the clean side (zeroed by the host) hugs
-                // the bezel at the 16pt floor.
-                .padding(.leading, max(CGFloat(safeArea.leading) + 6, 16))
-                .padding(.trailing, max(CGFloat(safeArea.trailing) + 6, 16))
-                .padding(.bottom, max(CGFloat(safeArea.bottom) + 4, 12))
+        GeometryReader { proxy in
+            MonitorSettingsPage(
+                safeArea: EdgeInsets(
+                    top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
+                    bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing)),
+                brand: "OpenZCine",
+                selection: Binding(get: { selectedTab }, set: { selectedTab = $0 }),
+                isLive: isConnected,
+                phaseLabel: isConnected
+                    ? "\(model.cameraState.cameraName) · \(transportLabel)"
+                    : model.linkHealthDetail,
+                sharingSubtitle: "Broadcast this feed and manage its watchers.",
+                sharingRail: "Broadcast & watchers",
+                scrollOffsets: Binding(
+                    get: { model.operatorSettingsScrollOffsets },
+                    set: { model.operatorSettingsScrollOffsets = $0 }),
+                feedback: settingsFeedback,
+                onClose: { model.dismissMediaLibrary() },
+                disconnect: { model.disconnect() }
+            ) { _ in
+                settingsRows(portrait: proxy.size.height > proxy.size.width)
             }
-
-            // Close floats in the very top-left corner (clear of the rounded bezel) — the Dynamic
-            // Island sits at the vertical centre, so the top corner is free even inside the lane. It
-            // sits outside the layout flow so the title + content can rise to fill the header void.
-            CloseButton(size: 37)
-                .padding(.leading, 16)
-                .padding(.top, max(CGFloat(safeArea.top) + 6, 22))
         }
-        .ignoresSafeArea()
         .sheet(item: $diagnosticsShareItem) { item in
             DiagnosticsShareSheet(url: item.url)
         }
@@ -3853,248 +3465,15 @@ struct OperatorSettingsPanel: View {
         }
     }
 
-    /// Extra leading inset the landscape header needs to clear the floating ``CloseButton``.
-    /// The button sits at a fixed 16pt from the screen edge (37pt wide); the panel's own leading
-    /// padding is `max(safeArea.leading + 6, 16)`. On notched iPhones the Dynamic Island lane
-    /// already pushes the content past the button (result: 0); on iPad there is no leading
-    /// safe-area inset, so the title would otherwise start exactly under the button.
-    private var closeButtonClearance: CGFloat {
-        max(0, (16 + 37 + 8) - max(CGFloat(safeArea.leading) + 6, 16))
+    private func settingsFeedback() {
+        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
 
-    /// Below this width the title and the session controls stop sharing a row: squeezed into
-    /// one, the pill truncates to "DISCON…" and the tile's texts letter-wrap — unreadable is
-    /// worse than a second row. iPhone portrait sits well under this; every landscape and iPad
-    /// width sits above it.
-    private static let settingsTopStackWidth: CGFloat = 560
-
-    private func settingsTop(width: CGFloat) -> some View {
-        // Close floats in the very top-left corner (see `body`); the title leads this row, lined
-        // up with the tab rail below, and the live tile stays pinned top-right — or, when the
-        // row cannot hold both readably, on its own row beneath the title.
-        let stacked = width < Self.settingsTopStackWidth
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("OpenZCine")
-                        .font(.system(size: 9.5, weight: .bold, design: .default))
-                        .kerning(0.8)
-                        .foregroundStyle(LiveDesign.accent)
-                        .textCase(.uppercase)
-                    Text("Operator Setup")
-                        .font(.system(size: 24, weight: .semibold, design: .default))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                }
-                Spacer()
-                if !stacked { sessionControls }
-            }
-            if stacked { sessionControls }
-        }
-    }
-
-    /// Disconnect lives beside the link-health tile: session-level actions belong with the
-    /// session's status, not inside a settings tab (and a watcher leaves the same way —
-    /// model.disconnect() routes a relay viewer through leaveRelay). Destructive red, the
-    /// app's broken-connector glyph, and sized to the tile it ends.
-    @ViewBuilder private var sessionControls: some View {
-        if isConnected {
-            HStack(spacing: 10) {
-                SettingsActionPill(
-                    title: "Disconnect",
-                    systemImage: "link",
-                    slashesIcon: true,
-                    tint: LiveDesign.rec,
-                    background: LiveDesign.rec.opacity(0.16),
-                    fillsHeight: true
-                ) { model.disconnect() }
-                SettingsLiveTile()
-                    .environment(model)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        } else {
-            SettingsLiveTile()
-                .environment(model)
-        }
-    }
-
-    private var settingsRail: some View {
-        VStack(spacing: 5) {
-            ForEach(OperatorSettingsTab.allCases) { tab in
-                settingsTabButton(tab)
-            }
-        }
-        .padding(6)
-        .frame(width: 146)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-    }
-
-    /// Horizontal tab strip for portrait: the same tab buttons the vertical ``settingsRail``
-    /// renders, laid out in a scrollable row above ``settingsContent`` instead of a side rail.
-    private var settingsTabStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 5) {
-                ForEach(OperatorSettingsTab.allCases) { tab in
-                    // Intrinsic width in the strip (the landscape rail keeps its fixed 146):
-                    // fixed-width chips left portrait showing two of seven tabs, which read
-                    // as a clipped bar rather than a scrollable one.
-                    settingsTabButton(tab)
-                }
-            }
-            .padding(6)
-        }
-        // Glass on the SCROLL VIEW, not its content — glass-on-content sizes the bar to every
-        // tab and it runs dead off the trailing edge; on the container the bar fits the width
-        // (both rounded ends on screen) and the tabs scroll inside it.
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+    private func preferenceBinding(_ keyPath: WritableKeyPath<OperatorPreferences, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { model.preferences[keyPath: keyPath] },
+            set: { model.preferences[keyPath: keyPath] = $0 }
         )
-        // The root's floating CloseButton overlays this same top-leading corner in portrait
-        // (landscape clears it via settingsTop instead); inset the whole bar to start beside it.
-        .padding(.leading, 45)
-    }
-
-    /// A single settings tab button — shared by the vertical rail (``settingsRail``) and the
-    /// horizontal portrait strip (``settingsTabStrip``).
-    private func settingsTabButton(_ tab: OperatorSettingsTab) -> some View {
-        Button {
-            selectedTab = tab
-        } label: {
-            HStack(spacing: 9) {
-                Capsule()
-                    .fill(selectedTab == tab ? LiveDesign.accent : Color.clear)
-                    .frame(width: 6, height: 26)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(tab.rawValue)
-                        .font(.system(size: 13, weight: .semibold, design: .default))
-                        .foregroundStyle(
-                            selectedTab == tab ? LiveDesign.text : LiveDesign.muted
-                        )
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                    Text(tabSubtitle(tab))
-                        .font(.system(size: 10.5, weight: .regular, design: .default))
-                        .foregroundStyle(LiveDesign.faint)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 43)
-            .background(
-                selectedTab == tab ? LiveDesign.surface : Color.clear,
-                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-            )
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    private func settingsContent(portrait: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(selectedTab.rawValue)
-                        .font(.system(size: 24, weight: .semibold, design: .default))
-                        .foregroundStyle(LiveDesign.text)
-                    Text(subtitle)
-                        .font(.system(size: 12.5, weight: .regular, design: .default))
-                        .foregroundStyle(LiveDesign.muted)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Text(pillText.uppercased())
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .kerning(0.6)
-                    .foregroundStyle(LiveDesign.accent)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .overlay(Capsule().stroke(LiveDesign.accentDim, lineWidth: 1))
-            }
-            SettingsTabScrollArea(
-                tabID: selectedTab.id,
-                savedOffset: savedScrollOffset,
-                reorderActive: $settingsReorderActive
-            ) {
-                settingsRows(portrait: portrait)
-                    // The monitor's full-bleed layout ignores the keyboard safe area, so the
-                    // scroll area never shrinks when the number pad rises — which buried the
-                    // Watcher Passcode field under it. Inset the CONTENT by the keyboard
-                    // height instead; the rows scroll clear of the pad.
-                    .padding(.bottom, keyboardInset)
-            }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(
-                for: UIResponder.keyboardWillChangeFrameNotification)
-        ) { note in
-            guard
-                let frame =
-                    note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
-            else { return }
-            let screen = UIScreen.main.bounds
-            let overlap = max(0, screen.maxY - frame.minY)
-            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = overlap }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(
-                for: UIResponder.keyboardWillHideNotification)
-        ) { _ in
-            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = 0 }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(
-            LiveDesign.surface,
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: LiveDesign.cornerRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-    }
-
-    private var subtitle: String {
-        switch selectedTab {
-        case .link: "Connection state and link behavior."
-        case .sharing: "Broadcast this feed and manage its watchers."
-        case .assist: "Behavior for live-view tools."
-        case .controls: "Touch behavior and safety."
-        case .display: "Live view buttons and chrome."
-        case .storage: "Local cache and integrations."
-        case .system: "App-level behavior."
-        }
-    }
-
-    private var pillText: String {
-        switch selectedTab {
-        case .link: "Live"
-        case .sharing: "Share"
-        case .assist: "Assist"
-        case .controls: "Touch"
-        case .display: "Visibility"
-        case .storage: "Data"
-        case .system: "App"
-        }
-    }
-
-    private func tabSubtitle(_ tab: OperatorSettingsTab) -> String {
-        switch tab {
-        case .link: "Connection"
-        case .sharing: "Broadcast & watchers"
-        case .assist: "Scopes & overlays"
-        case .controls: "Dials and safety"
-        case .display: "Live view"
-        case .storage: "Cache & accounts"
-        case .system: "App behavior"
-        }
     }
 
     @ViewBuilder private var sharingRows: some View {
@@ -4377,38 +3756,32 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var controlsRows: some View {
-        SettingsRowCard {
-            SettingsSwitchInlineRow(
-                title: "Record Confirmation",
-                help: "Ask before starting or stopping recording to prevent mistaps.",
-                showTopDivider: false,
-                isOn: model.preferences.recordConfirmationEnabled
-            ) { model.preferences.recordConfirmationEnabled.toggle() }
-            SettingsSwitchInlineRow(
+        MonitorOperatorSafetySettings(
+            recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
+            haptics: preferenceBinding(\.hapticsEnabled),
+            keepScreenAwake: preferenceBinding(\.keepScreenAwake),
+            hapticsHelp: "Short confirmation pulses for critical switches and setting changes.",
+            keepScreenAwakeHelp:
+                "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load. Disable tools you are not using. iOS may still dim when the device overheats.",
+            feedback: settingsFeedback
+        )
+        MonitorSettingsRowCard(title: "Input & orientation") {
+            MonitorSettingsSwitchInlineRow(
                 title: "Bluetooth Remote Shutter",
                 help:
                     "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
-                isOn: model.preferences.bluetoothShutterEnabled
+                showTopDivider: false,
+                isOn: model.preferences.bluetoothShutterEnabled,
+                feedback: settingsFeedback
             ) { model.preferences.bluetoothShutterEnabled.toggle() }
-            SettingsSwitchInlineRow(
-                title: "Haptics",
-                help: "Short confirmation pulses for critical switches and setting changes.",
-                isOn: model.preferences.hapticsEnabled
-            ) { model.preferences.hapticsEnabled.toggle() }
-            SettingsSwitchInlineRow(
-                title: "Keep Screen Awake",
-                help:
-                    "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load — disable tools you are not using. iOS may still dim when the device overheats.",
-                isOn: model.preferences.keepScreenAwake
-            ) { model.preferences.keepScreenAwake.toggle() }
-            SettingsSwitchInlineRow(
+            MonitorSettingsSwitchInlineRow(
                 title: "Auto-Rotate Feed",
                 help:
-                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only — the recording is never affected.",
-                isOn: model.preferences.autoRotateFeedEnabled
+                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected.",
+                isOn: model.preferences.autoRotateFeedEnabled,
+                feedback: settingsFeedback
             ) { model.preferences.autoRotateFeedEnabled.toggle() }
         }
-
     }
 
     /// The Display tab is one card per DISP mode: each mode owns what it shows, and each opens on
@@ -5965,100 +5338,6 @@ private struct ViewAssistToolSettingsCard: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
         .gridCellAnchor(.top)
-    }
-}
-
-private enum SettingsLiveTileMetrics {
-    static let fpsCommitMinInterval: CFAbsoluteTime = 0.5
-}
-
-struct SettingsLiveTile: View {
-    @Environment(NativeAppModel.self) private var model
-    @State private var displayedFPS = CameraDisplayState.preview.liveFPS
-    @State private var lastFPSCommit: CFAbsoluteTime = 0
-
-    private var detail: String {
-        let transport = model.isDemoSession ? "Demo" : (model.activeTransportLabel ?? "Wi-Fi")
-        // Compact whole-number frame rates ("25.00" → "25") — the tile is width-constrained in
-        // portrait and the long form ellipsized the FPS off the end.
-        let fps = displayedFPS.hasSuffix(".00") ? String(displayedFPS.dropLast(3)) : displayedFPS
-        return "\(model.cameraState.cameraName) · \(transport) · \(fps) FPS"
-    }
-
-    /// Live link state from the continuously-scored `model.linkHealth` (0–100).
-    private var isLinked: Bool { model.isDemoSession || model.linkHealth > 0 }
-
-    private var tint: Color {
-        guard isLinked else { return LiveDesign.faint }
-        switch model.linkHealth {
-        case 70...: return LiveDesign.good
-        case 40..<70: return LiveDesign.accent
-        default: return model.isDemoSession ? LiveDesign.good : LiveDesign.rec
-        }
-    }
-
-    /// 0–4 meter bars lit by health quartile; at least one while linked.
-    private var litBars: Int {
-        guard isLinked else { return 0 }
-        guard !model.isDemoSession else { return 4 }
-        return max(1, Int((Double(model.linkHealth) / 25.0).rounded(.up)))
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(tint)
-                .frame(width: 8, height: 8)
-                .shadow(color: tint.opacity(0.7), radius: 8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(isLinked ? "Active Link" : "No Link")
-                    .font(.system(size: 12, weight: .semibold, design: .default))
-                    .foregroundStyle(LiveDesign.text)
-                    // Squeezed, this label letter-wrapped ("Activ / e / Link"); a status
-                    // readout is one line or it is noise.
-                    .lineLimit(1)
-                    .fixedSize()
-                Text(isLinked ? detail : model.linkHealthDetail)
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(LiveDesign.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.62)
-            }
-            HStack(alignment: .bottom, spacing: 2) {
-                ForEach(0..<4) { index in
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(
-                            index < litBars
-                                ? tint.opacity(0.52 + Double(index) * 0.12)
-                                : LiveDesign.hairline
-                        )
-                        .frame(width: 3, height: CGFloat(6 + index * 3))
-                }
-            }
-        }
-        .animation(.easeOut(duration: 0.25), value: litBars)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            LiveDesign.surface,
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-        .onAppear {
-            displayedFPS = model.liveFPS
-        }
-        .onChange(of: model.liveFPS) { _, newValue in
-            let now = CFAbsoluteTimeGetCurrent()
-            guard newValue != displayedFPS else { return }
-            guard now - lastFPSCommit >= SettingsLiveTileMetrics.fpsCommitMinInterval else {
-                return
-            }
-            lastFPSCommit = now
-            displayedFPS = newValue
-        }
     }
 }
 

@@ -507,27 +507,6 @@ struct SettingsHorizontalStrip<Content: View>: View {
 
 /// While a settings reorder list is mid-drag, parent scroll views should pause so drop targets stay
 /// stable under the finger.
-struct SettingsReorderActiveKey: PreferenceKey {
-    static let defaultValue = false
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = value || nextValue()
-    }
-}
-
-/// Finger Y in the settings scroll viewport (`settingsScroll` space) while a reorder handle is
-/// dragged; `nil` when idle. Drives edge auto-scroll in `SettingsTabScrollArea`.
-struct SettingsReorderDragViewportYKey: PreferenceKey {
-    static let defaultValue: CGFloat? = nil
-    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
-        if let next = nextValue() { value = next }
-    }
-}
-
-/// Coordinate space name shared with `SettingsTabScrollArea` for viewport-relative drag location.
-enum SettingsScrollCoordinateSpace {
-    static let name = "settingsScroll"
-}
-
 /// Compact vertical reorder list for settings cards: the handle is `.draggable`, each row a
 /// `.dropDestination`, so iOS floats the drag preview and tracks the finger — no hand-positioned
 /// overlay to miscompute the offset. Kept out of a reorderable `List` (its UIKit snapshot

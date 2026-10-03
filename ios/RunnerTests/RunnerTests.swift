@@ -1,4 +1,6 @@
 import CoreImage
+import MonitorPresentation
+import MonitorUI
 import Network
 import OpenCineApple
 import OpenCineCore
@@ -2506,4 +2508,117 @@ struct NikonExposureProvenanceTests {
         #expect(model.nikonControlFacts.apertureLabels.isEmpty)
         #expect(model.advertisedExposureOptions.isEmpty)
     }
+}
+
+@MainActor
+@Suite("SIMULATED shared settings native scrolling")
+struct NikonSettingsScrollTests {
+    @Test("Per-tab settled offsets restore, bounce is ignored, and retired observers cannot write")
+    func scrollRestoresAndRetires() async throws {
+        let state = NikonSettingsScrollFixture()
+        let page = MonitorSettingsPage(
+            safeArea: EdgeInsets(), brand: "SIMULATED",
+            selection: Binding(get: { state.tab }, set: { state.tab = $0 }),
+            isLive: false, phaseLabel: "SIMULATED settings",
+            scrollOffsets: Binding(get: { state.offsets }, set: { state.offsets = $0 }),
+            onClose: {}, disconnect: {}
+        ) { _ in
+            ForEach(0..<50, id: \.self) { index in
+                Text("SIMULATED setting \(index)").frame(height: 44)
+            }
+        }
+        let host = UIHostingController(rootView: AnyView(page))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        let display = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 180) < 1 })
+        display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
+        try await settle(in: host) { state.offsets["Display"] == 320 }
+        display.setContentOffset(CGPoint(x: 0, y: -50), animated: false)
+        for _ in 0..<100 { await Task.yield() }
+        #expect(state.offsets["Display"] == 320)
+
+        state.tab = .assist
+        let assist = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 75) < 1 })
+        #expect(state.offsets["Display"] == 320)
+        assist.setContentOffset(CGPoint(x: 0, y: 210), animated: false)
+        try await settle(in: host) { state.offsets["View Assist"] == 210 }
+        state.tab = .display
+        let restored = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 320) < 1 })
+
+        host.rootView = AnyView(EmptyView())
+        try await settle(in: host) { settingsScroll(in: host.view) == nil }
+        let offsets = state.offsets
+        restored.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
+        for _ in 0..<100 { await Task.yield() }
+        #expect(state.offsets == offsets)
+    }
+
+    @Test("A saved position beyond the current content restores inside the real viewport")
+    func scrollClampsToCurrentContent() async throws {
+        let state = NikonSettingsScrollFixture()
+        state.offsets["Display"] = 10_000
+        let page = MonitorSettingsPage(
+            safeArea: EdgeInsets(), brand: "SIMULATED",
+            selection: Binding(get: { state.tab }, set: { state.tab = $0 }),
+            isLive: false, phaseLabel: "SIMULATED settings",
+            scrollOffsets: Binding(get: { state.offsets }, set: { state.offsets = $0 }),
+            onClose: {}, disconnect: {}
+        ) { _ in
+            ForEach(0..<12, id: \.self) { index in
+                Text("SIMULATED setting \(index)").frame(height: 44)
+            }
+        }
+        let host = UIHostingController(rootView: AnyView(page))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let view = try await scroll(in: host) { view in
+            let maximum = max(0, view.contentSize.height - view.bounds.height)
+            return maximum > 0 && abs(view.contentOffset.y - maximum) < 1
+        }
+        #expect(view.contentOffset.y >= 0)
+        #expect(view.contentOffset.y <= view.contentSize.height - view.bounds.height)
+    }
+
+    private func settingsScroll(in view: UIView) -> UIScrollView? {
+        // The real content viewport is wider than the 188-point navigation rail.
+        if let scroll = view as? UIScrollView, scroll.bounds.height > 100, scroll.bounds.width > 200 {
+            return scroll
+        }
+        for child in view.subviews {
+            if let found = settingsScroll(in: child) { return found }
+        }
+        return nil
+    }
+
+    private func scroll(
+        in host: UIViewController, satisfying predicate: (UIScrollView) -> Bool
+    ) async throws -> UIScrollView {
+        try await settle(in: host) {
+            settingsScroll(in: host.view).map(predicate) ?? false
+        }
+        return try #require(settingsScroll(in: host.view))
+    }
+
+    private func settle(in host: UIViewController, until predicate: () -> Bool) async throws {
+        for _ in 0..<500 {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            await Task.yield()
+            if predicate() { return }
+        }
+        let observed = settingsScroll(in: host.view).map { "offset=\($0.contentOffset.y) size=\($0.contentSize) bounds=\($0.bounds)" } ?? "missing scroll"
+        #expect(predicate(), "The actual shared settings scroll did not reach the expected native state: \(observed)")
+    }
+}
+
+@MainActor
+@Observable
+private final class NikonSettingsScrollFixture {
+    var tab: MonitorSettingsTab = .display
+    var offsets: [String: CGFloat] = ["Display": 180, "View Assist": 75]
 }
