@@ -131,23 +131,6 @@ enum MediaThumbnailSize: String, CaseIterable, Codable, Sendable, Identifiable {
         }
     }
 
-    var segmentLabel: String {
-        switch self {
-        case .small: "S"
-        case .medium: "M"
-        case .large: "L"
-        }
-    }
-
-    /// Square icon size for the sidebar density control — visual hierarchy without text labels.
-    var gridIconSize: CGFloat {
-        switch self {
-        case .small: 9
-        case .medium: 12
-        case .large: 15
-        }
-    }
-
     var accessibilityLabel: String {
         switch self {
         case .small: "Small thumbnails"
@@ -1070,34 +1053,6 @@ private struct MediaFilterPopup: View {
                 .foregroundStyle(LiveDesign.muted)
             content()
         }
-    }
-}
-
-private struct MediaActionPill: View {
-    let icon: String
-    let title: String
-    var isActive: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                isActive ? LiveDesign.accentDim : Color.clear,
-                in: Capsule()
-            )
-            .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
     }
 }
 
