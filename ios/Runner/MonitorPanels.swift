@@ -3807,125 +3807,118 @@ struct OperatorSettingsPanel: View {
         }
     }
 
-    /// The Display tab is one card per DISP mode: each mode owns what it shows, and each opens on
-    /// tap. Collapsed, the whole tab reads as "Video/Photo, DISP 1, DISP 2, DISP 3, button order"
-    /// instead of ~50 controls in one scroll.
-    ///
-    /// Video and photo keep separate layouts, and the switch for that is **one segmented control
-    /// at the top of the tab**, not a second copy of each section. Six stacked DISP cards would
-    /// double the length of the tab to express one bit; a single "which layout am I editing"
-    /// control reads at a glance and leaves the three sections exactly as they were.
+    /// Supplies stored Nikon layouts and admitted actions to the common Display section.
     @ViewBuilder private var displayRows: some View {
-        SettingsRowCard {
-            // Portrait Fit/Fill lives on the feed itself now — the bottom-right corner key on the
-            // portrait monitor — not as a settings row.
-            SettingsInlineRow(
-                title: "Layout For",
-                help:
-                    "Video and photo keep their own monitor layouts, so a cinema rig and a stills body do not fight over the same chrome. This picks which one the DISP sections below are setting up; the camera's own mode dial picks which one the monitor renders.",
-                showTopDivider: false
-            ) {
-                SettingsSegmented(
-                    options: CaptureLayoutMode.allCases.map(\.title),
-                    selected: editedCaptureMode.title
-                ) { value in
-                    guard
-                        let mode = CaptureLayoutMode.allCases.first(where: { $0.title == value })
-                    else { return }
-                    editedCaptureMode = mode
-                }
-            }
-        }
-        // Coming back from the Edit view lands on the section that was being edited, open, rather
-        // than at the top of the tab with everything collapsed again.
+        let capture = editedCaptureMode
+        MonitorDisplaySettings(
+            layoutHelp:
+                "Video and photo keep their own monitor layouts. This picks which one the DISP sections set up; the camera's own mode dial picks which one the monitor renders.",
+            choices: CaptureLayoutMode.allCases.map {
+                MonitorDisplayChoice(id: $0.rawValue, title: $0.title)
+            },
+            selection: Binding(
+                get: { editedCaptureMode.rawValue },
+                set: {
+                    guard let choice = CaptureLayoutMode(rawValue: $0) else { return }
+                    settingsFeedback()
+                    editedCaptureMode = choice
+                }),
+            expandedSection: Binding(
+                get: { expandedDispSection?.rawValue },
+                set: { expandedDispSection = $0.flatMap(DispMode.init(rawValue:)) }),
+            sections: DispMode.allCases.map { mode in
+                let eligible = mode != .command && capture == model.captureLayoutMode
+                return MonitorDisplaySection(
+                    id: mode.rawValue, title: "DISP \(dispNumber(mode)) · \(mode.title)",
+                    caption: dispCaption(mode),
+                    reset: {
+                        settingsFeedback()
+                        model.resetChromeVisibility(for: mode, capture: capture)
+                    },
+                    editHint: "Opens the monitor with an eye on each element you can show or hide",
+                    edit: eligible ? { model.beginChromeEditing(mode) } : nil,
+                    unavailableEditHelp: mode == .command
+                        ? nil
+                        : "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor.",
+                    visibility: chromeToggles(for: mode, capture: capture),
+                    pinsTitle: "View assists that stay on in clean view",
+                    pins: mode == .clean ? cleanPins : [],
+                    tools: mode == .live ? assistOrder : nil
+                )
+            },
+            order: displayOrder
+        )
         .onAppear {
             guard let returning = model.chromeEditorReturnMode else { return }
             expandedDispSection = returning
             model.chromeEditorReturnMode = nil
         }
-
-        dispSectionCard(.live)
-        dispSectionCard(.clean)
-        dispSectionCard(.command)
-
-        MonitorSettingsGroupCard(
-            title: "DISP Button Order",
-            caption: "Drag to reorder; tap to enable or disable modes.",
-            onReset: {
-                settingsFeedback()
-                model.resetDispPreferences()
-            },
-            content: {
-                DisplayOrderStrip()
-                    .environment(model)
-            }
-        )
     }
 
-    /// Which capture side the DISP sections are editing. Follows the camera on first open — the
-    /// layout you are looking at is the one you most likely came to change.
     private var editedCaptureMode: CaptureLayoutMode {
         get { displayCaptureMode ?? model.captureLayoutMode }
         nonmutating set { displayCaptureMode = newValue }
     }
 
-    /// The Edit view is the live monitor, so it can only arrange the layout the body is actually
-    /// rendering. Editing the other one falls back to the plain switch list.
-    private var editsTheLiveLayout: Bool { editedCaptureMode == model.captureLayoutMode }
-
-    @ViewBuilder private func dispSectionCard(_ mode: DispMode) -> some View {
-        let capture = editedCaptureMode
-        MonitorSettingsGroupCard(
-            title: "DISP \(dispNumber(mode)) · \(mode.title)",
-            caption: dispCaption(mode),
-            onReset: {
-                settingsFeedback()
-                model.resetChromeVisibility(for: mode, capture: capture)
-            },
-            expansion: Binding(
-                get: { expandedDispSection == mode },
-                set: { expandedDispSection = $0 ? mode : nil }),
-            content: {
-                dispSectionBody(mode, capture: capture)
-            }
-        )
-    }
-
-    @ViewBuilder private func dispSectionBody(_ mode: DispMode, capture: CaptureLayoutMode)
-        -> some View
-    {
-        VStack(alignment: .leading, spacing: 10) {
-            // Command is a fixed dashboard grid, not the live chrome — there is no live view
-            // to place badges on, so it gets the plain list. So does the capture side the body
-            // is not currently in: badges belong on the real thing, not on a stand-in.
-            if mode == .command || !editsTheLiveLayout {
-                if mode != .command {
-                    Text(
-                        "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor."
-                    )
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(LiveDesign.muted)
-                }
-                displayToggleGrid(chromeToggles(for: mode, capture: capture))
-            } else {
-                MonitorSettingsActionPill(title: "Edit view") { model.beginChromeEditing(mode) }
-                    .accessibilityHint(
-                        "Opens the monitor with an eye on each element you can show or hide")
-                if mode == .clean {
-                    Text("View assists that stay on in clean view")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(LiveDesign.muted)
-                    CleanViewPinStrip()
-                        .environment(model)
-                } else {
-                    Text("Tool bar buttons — drag to reorder, tap the eye to show or hide")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(LiveDesign.muted)
-                    AssistToolbarOrderStrip()
-                        .environment(model)
-                }
+    private var cleanPins: [MonitorDisplayToggle] {
+        MonitorAssistTool.activeCases.map { tool in
+            MonitorDisplayToggle(
+                id: tool.rawValue, title: tool.displaySettingsTitle,
+                isOn: model.preferences.cleanViewPinnedTools.contains(tool),
+                accessibilityLabel: "Keep \(tool.displaySettingsTitle) in clean view"
+            ) {
+                model.toggleCleanViewPin(tool)
             }
         }
+    }
+
+    private var assistOrder: MonitorDisplayOrderGroup {
+        MonitorDisplayOrderGroup(
+            title: "Tool bar buttons",
+            caption: "Tool bar buttons: drag to reorder, tap the eye to show or hide",
+            items: model.preferences.assistToolbarOrder.map { tool in
+                MonitorDisplayOrderItem(
+                    id: tool.rawValue, title: tool.displaySettingsTitle,
+                    isOn: model.preferences.isAssistToolbarButtonVisible(tool),
+                    supplement: tool.rawValue,
+                    visibilityLabel: "Show \(tool.displaySettingsTitle) on the monitor bar",
+                    toggle: model.canToggleAssistToolbarVisibility(tool)
+                        ? { model.toggleAssistToolbarVisibility(tool) } : nil)
+            },
+            move: { id, target in
+                let current = model.preferences.assistToolbarOrder
+                guard let source = current.firstIndex(where: { $0.rawValue == id }),
+                    current.indices.contains(target), source != target
+                else { return }
+                model.moveAssistToolbar(
+                    from: IndexSet(integer: source), to: source < target ? target + 1 : target)
+            })
+    }
+
+    private var displayOrder: MonitorDisplayOrderGroup {
+        MonitorDisplayOrderGroup(
+            title: "DISP Button Order",
+            caption: "Drag to reorder; tap to enable or disable modes.",
+            items: model.preferences.dispOrder.map { mode in
+                MonitorDisplayOrderItem(
+                    id: mode.rawValue, title: mode.title,
+                    isOn: model.preferences.enabledDispModes.contains(mode),
+                    highlighted: mode == model.displayMode
+                        && model.preferences.enabledDispModes.contains(mode),
+                    toggle: { model.toggleDispMode(mode) })
+            },
+            reset: {
+                settingsFeedback()
+                model.resetDispPreferences()
+            },
+            move: { id, target in
+                let current = model.preferences.dispOrder
+                guard let source = current.firstIndex(where: { $0.rawValue == id }),
+                    current.indices.contains(target), source != target
+                else { return }
+                model.moveDispOrder(
+                    from: IndexSet(integer: source), to: source < target ? target + 1 : target)
+            })
     }
 
     private func dispNumber(_ mode: DispMode) -> Int {
@@ -3943,15 +3936,14 @@ struct OperatorSettingsPanel: View {
         }
     }
 
-    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode)
-        -> [(title: String, isOn: Bool, action: () -> Void)]
-    {
+    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode) -> [MonitorDisplayToggle] {
         DisplayChromeVisibility.configurableSections(in: mode).map { section in
-            (
-                section.title,
-                model.preferences.chrome(for: mode, capture: capture).isVisible(section),
-                { model.toggleChrome(section, for: mode, capture: capture) }
-            )
+            MonitorDisplayToggle(
+                id: section.rawValue, title: section.title,
+                isOn: model.preferences.chrome(for: mode, capture: capture).isVisible(section)
+            ) {
+                model.toggleChrome(section, for: mode, capture: capture)
+            }
         }
     }
 
@@ -4236,17 +4228,6 @@ struct OperatorSettingsPanel: View {
         score >= 80 ? "Stable" : (score >= 50 ? "Watch" : "Poor")
     }
 
-    private func displayToggleGrid(
-        _ items: [(title: String, isOn: Bool, action: () -> Void)]
-    ) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], spacing: 7) {
-            ForEach(items.indices, id: \.self) { index in
-                MonitorSettingsDisplayToggle(
-                    title: items[index].title, isOn: items[index].isOn,
-                    action: items[index].action)
-            }
-        }
-    }
 }
 
 /// Coordinates the two explicit routes for reporting a public GitHub issue.

@@ -2641,6 +2641,62 @@ struct NikonSettingsScrollTests {
         #expect(state.offsets == offsets)
     }
 
+    @Test("The actual Nikon Display return preserves native offsets and retires its observer")
+    func actualDisplayRestoresAndRetires() async throws {
+        let model = NativeAppModel()
+        let original = model.preferences
+        model.preferences = OperatorPreferences.defaults
+        defer { model.preferences = original }
+        model.beginChromeEditing(.live)
+        model.endChromeEditing()
+        model.operatorSettingsScrollOffsets = ["Display": 180]
+        let host = UIHostingController(
+            rootView: AnyView(OperatorSettingsPanel().environment(model)))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        window.rootViewController = host
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        let display = try await scroll(in: host) { abs($0.contentOffset.y - 180) < 1 }
+        #expect(model.operatorSettingsTab == .display)
+        #expect(model.chromeEditorReturnMode == nil)
+        display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
+        try await settle(in: host) { model.operatorSettingsScrollOffsets["Display"] == 320 }
+        model.operatorSettingsTab = .controls
+        try await settle(in: host) { settingsScroll(in: host.view) !== display }
+        #expect(model.operatorSettingsScrollOffsets["Display"] == 320)
+        model.operatorSettingsTab = .display
+        let restored = try await scroll(in: host) { abs($0.contentOffset.y - 320) < 1 }
+        host.rootView = AnyView(EmptyView())
+        try await settle(in: host) { settingsScroll(in: host.view) == nil }
+        let offsets = model.operatorSettingsScrollOffsets
+        restored.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
+        for _ in 0..<100 { await Task.yield() }
+        #expect(model.operatorSettingsScrollOffsets == offsets)
+    }
+
+    @Test("Measured full labels select the same column counts as Compose")
+    func displayLabelFitBoundaries() {
+        #expect(MonitorDisplayMetrics.toggleColumnCount(compact: false, availableWidth: 480) == 4)
+        #expect(
+            MonitorDisplayMetrics.toggleColumnCount(
+                compact: false, availableWidth: 624, minimumCellWidth: 151) == 2)
+        #expect(
+            MonitorDisplayMetrics.toggleColumnCount(
+                compact: false, availableWidth: 625, minimumCellWidth: 151) == 4)
+        #expect(
+            MonitorDisplayMetrics.toggleColumnCount(
+                compact: true, availableWidth: 625, minimumCellWidth: 151) == 2)
+        #expect(
+            MonitorDisplayMetrics.toggleColumnCount(
+                compact: false, availableWidth: 309, minimumCellWidth: 151) == 2)
+        #expect(
+            MonitorDisplayMetrics.toggleColumnCount(
+                compact: false, availableWidth: 308, minimumCellWidth: 151) == 1)
+    }
+
     @Test("A saved position beyond the current content restores inside the real viewport")
     func scrollClampsToCurrentContent() async throws {
         let state = NikonSettingsScrollFixture()

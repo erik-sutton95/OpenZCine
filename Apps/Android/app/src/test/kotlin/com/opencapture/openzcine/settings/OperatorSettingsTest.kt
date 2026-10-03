@@ -308,65 +308,6 @@ class OperatorSettingsTest {
     }
 
     @Test
-    fun `settings reorder geometry accepts only the handle and clamps direct destinations`() {
-        assertFalse(settingsReorderGripHit(pointerX = 250f, containerWidth = 320f, gripWidth = 48f))
-        assertTrue(settingsReorderGripHit(pointerX = 280f, containerWidth = 320f, gripWidth = 48f))
-        val toolCount = AssistTool.entries.size
-        assertEquals(0, settingsReorderIndex(pointerY = -40f, rowHeight = 50f, itemCount = toolCount))
-        assertEquals(6, settingsReorderIndex(pointerY = 349f, rowHeight = 50f, itemCount = toolCount))
-        assertEquals(
-            toolCount - 1,
-            settingsReorderIndex(pointerY = 900f, rowHeight = 50f, itemCount = toolCount),
-        )
-    }
-
-    @Test
-    fun `display toggle grids wrap in a narrow landscape content pane`() {
-        assertEquals(
-            2,
-            displayToggleGridColumnCount(compact = false, availableWidthDp = 366f),
-            "A 600dp shell leaves roughly 366dp after the tab rail and card padding",
-        )
-        assertEquals(2, displayToggleGridColumnCount(compact = false, availableWidthDp = 479.9f))
-        assertEquals(4, displayToggleGridColumnCount(compact = false, availableWidthDp = 480f))
-        assertEquals(2, displayToggleGridColumnCount(compact = true, availableWidthDp = 600f))
-    }
-
-    @Test
-    fun `settings reorder auto scroll follows viewport edges and stops in the middle`() {
-        assertEquals(
-            -12f,
-            settingsReorderAutoScrollDelta(
-                pointerRootY = 90f,
-                viewportTop = 100f,
-                viewportBottom = 500f,
-                edgeThreshold = 40f,
-                maximumStep = 12f,
-            ),
-        )
-        assertEquals(
-            6f,
-            settingsReorderAutoScrollDelta(
-                pointerRootY = 480f,
-                viewportTop = 100f,
-                viewportBottom = 500f,
-                edgeThreshold = 40f,
-                maximumStep = 12f,
-            ),
-        )
-        assertEquals(
-            0f,
-            settingsReorderAutoScrollDelta(
-                pointerRootY = 300f,
-                viewportTop = 100f,
-                viewportBottom = 500f,
-                edgeThreshold = 40f,
-                maximumStep = 12f,
-            ),
-        )
-    }
-
-    @Test
     fun `toolbar reset restores every currently supported tool`() {
         val settings = OperatorSettings(store)
         settings.toggleAssistToolbarToolVisibility(AssistTool.WAVE)

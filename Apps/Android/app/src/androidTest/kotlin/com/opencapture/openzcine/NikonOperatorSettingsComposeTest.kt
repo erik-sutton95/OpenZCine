@@ -7,6 +7,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -28,6 +29,8 @@ import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.OperatorSettingsTab
+import com.opencapture.openzcine.settings.CaptureLayoutMode
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -165,6 +168,82 @@ class NikonOperatorSettingsComposeTest {
                 settings.feedEffectsConfiguration.zebraHighlightIre)
         }
         composeRule.onNode(midtone and hasSetTextAction(), useUnmergedTree = true).performImeAction()
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun actualCommonDisplayKeepsCaptureLayoutsIndependentAndAdmitsOnlyTheCurrentEditor() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-display-capture", Context.MODE_PRIVATE)
+        preferences.edit().clear().putString("unrelated.operator.choice", "retained").commit()
+        val settings = OperatorSettings(preferences)
+        val videoRecord = settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.VIDEO).railRecord.value
+        val photoRecord = settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO).railRecord.value
+        show(settings, OperatorSettingsTab.DISPLAY)
+        composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").assertIsDisplayed()
+        composeRule.onNodeWithText("Photo").performScrollTo().performClick()
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").assertDoesNotExist()
+        composeRule.onNodeWithTag("monitor.settings.display.toggle.RAIL_RECORD").performScrollTo().performClick()
+        composeRule.runOnIdle {
+            val reloaded = OperatorSettings(preferences)
+            assertEquals(videoRecord, reloaded.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.VIDEO).railRecord.value)
+            assertEquals(!photoRecord, reloaded.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO).railRecord.value)
+            assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
+        }
+        composeRule.onNodeWithText("Video").performScrollTo().performClick()
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("DISP 3 · Command").performScrollTo().performClick()
+        composeRule.onNodeWithTag("monitor.settings.display.edit.COMMAND").assertDoesNotExist()
+        composeRule.onNodeWithTag("monitor.settings.display.toggle.RAIL_RECORD").performScrollTo().assertIsDisplayed()
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun actualCommonDisplayContainsFullLabelsAndSwitchesInsideEachCard() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-display-label-fit", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        show(OperatorSettings(preferences), OperatorSettingsTab.DISPLAY)
+        composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
+        composeRule.onNodeWithText("Photo").performScrollTo().performClick()
+        for ((id, label) in listOf("CAMERA_VALUES" to "Camera Values", "RESOLUTION_READOUT" to "RESOLUTION")) {
+            val tag = "monitor.settings.display.toggle.$id"
+            val row = composeRule.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo()
+            val text = composeRule.onNode(hasText(label) and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true)
+            text.assertIsDisplayed()
+            val cardBounds = row.fetchSemanticsNode().boundsInRoot
+            val textBounds = text.fetchSemanticsNode().boundsInRoot
+            val density = context.resources.displayMetrics.density
+            // Actual native text must leave the existing 39dp switch, both 7dp row gaps,
+            // and the 9dp trailing inset inside the rendered card.
+            assertTrue("$label must leave room for its complete switch",
+                textBounds.right + 62f * density <= cardBounds.right + 1f)
+            assertTrue("$label stays inside the leading inset", textBounds.left >= cardBounds.left + 9f * density - 1f)
+        }
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun actualCommonDisplayPreservesEmptyCleanPinsAndLastEnabledMode() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-display-pins", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val settings = OperatorSettings(preferences)
+        val kept = AssistTool.entries.filter(settings::isPinnedToCleanView)
+        show(settings, OperatorSettingsTab.DISPLAY)
+        composeRule.onNodeWithText("DISP 2 · Clean").performScrollTo().performClick()
+        for (tool in kept) {
+            composeRule.onNodeWithTag("monitor.settings.display.toggle.${tool.name}")
+                .performScrollTo().performClick()
+        }
+        for (mode in MonitorDisplayMode.entries) {
+            composeRule.onNodeWithTag("monitor.settings.display.visibility.${mode.name}")
+                .performScrollTo().performClick()
+        }
+        composeRule.runOnIdle {
+            val reloaded = OperatorSettings(preferences)
+            assertTrue(AssistTool.entries.none(reloaded::isPinnedToCleanView))
+            assertEquals(setOf(MonitorDisplayMode.COMMAND), reloaded.enabledDisplayModes)
+            assertEquals(setOf(MonitorDisplayMode.COMMAND), settings.enabledDisplayModes)
+        }
         preferences.edit().clear().commit()
     }
 

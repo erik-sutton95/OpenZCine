@@ -1,8 +1,6 @@
 package com.opencapture.openzcine.settings
 
 import com.opencapture.monitorui.settings.MonitorSettingsActionPill
-import com.opencapture.monitorui.settings.MonitorSettingsDisplayToggle
-import com.opencapture.monitorui.settings.MonitorSettingsGroupCard
 import com.opencapture.monitorui.settings.MonitorSupportAction
 import com.opencapture.monitorui.settings.MonitorSupportSettings
 import androidx.compose.ui.platform.testTag
@@ -27,14 +25,10 @@ import android.os.Build
 import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
-import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,28 +36,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,51 +51,33 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
-import com.opencapture.openzcine.AndroidThermalTier
 import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
-import com.opencapture.openzcine.titleResource
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FeedPeakingColor
@@ -132,15 +94,10 @@ import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
-import com.opencapture.opencine.nikon.SwiftLiveViewPreviewState
 import com.opencapture.opencine.nikon.CameraSession
-import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import com.opencapture.openzcine.FeedFalseColorScale
-import com.opencapture.openzcine.labelResource
 import com.opencapture.openzcine.FeedLut
-import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioNetworkState
@@ -152,16 +109,13 @@ import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.relay.RelayCameraSession
 import com.opencapture.openzcine.relay.RelayWatchUiState
-import com.opencapture.openzcine.rememberAndroidThermalTier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /** Shared navigation vocabulary; existing debug enum names remain unchanged. */
@@ -367,7 +321,7 @@ internal fun OperatorSettingsScreen(
                         settings, assistState, cameraInput, toggleSetting, toggleAssist, emitHaptic,
                     )
                     OperatorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic, toggleSetting)
-                    OperatorSettingsTab.DISPLAY -> DisplayRows(
+                    OperatorSettingsTab.DISPLAY -> NikonDisplaySettings(
                         settings, compact, toggleSetting, emitHaptic,
                         checkNotNull(scroll).scrollState, scroll.viewportBounds,
                         liveCaptureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties)) {
@@ -1414,676 +1368,6 @@ private fun ControlsRows(
             isOn = settings.autoRotateFeedEnabled.value,
             help = stringResource(R.string.help_controls_auto_rotate_feed),
         ) { onToggle(settings.autoRotateFeedEnabled) }
-    }
-}
-
-/** Maps a vertical settings drag to a clamped row index. */
-internal fun settingsReorderIndex(pointerY: Float, rowHeight: Float, itemCount: Int): Int {
-    require(rowHeight > 0f && itemCount > 0) { "settings reorder list must contain positive rows" }
-    return floor(pointerY / rowHeight).toInt().coerceIn(0, itemCount - 1)
-}
-
-/** Only the trailing handle lane can begin a settings reorder. */
-internal fun settingsReorderGripHit(
-    pointerX: Float,
-    containerWidth: Float,
-    gripWidth: Float,
-): Boolean {
-    require(containerWidth >= 0f && gripWidth > 0f) { "settings reorder grip must be positive" }
-    return pointerX >= (containerWidth - gripWidth).coerceAtLeast(0f) &&
-        pointerX <= containerWidth
-}
-
-/** Signed per-frame parent-scroll step while a reorder finger rides a viewport edge. */
-internal fun settingsReorderAutoScrollDelta(
-    pointerRootY: Float,
-    viewportTop: Float,
-    viewportBottom: Float,
-    edgeThreshold: Float,
-    maximumStep: Float,
-): Float {
-    require(viewportBottom >= viewportTop && edgeThreshold > 0f && maximumStep >= 0f) {
-        "settings reorder viewport must be valid"
-    }
-    val topDistance = pointerRootY - viewportTop
-    if (topDistance < edgeThreshold) {
-        return -maximumStep * ((edgeThreshold - topDistance) / edgeThreshold).coerceIn(0f, 1f)
-    }
-    val bottomDistance = viewportBottom - pointerRootY
-    if (bottomDistance < edgeThreshold) {
-        return maximumStep * ((edgeThreshold - bottomDistance) / edgeThreshold).coerceIn(0f, 1f)
-    }
-    return 0f
-}
-
-/** Direct-drag assist order with a TalkBack-equivalent move action on every handle. */
-@Composable
-internal fun AssistToolbarOrderList(
-    settings: OperatorSettings,
-    onInteraction: () -> Unit,
-    parentScrollState: ScrollState? = null,
-    viewportBounds: Rect? = null,
-) {
-    val tools = settings.assistToolbarOrder
-    val latestTools by rememberUpdatedState(tools)
-    val latestOnInteraction by rememberUpdatedState(onInteraction)
-    var draggingTool by remember { mutableStateOf<AssistTool?>(null) }
-    var dragPosition by remember { mutableStateOf(Offset.Zero) }
-    var dragRootY by remember { mutableStateOf<Float?>(null) }
-    var listBounds by remember { mutableStateOf<Rect?>(null) }
-    val rowHeight = 50.dp
-    val gripWidth = 48.dp
-    val density = LocalDensity.current
-    val rowHeightPx = with(density) { rowHeight.toPx() }
-    val gripWidthPx = with(density) { gripWidth.toPx() }
-    val edgeThresholdPx = with(density) { 48.dp.toPx() }
-    val maximumScrollStepPx = with(density) { 12.dp.toPx() }
-
-    LaunchedEffect(draggingTool, dragRootY, viewportBounds, parentScrollState) {
-        val scrollState = parentScrollState ?: return@LaunchedEffect
-        val rootY = dragRootY ?: return@LaunchedEffect
-        val viewport = viewportBounds ?: return@LaunchedEffect
-        while (draggingTool != null) {
-            val delta =
-                settingsReorderAutoScrollDelta(
-                    pointerRootY = rootY,
-                    viewportTop = viewport.top,
-                    viewportBottom = viewport.bottom,
-                    edgeThreshold = edgeThresholdPx,
-                    maximumStep = maximumScrollStepPx,
-                )
-            if (delta == 0f) return@LaunchedEffect
-            scrollState.scrollBy(delta)
-            delay(16)
-            val tool = draggingTool ?: return@LaunchedEffect
-            val bounds = listBounds ?: continue
-            val current = latestTools
-            if (current.isNotEmpty()) {
-                val target = settingsReorderIndex(rootY - bounds.top, rowHeightPx, current.size)
-                if (current.indexOf(tool) != target) {
-                    settings.moveAssistToolbarTool(tool, target)
-                }
-            }
-        }
-    }
-
-    BoxWithConstraints(
-        Modifier.fillMaxWidth()
-            .height(rowHeight * tools.size)
-            .onGloballyPositioned { listBounds = it.boundsInRoot() }
-            .pointerInput(Unit) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { start ->
-                        if (settingsReorderGripHit(start.x, size.width.toFloat(), gripWidthPx)) {
-                            val current = latestTools
-                            if (current.isNotEmpty()) {
-                                val index = settingsReorderIndex(start.y, rowHeightPx, current.size)
-                                draggingTool = current[index]
-                                dragPosition = start
-                                dragRootY = listBounds?.top?.plus(start.y)
-                                latestOnInteraction()
-                            }
-                        }
-                    },
-                    onDrag = { change, _ ->
-                        val tool = draggingTool
-                        if (tool != null) {
-                            change.consume()
-                            dragPosition = change.position
-                            dragRootY = listBounds?.top?.plus(change.position.y)
-                            val current = latestTools
-                            if (current.isNotEmpty()) {
-                                val target =
-                                    settingsReorderIndex(
-                                        change.position.y,
-                                        rowHeightPx,
-                                        current.size,
-                                    )
-                                if (current.indexOf(tool) != target) {
-                                    settings.moveAssistToolbarTool(tool, target)
-                                }
-                            }
-                        }
-                    },
-                    onDragEnd = {
-                        draggingTool = null
-                        dragRootY = null
-                    },
-                    onDragCancel = {
-                        draggingTool = null
-                        dragRootY = null
-                    },
-                )
-            },
-    ) {
-        val listHeightPx = constraints.maxHeight.toFloat()
-        tools.forEachIndexed { index, tool ->
-            key(tool) {
-                val toolTitle = stringResource(tool.titleResource())
-                val moveEarlier = stringResource(R.string.settings_move_earlier, toolTitle)
-                val moveLater = stringResource(R.string.settings_move_later, toolTitle)
-                val positionDescription = stringResource(R.string.settings_position, index + 1)
-                val positionLabel = stringResource(R.string.settings_position_number, index + 1)
-                val visibilityDescription =
-                    stringResource(R.string.settings_toolbar_visibility, toolTitle)
-                val visibilityState =
-                    stringResource(
-                        if (settings.isAssistToolbarToolVisible(tool)) R.string.status_visible
-                        else R.string.status_hidden,
-                    )
-                val reorderDescription =
-                    stringResource(R.string.settings_reorder_position, toolTitle, index + 1)
-                val dragging = tool == draggingTool
-                val y =
-                    if (dragging) {
-                        (dragPosition.y - rowHeightPx / 2f)
-                            .coerceIn(0f, (listHeightPx - rowHeightPx).coerceAtLeast(0f))
-                    } else {
-                        index * rowHeightPx
-                    }
-                val accessibilityActions =
-                    buildList {
-                        if (index > 0) {
-                            add(
-                                CustomAccessibilityAction(moveEarlier) {
-                                    settings.moveAssistToolbarTool(tool, index - 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                        if (index < tools.lastIndex) {
-                            add(
-                                CustomAccessibilityAction(moveLater) {
-                                    settings.moveAssistToolbarTool(tool, index + 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                    }
-                Column(
-                    Modifier.offset { IntOffset(0, y.roundToInt()) }
-                        .fillMaxWidth()
-                        .height(rowHeight)
-                        .graphicsLayer {
-                            scaleX = if (dragging) 1.02f else 1f
-                            scaleY = if (dragging) 1.02f else 1f
-                            shadowElevation = if (dragging) 12.dp.toPx() else 0f
-                            shape = ChromeShape
-                        }
-                        .zIndex(if (dragging) 1f else 0f)
-                        .background(if (dragging) LiveDesign.surface else androidx.compose.ui.graphics.Color.Transparent),
-                ) {
-                    if (index != 0) {
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(22.dp)
-                                .background(LiveDesign.surface, CircleShape)
-                                .semantics { contentDescription = positionDescription },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                positionLabel,
-                                style = chromeStyle(9f, FontWeight.Medium, mono = true),
-                                color = LiveDesign.muted,
-                            )
-                        }
-                        Text(
-                            toolTitle,
-                            style = chromeStyle(12.5f, FontWeight.SemiBold),
-                            color =
-                                if (settings.isAssistToolbarToolVisible(tool)) {
-                                    LiveDesign.text
-                                } else {
-                                    LiveDesign.muted
-                                },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (tool == AssistTool.LUT) {
-                            SettingsValueText(stringResource(R.string.settings_pinned))
-                        } else {
-                            Box(
-                                Modifier.settingsClickable(role = Role.Switch) {
-                                    settings.toggleAssistToolbarToolVisibility(tool)
-                                    onInteraction()
-                                }.semantics {
-                                    contentDescription = visibilityDescription
-                                    stateDescription = visibilityState
-                                },
-                            ) {
-                                SettingsSwitchGraphic(settings.isAssistToolbarToolVisible(tool))
-                            }
-                        }
-                        Box(
-                            Modifier.width(gripWidth)
-                                .fillMaxHeight()
-                                .semantics {
-                                    contentDescription = reorderDescription
-                                    customActions = accessibilityActions
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Canvas(Modifier.size(18.dp, 14.dp)) {
-                                val stroke = 1.6.dp.toPx()
-                                listOf(2f, 7f, 12f).forEach { yOffset ->
-                                    drawLine(
-                                        LiveDesign.faint,
-                                        Offset(1.dp.toPx(), yOffset.dp.toPx()),
-                                        Offset(size.width - 1.dp.toPx(), yOffset.dp.toPx()),
-                                        strokeWidth = stroke,
-                                        cap = StrokeCap.Round,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Direct-drag DISP order with an equivalent TalkBack move action. */
-@Composable
-internal fun DisplayModeOrderList(
-    settings: OperatorSettings,
-    onInteraction: () -> Unit,
-) {
-    val modes = settings.displayModeOrder
-    val latestModes by rememberUpdatedState(modes)
-    var draggingMode by remember { mutableStateOf<MonitorDisplayMode?>(null) }
-    var dragPosition by remember { mutableStateOf(Offset.Zero) }
-    val rowHeight = 50.dp
-    val gripWidth = 48.dp
-    val density = LocalDensity.current
-    val rowHeightPx = with(density) { rowHeight.toPx() }
-    val gripWidthPx = with(density) { gripWidth.toPx() }
-
-    BoxWithConstraints(
-        Modifier.fillMaxWidth()
-            .height(rowHeight * modes.size)
-            .pointerInput(Unit) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { start ->
-                        if (settingsReorderGripHit(start.x, size.width.toFloat(), gripWidthPx)) {
-                            val current = latestModes
-                            if (current.isNotEmpty()) {
-                                draggingMode =
-                                    current[
-                                        settingsReorderIndex(
-                                            start.y,
-                                            rowHeightPx,
-                                            current.size,
-                                        )
-                                    ]
-                                dragPosition = start
-                                onInteraction()
-                            }
-                        }
-                    },
-                    onDrag = { change, _ ->
-                        val mode = draggingMode
-                        if (mode != null) {
-                            change.consume()
-                            dragPosition = change.position
-                            val current = latestModes
-                            if (current.isNotEmpty()) {
-                                val target =
-                                    settingsReorderIndex(
-                                        change.position.y,
-                                        rowHeightPx,
-                                        current.size,
-                                    )
-                                if (current.indexOf(mode) != target) {
-                                    settings.moveDisplayMode(mode, target)
-                                }
-                            }
-                        }
-                    },
-                    onDragEnd = { draggingMode = null },
-                    onDragCancel = { draggingMode = null },
-                )
-            },
-    ) {
-        val listHeightPx = constraints.maxHeight.toFloat()
-        modes.forEachIndexed { index, mode ->
-            key(mode) {
-                val modeLabel = stringResource(mode.labelResource())
-                val moveEarlier = stringResource(R.string.settings_move_earlier, modeLabel)
-                val moveLater = stringResource(R.string.settings_move_later, modeLabel)
-                val positionDescription = stringResource(R.string.settings_position, index + 1)
-                val positionLabel = stringResource(R.string.settings_position_number, index + 1)
-                val includeDescription =
-                    stringResource(R.string.settings_disp_include, modeLabel)
-                val reorderDescription =
-                    stringResource(R.string.settings_reorder_position, modeLabel, index + 1)
-                val enabled = mode in settings.enabledDisplayModes
-                val enabledState =
-                    stringResource(
-                        if (enabled) R.string.status_enabled else R.string.status_disabled,
-                    )
-                val dragging = mode == draggingMode
-                val y =
-                    if (dragging) {
-                        (dragPosition.y - rowHeightPx / 2f)
-                            .coerceIn(0f, (listHeightPx - rowHeightPx).coerceAtLeast(0f))
-                    } else {
-                        index * rowHeightPx
-                    }
-                val accessibilityActions =
-                    buildList {
-                        if (index > 0) {
-                            add(
-                                CustomAccessibilityAction(moveEarlier) {
-                                    settings.moveDisplayMode(mode, index - 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                        if (index < modes.lastIndex) {
-                            add(
-                                CustomAccessibilityAction(moveLater) {
-                                    settings.moveDisplayMode(mode, index + 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                    }
-                Column(
-                    Modifier.offset { IntOffset(0, y.roundToInt()) }
-                        .fillMaxWidth()
-                        .height(rowHeight)
-                        .graphicsLayer {
-                            scaleX = if (dragging) 1.02f else 1f
-                            scaleY = if (dragging) 1.02f else 1f
-                            shadowElevation = if (dragging) 12.dp.toPx() else 0f
-                            shape = ChromeShape
-                        }
-                        .zIndex(if (dragging) 1f else 0f)
-                        .background(
-                            if (dragging) LiveDesign.surface else androidx.compose.ui.graphics.Color.Transparent,
-                        ),
-                ) {
-                    if (index != 0) {
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(22.dp)
-                                .background(LiveDesign.surface, CircleShape)
-                                .semantics { contentDescription = positionDescription },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                positionLabel,
-                                style = chromeStyle(9f, FontWeight.Medium, mono = true),
-                                color = LiveDesign.muted,
-                            )
-                        }
-                        Text(
-                            modeLabel,
-                            style = chromeStyle(12.5f, FontWeight.SemiBold),
-                            color = if (enabled) LiveDesign.text else LiveDesign.muted,
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Box(
-                            Modifier.settingsClickable(role = Role.Switch) {
-                                if (settings.toggleDisplayMode(mode)) onInteraction()
-                            }.semantics {
-                                contentDescription = includeDescription
-                                stateDescription = enabledState
-                            },
-                        ) {
-                            SettingsSwitchGraphic(enabled)
-                        }
-                        Box(
-                            Modifier.width(gripWidth)
-                                .fillMaxHeight()
-                                .semantics {
-                                    contentDescription = reorderDescription
-                                    customActions = accessibilityActions
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Canvas(Modifier.size(18.dp, 14.dp)) {
-                                val stroke = 1.6.dp.toPx()
-                                listOf(2f, 7f, 12f).forEach { yOffset ->
-                                    drawLine(
-                                        LiveDesign.faint,
-                                        Offset(1.dp.toPx(), yOffset.dp.toPx()),
-                                        Offset(size.width - 1.dp.toPx(), yOffset.dp.toPx()),
-                                        strokeWidth = stroke,
-                                        cap = StrokeCap.Round,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Display tab. Every exposed toggle maps to Android monitor chrome rather
- * than merely recording an intent for a later shell pass.
- */
-@Composable
-private fun DisplayRows(
-    settings: OperatorSettings,
-    compact: Boolean,
-    onToggle: (OperatorSettings.Toggle) -> Unit,
-    onInteraction: () -> Unit,
-    parentScrollState: ScrollState,
-    viewportBounds: Rect?,
-    liveCaptureMode: CaptureLayoutMode,
-    onEditView: (MonitorDisplayMode) -> Unit,
-) {
-    // One card per DISP mode: each mode owns what it shows, and each opens on tap. Collapsed, the
-    // whole tab is four short rows instead of ~50 controls in one scroll (iOS `displayRows`).
-    //
-    // Video and photo keep separate layouts, and the switch for that is ONE segmented control at
-    // the top — six stacked DISP cards would double the longest tab in the app to express one bit.
-    var expandedSection by rememberSaveable { mutableStateOf<MonitorDisplayMode?>(null) }
-    var pickedCapture by rememberSaveable { mutableStateOf<CaptureLayoutMode?>(null) }
-    val capture = pickedCapture ?: liveCaptureMode
-    MonitorSettingsGroupCard(
-        title = stringResource(R.string.settings_layout_for),
-        caption = stringResource(R.string.settings_layout_for_help),
-        captionMaxLines = 3,
-    ) {
-        SettingsSegmented(
-            options = CaptureLayoutMode.entries.map { it.title },
-            selected = capture.title,
-        ) { value ->
-            CaptureLayoutMode.entries.firstOrNull { it.title == value }?.let {
-                pickedCapture = it
-                onInteraction()
-            }
-        }
-    }
-    MonitorDisplayMode.entries.forEach { mode ->
-        MonitorSettingsGroupCard(
-            title = "DISP ${mode.ordinal + 1} · ${stringResource(mode.labelResource())}",
-            caption = stringResource(dispSectionCaption(mode)),
-            onReset = {
-                settings.resetChromeVisibility(mode, capture)
-                onInteraction()
-            },
-            // The caption IS the mode's explanation here — never let it truncate.
-            captionMaxLines = Int.MAX_VALUE,
-            expanded = expandedSection == mode,
-            onExpandToggle = {
-                expandedSection = if (expandedSection == mode) null else mode
-                onInteraction()
-            },
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // Command is a fixed dashboard grid, not the live chrome — there is no live view
-                // to place badges on, so it gets the plain list. So does the capture side the body
-                // is not currently in: badges belong on the real thing, not on a stand-in.
-                if (mode == MonitorDisplayMode.COMMAND || capture != liveCaptureMode) {
-                    if (mode != MonitorDisplayMode.COMMAND) {
-                        Text(
-                            stringResource(
-                                R.string.settings_layout_for_other_side,
-                                capture.title.lowercase(),
-                            ),
-                            style = chromeStyle(11f, FontWeight.SemiBold),
-                            color = LiveDesign.muted,
-                        )
-                    }
-                    DisplayToggleGrid(
-                        compact = compact,
-                        entries =
-                            ChromeSection.configurableIn(mode).map { section ->
-                                val toggle = settings.chrome(mode, capture)[section]
-                                DisplayToggleEntry(section.title, toggle.value) {
-                                    onToggle(toggle)
-                                }
-                            },
-                    )
-                } else {
-                    MonitorSettingsActionPill(
-                        title = stringResource(R.string.settings_edit_view),
-                        onClick = { onEditView(mode) },
-                    )
-                    // The status-bar cells. iOS nests their badges inside the deck pill in the Edit
-                    // view; here they stay a grid, because a 26dp badge inside a 28dp pill on a
-                    // phone-density Compose deck is not a reliable touch target.
-                    Text(
-                        stringResource(R.string.settings_live_readouts),
-                        style = chromeStyle(11f, FontWeight.SemiBold),
-                        color = LiveDesign.muted,
-                    )
-                    DisplayToggleGrid(
-                        compact = compact,
-                        entries =
-                            ChromeSection.statusBarReadouts.map { section ->
-                                val toggle = settings.chrome(mode, capture)[section]
-                                DisplayToggleEntry(section.title, toggle.value) { onToggle(toggle) }
-                            },
-                    )
-                    if (mode == MonitorDisplayMode.CLEAN) {
-                        Text(
-                            stringResource(R.string.settings_clean_view_tools),
-                            style = chromeStyle(11f, FontWeight.SemiBold),
-                            color = LiveDesign.muted,
-                        )
-                        DisplayToggleGrid(
-                            compact = compact,
-                            entries =
-                                // Canonical tool order, not the operator's toolbar order — the
-                                // keep list should not reshuffle itself under them when they drag
-                                // the toolbar (iOS `CleanViewPinStrip`).
-                                AssistTool.entries.map { tool ->
-                                    val title = stringResource(tool.titleResource())
-                                    DisplayToggleEntry(title, settings.isPinnedToCleanView(tool)) {
-                                        settings.toggleCleanViewPin(tool)
-                                        onInteraction()
-                                    }
-                                },
-                        )
-                    } else {
-                        Text(
-                            stringResource(R.string.settings_assist_toolbar_caption),
-                            style = chromeStyle(11f, FontWeight.SemiBold),
-                            color = LiveDesign.muted,
-                        )
-                        AssistToolbarOrderList(
-                            settings = settings,
-                            onInteraction = onInteraction,
-                            parentScrollState = parentScrollState,
-                            viewportBounds = viewportBounds,
-                        )
-                    }
-                }
-            }
-        }
-    }
-    MonitorSettingsGroupCard(
-        title = stringResource(R.string.settings_disp_order),
-        caption = stringResource(R.string.settings_disp_order_caption),
-        onReset = {
-            settings.resetDisplayModePreferences()
-            onInteraction()
-        },
-    ) {
-        DisplayModeOrderList(settings, onInteraction)
-    }
-}
-
-@StringRes
-private fun dispSectionCaption(mode: MonitorDisplayMode): Int =
-    when (mode) {
-        MonitorDisplayMode.LIVE -> R.string.settings_disp_live_caption
-        MonitorDisplayMode.CLEAN -> R.string.settings_disp_clean_caption
-        MonitorDisplayMode.COMMAND -> R.string.settings_disp_command_caption
-    }
-
-private const val FOUR_COLUMN_DISPLAY_TOGGLE_MIN_WIDTH_DP: Float = 480f
-
-/** Number of switch columns that fit without compressing a label or switch. */
-internal fun displayToggleGridColumnCount(compact: Boolean, availableWidthDp: Float): Int {
-    require(availableWidthDp >= 0f) { "display toggle width must not be negative" }
-    return if (compact || availableWidthDp < FOUR_COLUMN_DISPLAY_TOGGLE_MIN_WIDTH_DP) 2 else 4
-}
-
-private data class DisplayToggleEntry(
-    val title: String,
-    val isOn: Boolean,
-    val onToggle: () -> Unit,
-)
-
-/** Responsive 4-up/2-by-2 switch grid for the narrow post-tab-rail pane. */
-@Composable
-private fun DisplayToggleGrid(
-    compact: Boolean,
-    entries: List<DisplayToggleEntry>,
-    twoColumnOrder: List<Int>? = null,
-) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val columns = displayToggleGridColumnCount(compact, maxWidth.value)
-        val orderedEntries =
-            if (columns == 2 && twoColumnOrder != null) {
-                twoColumnOrder.map(entries::get)
-            } else {
-                entries
-            }
-        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            orderedEntries.chunked(columns).forEach { rowEntries ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    rowEntries.forEach { entry ->
-                        MonitorSettingsDisplayToggle(
-                            entry.title,
-                            isOn = entry.isOn,
-                            modifier = Modifier.weight(1f),
-                            onToggle = entry.onToggle,
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 
