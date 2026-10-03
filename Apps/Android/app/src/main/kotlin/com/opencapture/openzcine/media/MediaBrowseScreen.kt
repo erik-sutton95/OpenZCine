@@ -4,11 +4,18 @@ import com.opencapture.monitorui.MonitorCatalogDisplayControls
 import com.opencapture.monitorui.MonitorCatalogHeader
 import com.opencapture.monitorui.MonitorMediaNavigation
 import com.opencapture.monitorui.MonitorMediaNavigationCategory
+import com.opencapture.monitorui.MonitorMediaFilterForm
+import com.opencapture.monitorui.MonitorMediaFilterChoice
+import com.opencapture.monitorui.MonitorMediaFilterChipLayout
+import com.opencapture.monitorui.MonitorMediaPhotoSizeChoices
+import com.opencapture.monitorui.MonitorMediaDateWindowChoices
+import com.opencapture.monitorui.MonitorMediaStorageChoices
 import com.opencapture.monitorui.MonitorPageHeading
 import com.opencapture.monitorui.MonitorPageScaffold
 import com.opencapture.monitorui.MonitorThumbnailSize
 
 import com.opencapture.openzcine.performOperatorHaptic
+import com.opencapture.openzcine.LocalOperatorHaptics
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -2321,13 +2328,14 @@ private fun RefreshControl(enabled: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun MediaFilterDialog(
+internal fun MediaFilterDialog(
     filters: MediaLibraryFilters,
     options: MediaFilterOptions,
     storageIds: List<Long>,
     onFiltersChanged: (MediaLibraryFilters) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val haptics = LocalOperatorHaptics.current
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
         properties =
@@ -2364,81 +2372,75 @@ private fun MediaFilterDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    if (options.formats.isNotEmpty()) {
-                        FilterSection("FORMAT") {
-                            options.formats.forEach { value ->
-                                FilterChoice(value.title, value in filters.formats) {
-                                    onFiltersChanged(
-                                        filters.copy(formats = filters.formats.toggled(value)),
-                                    )
-                                }
+                    MonitorMediaFilterForm(
+                        formats = options.formats.map(MediaFormatFilter::title),
+                        resolutions = options.resolutions.map(MediaResolutionFilter::title),
+                        colors = emptyList(),
+                        formatSelection = filters.formats.mapTo(linkedSetOf(), MediaFormatFilter::title),
+                        resolutionSelection = filters.resolutions.mapTo(linkedSetOf(), MediaResolutionFilter::title),
+                        colorSelection = emptySet(),
+                        dateStartLabel = null,
+                        dateEndLabel = null,
+                        hasDates = false,
+                        onToggleFormat = { id ->
+                            options.formats.firstOrNull { it.title == id }?.let { value ->
+                                haptics.selection()
+                                onFiltersChanged(filters.copy(formats = filters.formats.toggled(value)))
                             }
-                        }
-                    }
-                    if (options.resolutions.isNotEmpty()) {
-                        FilterSection("RESOLUTION") {
-                            options.resolutions.forEach { value ->
-                                FilterChoice(value.title, value in filters.resolutions) {
-                                    onFiltersChanged(
-                                        filters.copy(
-                                            resolutions = filters.resolutions.toggled(value),
-                                        ),
-                                    )
-                                }
+                        },
+                        onToggleResolution = { id ->
+                            options.resolutions.firstOrNull { it.title == id }?.let { value ->
+                                haptics.selection()
+                                onFiltersChanged(filters.copy(resolutions = filters.resolutions.toggled(value)))
                             }
-                        }
-                    }
-                    if (options.photoSizes.isNotEmpty()) {
-                        FilterSection("SIZE") {
-                            options.photoSizes.forEach { value ->
-                                FilterChoice(value.title, value in filters.photoSizes) {
-                                    onFiltersChanged(
-                                        filters.copy(
-                                            photoSizes = filters.photoSizes.toggled(value),
-                                        ),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    if (options.dateWindows.isNotEmpty()) {
-                        FilterSection("DATE") {
-                            options.dateWindows.forEach { value ->
-                                // The windows nest, so selecting one replaces the other; tapping
-                                // the active one clears it.
-                                FilterChoice(value.title, filters.dateWindow == value) {
-                                    onFiltersChanged(
-                                        filters.copy(
-                                            dateWindow =
-                                                if (filters.dateWindow == value) null else value,
-                                        ),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    if (options.isEmpty && storageIds.isEmpty()) {
-                        Text(
-                            "Nothing in this tab to filter by.",
-                            style = chromeStyle(12f, FontWeight.Normal),
-                            color = LiveDesign.faint,
-                        )
-                    }
-                    if (storageIds.isNotEmpty()) {
-                        FilterSection("STORAGE") {
-                            storageIds.forEachIndexed { index, storageId ->
-                                FilterChoice("SLOT ${index + 1}", filters.storageId == storageId) {
-                                    onFiltersChanged(
-                                        filters.copy(
-                                            storageId =
-                                                if (filters.storageId == storageId) null
-                                                else storageId,
-                                        ),
-                                    )
-                                }
-                            }
-                        }
-                    }
+                        },
+                        onToggleColor = {},
+                        onPickStart = {},
+                        onPickEnd = {},
+                        onClear = { onFiltersChanged(MediaLibraryFilters()) },
+                        photoSizes = options.photoSizes.takeIf { it.isNotEmpty() }?.let { sizes ->
+                            MonitorMediaPhotoSizeChoices(
+                                options = sizes.map { MonitorMediaFilterChoice(it.name, it.title) },
+                                selectedIds = filters.photoSizes.mapTo(linkedSetOf()) { it.name },
+                                onToggle = { id ->
+                                    sizes.firstOrNull { it.name == id }?.let { value ->
+                                        haptics.selection()
+                                        onFiltersChanged(filters.copy(photoSizes = filters.photoSizes.toggled(value)))
+                                    }
+                                },
+                            )
+                        },
+                        dateWindows = options.dateWindows.takeIf { it.isNotEmpty() }?.let { windows ->
+                            MonitorMediaDateWindowChoices(
+                                options = windows.map { MonitorMediaFilterChoice(it.name, it.title) },
+                                selectedId = filters.dateWindow?.name,
+                                onToggle = { id ->
+                                    windows.firstOrNull { it.name == id }?.let { value ->
+                                        haptics.selection()
+                                        onFiltersChanged(
+                                            filters.copy(dateWindow = value.takeUnless { filters.dateWindow == value }),
+                                        )
+                                    }
+                                },
+                            )
+                        },
+                        storage = storageIds.takeIf { it.isNotEmpty() }?.let { slots ->
+                            MonitorMediaStorageChoices(
+                                options = slots.mapIndexed { index, id ->
+                                    MonitorMediaFilterChoice(id.toString(), "SLOT ${index + 1}")
+                                },
+                                selectedId = filters.storageId?.toString(),
+                                onToggle = { id ->
+                                    slots.firstOrNull { it.toString() == id }?.let { storageId ->
+                                        haptics.selection()
+                                        onFiltersChanged(filters.togglingStorageSlot(storageId))
+                                    }
+                                },
+                            )
+                        },
+                        chipLayout = MonitorMediaFilterChipLayout.HORIZONTAL_SCROLL,
+                        showsInlineClear = false,
+                    )
                 }
                 Row(
                     Modifier.fillMaxWidth(),
@@ -2466,35 +2468,6 @@ private fun MediaFilterDialog(
     }
 }
 
-@Composable
-private fun FilterSection(title: String, content: @Composable RowScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = chromeStyle(9f, FontWeight.Bold, mono = true), color = LiveDesign.muted)
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            content = content,
-        )
-    }
-}
-
-@Composable
-private fun FilterChoice(title: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        title,
-        style = chromeStyle(10f, FontWeight.Bold, mono = true),
-        color = if (selected) LiveDesign.accent else LiveDesign.muted,
-        modifier =
-            Modifier.clip(CapsuleShape)
-                .background(if (selected) LiveDesign.accentDim else LiveDesign.background)
-                .border(1.dp, if (selected) LiveDesign.accent else LiveDesign.hairline, CapsuleShape)
-                .semantics {
-                    contentDescription = "$title filter"
-                    role = Role.Checkbox
-                }.chromeClickable(onClick)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-    )
-}
 
 private fun <Value> Set<Value>.toggled(value: Value): Set<Value> =
     toMutableSet().apply { if (!add(value)) remove(value) }

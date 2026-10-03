@@ -901,20 +901,12 @@ struct MediaBrowserView: View {
 
 /// Compact glass filter panel — mirrors live-view `AssistPanel` styling, anchored near the
 /// header Filter button instead of a full-screen sheet.
-private struct MediaFilterPopup: View {
+struct MediaFilterPopup: View {
     @Environment(NativeAppModel.self) private var model
     let onClose: () -> Void
 
-    /// Two chips where they fit, one where they do not. `.adaptive` is SwiftUI's own column
-    /// collapse, so the narrow case needs no width plumbed into the popup. 150 is chosen to stay
-    /// two-up at the full 400pt panel (120 gave three) and to drop to one column only below a
-    /// ~350pt viewport, where two chips no longer hold a usable width.
-    private let filterChipColumns = [GridItem(.adaptive(minimum: 150), spacing: 5)]
-
     var body: some View {
-        GlassPanel(
-            padding: EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
-        ) {
+        GlassPanel(padding: EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label {
@@ -923,123 +915,15 @@ private struct MediaFilterPopup: View {
                         Image(systemName: "line.3.horizontal.decrease")
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .font(.system(size: 12, weight: .bold, design: .default))
+                    .font(.system(size: 12, weight: .bold))
                     .kerning(1)
                     .textCase(.uppercase)
                     .foregroundStyle(LiveDesign.text)
                     Spacer()
                     CloseButton(action: onClose, size: 26)
                 }
-
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        let options = model.mediaFilterOptions
-
-                        if !options.formats.isEmpty {
-                            filterSection(title: "FORMAT") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.formats, id: \.self) { format in
-                                        MediaFilterChip(
-                                            title: format.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaFormatFilters.contains(format)
-                                        ) {
-                                            model.toggleMediaFormatFilter(format)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !options.resolutions.isEmpty {
-                            filterSection(title: "RESOLUTION") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.resolutions, id: \.self) { bucket in
-                                        MediaFilterChip(
-                                            title: bucket.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaResolutionFilters.contains(bucket)
-                                        ) {
-                                            model.toggleMediaResolutionFilter(bucket)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !options.photoSizes.isEmpty {
-                            filterSection(title: "SIZE") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.photoSizes, id: \.self) { size in
-                                        MediaFilterChip(
-                                            title: size.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaPhotoSizeFilters.contains(size)
-                                        ) {
-                                            model.toggleMediaPhotoSizeFilter(size)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !options.dateWindows.isEmpty {
-                            filterSection(title: "DATE") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.dateWindows, id: \.self) { window in
-                                        MediaFilterChip(
-                                            title: window.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaDateWindow == window
-                                        ) {
-                                            model.toggleMediaDateWindow(window)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        let hasStorageSection =
-                            model.mediaBrowserSource == .camera && !model.mediaStorageSlots.isEmpty
-                        if options.isEmpty, !hasStorageSection {
-                            Text("Nothing in this tab to filter by.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(LiveDesign.faint)
-                                .padding(.vertical, 2)
-                        }
-
-                        if hasStorageSection {
-                            filterSection(title: "STORAGE") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(model.mediaStorageSlots) { slot in
-                                        let active = model.mediaStorageSlotFilter == slot.storageID
-                                        MediaFilterChip(
-                                            title: "SLOT \(slot.slotNumber)",
-                                            icon: "sdcard.fill",
-                                            expands: true,
-                                            isActive: active
-                                        ) {
-                                            if active {
-                                                model.mediaStorageSlotFilter = nil
-                                            } else {
-                                                model.mediaStorageSlotFilter = slot.storageID
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if model.mediaActiveFilterCount > 0 {
-                            Button("Clear all filters") {
-                                model.clearMediaFilters()
-                            }
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.accent)
-                            .padding(.top, 2)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    nikonMediaFilterForm(model: model)
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
@@ -1048,56 +932,76 @@ private struct MediaFilterPopup: View {
         .onTapGesture {}
     }
 
-    private func filterSection<Content: View>(
-        title: String, @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(LiveDesign.muted)
-            content()
-        }
-    }
 }
 
-private struct MediaFilterChip: View {
-    let title: String
-    var icon: String? = nil
-    var expands = false
-    let isActive: Bool
-    let action: () -> Void
-
-    private let minHeight: CGFloat = 30
-    private let horizontalPadding: CGFloat = 8
-    private let verticalPadding: CGFloat = 5
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                Text(title)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-            }
-            .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
-            .frame(maxWidth: expands ? .infinity : nil)
-            .frame(minHeight: minHeight)
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
-            .background(
-                isActive ? LiveDesign.accentDim : LiveDesign.glassBright,
-                in: Capsule()
-            )
-            .overlay(
-                Capsule().stroke(
-                    isActive ? LiveDesign.accent.opacity(0.45) : LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
+@MainActor
+func nikonMediaFilterForm(model: NativeAppModel) -> MonitorMediaFilterForm {
+    let options = model.mediaFilterOptions
+    let storageChoices: MonitorMediaStorageChoices?
+    if model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
+        let slots = model.mediaStorageSlots
+        storageChoices = MonitorMediaStorageChoices(
+            options: slots.map {
+                MonitorMediaFilterChoice(id: String($0.storageID), label: "SLOT \($0.slotNumber)")
+            },
+            selectedId: model.mediaStorageSlotFilter.map(String.init),
+            onToggle: { id in
+                guard let slot = slots.first(where: { String($0.storageID) == id }) else { return }
+                model.mediaStorageSlotFilter =
+                    model.mediaStorageSlotFilter == slot.storageID ? nil : slot.storageID
+            })
+    } else {
+        storageChoices = nil
     }
+    return MonitorMediaFilterForm(
+        formats: options.formats.map(\.rawValue),
+        resolutions: options.resolutions.map(\.rawValue),
+        colors: [],
+        formatSelection: Set(model.mediaFormatFilters.map(\.rawValue)),
+        resolutionSelection: Set(model.mediaResolutionFilters.map(\.rawValue)),
+        colorSelection: [], dateStartLabel: nil, dateEndLabel: nil,
+        hasDates: false,
+        onToggleFormat: { id in
+            guard let value = options.formats.first(where: { $0.rawValue == id }) else { return }
+            model.toggleMediaFormatFilter(value)
+        },
+        onToggleResolution: { id in
+            guard let value = options.resolutions.first(where: { $0.rawValue == id }) else {
+                return
+            }
+            model.toggleMediaResolutionFilter(value)
+        },
+        onToggleColor: { _ in }, onPickStart: {}, onPickEnd: {},
+        onClear: model.clearMediaFilters,
+        photoSizes: options.photoSizes.isEmpty
+            ? nil
+            : MonitorMediaPhotoSizeChoices(
+                options: options.photoSizes.map {
+                    MonitorMediaFilterChoice(id: $0.rawValue, label: $0.rawValue)
+                },
+                selectedIds: Set(model.mediaPhotoSizeFilters.map(\.rawValue)),
+                onToggle: { id in
+                    guard let value = options.photoSizes.first(where: { $0.rawValue == id }) else {
+                        return
+                    }
+                    model.toggleMediaPhotoSizeFilter(value)
+                }),
+        dateWindows: options.dateWindows.isEmpty
+            ? nil
+            : MonitorMediaDateWindowChoices(
+                options: options.dateWindows.map {
+                    MonitorMediaFilterChoice(id: $0.rawValue, label: $0.rawValue)
+                },
+                selectedId: model.mediaDateWindow?.rawValue,
+                onToggle: { id in
+                    guard let value = options.dateWindows.first(where: { $0.rawValue == id }) else {
+                        return
+                    }
+                    model.toggleMediaDateWindow(value)
+                }),
+        storage: storageChoices,
+        hasActiveFilters: model.mediaActiveFilterCount > 0
+    )
 }
 
 private struct MediaStorageCard: View {

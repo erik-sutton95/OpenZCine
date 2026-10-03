@@ -15,6 +15,126 @@ import XCTest
 final class RunnerTests: XCTestCase {
 
     @MainActor
+    func testActualMediaFilterAdapterUsesOfferedMetadataAndComposesTypedSelections() throws {
+        // SIMULATED listed metadata, without a camera session or any file/store writes.
+        let model = NativeAppModel()
+        model.connection = .connected
+        model.mediaCategoryTab = .all
+        let today = filterCaptureDate(daysAgo: 0)
+        let old = filterCaptureDate(daysAgo: 90)
+        model.mediaClips = [
+            filterClip("A.MOV", width: 1920, date: today),
+            filterClip("B.MP4", width: 3840, date: old),
+            filterClip("L.JPG", width: 6048, date: today),
+            filterClip("M.TIF", width: 4032, date: old),
+        ]
+        var form = nikonMediaFilterForm(model: model)
+        XCTAssertFalse(form.hasDates)
+        XCTAssertTrue(form.colors.isEmpty)
+        form.onToggleFormat("JPEG")
+        form.onToggleFormat("TIFF")
+        XCTAssertEqual(Set(model.filteredMediaClips.map(\.filename)), ["L.JPG", "M.TIF"])
+        try XCTUnwrap(form.photoSizes).onToggle("L")
+        XCTAssertEqual(model.filteredMediaClips.map(\.filename), ["L.JPG"])
+        try XCTUnwrap(form.photoSizes).onToggle("M")
+        XCTAssertEqual(Set(model.filteredMediaClips.map(\.filename)), ["L.JPG", "M.TIF"])
+        try XCTUnwrap(form.dateWindows).onToggle("TODAY")
+        XCTAssertEqual(model.filteredMediaClips.map(\.filename), ["L.JPG"])
+        try XCTUnwrap(form.dateWindows).onToggle("7 DAYS")
+        XCTAssertEqual(model.mediaDateWindow, .last7Days)
+        try XCTUnwrap(form.dateWindows).onToggle("7 DAYS")
+        XCTAssertNil(model.mediaDateWindow)
+        let selected = model.mediaActiveFilterCount
+        form.onToggleFormat("not-offered")
+        try XCTUnwrap(form.photoSizes).onToggle("not-offered")
+        try XCTUnwrap(form.dateWindows).onToggle("not-offered")
+        XCTAssertEqual(model.mediaActiveFilterCount, selected)
+        XCTAssertEqual(Set(model.filteredMediaClips.map(\.filename)), ["L.JPG", "M.TIF"])
+        model.mediaCategoryTab = .videos
+        XCTAssertTrue(model.mediaFormatFilters.isEmpty)
+        XCTAssertTrue(model.mediaPhotoSizeFilters.isEmpty)
+        form = nikonMediaFilterForm(model: model)
+        XCTAssertNil(form.photoSizes)
+        form.onToggleFormat("MOV")
+        form.onToggleFormat("MP4")
+        form.onToggleResolution("HD")
+        XCTAssertEqual(model.filteredMediaClips.map(\.filename), ["A.MOV"])
+        form.onToggleResolution("4K")
+        XCTAssertEqual(Set(model.filteredMediaClips.map(\.filename)), ["A.MOV", "B.MP4"])
+        // An incoming partial listing must not erase a freshly selected chip.
+        model.mediaClips.removeAll { $0.filename == "A.MOV" }
+        XCTAssertEqual(model.mediaFormatFilters, [.mov, .mp4])
+        XCTAssertEqual(model.mediaResolutionFilters, [.hd, .fourK])
+        form.onClear()
+        XCTAssertEqual(model.mediaActiveFilterCount, 0)
+        XCTAssertEqual(model.mediaCategoryTab, .videos)
+    }
+
+    @MainActor
+    func testActualMediaFilterAdapterPreservesCardIdentityBackupsAndHiddenActiveClear() throws {
+        let model = NativeAppModel()
+        model.connection = .connected
+        model.mediaCategoryTab = .all
+        let first: UInt32 = 0xF001_0001
+        let second: UInt32 = 0xF002_0001
+        model.mediaStorageSlots = [
+            MediaStorageSlotDisplay(
+                storageID: first, slotNumber: 3, cameraName: "SIMULATED", usedGigabytes: 0,
+                freeGigabytes: 1, totalGigabytes: 1),
+            MediaStorageSlotDisplay(
+                storageID: second, slotNumber: 7, cameraName: "SIMULATED", usedGigabytes: 0,
+                freeGigabytes: 1, totalGigabytes: 1),
+        ]
+        var backup = filterClip("BACKUP.MOV", width: 1920, date: filterCaptureDate(daysAgo: 0))
+        backup.storageID = first
+        backup.storageLocations = [
+            MediaObjectHandle(storageID: first, handle: 1),
+            MediaObjectHandle(storageID: second, handle: 2),
+        ]
+        var single = filterClip("PRIMARY.MOV", width: 1920, date: filterCaptureDate(daysAgo: 90))
+        single.storageID = first
+        model.mediaClips = [backup, single]
+        let form = nikonMediaFilterForm(model: model)
+        let storage = try XCTUnwrap(form.storage)
+        XCTAssertEqual(storage.options.map(\.label), ["SLOT 3", "SLOT 7"])
+        storage.onToggle(String(second))
+        XCTAssertEqual(model.mediaStorageSlotFilter, second)
+        XCTAssertEqual(model.filteredMediaClips.map(\.filename), ["BACKUP.MOV"])
+        storage.onToggle("7")
+        XCTAssertEqual(
+            model.mediaStorageSlotFilter, second, "A label/index cannot become a card ID")
+        storage.onToggle(String(first))
+        XCTAssertEqual(
+            Set(model.filteredMediaClips.map(\.filename)), ["BACKUP.MOV", "PRIMARY.MOV"])
+        storage.onToggle(String(first))
+        XCTAssertNil(model.mediaStorageSlotFilter)
+        storage.onToggle(String(second))
+        let sort = model.mediaSortOrder
+        model.mediaBrowserSource = .iPhone
+        let hidden = nikonMediaFilterForm(model: model)
+        XCTAssertNil(hidden.storage)
+        XCTAssertEqual(hidden.hasActiveFilters, true)
+        XCTAssertEqual(model.mediaStorageSlotFilter, second)
+        hidden.onClear()
+        XCTAssertEqual(model.mediaActiveFilterCount, 0)
+        XCTAssertEqual(model.mediaCategoryTab, .all)
+        XCTAssertEqual(model.mediaSortOrder, sort)
+    }
+
+    private func filterCaptureDate(daysAgo: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss"
+        let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
+        return formatter.string(from: date)
+    }
+
+    private func filterClip(_ name: String, width: UInt32, date: String) -> MediaClip {
+        MediaClip(
+            cameraID: "SIMULATED-filter", filename: name, handle: 1, storageID: 65_537,
+            sizeBytes: 1, captureDate: date, pixelWidth: width)
+    }
+
+    @MainActor
     func testCommonZebraUnknownEditorOmitsNativeFieldsWithoutLosingZoneControls() async throws {
         let absent = MonitorZebraNumberZone(
             enabled: .constant(false), entry: nil,
