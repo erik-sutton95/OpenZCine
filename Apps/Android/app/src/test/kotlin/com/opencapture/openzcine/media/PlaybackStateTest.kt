@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** Pure playback policy coverage; Media3 and camera I/O remain outside JVM tests. */
 class PlaybackStateTest {
@@ -251,5 +252,22 @@ class PlaybackStateTest {
         assertEquals(targets + listOf<Double?>(null), visited)
         // With nothing on offer the control cannot select anything.
         assertNull(nextConformTarget(null, emptyList()))
+    }
+
+    @Test
+    fun `conform adapter preserves nullable and nonfinite legacy speed outcomes`() {
+        assertEquals(1.0, conformPreviewSpeed(null, Double.NaN))
+        assertEquals(1.0, conformPreviewSpeed(60.0, null))
+        assertEquals(1.0, conformPreviewSpeed(Double.NaN, 24.0))
+        assertEquals(1.0, conformPreviewSpeed(Double.POSITIVE_INFINITY, 24.0))
+        assertEquals(1.0, conformPreviewSpeed(Double.NEGATIVE_INFINITY, 24.0))
+        assertEquals(1.0, conformPreviewSpeed(0.0, Double.POSITIVE_INFINITY))
+        assertEquals(1.0, conformPreviewSpeed(-60.0, Double.NaN))
+        assertEquals(1.0, conformPreviewSpeed(60.0, Double.NEGATIVE_INFINITY))
+        assertEquals(1.0, conformPreviewSpeed(60.0, -24.0))
+        assertEquals(1.0, conformPreviewSpeed(60.0, 0.0))
+        assertEquals(Double.POSITIVE_INFINITY, conformPreviewSpeed(60.0, Double.POSITIVE_INFINITY))
+        assertTrue(conformPreviewSpeed(60.0, Double.NaN).isNaN())
+        assertEquals(0.4, conformPreviewSpeed(60.0, 24.0), 1e-9)
     }
 }
