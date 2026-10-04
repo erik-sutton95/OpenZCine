@@ -86,6 +86,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.collectAsState
+import com.opencapture.opencine.appkit.*
+import com.opencapture.opencine.media.MediaCatalog
+import kotlin.properties.ReadWriteProperty
+import kotlin.reflect.KProperty
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -492,12 +497,12 @@ internal fun MediaBrowseScreen(
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     /** Bumped when Settings clears the camera media cache so an open gallery reloads. */
     cacheRevision: Int = 0,
+    /** The actual root's canonical index also receives Settings clear/delete mutations. */
+    catalogIndex: MediaLibraryIndex? = null,
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onClose: () -> Unit,
 ) {
-    val catalogOwner = remember(mediaService) { mediaService?.let(::NikonMediaGalleryCatalog) }
-    DisposableEffect(catalogOwner) { onDispose { catalogOwner?.retire() } }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val playbackAssistState =
@@ -511,9 +516,29 @@ internal fun MediaBrowseScreen(
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
         }
     val libraryIndex =
-        remember(context) {
-            MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
+        remember(context, catalogIndex) {
+            catalogIndex ?: MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
         }
+    var library by remember(cameraID, mediaService, offlineCameraIDs, libraryIndex) { mutableStateOf<MonitorMediaLibraryModel<NikonLibraryClip>?>(null) }
+    var libraryCodec by remember(cameraID, mediaService, offlineCameraIDs, libraryIndex) { mutableStateOf<NikonMediaLibraryCodec?>(null) }
+    var librarySourceOwner by remember(cameraID, mediaService, offlineCameraIDs, libraryIndex) { mutableStateOf<com.opencapture.opencine.nikon.NikonMediaService?>(null) }
+    val libraryActions = remember(cameraID, mediaService, offlineCameraIDs, libraryIndex, cacheStore) {
+        NikonMediaLibraryActions(libraryIndex, cacheStore, { library }, { libraryCodec })
+    }
+    var deletionAction by remember(cameraID, mediaService, libraryIndex) {
+        mutableStateOf<NikonMediaLibraryActions.Capture?>(null)
+    }
+    val emptyLibraryState = remember(cameraID) { kotlinx.coroutines.flow.MutableStateFlow(MonitorMediaLibraryState<NikonLibraryClip>()) }
+    val libraryState by (library?.state ?: emptyLibraryState).collectAsState()
+    DisposableEffect(library, mediaService) {
+        val retired = library
+        onDispose {
+            // Retire exact native lease before Compose cancels the inherited cleanup scope.
+            val binding = retired?.binding
+            if (binding != null) mediaService?.retireBrowse(binding)
+            retired?.close()
+        }
+    }
     val galleryGateway =
         remember(context, galleryFailureInjection) {
             AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
@@ -590,8 +615,19 @@ internal fun MediaBrowseScreen(
     var seriesRepresentative by remember { mutableStateOf<MediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var autoPlayHandled by remember { mutableStateOf(false) }
-    var isSelecting by remember { mutableStateOf(false) }
-    var selectedIDs by remember { mutableStateOf(emptySet<String>()) }
+    val selection = NikonMediaLibrarySelection(owner = { library }, observe = { libraryState })
+    var isSelecting by object : ReadWriteProperty<Any?, Boolean> {
+        override fun getValue(thisRef: Any?, property: KProperty<*>): Boolean = selection.selecting
+        override fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
+            selection.selecting = value
+        }
+    }
+    var selectedIDs by object : ReadWriteProperty<Any?, Set<String>> {
+        override fun getValue(thisRef: Any?, property: KProperty<*>): Set<String> = selection.selectedKeys
+        override fun setValue(thisRef: Any?, property: KProperty<*>, value: Set<String>) {
+            selection.selectedKeys = value
+        }
+    }
     var readySelectionIDs by remember { mutableStateOf(emptySet<String>()) }
     var shareInProgress by remember { mutableStateOf(false) }
     var shareMessage by remember { mutableStateOf<String?>(null) }
@@ -652,134 +688,88 @@ internal fun MediaBrowseScreen(
             }
     }
 
-    LaunchedEffect(
-        cameraID,
-        mediaService,
-        offlineCameraIDs,
-        librarySource,
-        effectiveCameraConnected,
-        reloadKey,
-        cacheRevision,
-        pendingDeletion != null,
-    ) {
-        // A deletion owns the camera between the cancelled old listing and the
-        // fresh re-enumeration it schedules; never list mid-deletion.
+    LaunchedEffect(cameraID, mediaService, offlineCameraIDs, librarySource,
+        effectiveCameraConnected, reloadKey, cacheRevision, pendingDeletion != null) {
         if (pendingDeletion != null) return@LaunchedEffect
+        // The old listing retires before local IO can suspend; deletion retires it at request capture.
+        library?.let { previous ->
+            previous.binding?.let { librarySourceOwner?.retireBrowse(it) }
+            previous.close()
+        }
         state = BrowseState.Loading
-        val nextState =
-            when (librarySource) {
-                MediaLibrarySource.CAMERA -> {
-                    browseStorageSlots = null
-                    offlineClipOwners = emptyMap()
-                    if (!effectiveCameraConnected) {
-                        BrowseState.Failed("Reconnect the camera to list media.")
-                    } else if (!SwiftCore.isAvailable) {
-                        BrowseState.Failed("Camera core is not bundled in this build.")
-                    } else {
-                        val listingCheckpoint =
-                            withContext(Dispatchers.IO) {
-                                libraryIndex.beginCameraListing(cameraID)
-                            }
-                        try {
-                            val producer = mediaService ?: throw MediaBrowsePagingException("Camera media source unavailable.")
-                            val owner = catalogOwner ?: throw MediaBrowsePagingException("Camera media source unavailable.")
-                            val browse = owner.open()
-                            val cursor = browse.catalog()
-                            var catalog = com.opencapture.opencine.media.MediaCatalog()
-                            var clips: List<MediaClipRecord> = emptyList()
-                            try {
-                                while (true) {
-                                    val delta = cursor.next() ?: break
-                                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                                    if (!producer.isCurrent(browse.binding)) throw kotlinx.coroutines.CancellationException("Source retired")
-                                    val page = owner.capture(delta, catalog, browse.binding)
-                                    catalog = page.catalog; clips = page.clips
-                                    owner.admit(browse.binding)
-                                    listingCheckpoint.applyPage(page.additions, page.removals)
-                                    browseStorageSlots = producer.storageSlots(browse.binding)
-                                    if (!producer.isCurrent(browse.binding)) throw kotlinx.coroutines.CancellationException("Source retired")
-                                    state = BrowseState.Loaded(clips, isLoadingMore = !delta.complete)
-                                }
-                                owner.admit(browse.binding)
-                                check(catalog.complete) { "Partial source catalog cannot prune the legacy index." }
-                            } finally { cursor.close() }
-                            owner.admit(browse.binding)
-                            withContext(Dispatchers.IO) {
-                                owner.admit(browse.binding)
-                                // The camera answered for every object it holds, so rows it never
-                                // listed are gone from the card — prune them unless a complete
-                                // local copy keeps the clip browsable offline.
-                                listingCheckpoint.commit(prunesUnlistedClips = true) { clip ->
-                                    runCatching {
-                                        cacheStore.completedEntryOrNull(
-                                            cameraID,
-                                            MediaCacheObjectIdentity(clip),
-                                            clip.sizeBytes,
-                                        )
-                                    }.getOrNull() != null
-                                }
-                            }
-                            BrowseState.Loaded(clips)
-                        } catch (error: CancellationException) {
-                            throw error
-                        } catch (error: com.opencapture.opencine.media.MediaServiceException) {
-                            if (error.failure == com.opencapture.opencine.media.MediaServiceFailure.RETIRED) {
-                                throw CancellationException("Camera media source retired", error)
-                            }
-                            withContext(Dispatchers.IO) { listingCheckpoint.commit() }
-                            val partial = (state as? BrowseState.Loaded)?.clips.orEmpty()
-                            incompleteCameraBrowseState(partial)
-                        } catch (_: MediaBrowsePagingException) {
-                            // A partial pass proves nothing about the rows it never reached.
-                            withContext(Dispatchers.IO) { listingCheckpoint.commit() }
-                            val partial = (state as? BrowseState.Loaded)?.clips.orEmpty()
-                            incompleteCameraBrowseState(partial)
-                        }
-                    }
-                }
-                MediaLibrarySource.LOCAL -> {
-                    val (clips, owners) =
-                        withContext(Dispatchers.IO) {
-                            // iOS offline `.camera` spans every per-serial bucket
-                            // and keeps only fully downloaded entries.
-                            val bucketIDs =
-                                offlineCameraIDs.takeIf { it.isNotEmpty() }
-                                    ?: listOf(cameraID)
-                            val nextOwners = linkedMapOf<String, String>()
-                            val nextClips = ArrayList<MediaClipRecord>()
-                            for (bucketID in bucketIDs) {
-                                for (clip in libraryIndex.persistedClips(bucketID)) {
-                                    val complete =
-                                        runCatching {
-                                            cacheStore.completedEntryOrNull(
-                                                bucketID,
-                                                MediaCacheObjectIdentity(clip),
-                                                clip.sizeBytes,
-                                            )
-                                        }.getOrNull()
-                                    if (complete != null) {
-                                        nextOwners[clip.offlineObjectKey()] = bucketID
-                                        nextClips += clip
-                                    }
-                                }
-                            }
-                            nextClips to nextOwners
-                        }
-                    offlineClipOwners = owners
-                    BrowseState.Loaded(clips)
+        val connectedSource = mediaService.takeIf {
+            effectiveCameraConnected && librarySource == MediaLibrarySource.CAMERA && SwiftCore.isAvailable
+        }
+        val buckets = if (librarySource == MediaLibrarySource.LOCAL)
+            offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID) else listOf(cameraID)
+        val initialRows = withContext(Dispatchers.IO) {
+            buckets.flatMap { bucket -> libraryIndex.persistedClips(bucket).map { NikonLibraryClip(bucket, it) } }
+        }
+        var owner = library
+        if (owner == null) {
+            val codec = NikonMediaLibraryCodec(cameraID, connectedSource, cacheStore,
+                favoriteKeys = { buckets.flatMap { libraryIndex.favoriteIDs(it) }.toSet() },
+                hasLocalCopy = { clip -> runCatching {
+                    cacheStore.completedEntryOrNull(cameraID, MediaCacheObjectIdentity(clip), clip.sizeBytes)
+                }.getOrNull() != null })
+            owner = MonitorMediaLibraryModel(
+                cache = MonitorMediaCache(MonitorMediaCacheDirectory(context.noBackupFilesDir.resolve("media-cache")), codec,
+                    eligibility = MonitorMediaOriginalEligibility.ExactSize,
+                    catalogAddress = libraryIndex.catalogByteStore(cameraID).namespace, preservedMetadata = emptyList(),
+                    catalogStore = libraryIndex.catalogByteStore(cameraID)),
+                favoritesStore = NikonLibraryFavorites(libraryIndex, buckets),
+                service = connectedSource, scope = scope,
+                cacheScanning = MonitorMediaCacheScanning.BACKGROUND,
+                catalogPersistence = MonitorMediaCatalogPersistence.LISTING_COMPLETE_OR_NON_CANCEL_FAILURE,
+                initialCatalog = MediaCatalog(), initialRecords = initialRows.map(codec::record),
+                catalogBase = MonitorMediaCatalogBase.FRESH_LISTING)
+            owner.visibility(MonitorMediaLibraryVisibility.ALL_RECORDS)
+            libraryCodec = codec; librarySourceOwner = connectedSource; library = owner
+        } else if (librarySourceOwner !== connectedSource) {
+            // Producer replacement also replaces its pure binding-capture codec.
+            owner.close(); library = null; reloadKey += 1; return@LaunchedEffect
+        }
+        val actual = owner
+        val currentCodec = libraryCodec ?: return@LaunchedEffect
+        actual.applyLocalRecords(MonitorMediaCatalogCapture(resetLibrary = true,
+            upserts = initialRows.map(currentCodec::record),
+            sourceFavoriteKeys = buckets.flatMap { libraryIndex.favoriteIDs(it) }.toSet()), actual.actionToken)
+        if (librarySource == MediaLibrarySource.LOCAL) {
+            val localRows = withContext(Dispatchers.IO) {
+                initialRows.filter { value -> runCatching {
+                    cacheStore.completedEntryOrNull(value.bucket, MediaCacheObjectIdentity(value.clip), value.clip.sizeBytes)
+                }.getOrNull() != null }
+            }
+            val codec = libraryCodec ?: return@LaunchedEffect
+            actual.applyLocalRecords(MonitorMediaCatalogCapture(resetLibrary = true,
+                upserts = localRows.map(codec::record),
+                sourceFavoriteKeys = buckets.flatMap { libraryIndex.favoriteIDs(it) }.toSet()), actual.actionToken)
+            offlineClipOwners = localRows.associate { it.clip.offlineObjectKey() to it.bucket }
+            state = BrowseState.Loaded(localRows.map { it.clip })
+        } else if (connectedSource == null) {
+            state = BrowseState.Failed(if (!effectiveCameraConnected) "Reconnect the camera to list media."
+                else "Camera core is not bundled in this build.")
+        } else {
+            offlineClipOwners = emptyMap(); browseStorageSlots = null
+            libraryCodec?.beginListing()
+            if (actual.state.value.browsing) actual.refresh() else actual.begin()
+            actual.state.collect { snapshot ->
+                val binding = actual.binding
+                if (library !== actual) return@collect
+                val clips = if (binding != null && connectedSource.isCurrent(binding)) {
+                    MediaClips.newestFirst(snapshot.catalog.assets.mapNotNull { asset ->
+                        connectedSource.mediaCatalogRecord(asset.id, binding)?.clip
+                    })
+                } else emptyList()
+                if (binding != null) browseStorageSlots = connectedSource.storageSlots(binding)
+                state = if (snapshot.fetching && snapshot.catalogPageCount == 0) BrowseState.Loading
+                    else if (snapshot.note != null && !snapshot.fetching) incompleteCameraBrowseState(clips)
+                    else BrowseState.Loaded(clips, isLoadingMore = snapshot.fetching)
+                if (autoPlayFirstProxy && !autoPlayHandled && !snapshot.fetching) {
+                    autoPlayHandled = true
+                    playingClip = clips.firstOrNull { it.contentKind == MediaContentKind.PLAYABLE_PROXY }
                 }
             }
-        state = nextState
-        if (
-            autoPlayFirstProxy &&
-                !autoPlayHandled &&
-                nextState is BrowseState.Loaded
-        ) {
-            autoPlayHandled = true
-            playingClip =
-                nextState.clips.firstOrNull {
-                    it.contentKind == MediaContentKind.PLAYABLE_PROXY
-                }
         }
     }
 
@@ -790,40 +780,28 @@ internal fun MediaBrowseScreen(
     // restarts the listing so the fresh enumeration confirms the deletions.
     LaunchedEffect(pendingDeletion) {
         val targets = pendingDeletion ?: return@LaunchedEffect
-        // A still viewer closed by this deletion may leave its transfer draining; the blocking
-        // stop joins the pump so the card never sees a delete interleaved with reads of the same
-        // object. The grid holds steady (the listing stays cancelled) — one progress bar covers
-        // the run and it refreshes once at the end.
+        val action = deletionAction ?: return@LaunchedEffect
+        // The existing stop joins the native pump before the first admitted delete.
         withContext(Dispatchers.IO) {
             if (SwiftCore.isAvailable) connectionOwner?.let(NikonNative::sessionStopMediaTransfer)
         }
-        deletionProgress = 0 to targets.size
-        targets.forEachIndexed { index, clip ->
-            withContext(Dispatchers.IO) {
-                // Protected objects are refused by the body and stay listed; their caches stay
-                // too so the row remains fully backed.
-                if (
-                    SwiftCore.isAvailable &&
-                        connectionOwner != null &&
-                        NikonNative.sessionDeleteObject(connectionOwner, clip.handle.toInt())
-                ) {
-                    val owner = ownerCameraID(clip)
-                    runCatching {
-                        cacheStore.purgeEntry(owner, MediaCacheObjectIdentity(clip))
-                    }
-                    libraryIndex.purgeClip(owner, clip)
+        if (action.isCurrent) deletionProgress = 0 to targets.size
+        action.deleteBatch(targets.map { NikonLibraryClip(ownerCameraID(it), it) },
+            deleteObject = { value ->
+                withContext(Dispatchers.IO) {
+                    SwiftCore.isAvailable && connectionOwner != null &&
+                        NikonNative.sessionDeleteObject(connectionOwner, value.clip.handle.toInt())
                 }
-            }
-            deletionProgress = (index + 1) to targets.size
-        }
+            }, onProgress = { completed, total -> deletionProgress = completed to total })
+        if (!action.isCurrent || deletionAction !== action) return@LaunchedEffect
         deletionProgress = null
-        favorites =
-            withContext(Dispatchers.IO) {
-                val ids = offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
-                ids.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
-            }
+        favorites = withContext(Dispatchers.IO) {
+            val ids = offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
+            ids.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+        }
+        if (!action.isCurrent || deletionAction !== action) return@LaunchedEffect
         exitSelection()
-        pendingDeletion = null
+        pendingDeletion = null; deletionAction = null
     }
 
     fun requestDeletion(selection: List<MediaClipRecord>) {
@@ -832,7 +810,14 @@ internal fun MediaBrowseScreen(
         deleteConfirmTargets = null
         viewingPhoto = null
         deletionSelectedCount = selection.size
-        pendingDeletion = cameraDeletionTargets(catalog, selection, ::ownerCameraID)
+        val targets = cameraDeletionTargets(catalog, selection, ::ownerCameraID)
+        deletionAction = libraryActions.beginDeletion(targets.map { NikonLibraryClip(ownerCameraID(it), it) }) {
+            library?.let { owner ->
+                owner.binding?.let { librarySourceOwner?.retireBrowse(it) }
+                owner.close()
+            }
+        }
+        pendingDeletion = targets
     }
 
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
@@ -852,109 +837,34 @@ internal fun MediaBrowseScreen(
             )
         if (retained != filters) filters = retained
     }
-    // Filtering ends in a sortedWith that lowercases every filename per comparison, so it must not
-    // re-run on unrelated recompositions (a selection tap used to pay for a full re-sort).
-    val displayedClips =
-        remember(
-            loadedClips,
-            options.category,
-            favorites,
-            cameraID,
-            options.sortOrder,
-            filters,
-            offlineClipOwners,
-        ) {
-            MediaLibraryFiltering.displayed(
-                clips = loadedClips,
-                category = options.category,
-                favoriteIDs = favorites,
-                cameraID = cameraID,
-                sortOrder = options.sortOrder,
-                filters = filters,
-                libraryKey = ::clipKey,
-                ownerOf = ::ownerCameraID,
-            )
+    // A captured neutral pass supplies options, sorted survivors and grid representatives together.
+    val projection = remember(loadedClips, options.category, favorites, cameraID,
+        options.sortOrder, filters, offlineClipOwners, libraryState.records) {
+        val actualIDs = libraryState.records.associate {
+            it.payload.clip.libraryKey(it.payload.bucket) to it.asset.id
         }
-    // The chips the popup may offer, derived from the category's own listing before any chip is
-    // applied — so a category never advertises a value its media cannot match.
-    val filterOptions =
-        remember(loadedClips, options.category, favorites, cameraID, offlineClipOwners) {
-            MediaFilterDerivation.options(
-                MediaLibraryFiltering.categoryScoped(
-                    clips = loadedClips,
-                    category = options.category,
-                    favoriteIDs = favorites,
-                    cameraID = cameraID,
-                    libraryKey = ::clipKey,
-                ),
-            )
-        }
+        NikonAppGalleryProjection(loadedClips, actualIDs, options.category, favorites,
+            cameraID, options.sortOrder, filters, libraryKey = ::clipKey, ownerOf = ::ownerCameraID)
+    }
+    val displayedClips = projection.displayedClips
+    val filterOptions = projection.filterOptions
     // Only an operator navigation prunes, never a discovery batch: chips derived from a listing
     // that is still streaming in must not clear a selection the operator just made.
     LaunchedEffect(options.category, librarySource) {
         val retained = filters.retainingOfferedChips(filterOptions)
         if (retained != filters) filters = retained
     }
-    // One key pass over the library, reused by every lookup below. Rebuilding this per call was
-    // the other half of the multiselect stall.
-    val clipsByKey = remember(displayedClips) { displayedClips.associateBy(::clipKey) }
-    // Collapse continuous-drive runs into one representative cell per series (iOS
-    // filteredMediaClips burst step). Grouping runs on the displayed set, so an offline pass
-    // groups only cached frames; the series view reaches the hidden members.
-    val burstSeries =
-        remember(displayedClips) {
-            BurstSeriesGrouping.group(displayedClips.map { it.burstFrame(ownerCameraID(it)) })
-        }
-    val burstByRepresentative =
-        remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
-    val hiddenBurstIDs =
-        remember(burstSeries) { burstSeries.flatMapTo(hashSetOf()) { it.memberIDs.drop(1) } }
-    val gridClips =
-        remember(displayedClips, hiddenBurstIDs) {
-            if (hiddenBurstIDs.isEmpty()) displayedClips
-            else displayedClips.filter { clipKey(it) !in hiddenBurstIDs }
-        }
-    fun burstMembers(representative: MediaClipRecord): List<MediaClipRecord> {
-        val series = burstByRepresentative[clipKey(representative)] ?: return emptyList()
-        return series.memberIDs.mapNotNull { clipsByKey[it] }
-    }
-    // A grid burst cell stands for its whole series (iOS `burstExpanded`): expand each selected
-    // representative to every member so a multiselect delete/share acts on the whole set, not
-    // just the representative. Non-series clips pass through; deduped, order preserved.
-    fun burstExpanded(clips: List<MediaClipRecord>): List<MediaClipRecord> {
-        if (clips.isEmpty()) return clips
-        val byID = clipsByKey
-        val seen = HashSet<String>()
-        val result = ArrayList<MediaClipRecord>(clips.size)
-        for (clip in clips) {
-            val members =
-                burstByRepresentative[clipKey(clip)]?.memberIDs?.mapNotNull { byID[it] }
-                    ?.takeIf { it.isNotEmpty() } ?: listOf(clip)
-            for (member in members) if (seen.add(clipKey(member))) result.add(member)
-        }
-        return result
-    }
-    // Pair lookups scan the unfiltered catalog so the RAW side survives tab
-    // and chip filters (iOS `rawSibling(of:)`).
-    val rawStillPairKeys =
-        remember(loadedClips, offlineClipOwners) {
-            loadedClips.mapNotNullTo(hashSetOf()) { clip ->
-                if (clip.isRawStill) clip.rawPairKey(ownerCameraID(clip)) else null
-            }
-        }
-    fun hasRawSibling(clip: MediaClipRecord): Boolean =
-        clip.isJpegStill && clip.rawPairKey(ownerCameraID(clip)) in rawStillPairKeys
-    val selectedClips =
-        remember(clipsByKey, selectedIDs) {
-            displayedClips.filter { clip -> clipKey(clip) in selectedIDs }
-        }
-    // Delete/share act on the whole burst series behind a selected representative (iOS
-    // `burstExpanded`); the selection COUNT stays on the representatives, mirroring iOS.
-    val selectedSeriesClips =
-        remember(clipsByKey, selectedClips, burstByRepresentative) {
-            burstExpanded(selectedClips)
-        }
-    val visibleIDs = clipsByKey.keys
+    val gridClips = projection.gridClips
+    val burstSeries = projection.legacyGroups
+    val burstByRepresentative = remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
+    fun burstMembers(representative: MediaClipRecord): List<MediaClipRecord> =
+        projection.members(representative, ::clipKey)
+    fun burstExpanded(clips: List<MediaClipRecord>): List<MediaClipRecord> =
+        projection.expanded(clips, ::clipKey)
+    fun hasRawSibling(clip: MediaClipRecord): Boolean = projection.hasRawSibling(clip, ::clipKey)
+    val selectedClips = projection.selected(selectedIDs)
+    val selectedSeriesClips = projection.expanded(selectedClips, ::clipKey)
+    val visibleIDs = projection.visibleKeys
 
     LaunchedEffect(visibleIDs) {
         val retained = MediaLibrarySelection.retainVisible(selectedIDs, visibleIDs)
@@ -1006,12 +916,14 @@ internal fun MediaBrowseScreen(
 
     fun toggleFavorite(clip: MediaClipRecord) {
         val owner = ownerCameraID(clip)
-        val updated = libraryIndex.toggleFavorite(owner, clip)
-        favorites = mergedFavorites(updated)
+        val value = NikonLibraryClip(owner, clip)
+        val action = libraryActions.capture(listOf(value))
+        val updated = action.toggleFavorite(value)
+        if (updated != null && action.isCurrent) favorites = mergedFavorites(updated)
         // Heart and camera star are one signal (Favorites reads the set that star writes fill):
         // agree the body's rating with the heart when connected. Best-effort — an offline clip
         // keeps only the local flag. [verify-on-HW]
-        val nowFavorite = clip.libraryKey(owner) in updated
+        val nowFavorite = action.favoriteTarget(value)
         val ratingOwner = connectionOwner
         if (
             effectiveCameraConnected && SwiftCore.isAvailable && clip.handle != 0L && ratingOwner != null
@@ -1030,10 +942,11 @@ internal fun MediaBrowseScreen(
 
     // Mirrors a camera star write (viewer/player, seed-read or set) into the local favorite set
     // so the Favorites tab surfaces rated shots. iOS `mirrorRatingIntoIndex`.
-    fun mirrorRating(clip: MediaClipRecord, stars: Int) {
-        val owner = ownerCameraID(clip)
-        favorites = mergedFavorites(libraryIndex.setFavorite(owner, clip, stars >= 1))
+    fun captureRatingCompletion(clip: MediaClipRecord): NikonMediaRatingCompletion {
+        val value = NikonLibraryClip(ownerCameraID(clip), clip)
+        return libraryActions.captureRatingCompletion(value) { favorites = mergedFavorites(it) }
     }
+    fun mirrorRating(clip: MediaClipRecord, stars: Int) { captureRatingCompletion(clip).mirror(stars) }
 
     fun open(clip: MediaClipRecord) {
         // A burst representative opens the series view (its other frames are hidden in the grid).
@@ -1421,7 +1334,7 @@ internal fun MediaBrowseScreen(
         if (frameioController.isInternetHopActive) {
             withContext(NonCancellable) { frameioController.endInternetHop() }
         }
-        catalogOwner?.close()
+        library?.close()
         onClose()
     }
     BackHandler(enabled = playingClip == null && viewingPhoto == null) {
@@ -1665,6 +1578,7 @@ internal fun MediaBrowseScreen(
                     onDelete = { requestDeletion(listOf(clip)) },
                     onDeleteAll = { if (members.isNotEmpty()) deleteConfirmTargets = members },
                     onRatingMirrored = ::mirrorRating,
+                    onCaptureRatingCompletion = ::captureRatingCompletion,
                     onRatingDiagnostic = onRatingDiagnostic,
                     onResolvedObjectSize = { resolvedClip, resolvedSize ->
                         libraryIndex.rememberResolvedObjectSize(
@@ -1727,6 +1641,7 @@ internal fun MediaBrowseScreen(
                 mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                 onToggleFavorite = ::toggleFavorite,
                 onRatingMirrored = ::mirrorRating,
+                    onCaptureRatingCompletion = ::captureRatingCompletion,
                 onRatingDiagnostic = onRatingDiagnostic,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
@@ -1756,6 +1671,7 @@ internal fun MediaBrowseScreen(
                     deleteConfirmationMessage(loadedClips, listOf(clip), ::ownerCameraID),
                 onDelete = { requestDeletion(listOf(clip)) },
                 onRatingMirrored = ::mirrorRating,
+                    onCaptureRatingCompletion = ::captureRatingCompletion,
                 onRatingDiagnostic = onRatingDiagnostic,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(

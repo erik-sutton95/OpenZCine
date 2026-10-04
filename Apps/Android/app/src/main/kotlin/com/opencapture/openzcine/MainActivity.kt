@@ -896,6 +896,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     MediaBrowseScreen(
+                        catalogIndex = mediaLibraryIndex,
                         cameraID = primary?.cameraID ?: "offline-all-cameras",
                         cameraConnected = false,
                         cameraSessionAvailable = false,
@@ -1607,6 +1608,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 MonitorOverlay.MEDIA ->
                                     MediaBrowseScreen(
+                                        catalogIndex = mediaLibraryIndex,
                                         cameraID = cameraID,
                                         mediaService = shellSessions.media(active, multicam.lentMember(active)?.control ?: shellSessions.acquire(active)),
                                         cameraConnected =

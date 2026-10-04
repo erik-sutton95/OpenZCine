@@ -88,26 +88,8 @@ internal enum class MediaDateWindowFilter(val title: String, val dayCount: Long)
     LAST_30_DAYS("30 DAYS", 30),
     ;
 
-    /**
-     * True when a PTP `YYYYMMDDThhmmss` capture date falls inside the window. Future-dated
-     * captures (a body with a skewed clock) fall outside every window.
-     */
-    fun contains(captureDate: String, today: LocalDate): Boolean {
-        val day = captureDay(captureDate) ?: return false
-        return !day.isAfter(today) && !day.isBefore(today.minusDays(dayCount - 1))
-    }
-
-    private companion object {
-        fun captureDay(captureDate: String): LocalDate? {
-            val token = captureDate.take(8)
-            if (token.length != 8 || !token.all { it in '0'..'9' }) return null
-            return try {
-                LocalDate.parse(token, DateTimeFormatter.BASIC_ISO_DATE)
-            } catch (_: DateTimeParseException) {
-                null
-            }
-        }
-    }
+    fun contains(captureDate: String, today: LocalDate): Boolean =
+        com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.windowContains(captureDate, dayCount, today)
 }
 
 /** Camera-scoped filters composed with AND semantics across filter groups. */
@@ -226,6 +208,32 @@ internal data class MediaLibraryCameraBucket(
  */
 internal class MediaLibraryIndex(private val preferences: MediaLibraryPreferences) {
     private val persistenceLock = Any()
+    private var catalogGeneration = 0L
+
+    /** Actual preference byte authority, including reread/encode/commit under the original lock. */
+    fun catalogByteStore(cameraID: String): com.opencapture.opencine.appkit.MonitorMediaCatalogByteStore =
+        object : com.opencapture.opencine.appkit.MonitorMediaCatalogByteStore {
+            override val namespace: String = indexKey(cameraID)
+            override val generation: Long get() = synchronized(persistenceLock) { catalogGeneration }
+            override fun read(): ByteArray? = synchronized(persistenceLock) {
+                preferences.getString(indexKey(cameraID))?.toByteArray(Charsets.UTF_8)
+            }
+            override fun write(bytes: ByteArray, ifCurrent: () -> Boolean) = synchronized(persistenceLock) {
+                check(ifCurrent()) { "Catalog retired" }
+                preferences.putString(indexKey(cameraID), bytes.toString(Charsets.UTF_8))
+                rememberIndexedCameraLocked(cameraID)
+            }
+            override fun update(ifCurrent: () -> Boolean, encode: (ByteArray?) -> ByteArray?) = synchronized(persistenceLock) {
+                check(ifCurrent()) { "Catalog retired" }
+                val current = preferences.getString(indexKey(cameraID))?.toByteArray(Charsets.UTF_8)
+                val bytes = encode(current) ?: return@synchronized
+                check(ifCurrent()) { "Catalog retired" }
+                preferences.putString(indexKey(cameraID), bytes.toString(Charsets.UTF_8))
+                rememberIndexedCameraLocked(cameraID)
+            }
+        }
+
+
 
     /**
      * Applies and commits one bounded listing delta. Multi-page callers should
@@ -291,6 +299,20 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         rememberCameraListing(cameraID, listOf(clip.copy(sizeBytes = resolvedSizeBytes)))
     }
 
+    /** Canonical action result admission shares the actual index lock; no native work runs here. */
+    fun mutateCapturedAction(cameraID: String, clip: MediaClipRecord, observed: MediaClipRecord?,
+        generation: Long, ifCurrent: () -> Boolean, mutate: () -> Unit): Boolean = synchronized(persistenceLock) {
+        if (catalogGeneration != generation || !ifCurrent()) return@synchronized false
+        val current = persistedClipsLocked(cameraID).firstOrNull { it.libraryKey(cameraID) == clip.libraryKey(cameraID) }
+        if (observed == null) {
+            if (current != null && !sameNikonActionContent(clip, current)) return@synchronized false
+        } else {
+            if (current == null || !sameNikonActionContent(observed, current)) return@synchronized false
+        }
+        mutate()
+        true
+    }
+
     /** Returns only records previously received from the shared-core listing wire. */
     fun persistedClips(cameraID: String): List<MediaClipRecord> =
         synchronized(persistenceLock) { persistedClipsLocked(cameraID) }
@@ -302,6 +324,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      */
     fun clearCameraCatalogs() {
         synchronized(persistenceLock) {
+            catalogGeneration += 1
             indexedCameraIDsLocked().forEach { cameraID ->
                 preferences.putString(indexKey(cameraID), null)
             }
@@ -315,17 +338,19 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      * downloaded copy does not keep the row alive). Cache artifacts are the
      * [MediaCacheStore]'s side of the purge.
      */
-    fun purgeClip(cameraID: String, clip: MediaClipRecord) {
+    fun purgeClip(cameraID: String, clip: MediaClipRecord, ifCurrent: () -> Boolean = { true }) {
         val identity = clip.libraryKey(cameraID)
         synchronized(persistenceLock) {
+            if (!ifCurrent()) return
             val remaining = persistedClipsLocked(cameraID).filter { it.libraryKey(cameraID) != identity }
             preferences.putString(
                 indexKey(cameraID),
                 MediaLibraryRecordCodec.encode(remaining).takeIf { remaining.isNotEmpty() },
             )
         }
+        if (!ifCurrent()) return
         val favorites = favoriteIDs(cameraID)
-        if (identity in favorites) {
+        if (identity in favorites && ifCurrent()) {
             preferences.putString(
                 favoritesKey(cameraID),
                 (favorites - identity).sorted().joinToString(separator = "\n").ifEmpty { null },
@@ -559,241 +584,57 @@ internal class MediaLibraryListingCheckpoint(
     }
 }
 
-/** Pure category filtering and ordering based on the shared core's action wire. */
+/** Legacy source callers delegate to the same captured neutral projection owner as the gallery. */
 internal object MediaLibraryFiltering {
-    /**
-     * The active category's listing before any chip filter (iOS `mediaCategoryTabClips`). The
-     * filter popup derives its chips from exactly this, so a category is only ever offered values
-     * its own media can match.
-     */
-    fun categoryScoped(
-        clips: List<MediaClipRecord>,
-        category: MediaLibraryCategory,
-        favoriteIDs: Set<String>,
-        cameraID: String,
-        libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
-    ): List<MediaClipRecord> =
-        when (category) {
-            MediaLibraryCategory.ALL -> clips
-            MediaLibraryCategory.VIDEOS ->
-                clips.filter {
-                    it.contentKind == MediaContentKind.PLAYABLE_PROXY ||
-                        it.contentKind == MediaContentKind.R3D_MASTER
-                }
-            MediaLibraryCategory.PHOTOS ->
-                clips.filter { it.contentKind == MediaContentKind.STILL_PHOTO }
-            MediaLibraryCategory.FAVORITES ->
-                clips.filter { libraryKey(it) in favoriteIDs }
-        }
-
-    fun displayed(
-        clips: List<MediaClipRecord>,
-        category: MediaLibraryCategory,
-        favoriteIDs: Set<String>,
-        cameraID: String,
-        sortOrder: MediaLibrarySortOrder,
-        filters: MediaLibraryFilters = MediaLibraryFilters(),
-        today: LocalDate = LocalDate.now(),
-        /** Offline multi-camera libraries resolve favorites with the owning bucket. */
-        libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
-        /** Offline multi-camera libraries pair RAW+JPEG within the owning bucket. */
-        ownerOf: (MediaClipRecord) -> String = { _ -> cameraID },
-    ): List<MediaClipRecord> {
-        val scoped = categoryScoped(clips, category, favoriteIDs, cameraID, libraryKey)
-        var filtered = scoped
-        if (filters.formats.isNotEmpty()) {
-            filtered = filtered.filter { clip -> clip.formatFilter() in filters.formats }
-        }
-        if (filters.resolutions.isNotEmpty()) {
-            filtered = filtered.filter { clip -> clip.resolutionFilter() in filters.resolutions }
-        }
-        if (filters.photoSizes.isNotEmpty()) {
-            val stillWidths = scoped.stillPixelWidths()
-            filtered =
-                filtered.filter { clip ->
-                    clip.photoSizeFilter(stillWidths) in filters.photoSizes
-                }
-        }
-        filters.dateWindow?.let { window ->
-            filtered = filtered.filter { clip -> window.contains(clip.captureDate, today) }
-        }
-        filters.storageId?.let { selectedStorage ->
-            filtered = filtered.filter { clip -> clip.storageId == selectedStorage }
-        }
-        // One item per RAW+JPEG pair: the JPEG carries the still (badge +
-        // viewer toggle), the same-shot RAW never renders its own cell. Keyed
-        // on the filter survivors so an offline pass can still surface a
-        // cached NEF whose JPEG side was filtered away (iOS `displayedClips`).
-        val jpegPairKeys =
-            filtered.mapNotNullTo(hashSetOf()) { clip ->
-                if (clip.isJpegStill) clip.rawPairKey(ownerOf(clip)) else null
-            }
-        filtered =
-            filtered.filterNot { clip ->
-                clip.isRawStill && clip.rawPairKey(ownerOf(clip)) in jpegPairKeys
-            }
-        return sort(filtered, sortOrder)
-    }
-
-    fun sort(
-        clips: List<MediaClipRecord>,
-        sortOrder: MediaLibrarySortOrder,
-    ): List<MediaClipRecord> =
-        when (sortOrder) {
-            MediaLibrarySortOrder.NEWEST ->
-                clips.sortedWith(
-                    compareByDescending<MediaClipRecord> { it.captureDate.ifEmpty { it.filename } }
-                        .thenByDescending { it.filename.lowercase(Locale.US) },
-                )
-            MediaLibrarySortOrder.OLDEST ->
-                clips.sortedWith(
-                    compareBy<MediaClipRecord> { it.captureDate.ifEmpty { it.filename } }
-                        .thenBy { it.filename.lowercase(Locale.US) },
-                )
-            MediaLibrarySortOrder.NAME ->
-                clips.sortedBy { it.filename.lowercase(Locale.US) }
-        }
+    fun categoryScoped(clips: List<MediaClipRecord>, category: MediaLibraryCategory,
+        favoriteIDs: Set<String>, cameraID: String,
+        libraryKey: (MediaClipRecord) -> String = { it.libraryKey(cameraID) }): List<MediaClipRecord> =
+        NikonAppGalleryProjection(clips, emptyMap(), category, favoriteIDs, cameraID,
+            MediaLibrarySortOrder.NEWEST, libraryKey = libraryKey).categoryClips
+    fun displayed(clips: List<MediaClipRecord>, category: MediaLibraryCategory,
+        favoriteIDs: Set<String>, cameraID: String, sortOrder: MediaLibrarySortOrder,
+        filters: MediaLibraryFilters = MediaLibraryFilters(), today: LocalDate = LocalDate.now(),
+        libraryKey: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
+        ownerOf: (MediaClipRecord) -> String = { cameraID }): List<MediaClipRecord> =
+        NikonAppGalleryProjection(clips, emptyMap(), category, favoriteIDs, cameraID,
+            sortOrder, filters, today, libraryKey, ownerOf).displayedClips
+    fun sort(clips: List<MediaClipRecord>, sortOrder: MediaLibrarySortOrder): List<MediaClipRecord> =
+        NikonAppGalleryProjection.sorted(clips, sortOrder)
 }
 
-/**
- * The FORMAT chip one listed object belongs to.
- *
- * Stills decode the shared core's `formatLabel` straight off the listing wire, so which
- * extensions count as HEIF or NEF stays a Swift-only decision. Only the two video containers are
- * named from the extension, and that is the same `codecLabel` the grid badge already renders.
- */
+/** Legacy metadata helpers map pure Nikon-owned facts into existing UI values. */
 internal fun MediaClipRecord.formatFilter(): MediaFormatFilter? =
-    stillPhoto?.let { still ->
-        MediaFormatFilter.entries.firstOrNull { it.title == still.formatLabel }
+    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.formatKey(this)?.let { key ->
+        MediaFormatFilter.entries.firstOrNull { it.title == key }
     }
-        ?: when (codecLabel) {
-            "MOV", "M4V" -> MediaFormatFilter.MOV
-            "MP4" -> MediaFormatFilter.MP4
-            else -> null
-        }
-
-/** Full-image widths of the stills in a listing, the domain L/M/S is ranked against. */
 internal fun List<MediaClipRecord>.stillPixelWidths(): List<Int> =
-    filter { it.contentKind == MediaContentKind.STILL_PHOTO }.map { it.pixelWidth }
-
-/**
- * Ranks this still's width among the widths present, widest first (core
- * `MediaPhotoSizeClass.rank`). Null for videos and for a still whose dimensions the camera never
- * reported, so an unknown size is left unclassified rather than guessed at — and null for *every*
- * still once the listing holds more than three distinct widths. Nikon's image size is a
- * three-way, so a wider spread is not an L/M/S shoot (a mixed FX and DX-crop card, say); ranking
- * it anyway would strand the fourth size behind chips claiming to cover everything, so the SIZE
- * row drops out entirely instead.
- */
-internal fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? {
-    if (contentKind != MediaContentKind.STILL_PHOTO || pixelWidth <= 0) return null
-    val ranked = presentWidths.filter { it > 0 }.distinct().sortedDescending()
-    if (ranked.size > MediaPhotoSizeFilter.entries.size) return null
-    val index = ranked.indexOf(pixelWidth)
-    if (index < 0) return null
-    return MediaPhotoSizeFilter.entries.getOrNull(index)
-}
-
-/** The chips a filter popup may offer — the Kotlin mirror of the core's `MediaFilterOptions`. */
+    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.stillWidths(this)
+internal fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? =
+    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.photoSizeKey(this, presentWidths)?.let { key ->
+        MediaPhotoSizeFilter.entries.firstOrNull { it.title == key }
+    }
 internal data class MediaFilterOptions(
     val formats: List<MediaFormatFilter> = emptyList(),
     val resolutions: List<MediaResolutionFilter> = emptyList(),
     val photoSizes: List<MediaPhotoSizeFilter> = emptyList(),
     val dateWindows: List<MediaDateWindowFilter> = emptyList(),
 ) {
-    val isEmpty: Boolean
-        get() =
-            formats.isEmpty() &&
-                resolutions.isEmpty() &&
-                photoSizes.isEmpty() &&
-                dateWindows.isEmpty()
+    val isEmpty get() = formats.isEmpty() && resolutions.isEmpty() && photoSizes.isEmpty() && dateWindows.isEmpty()
 }
-
-/**
- * Derives the browser's filter chips from the listing the operator is actually looking at — the
- * Kotlin mirror of the core's `MediaFilterDerivation`.
- *
- * One rule governs every row: a chip is offered only when it matches at least one listed object
- * and excludes at least one. A chip matching nothing is dead (the Photos tab used to offer MOV,
- * MP4, and 6K, none of which a still can be), and a chip matching everything filters nothing.
- * Deriving is also what keeps the two media kinds apart: resolution buckets are classified for
- * videos only and L/M/S for stills only, so Photos produces no RESOLUTION row and Videos no SIZE
- * row without either being told which category it is.
- */
 internal object MediaFilterDerivation {
-    private fun <T> partitioning(
-        candidates: List<T>,
-        itemCount: Int,
-        matchCount: (T) -> Int,
-    ): List<T> {
-        if (itemCount <= 0) return emptyList()
-        return candidates.filter { candidate ->
-            val matched = matchCount(candidate)
-            matched > 0 && matched < itemCount
-        }
-    }
-
-    fun options(
-        clips: List<MediaClipRecord>,
-        today: LocalDate = LocalDate.now(),
-    ): MediaFilterOptions {
-        if (clips.isEmpty()) return MediaFilterOptions()
-        val count = clips.size
-        val formats = clips.map { it.formatFilter() }
-        val stillWidths = clips.stillPixelWidths()
-        val sizes = clips.map { it.photoSizeFilter(stillWidths) }
-        // Resolution buckets describe video frame sizes; a still's rank belongs in the SIZE row.
-        val buckets =
-            clips.map { clip ->
-                if (clip.contentKind == MediaContentKind.STILL_PHOTO) null
-                else clip.resolutionFilter()
-            }
+    fun options(clips: List<MediaClipRecord>, today: LocalDate = LocalDate.now()): MediaFilterOptions {
+        val offered = com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.offered(clips, today)
         return MediaFilterOptions(
-            formats =
-                partitioning(MediaFormatFilter.entries, count) { chip ->
-                    formats.count { it == chip }
-                },
-            resolutions =
-                partitioning(MediaResolutionFilter.entries, count) { bucket ->
-                    buckets.count { it == bucket }
-                },
-            photoSizes =
-                partitioning(MediaPhotoSizeFilter.entries, count) { size ->
-                    sizes.count { it == size }
-                },
-            dateWindows =
-                partitioning(MediaDateWindowFilter.entries, count) { window ->
-                    clips.count { window.contains(it.captureDate, today) }
-                },
-        )
+            offered.formats.mapNotNull { key -> MediaFormatFilter.entries.firstOrNull { it.title == key } },
+            offered.resolutions.mapNotNull { key -> MediaResolutionFilter.entries.firstOrNull { it.title == key } },
+            offered.photoSizes.mapNotNull { key -> MediaPhotoSizeFilter.entries.firstOrNull { it.title == key } },
+            offered.dateWindows.mapNotNull { key -> MediaDateWindowFilter.entries.firstOrNull { it.title == key } })
     }
 }
-
-/** Resolution filtering follows shared source, proxy, then filename precedence. */
 internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
-    resolutionFilter(sourcePixelWidth)
-        ?: resolutionFilter(pixelWidth)
-        ?: resolutionFilter(filename)
-
-private fun resolutionFilter(pixelWidth: Int): MediaResolutionFilter? =
-    when (pixelWidth) {
-        in 6_000..Int.MAX_VALUE -> MediaResolutionFilter.SIX_K
-        in 5_300..<6_000 -> MediaResolutionFilter.FIVE_FOUR_K
-        in 3_500..<5_300 -> MediaResolutionFilter.FOUR_K
-        in 1_000..<3_500 -> MediaResolutionFilter.HD
-        else -> null
+    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.resolutionKey(this)?.let { key ->
+        MediaResolutionFilter.entries.firstOrNull { it.title == key }
     }
-
-private fun resolutionFilter(filename: String): MediaResolutionFilter? {
-    val upper = filename.uppercase(Locale.US)
-    return when {
-        upper.contains("6K") -> MediaResolutionFilter.SIX_K
-        upper.contains("5.4K") || upper.contains("54K") -> MediaResolutionFilter.FIVE_FOUR_K
-        upper.contains("4K") || upper.contains("UHD") -> MediaResolutionFilter.FOUR_K
-        upper.contains("HD") || upper.contains("1080") -> MediaResolutionFilter.HD
-        else -> null
-    }
-}
 
 /** Pure set updates used by long-press, tap, and sweep selection. */
 internal object MediaLibrarySelection {
@@ -845,7 +686,7 @@ internal fun MediaClipRecord.offlineObjectKey(): String =
     listOf(storageId.toString(), handle.toString(), captureDate, filename)
         .joinToString(separator = "\u0000")
 
-private fun MediaObjectIdentity.libraryKey(cameraID: String): String =
+internal fun MediaObjectIdentity.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageID, handle, captureDate, filename)
 
 private fun mediaLibraryKey(
@@ -860,7 +701,7 @@ private fun mediaLibraryKey(
             .joinToString(separator = "\u0000"),
     )
 
-private fun mergeAuthoritativeObjectSize(
+internal fun mergeAuthoritativeObjectSize(
     existing: MediaClipRecord?,
     incoming: MediaClipRecord,
 ): MediaClipRecord =
@@ -1054,4 +895,20 @@ private fun computeDigest(value: String): String {
             append(hex[unsigned and 0x0F])
         }
     }
+}
+
+/** Pure access to the exact legacy Base64/binary codec; no preference or registry side effects. */
+internal fun decodeMediaLibraryCatalogBytes(bytes: ByteArray): List<MediaClipRecord> =
+    MediaLibraryRecordCodec.decode(bytes.toString(Charsets.UTF_8))
+internal fun encodeMediaLibraryCatalogBytes(clips: List<MediaClipRecord>): ByteArray =
+    MediaLibraryRecordCodec.encode(clips).toByteArray(Charsets.UTF_8)
+
+/** Same legacy cache identity; unknown size may strengthen, conflicting known bytes retire. */
+internal fun sameNikonActionContent(old: MediaClipRecord, current: MediaClipRecord): Boolean {
+    if (old.filename != current.filename || old.storageId != current.storageId || old.handle != current.handle) return false
+    if (old.captureDate.isNotEmpty() && current.captureDate.isNotEmpty() && old.captureDate != current.captureDate) return false
+    if (old.sizeBytes > 0 && current.sizeBytes > 0 &&
+        old.sizeBytes != PTP_UINT32_SENTINEL && current.sizeBytes != PTP_UINT32_SENTINEL &&
+        old.sizeBytes != current.sizeBytes) return false
+    return true
 }

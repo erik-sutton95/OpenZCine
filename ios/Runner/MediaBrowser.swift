@@ -219,8 +219,14 @@ struct MediaBrowserView: View {
     /// Transient explanation shown when a proxy-less R3D master is tapped.
     @State private var masterNotice: String?
     @State private var masterNoticeDismissTask: Task<Void, Never>?
-    @State private var isSelecting = false
-    @State private var selectedClipIDs: Set<String> = []
+    private var isSelecting: Bool {
+        get { model.mediaSelectionIsSelecting }
+        nonmutating set { model.mediaSelectionIsSelecting = newValue }
+    }
+    private var selectedClipIDs: Set<String> {
+        get { model.mediaSelectedClipIDs }
+        nonmutating set { model.mediaSelectedClipIDs = newValue }
+    }
     @State private var isBatchDeleteConfirmPresented = false
     @State private var selectionState = MonitorMediaSelectionState()
     /// Set by the post-hop share resume: the player opens with its share popup already on this

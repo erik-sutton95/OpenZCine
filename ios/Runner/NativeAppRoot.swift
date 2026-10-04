@@ -2302,10 +2302,12 @@ final class NativeAppModel {
 
     init(
         liveViewGuideStore: LiveViewGuideStore = LiveViewGuideStore(),
-        lutFileStore: LUTFileStore = LUTFileStore()
+        lutFileStore: LUTFileStore = LUTFileStore(),
+        mediaClipStore: MediaClipStore = MediaClipStore()
     ) {
         self.liveViewGuideStore = liveViewGuideStore
         self.lutFileStore = lutFileStore
+        self.mediaClipStore = mediaClipStore
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -2332,14 +2334,44 @@ final class NativeAppModel {
     var customLUTs: [StoredLUT] = []
     var redLUTs: [StoredLUT] = []
     /// On-disk cache + index for camera clips (Media page), and the current library list.
-    let mediaClipStore = MediaClipStore()
-    var mediaClips: [MediaClip] = []
-    /// Burst-series lookup keyed by representative clip id, refreshed as a side effect of
-    /// `filteredMediaClips` (the grid renders one cell per series; the series view reaches the rest).
-    @ObservationIgnored private(set) var burstByRepresentative: [String: BurstSeries] = [:]
-    var mediaFetchInProgress = false
+    let mediaClipStore: MediaClipStore
+    private var unopenedMediaRows: [MediaClip] = []
+    private(set) var mediaLibrary: MonitorMediaLibraryModel<MediaClip>?
+    @ObservationIgnored private var mediaLibraryCodec: NikonMediaLibraryCodec?
+    @ObservationIgnored private var mediaLibraryBytes: NikonMediaLibraryByteStore?
+    @ObservationIgnored private var mediaLibraryBucket: String?
+    @ObservationIgnored private var mediaActionStoreGeneration: UInt64 = 0
+    var mediaClips: [MediaClip] {
+        get { mediaLibrary?.records.map(\.payload) ?? unopenedMediaRows }
+        set {
+            guard let owner = mediaLibrary, let codec = mediaLibraryCodec else {
+                unopenedMediaRows = newValue; return
+            }
+            let token = owner.actionToken
+            do {
+                let records = try newValue.map(codec.record)
+                try owner.applyLocalRecords(.init(resetLibrary: true, upserts: records,
+                    sourceFavoriteKeys: Set(newValue.filter(\.isFavorite).map(\.id))), token: token)
+            } catch { /* A retired gallery cannot replace its successor's local metadata. */ }
+        }
+    }
+    var mediaSelectionIsSelecting: Bool {
+        get { mediaLibrary?.selecting ?? false }
+        set { mediaLibrary?.selecting = newValue }
+    }
+    var mediaSelectedClipIDs: Set<String> {
+        get { Set(mediaLibrary?.records.filter { mediaLibrary?.selectedIDs.contains($0.asset.id) == true }
+            .map { $0.payload.id } ?? []) }
+        set {
+            guard let owner = mediaLibrary else { return }
+            owner.selectedIDs = Set(owner.records.filter { newValue.contains($0.payload.id) }.map { $0.asset.id })
+        }
+    }
+    /// The last grid pass owns its admitted group IDs; current payload lookup preserves native actions.
+    @ObservationIgnored private var mediaProjectionSnapshot: NikonAppGalleryProjection?
+    var mediaFetchInProgress: Bool { mediaLibrary?.fetching ?? false }
     /// Movie clips discovered so far during an in-flight `fetchClipsFromCamera` listing pass.
-    var mediaFetchListedCount = 0
+    var mediaFetchListedCount: Int { mediaFetchInProgress ? mediaProducer?.service.listedCount ?? 0 : 0 }
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
     var mediaDownloadProgress: [String: Double] = [:]
     @ObservationIgnored private var mediaDownloadInFlight: Set<String> = []
@@ -2349,12 +2381,8 @@ final class NativeAppModel {
     /// Clips whose fetched thumbnail bytes failed to decode this session — skipped by
     /// `fetchThumbnail` so a body that serves garbage for a clip isn't re-queried every scroll.
     @ObservationIgnored private var thumblessClipIDs: Set<String> = []
-    @ObservationIgnored private var mediaFetchTask: Task<Void, Never>?
     /// Debounced re-list while the gallery is open and the body is still writing objects.
     @ObservationIgnored private var galleryRelistTask: Task<Void, Never>?
-    /// Bumped per listing pass so a cancelled pass finishing late can't clear a successor's state
-    /// or write an older snapshot into a cleared index.
-    @ObservationIgnored private var mediaFetchGeneration = 0
     /// Tab the last listing pass that ran to completion (not cancelled) was scoped to, nil when
     /// none has. Lets the tab `didSet` skip redundant re-lists; cleared whenever a fresh pass is
     /// scheduled (browser open, source correction, foreground resume) and on session teardown.
@@ -4464,11 +4492,10 @@ final class NativeAppModel {
         didSet { if oldValue !== cameraSession { retireMediaProducer() } }
     }
     @ObservationIgnored private var mediaProducer: (io: NikonMediaCatalogAdapter, service: NikonMediaService)?
-    @ObservationIgnored private var mediaBrowse: (any CameraMediaBrowse)?
 
     private func retireMediaProducer() {
-        mediaProducer?.service.retire(); mediaProducer = nil; mediaBrowse = nil
-        mediaFetchTask?.cancel(); mediaFetchTask = nil; mediaFetchGeneration += 1
+        mediaLibrary?.bind(nil); mediaLibrary?.close(); mediaLibraryBytes?.retire()
+        mediaProducer?.service.retire(); mediaProducer = nil
     }
     private func currentMediaService() -> NikonMediaService? {
         guard let native = cameraSession, let common = controlSession, isConnected else { return nil }
@@ -4491,9 +4518,66 @@ final class NativeAppModel {
     }
     private func closeMediaBrowse() {
         mediaProducer?.service.cancelCatalog()
-        mediaFetchTask?.cancel(); mediaFetchTask = nil; mediaFetchGeneration += 1
-        let retired = mediaBrowse; mediaBrowse = nil
-        if let retired { Task { await retired.close() } }
+        mediaLibrary?.close()
+    }
+
+    private func prepareMediaLibrary(rows: [MediaClip], bucket: String, service: NikonMediaService?) {
+        if let owner = mediaLibrary, mediaLibraryBucket == bucket, mediaLibraryCodec?.service === service {
+            mediaClips = rows
+            return
+        }
+        mediaLibrary?.close(); mediaLibraryBytes?.retire()
+        let codec = NikonMediaLibraryCodec(store: mediaClipStore, bucket: bucket, service: service) { [weak self] in
+            self?.isClipDownloaded($0) == true
+        }
+        let bytes = NikonMediaLibraryByteStore(store: mediaClipStore, bucket: bucket) { [weak self] in
+            self?.mediaLibraryBucket == bucket && self?.mediaLibraryCodec === codec
+        }
+        mediaLibraryCodec = codec; mediaLibraryBytes = bytes; mediaLibraryBucket = bucket
+        let cache = MonitorMediaCache(directory: .init(root: mediaClipStore.root), codec: codec,
+            eligibility: .minimumFraction(numerator: 1, denominator: 1),
+            catalogAddress: mediaClipStore.directory(for: bucket).lastPathComponent + "/index.json",
+            preservedMetadata: [], catalogStore: bytes)
+        let favorites = NikonMediaLibraryFavorites(store: mediaClipStore,
+            buckets: Array(Set(rows.map(\.cameraID) + [bucket])))
+        let owner = MonitorMediaLibraryModel(cache: cache, favorites: favorites, service: service,
+            cacheScanning: .background, catalogBase: .freshListing,
+            initialCatalog: .init(), initialRecords: (try? rows.map(codec.record)) ?? [])
+        owner.visibility = .allRecords
+        mediaLibrary = owner
+    }
+
+    func captureMediaLibraryAction(_ clips: [MediaClip]) -> NikonMediaLibraryAction? {
+        let owner = mediaLibrary, bytes = mediaLibraryBytes
+        let codec = mediaLibraryCodec ?? NikonMediaLibraryCodec(store: mediaClipStore,
+            bucket: clips.first?.cameraID ?? mediaBucketID, service: nil, downloaded: { _ in false })
+        let root = mediaClipStore.root.absoluteString
+        let generation = mediaActionStoreGeneration, connection = connectionGeneration
+        return NikonMediaLibraryAction(owner: owner, store: mediaClipStore, codec: codec, bytes: bytes,
+            clips: clips) { [weak self] in
+                guard let self else { return false }
+                return self.mediaLibrary === owner && self.mediaLibraryBytes === bytes
+                    && self.mediaClipStore.root.absoluteString == root
+                    && self.mediaActionStoreGeneration == generation && self.connectionGeneration == connection
+            }
+    }
+
+    /// Native callers and deterministic tests use the same delayed result/persistence completion.
+    func performCapturedMediaRating(for clip: MediaClip, operation: () async -> Int?) async -> Int? {
+        await performCapturedMediaRating(for: clip, action: captureMediaLibraryAction([clip]), operation: operation)
+    }
+
+    private func performCapturedMediaRating(for clip: MediaClip, action: NikonMediaLibraryAction?,
+        operation: () async -> Int?) async -> Int? {
+        guard let stars = await operation() else { return nil }
+        if let action {
+            guard action.canMutate(clip) else { return stars }
+            mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+                $0.starRating = stars; $0.isFavorite = stars >= 1
+            }
+            action.publish()
+        } else { mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars) }
+        return stars
     }
 
     /// User-facing label for the live session's physical link ("Wi-Fi" / "USB-C"), or nil when no
@@ -4529,9 +4613,6 @@ final class NativeAppModel {
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
-    /// Single-flight poll of the camera's Nikon event queue (`GetEventEx`) — the channel a
-    /// body-fired capture surfaces on.
-    @ObservationIgnored private var deviceEventPollTask: Task<Void, Never>?
     /// Debounces the body-fired capture sync so a burst's many ObjectAdded events trigger one
     /// instant playback, not one per frame.
     @ObservationIgnored private var lastBodyCaptureSyncAt: Date?
@@ -6749,8 +6830,6 @@ final class NativeAppModel {
         linkHealthUpdateTask = nil
         propertyPollTask?.cancel()
         propertyPollTask = nil
-        deviceEventPollTask?.cancel()
-        deviceEventPollTask = nil
         pendingWriteDrainTask?.cancel()
         pendingWriteDrainTask = nil
         // Media traffic must not outlive the session: an in-flight clip stream or thumbnail sweep
@@ -6758,8 +6837,7 @@ final class NativeAppModel {
         // the next session tries to establish.
         cancelClipStream()
         mediaProducer?.service.cancelCatalog()
-        mediaFetchTask?.cancel()
-        mediaFetchTask = nil
+        mediaLibrary?.close()
         galleryRelistTask?.cancel()
         galleryRelistTask = nil
         cancelThumbnailWork(resumingWaiters: true)
@@ -7467,17 +7545,22 @@ final class NativeAppModel {
         // kept (the next open resumes); an interrupted listing re-schedules on foreground; the
         // thumbnail queue is preserved so the worker picks it back up.
         cancelClipStream()
-        if mediaFetchTask != nil {
-            mediaProducer?.service.cancelCatalog()
-        mediaFetchTask?.cancel()
-            mediaFetchTask = nil
-            mediaFetchInterruptedByBackground = true
-        }
+        pauseMediaListingForBackground()
         cancelThumbnailWork(resumingWaiters: false)
         // Best-effort: also tell the camera to drop live view (saves its battery/thermal). Tracked so
         // a quick foreground return waits for it before restarting; iOS may suspend us before it
         // completes, which is harmless.
         backgroundStopTask = Task { await session.stopLiveView() }
+    }
+
+    /// Pauses both an admitted cursor and an open request that has not returned a binding yet.
+    @discardableResult func pauseMediaListingForBackground() -> Bool {
+        guard let owner = mediaLibrary,
+            owner.fetching || (owner.browsing && owner.binding == nil) else { return false }
+        mediaProducer?.service.cancelCatalog()
+        owner.close()
+        mediaFetchInterruptedByBackground = true
+        return true
     }
 
     /// Restores activity when the app returns to the foreground: re-warms the command channel and
@@ -7693,18 +7776,10 @@ final class NativeAppModel {
         // stride turned into a visible periodic hitch (see `LiveViewPollPacing`).
         let framePeriodMilliseconds = 1000 / max(1, Double(cameraPropertySnapshot.fps ?? 30))
         let measuredRoundTrip = session.readLastCommandRoundTripMilliseconds()
-        let eventPollStride = LiveViewPollPacing.eventPollStride(
-            roundTripMilliseconds: measuredRoundTrip,
-            framePeriodMilliseconds: framePeriodMilliseconds)
-        if frameCounter.isMultiple(of: eventPollStride), deviceEventPollTask == nil {
-            deviceEventPollTask = Task { [weak self] in
-                defer { self?.deviceEventPollTask = nil }
-                guard let self, self.cameraSession === session else { return }
-                let events = await session.pollDeviceEvents()
-                for event in events {
-                    self.handlePolledDeviceEvent(event, session: session)
-                }
-            }
+        monitorRuntime?.pollDeviceEventsAtSafePoint(frameCounter: frameCounter,
+            framePeriodMilliseconds: framePeriodMilliseconds, roundTripMilliseconds: measuredRoundTrip) { [weak self] event in
+            guard let self, self.cameraSession === session else { return }
+            self.handlePolledDeviceEvent(event, session: session)
         }
         // A pending camera-announced change jumps the background cadence — the operator's own hand
         // on the body should not wait out a poll interval sized for idle round-robin. The stride
@@ -10374,31 +10449,41 @@ final class NativeAppModel {
     /// shot's own row deletes every card it lives on. Protected objects are refused by the body
     /// and stay listed. Returns the number of items actually removed. [verify-on-HW]
     func deleteMediaClips(_ clips: [MediaClip]) async -> Int {
+        await deleteMediaClips(clips, deleteLocation: nil)
+    }
+
+    func deleteMediaClips(_ clips: [MediaClip],
+        deleteLocation: ((MediaObjectHandle) async -> Bool)?) async -> Int {
         // A camera list enumerated before the deletions would re-add the rows when it
         // lands — cancel it up front and re-list fresh once the deletions are done.
         mediaProducer?.service.cancelCatalog()
-        mediaFetchTask?.cancel()
-        mediaFetchTask = nil
+        mediaLibrary?.close()
         let targets = deletionPlan(for: clips).targets
+        let action = captureMediaLibraryAction(targets)
         // Drive a progress bar and hold the grid steady during the run: mutating the in-memory
         // list per item made the grid jump/reflow on every delete. The store is purged as we go
         // (so a mid-run failure still frees the card), but the visible `mediaClips` list is left
         // untouched until the single `refreshMediaClips()` below rebuilds it from the store.
         mediaDeletionProgress = MediaDeletionProgress(
             completed: 0, total: targets.count, selectedCount: clips.count)
-        defer { mediaDeletionProgress = nil }
+        defer { if action?.isCurrent != false { mediaDeletionProgress = nil } }
         var deleted = 0
         for clip in targets {
             let doomed = clip.allLocations
             if !doomed.isEmpty {
-                guard let session = cameraSession else { continue }
+                let session = cameraSession
+                guard session != nil || deleteLocation != nil else { continue }
                 // Backup mode: one shot is a distinct object on EACH card — delete every
                 // copy, not just the primary. [verify-on-HW: cross-card handle delete]
                 var survivors: [MediaObjectHandle] = []
-                for location in doomed
-                where (try? await session.deleteObject(handle: location.handle)) == nil {
-                    survivors.append(location)
+                for location in doomed {
+                    let removed: Bool
+                    if let deleteLocation { removed = await deleteLocation(location) }
+                    else if let session { removed = (try? await session.deleteObject(handle: location.handle)) != nil }
+                    else { removed = false }
+                    if !removed { survivors.append(location) }
                 }
+                guard action?.canMutate(clip) != false else { continue }
                 mediaDeletionProgress?.completed += 1
                 if !survivors.isEmpty {
                     // The body refused a copy (protected object) — the row lives on with
@@ -10412,6 +10497,7 @@ final class NativeAppModel {
                     continue
                 }
             } else {
+                guard action?.canMutate(clip) != false else { continue }
                 mediaDeletionProgress?.completed += 1
             }
             // Purge every trace the list scan could resurrect an item from: cached
@@ -10422,11 +10508,12 @@ final class NativeAppModel {
         }
         // One grid update for the whole batch — rebuilds the visible list from the now-purged
         // store instead of reflowing per item.
-        refreshMediaClips()
-        // The card's object set changed under the instant-review baseline — reseed it,
-        // and re-enumerate so the fresh listing confirms the deletions.
-        seedInstantReviewBaseline()
-        if isConnected { scheduleFetchClipsFromCamera() }
+        if let action { action.publish() } else { refreshMediaClips() }
+        // A retired batch cannot relist or clean up its successor's state.
+        if action?.isCurrent != false {
+            seedInstantReviewBaseline()
+            if isConnected { scheduleFetchClipsFromCamera() }
+        }
         return deleted
     }
 
@@ -10454,10 +10541,10 @@ final class NativeAppModel {
     /// self-corrects against the body (truth) on viewer open — no per-cell round-trip needed.
     func mediaStarRating(for clip: MediaClip) async -> Int? {
         guard let handle = clip.handle, let session = cameraSession else { return nil }
-        guard let value = try? await session.objectRating(handle: handle) else { return nil }
-        let stars = StillCapturePolicy.stars(fromRatingValue: value)
-        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars)
-        return stars
+        return await performCapturedMediaRating(for: clip) {
+            guard let value = try? await session.objectRating(handle: handle) else { return nil }
+            return StillCapturePolicy.stars(fromRatingValue: value)
+        }
     }
 
     /// Writes a 0–5 star rating to the clip and confirms it with a readback; a RAW+JPEG pair
@@ -10466,6 +10553,11 @@ final class NativeAppModel {
     /// response code — instead of a silent rollback. The index mirror lands ONLY on a confirmed
     /// write, so a refused write never leaves a Favorites ghost the card doesn't have. [verify-on-HW]
     func setMediaStarRating(_ stars: Int, for clip: MediaClip) async -> RatingWriteOutcome {
+        await setMediaStarRating(stars, for: clip, action: captureMediaLibraryAction([clip]))
+    }
+
+    private func setMediaStarRating(_ stars: Int, for clip: MediaClip,
+        action: NikonMediaLibraryAction?) async -> RatingWriteOutcome {
         guard let handle = clip.handle, let session = cameraSession else { return .offline }
         AppDiagnostics.shared.record(.ratingWriteAttempted)
         let value = StillCapturePolicy.ratingValue(forStars: stars)
@@ -10479,7 +10571,14 @@ final class NativeAppModel {
         }
         // Confirm via readback and mirror ONLY the confirmed value onto the JPEG-side row.
         let confirmed = await confirmedStars(session: session, handle: handle, requested: stars)
-        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: confirmed)
+        if let action {
+            if action.canMutate(clip) {
+                mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+                    $0.starRating = confirmed; $0.isFavorite = confirmed >= 1
+                }
+                action.publish()
+            }
+        } else { mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: confirmed) }
         AppDiagnostics.shared.record(.ratingWriteConfirmed)
         return .confirmed(confirmed)
     }
@@ -13436,132 +13535,25 @@ extension NativeAppModel {
         mediaClips
     }
 
-    /// The active tab's listing before any popup chip is applied — what the filter popup derives
-    /// its chips from, so a tab is only ever offered values its own media can match.
-    var mediaCategoryTabClips: [MediaClip] {
-        let clips = mediaBrowserSourceClips
-        let proxyStems = MediaClipFilename.playableProxyStems(in: clips.map(\.filename))
-        let visible = clips.filter {
-            MediaClipFilename.shouldShowInMediaBrowser(
-                filename: $0.filename,
-                playableProxyStems: proxyStems)
-        }
-
-        switch mediaCategoryTab {
-        case .all: return visible
-        case .videos: return visible.filter { MediaClipFilename.isPlayableProxy($0.filename) }
-        case .photos: return visible.filter { MediaClipFilename.isPhoto($0.filename) }
-        case .favorites:
-            // Local heart OR any camera star — shots rated during the shoot count as favorites.
-            return visible.filter(\.isFavorited)
-        }
-    }
-
-    /// The chips the filter popup may offer for the active tab, derived from the listing itself.
-    var mediaFilterOptions: MediaFilterOptions {
-        MediaFilterDerivation.options(for: mediaCategoryTabClips.map(\.filterItem))
-    }
-
-    /// Tab + chip filters composed with AND semantics (format/resolution chips OR within type).
+    /// The category and chip options come from the same captured neutral projection pass.
+    var mediaCategoryTabClips: [MediaClip] { mediaProjectionPass.categoryClips }
+    var mediaFilterOptions: MediaFilterOptions { mediaProjectionPass.filterOptions }
     var filteredMediaClips: [MediaClip] {
-        var clips = mediaCategoryTabClips
-
-        if !mediaFormatFilters.isEmpty {
-            clips = clips.filter { clip in
-                mediaFormatFilters.contains { $0.matches(clip) }
-            }
-        }
-
-        if !mediaResolutionFilters.isEmpty {
-            clips = clips.filter { clip in
-                guard let bucket = clip.resolutionBucket else { return false }
-                return mediaResolutionFilters.contains(bucket)
-            }
-        }
-
-        if !mediaPhotoSizeFilters.isEmpty {
-            let stillWidths = mediaCategoryTabClips.compactMap { clip -> UInt32? in
-                clip.mediaKind == .photo ? clip.pixelWidth : nil
-            }
-            clips = clips.filter { clip in
-                guard clip.mediaKind == .photo, let width = clip.pixelWidth,
-                    let size = MediaPhotoSizeClass.rank(pixelWidth: width, among: stillWidths)
-                else { return false }
-                return mediaPhotoSizeFilters.contains(size)
-            }
-        }
-
-        if let window = mediaDateWindow {
-            clips = clips.filter { window.contains(ptpCaptureDate: $0.captureDate) }
-        }
-
-        if let slot = mediaStorageSlotFilter {
-            // A backup-mode shot lives on BOTH cards as one row with two locations — it must
-            // appear under either slot chip, not just its primary's.
-            clips = clips.filter { $0.isOn(storageID: slot) }
-        }
-
-        if !isConnected {
-            clips = clips.filter { isClipDownloaded($0) }
-        }
-
-        // One item per RAW+JPEG pair: the JPEG carries the still (badge + viewer toggle), the
-        // same-shot RAW never renders its own cell. Keyed on the survivors so an offline pass can
-        // still surface a cached NEF whose JPEG side was filtered away.
-        let jpegPairKeys = Set(clips.lazy.filter(\.isJPEGPhoto).map(\.rawPairKey))
-        clips = clips.filter { !($0.isRawPhoto && jpegPairKeys.contains($0.rawPairKey)) }
-
-        // Collapse continuous-drive runs: render one representative cell per burst series and hide
-        // the other frames (the series view reaches them). Grouping runs on the displayed set, so
-        // an offline pass groups only cached frames. ponytail: computed once per list pass here and
-        // stashed for the grid's O(1) badge/series lookups — @ObservationIgnored, so no re-render.
-        let series = BurstSeriesGrouping.group(clips.map(\.burstFrame))
-        var byRepresentative: [String: BurstSeries] = [:]
-        var hiddenMemberIDs: Set<String> = []
-        for run in series {
-            byRepresentative[run.representativeID] = run
-            hiddenMemberIDs.formUnion(run.memberIDs.dropFirst())
-        }
-        burstByRepresentative = byRepresentative
-        if !hiddenMemberIDs.isEmpty {
-            clips = clips.filter { !hiddenMemberIDs.contains($0.id) }
-        }
-
-        return MediaClipSorting.sort(clips, order: mediaSortOrder)
+        let pass = mediaProjectionPass
+        mediaProjectionSnapshot = pass
+        return pass.gridClips
     }
-
-    /// The burst series a representative clip stands for (nil for ordinary cells).
-    func burstSeries(for clip: MediaClip) -> BurstSeries? { burstByRepresentative[clip.id] }
-
-    /// The frames in a clip's burst series (representative first); empty when it isn't a series.
+    func burstSeries(for clip: MediaClip) -> BurstSeries? { mediaProjectionSnapshot?.series(for: clip) }
     func burstMembers(of clip: MediaClip) -> [MediaClip] {
-        guard let series = burstByRepresentative[clip.id] else { return [] }
-        let byID = Dictionary(
-            mediaClips.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return series.memberIDs.compactMap { byID[$0] }
+        mediaProjectionSnapshot?.members(of: clip, current: mediaClips) ?? []
     }
-
-    /// Expands any burst representative in `clips` to its full series — a grid burst cell stands
-    /// for every frame it collapses, so a multiselect delete/share must act on the whole series,
-    /// not just the representative. Non-series clips pass through; deduped, order preserved.
     func burstExpanded(_ clips: [MediaClip]) -> [MediaClip] {
-        var seen = Set<String>()
-        var result: [MediaClip] = []
-        for clip in clips {
-            let members = burstMembers(of: clip)
-            for member in (members.isEmpty ? [clip] : members)
-            where seen.insert(member.id).inserted {
-                result.append(member)
-            }
-        }
-        return result
+        mediaProjectionSnapshot?.expanded(clips, current: mediaClips)
+            ?? NikonAppGalleryProjection.ungroupedExpanded(clips)
     }
-
-    /// The same-shot `.NEF`/`.NRW`/`.DNG` behind a JPEG's grid item (nil for unpaired stills).
-    /// Scans the unfiltered bucket list so the pair survives tab and chip filters.
+    /// Unfiltered source pairing remains separate from visible grid representatives.
     func rawSibling(of clip: MediaClip) -> MediaClip? {
-        guard clip.isJPEGPhoto else { return nil }
-        return mediaClips.first { $0.isRawPhoto && $0.rawPairKey == clip.rawPairKey }
+        NikonAppGalleryProjection.rawSibling(of: clip, in: mediaClips)
     }
 
     /// On-disk cache size for the active browser source bucket.
@@ -13658,37 +13650,28 @@ extension NativeAppModel {
 
     /// Reloads the library list from the on-disk cache + index for the active browser bucket.
     func refreshMediaClips() {
-        if !isConnected {
-            switch mediaBrowserSource {
-            case .camera:
-                // Offline camera browsing spans every per-serial bucket; `filteredMediaClips`
-                // keeps only fully downloaded entries.
-                mediaClips = mediaClipStore.listAllCachedClips()
-            case .iPhone:
-                mediaClips = mediaClipStore.list(cameraID: MediaClipStore.localBucketID)
-            }
-            return
-        }
-        let bucket =
-            mediaBrowserSource == .camera ? mediaBucketID : MediaClipStore.localBucketID
-        mediaClips = mediaClipStore.list(cameraID: bucket)
+        let bucket = mediaBrowserSource == .camera ? mediaBucketID : MediaClipStore.localBucketID
+        let rows: [MediaClip]
+        if !isConnected, mediaBrowserSource == .camera { rows = mediaClipStore.listAllCachedClips() }
+        else { rows = mediaClipStore.list(cameraID: bucket) }
+        prepareMediaLibrary(rows: rows, bucket: bucket,
+            service: isConnected && mediaBrowserSource == .camera ? currentMediaService() : nil)
     }
 
     /// Cancels any in-flight listing pass and starts a fresh camera discovery.
     /// `identityProbeBudget` caps how many reused handles are `GetObjectInfo`'d to
     /// catch a formatted card that recycled PTP handles (#296).
     func scheduleFetchClipsFromCamera(identityProbeBudget: Int = 8) {
-        guard currentMediaService() != nil else { return }
-        mediaProducer?.service.cancelCatalog()
-        mediaFetchTask?.cancel()
-        // Coverage re-arms only when the new pass runs to completion — until then a tab
-        // switch must fall back to scheduling (see `mediaCategoryTab.didSet`).
-        mediaFetchGeneration += 1
-        let generation = mediaFetchGeneration
-        mediaFetchTask = Task {
-            await fetchClipsFromCamera(
-                generation: generation, identityProbeBudget: identityProbeBudget)
-        }
+        guard let service = currentMediaService() else { return }
+        let bucket = mediaBucketID
+        let cached = mediaClipStore.list(cameraID: bucket)
+        service.configure(.init(cached: NikonMediaCatalogAdapter.records(cached),
+            pairing: NikonMediaCatalogAdapter.pairingRecords(cached),
+            category: mediaCategoryTab.nikonMediaCategory, identityProbeBudget: identityProbeBudget,
+            retainedLocalFilenames: Set(cached.filter { self.isClipDownloaded($0) }.map(\.filename))))
+        prepareMediaLibrary(rows: cached, bucket: bucket, service: service)
+        guard let owner = mediaLibrary else { return }
+        if owner.browsing { owner.refresh() } else { owner.begin() }
     }
 
     /// Operator Refresh: probe every reused handle so a recycled PTP generation cannot
@@ -13707,9 +13690,6 @@ extension NativeAppModel {
         }
     }
 
-    private func mediaFetchIsCurrent(_ generation: Int) -> Bool {
-        mediaFetchGeneration == generation && !Task.isCancelled
-    }
 
     /// Total cached clip bytes across every camera bucket on disk (Settings → Storage readout).
     func totalMediaCacheByteCount() -> UInt64 {
@@ -13722,10 +13702,10 @@ extension NativeAppModel {
     /// Camera indexes are cache — preserving them after a format is what left thumbnail-less
     /// ghosts in the gallery (#296). The on-device `local` library is left intact.
     func clearAllMediaCaches() {
+        mediaActionStoreGeneration &+= 1
         cancelClipStream()
         mediaProducer?.service.cancelCatalog()
-        mediaFetchTask?.cancel()
-        mediaFetchGeneration += 1
+        mediaLibrary?.close(); mediaLibraryBytes?.retire()
         mediaDownloadProgress.removeAll()
         for bucket in mediaClipStore.allBucketIDs() where bucket != MediaClipStore.localBucketID {
             mediaClipStore.clearCache(cameraID: bucket, preservingIndex: false)
@@ -13739,12 +13719,12 @@ extension NativeAppModel {
     /// Clears on-disk clip cache for the active Media browser source bucket. Cancels any in-flight
     /// stream first; `index.json` metadata (favorites, handles, Frame.io/export flags) is preserved.
     func clearMediaCache() {
+        mediaActionStoreGeneration &+= 1
         cancelClipStream()
         // An in-flight enumeration would repopulate the freshly cleared index from its own
         // older snapshot; the generation bump makes its late writes fall on the floor.
         mediaProducer?.service.cancelCatalog()
-        mediaFetchTask?.cancel()
-        mediaFetchGeneration += 1
+        mediaLibrary?.close(); mediaLibraryBytes?.retire()
         mediaDownloadProgress.removeAll()
 
         let clearingCameraBucket = mediaBrowserSource == .camera
@@ -13777,58 +13757,6 @@ extension NativeAppModel {
 
     func clipLocalURL(_ clip: MediaClip) -> URL? {
         try? mediaClipStore.localURL(cameraID: clip.cameraID, filename: clip.filename)
-    }
-
-    /// Consumes the real Nikon producer. Source enumeration/reconciliation lives below the app.
-    private func fetchClipsFromCamera(generation: Int, identityProbeBudget: Int) async {
-        guard let service = currentMediaService(), mediaFetchIsCurrent(generation) else { return }
-        let bucket = mediaBucketID
-        let cached = mediaClipStore.list(cameraID: bucket)
-        service.configure(.init(cached: NikonMediaCatalogAdapter.records(cached),
-            pairing: NikonMediaCatalogAdapter.pairingRecords(cached),
-            category: mediaCategoryTab.nikonMediaCategory, identityProbeBudget: identityProbeBudget,
-            retainedLocalFilenames: Set(cached.filter { self.isClipDownloaded($0) }.map(\.filename))))
-        mediaFetchInProgress = true
-        guard mediaFetchIsCurrent(generation) else { return }
-        mediaFetchListedCount = 0
-        defer {
-            if mediaFetchGeneration == generation {
-                mediaFetchInProgress = false
-                if mediaFetchGeneration == generation { mediaFetchListedCount = 0; mediaFetchTask = nil }
-            }
-        }
-        do {
-            let browse: any CameraMediaBrowse
-            if let existing = mediaBrowse, service.isCurrent(existing.binding) { browse = existing }
-            else {
-                let opened = try await service.openBrowse()
-                guard mediaFetchIsCurrent(generation), mediaProducer?.service === service else {
-                    await opened.close(); return
-                }
-                mediaBrowse = opened; browse = opened
-            }
-            let cursor = try await browse.catalog()
-            guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { cursor.close(); return }
-            defer { cursor.close() }
-            while let delta = try await cursor.next() {
-                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
-                let merged = try NikonMediaCatalogAdapter.apply(delta, service: service, binding: browse.binding,
-                    bucket: bucket, store: mediaClipStore, current: mediaClips,
-                    isDownloaded: { self.isClipDownloaded($0) },
-                    admit: { self.mediaFetchIsCurrent(generation) && self.mediaProducer?.service === service })
-                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
-                if mediaBrowserSource == .camera, bucket == mediaBucketID { mediaClips = merged }
-                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
-                mediaStorageSlots = NikonMediaCatalogAdapter.displayStorage(service.storageRecords,
-                    cameraName: cameraState.cameraName)
-                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
-                mediaFetchListedCount = service.listedCount
-            }
-        } catch {
-            // Partial source facts stay indexed; failed or canceled passes never claim coverage.
-            guard mediaFetchIsCurrent(generation) else { return }
-            if !(error is CancellationError) { mediaLibraryLogger.debug("camera catalog pass did not complete") }
-        }
     }
 
     /// On-disk thumbnail URL when the camera thumb (or a prior fetch) is cached for this clip.
@@ -14055,15 +13983,27 @@ extension NativeAppModel {
     /// un-favoriting clears it, and — when connected — writes the matching rating to the body so
     /// the two agree. Best-effort: an offline clip just keeps the local flag until next sync.
     func toggleClipFavorite(_ clip: MediaClip) {
-        var stars = 0
-        mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
-            $0.isFavorite.toggle()
-            stars = $0.isFavorite ? max($0.starRating ?? 0, 1) : 0
-            $0.starRating = stars
+        _ = toggleClipFavorite(clip, ratingOperation: nil)
+    }
+
+    @discardableResult func toggleClipFavorite(_ clip: MediaClip,
+        ratingOperation: ((Int, MediaClip) async -> Int?)?) -> Task<Void, Never>? {
+        let action = captureMediaLibraryAction([clip])
+        let captured = action?.capturedClip(clip) ?? clip
+        var stars = captured.isFavorite ? 0 : max(captured.starRating ?? 0, 1)
+        if action?.canMutate(clip) != false {
+            mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+                $0.isFavorite.toggle()
+                stars = $0.isFavorite ? max($0.starRating ?? 0, 1) : 0
+                $0.starRating = stars
+            }
+            if let action { action.publish() } else { refreshMediaClips() }
         }
-        refreshMediaClips()
-        if clip.handle != nil {
-            Task { _ = await setMediaStarRating(stars, for: clip) }
+        guard clip.handle != nil else { return nil }
+        return Task {
+            if let ratingOperation {
+                _ = await performCapturedMediaRating(for: clip, action: action) { await ratingOperation(stars, clip) }
+            } else { _ = await setMediaStarRating(stars, for: clip, action: action) }
         }
     }
 

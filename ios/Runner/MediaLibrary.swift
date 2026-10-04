@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineMedia
 import os
 import OpenZCineCore
 
@@ -313,44 +314,7 @@ enum MediaBrowserFilterMetrics {
 
 enum MediaClipSorting {
     static func sort(_ clips: [MediaClip], order: MediaSortOrder) -> [MediaClip] {
-        switch order {
-        case .newest:
-            return clips.sorted { lhs, rhs in
-                let lk = sortKey(lhs)
-                let rk = sortKey(rhs)
-                if lk != rk { return lk > rk }
-                return lhs.filename.localizedCaseInsensitiveCompare(rhs.filename)
-                    == .orderedDescending
-            }
-        case .oldest:
-            return clips.sorted { lhs, rhs in
-                let lk = sortKey(lhs)
-                let rk = sortKey(rhs)
-                if lk != rk { return lk < rk }
-                return lhs.filename.localizedCaseInsensitiveCompare(rhs.filename)
-                    == .orderedAscending
-            }
-        case .name:
-            return clips.sorted {
-                $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending
-            }
-        case .rating:
-            // Rating desc, newest as tiebreak so equal-star shots keep the familiar order.
-            return clips.sorted { lhs, rhs in
-                let ls = lhs.starRating ?? 0
-                let rs = rhs.starRating ?? 0
-                if ls != rs { return ls > rs }
-                let lk = sortKey(lhs)
-                let rk = sortKey(rhs)
-                if lk != rk { return lk > rk }
-                return lhs.filename.localizedCaseInsensitiveCompare(rhs.filename)
-                    == .orderedDescending
-            }
-        }
-    }
-
-    private static func sortKey(_ clip: MediaClip) -> String {
-        clip.captureDate.isEmpty ? clip.filename : clip.captureDate
+        NikonAppGalleryProjection.sorted(clips, order: order)
     }
 }
 
@@ -710,6 +674,31 @@ struct MediaClipStore {
 
     private func indexURL(cameraID: String) -> URL {
         directory(for: cameraID).appendingPathComponent("index.json")
+    }
+
+    /// Exact catalog-byte access for the shared library owner. Paths and JSON schema stay local.
+    func catalogBytes(cameraID: String) throws -> Data? {
+        let url = indexURL(cameraID: cameraID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url)
+    }
+
+    func writeCatalogBytes(_ bytes: Data, cameraID: String, ifCurrent: () -> Bool) throws {
+        let dir = directory(for: cameraID)
+        guard ifCurrent() else { throw MediaServiceError.retired }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard ifCurrent() else { throw MediaServiceError.retired }
+        try bytes.write(to: indexURL(cameraID: cameraID), options: .atomic)
+    }
+
+    static func decodeCatalogBytes(_ bytes: Data) throws -> [MediaClip] {
+        try JSONDecoder().decode([MediaClip].self, from: bytes).filter {
+            MediaClipFilename.safeCameraBasename($0.filename) != nil
+        }
+    }
+
+    static func encodeCatalogBytes(_ clips: [MediaClip]) throws -> Data {
+        try JSONEncoder().encode(clips)
     }
 
     private func loadIndex(cameraID: String) -> [MediaClip] {

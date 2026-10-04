@@ -122,6 +122,7 @@ internal fun MediaStillViewer(
     filmstrip: (@Composable () -> Unit)? = null,
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
     onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
+    onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)? = null,
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
@@ -197,13 +198,15 @@ internal fun MediaStillViewer(
     LaunchedEffect(clip.handle, cameraTransferAvailable, connectionOwner) {
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
         val owner = connectionOwner ?: return@LaunchedEffect
+        val completion = onCaptureRatingCompletion?.invoke(clip)
         val read =
             withContext(Dispatchers.IO) { NikonNative.sessionObjectRating(owner, clip.handle.toInt()) }
-        if (read >= 0) {
+        if (read >= 0 && completion?.isCurrent != false) {
+            if (completion != null && !completion.mirror(read)) return@LaunchedEffect
             ratingStars = read
             // Self-correct the local favorite cache against the body (truth) on open — this is
             // also how a shot starred in instant playback lands under Favorites once opened.
-            onRatingMirrored(clip, read)
+            if (completion == null) onRatingMirrored(clip, read)
         }
     }
     val viewerScope = rememberCoroutineScope()
@@ -395,6 +398,7 @@ internal fun MediaStillViewer(
                     val previous = ratingStars
                     ratingStars = target
                     onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_ATTEMPTED)
+                    val completion = onCaptureRatingCompletion?.invoke(clip)
                     viewerScope.launch {
                         val written =
                             withContext(Dispatchers.IO) {
@@ -416,13 +420,15 @@ internal fun MediaStillViewer(
                             }
                         when (val outcome = ratingWriteResult(written)) {
                             is RatingWriteResult.Confirmed -> {
+                                if (completion != null && !completion.mirror(outcome.stars)) return@launch
                                 ratingStars = outcome.stars
                                 shareMessage = null
                                 // Mirror ONLY a confirmed write onto the JPEG-identity row.
-                                onRatingMirrored(clip, outcome.stars)
+                                if (completion == null) onRatingMirrored(clip, outcome.stars)
                                 onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_CONFIRMED)
                             }
                             is RatingWriteResult.Refused -> {
+                                if (completion?.isCurrent == false) return@launch
                                 // Never a silent rollback — say why, with the body's response code.
                                 ratingStars = previous
                                 shareMessage = ratingRefusalMessage(outcome.code)

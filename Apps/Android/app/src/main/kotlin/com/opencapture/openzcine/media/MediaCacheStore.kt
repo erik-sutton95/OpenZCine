@@ -206,6 +206,13 @@ class MediaCacheStore(rootDirectory: Path) {
         )
     }
 
+    /** Pure canonical address lookup. Does not create a bucket, writer or partial file. */
+    fun libraryRelativeAddress(cameraID: String, identity: MediaCacheObjectIdentity): String {
+        require(cameraID.isNotBlank())
+        validateFilename(identity.filename)
+        return "${sha256Hex(cameraID)}/${sha256Hex(identity.cacheKeyMaterial())}.media"
+    }
+
     /**
      * Opens or creates the stable cache entry for one uniquely identified
      * camera object.

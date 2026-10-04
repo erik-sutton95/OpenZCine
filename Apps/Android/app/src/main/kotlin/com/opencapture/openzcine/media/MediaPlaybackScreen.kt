@@ -227,6 +227,7 @@ internal fun MediaPlaybackScreen(
     onToggleFavorite: (MediaClipRecord) -> Unit,
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
     onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
+    onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)? = null,
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
@@ -260,6 +261,7 @@ internal fun MediaPlaybackScreen(
             mediaDeliveryCoordinator = mediaDeliveryCoordinator,
             onToggleFavorite = { onToggleFavorite(activeClip) },
             onRatingMirrored = onRatingMirrored,
+            onCaptureRatingCompletion = onCaptureRatingCompletion,
             onRatingDiagnostic = onRatingDiagnostic,
             onResolvedObjectSize = onResolvedObjectSize,
             onNavigate = { target -> activeClip = target },
@@ -288,6 +290,7 @@ private fun PlaybackClipSession(
     mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
     onToggleFavorite: () -> Unit,
     onRatingMirrored: (MediaClipRecord, Int) -> Unit,
+    onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)?,
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit,
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit,
     onNavigate: (MediaClipRecord) -> Unit,
@@ -360,12 +363,14 @@ private fun PlaybackClipSession(
     LaunchedEffect(clip.handle, cameraTransferAvailable, connectionOwner) {
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
         val owner = connectionOwner ?: return@LaunchedEffect
+        val completion = onCaptureRatingCompletion?.invoke(clip)
         val read =
             withContext(Dispatchers.IO) { NikonNative.sessionObjectRating(owner, clip.handle.toInt()) }
-        if (read >= 0) {
+        if (read >= 0 && completion?.isCurrent != false) {
+            if (completion != null && !completion.mirror(read)) return@LaunchedEffect
             ratingStars = read
             // Self-correct the local favorite cache against the body (truth) on open.
-            onRatingMirrored(clip, read)
+            if (completion == null) onRatingMirrored(clip, read)
         }
     }
     LaunchedEffect(ratingMessage) {
@@ -378,6 +383,7 @@ private fun PlaybackClipSession(
         val previous = ratingStars
         ratingStars = target
         onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_ATTEMPTED)
+        val completion = onCaptureRatingCompletion?.invoke(clip)
         ratingScope.launch {
             val written =
                 withContext(Dispatchers.IO) {
@@ -387,12 +393,14 @@ private fun PlaybackClipSession(
                 }
             when (val outcome = ratingWriteResult(written)) {
                 is RatingWriteResult.Confirmed -> {
+                    if (completion != null && !completion.mirror(outcome.stars)) return@launch
                     ratingStars = outcome.stars
                     ratingMessage = null
-                    onRatingMirrored(clip, outcome.stars)  // mirror only a confirmed write
+                    if (completion == null) onRatingMirrored(clip, outcome.stars)  // mirror only a confirmed write
                     onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_CONFIRMED)
                 }
                 is RatingWriteResult.Refused -> {
+                    if (completion?.isCurrent == false) return@launch
                     ratingStars = previous
                     ratingMessage = ratingRefusalMessage(outcome.code)
                     onRatingDiagnostic(
