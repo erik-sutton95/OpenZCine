@@ -660,7 +660,7 @@ struct MediaBrowserView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(displayedClips) { clip in
-                        MediaClipListRow(
+                        MediaClipListArtworkAdapter(
                             clip: clip,
                             isDownloaded: model.isClipDownloaded(clip),
                             localURL: model.clipLocalURL(clip),
@@ -691,7 +691,7 @@ struct MediaBrowserView: View {
     private var gridCells: some View {
         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 4) {
             ForEach(displayedClips) { clip in
-                MediaClipCell(
+                MediaClipGridArtworkAdapter(
                     clip: clip,
                     isDownloaded: model.isClipDownloaded(clip),
                     localURL: model.clipLocalURL(clip),
@@ -1034,32 +1034,38 @@ private struct MediaStorageCard: View {
     }
 }
 
-// MARK: - Clip chrome
-
-/// Favorite control with a 44pt hit target so edge taps register reliably inside scroll rows/cells.
-private struct MediaClipFavoriteButton: View {
-    let isFavorite: Bool
-    var iconSize: CGFloat = 13
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: isFavorite ? "star.fill" : "star")
-                .font(.system(size: iconSize))
-                .foregroundStyle(isFavorite ? LiveDesign.accent : LiveDesign.faint)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+/// Source-derived cell facts. The shared renderer never inspects camera handles or cache URLs.
+enum MediaClipCellPresentation {
+    static func value(
+        clip: MediaClip, detail: String, isDownloaded: Bool, cacheProgress: Double?,
+        isStreaming: Bool, hasRawSibling: Bool, burstCount: Int? = nil, duration: String?,
+        list: Bool, selecting: Bool
+    ) -> MonitorClipValue {
+        let photo = clip.mediaKind == .photo
+        let caption = cacheProgress.map { progress in
+            let percent = "\(Int(progress * 100))%"
+            return !list && isStreaming ? "CACHING \(percent)" : percent
         }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(isFavorite ? "Remove from favorites" : "Add to favorites")
-        .zIndex(1)
+        return MonitorClipValue(
+            id: clip.id, title: clip.filename, detail: detail,
+            duration: list || photo || selecting || cacheProgress != nil ? nil : duration,
+            source: list || isDownloaded || cacheProgress != nil ? nil : "On camera",
+            favorite: clip.isFavorite, progress: cacheProgress,
+            burstCount: list || selecting ? nil : burstCount,
+            mediaBadge: !list && photo && hasRawSibling && !selecting && cacheProgress == nil
+                ? "RAW+J" : nil,
+            completionBadge: !list && !photo && isDownloaded && cacheProgress == nil
+                && clip.exportStatus == .exported ? "EXPORTED" : nil,
+            transferCaption: caption,
+            favoriteLabel: clip.isFavorite ? "Remove from favorites" : "Add to favorites",
+            selectionEntryLabel: selecting ? nil : "Select \(clip.filename)")
     }
 }
 
-// MARK: - Grid cell
+// MARK: - Source artwork adapters
 
 /// Compact list row for the Media browser — thumbnail, filename, and metadata in one line.
-private struct MediaClipListRow: View {
+private struct MediaClipListArtworkAdapter: View {
     let clip: MediaClip
     let isDownloaded: Bool
     let localURL: URL?
@@ -1102,119 +1108,34 @@ private struct MediaClipListRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 12) {
-                listThumbnail
-                    .frame(width: 96, height: 54)
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(
-                            cornerRadius: DesignTokens.cornerRadius, style: .continuous
-                        )
-                        .strokeBorder(LiveDesign.hairline, lineWidth: 1)
-                    )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(clip.filename)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                    Text(metadataLine)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(LiveDesign.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 4)
-
-                if isSelecting {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22, weight: .semibold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(
-                            isSelected ? Color.white : Color.white.opacity(0.92),
-                            isSelected ? LiveDesign.accent : Color.black.opacity(0.45)
-                        )
-                }
-            }
-            .contentShape(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .onTapGesture {
-                if isSelecting {
-                    onToggleSelection?()
-                } else {
-                    onOpen()
-                }
-            }
-
-            if !isSelecting {
-                MediaClipFavoriteButton(
-                    isFavorite: clip.isFavorite,
-                    iconSize: 14,
-                    action: onToggleFavorite
-                )
-            }
-        }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 8)
-        .background(
-            isSelected ? LiveDesign.accentDim.opacity(0.55) : LiveDesign.surface.opacity(0.45),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .stroke(
-                    isSelected ? LiveDesign.accent.opacity(0.45) : LiveDesign.hairline, lineWidth: 1
-                )
-        )
-        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous))
-        .onLongPressGesture(minimumDuration: 0.4) {
-            guard !isSelecting else { return }
-            onBeginSelection?()
-        }
+        MonitorMediaCell(
+            clip: MediaClipCellPresentation.value(
+                clip: clip, detail: metadataLine, isDownloaded: isDownloaded,
+                cacheProgress: cacheProgress, isStreaming: isStreaming,
+                hasRawSibling: hasRawSibling, duration: durationLabel,
+                list: true, selecting: isSelecting),
+            layout: .list, selecting: isSelecting, selected: isSelected,
+            onOpen: onOpen, onSelect: { onToggleSelection?() },
+            onFavorite: isSelecting ? nil : onToggleFavorite,
+            onBeginSelection: onBeginSelection
+        ) { artwork }
         // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
         .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
             await loadThumbnail()
             await loadDuration()
         }
-        // The `.task` cancels its in-flight load on disappear; the decoded thumbnail stays —
-        // `MediaCellThumbnailCache` bounds memory, so reappearing cells skip the disk re-decode.
-        .onDisappear {
-            durationLabel = nil
-        }
+        // Source task cancellation and bounded cached image lifetime remain app-owned.
+        .onDisappear { durationLabel = nil }
     }
 
-    @ViewBuilder private var listThumbnail: some View {
+    private var artwork: some View {
         ZStack {
             LiveDesign.surface
             if let thumbnail {
-                Image(uiImage: thumbnail)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+                Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
             } else {
                 Image(systemName: isPhoto ? "photo" : "film")
-                    .font(.system(size: 20, weight: .light))
-                    .foregroundStyle(LiveDesign.faint)
-            }
-            if let cacheProgress {
-                ZStack {
-                    Color.black.opacity(0.45)
-                    Text("\(Int(cacheProgress * 100))%")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LiveDesign.text)
-                }
-            } else if !isDownloaded {
-                ZStack {
-                    Color.black.opacity(0.35)
-                    Image(systemName: isPhoto ? "photo.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(LiveDesign.text.opacity(0.9))
-                }
+                    .font(.system(size: 20, weight: .light)).foregroundStyle(LiveDesign.faint)
             }
         }
     }
@@ -1537,7 +1458,7 @@ private struct FilmstripThumb: View {
     }
 }
 
-private struct MediaClipCell: View {
+private struct MediaClipGridArtworkAdapter: View {
     let clip: MediaClip
     let isDownloaded: Bool
     let localURL: URL?
@@ -1563,182 +1484,34 @@ private struct MediaClipCell: View {
     private var isPhoto: Bool { clip.mediaKind == .photo }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ZStack {
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                    .fill(LiveDesign.surface)
-                if let thumbnail {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Image(systemName: isPhoto ? "photo" : "film")
-                        .font(.system(size: 28, weight: .light))
-                        .foregroundStyle(LiveDesign.faint)
-                }
-                overlay
-            }
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-            .clipShape(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                    .strokeBorder(LiveDesign.hairline, lineWidth: 1)
-            )
-            .overlay(alignment: .bottomTrailing) {
-                let badge = isPhoto ? (hasRawSibling ? "RAW+J" : nil) : durationLabel
-                if let badge, cacheProgress == nil, !isSelecting {
-                    Text(badge)
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LiveDesign.text)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4)
-                        )
-                        .padding(8)
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                if isSelecting {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 24, weight: .semibold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(
-                            isSelected ? Color.white : Color.white.opacity(0.92),
-                            isSelected ? LiveDesign.accent : Color.black.opacity(0.45)
-                        )
-                        .padding(8)
-                        .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 1)
-                }
-            }
-            .overlay(alignment: .topLeading) {
-                // Burst series: one cell stands for the run, badged with its frame count (like
-                // the body's series card). Tapping the cell opens the series view.
-                if let burstCount, !isSelecting {
-                    HStack(spacing: 2) {
-                        Image(systemName: "square.stack.3d.up.fill").font(.system(size: 9))
-                        Text("\(burstCount)")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    }
-                    .foregroundStyle(LiveDesign.text)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4))
-                    .padding(8)
-                }
-            }
-            .contentShape(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .onTapGesture {
-                if isSelecting {
-                    onToggleSelection?()
-                } else {
-                    onOpen()
-                }
-            }
-            // Plain long-press ENTERS selection mode (and picks this cell). Once selecting, the
-            // common native host owns the subsequent selecting sweep and edge clock.
-            // Browsing entry stays on this cell, so the original hold cannot toggle twice.
-            .onLongPressGesture(minimumDuration: 0.4) {
-                guard !isSelecting else { return }
-                onBeginSelection?()
-            }
-
-            HStack(spacing: 6) {
-                Text(clip.filename)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(LiveDesign.text)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                MediaClipFavoriteButton(
-                    isFavorite: clip.isFavorite,
-                    action: onToggleFavorite
-                )
-            }
-        }
+        MonitorMediaCell(
+            clip: MediaClipCellPresentation.value(
+                clip: clip, detail: "", isDownloaded: isDownloaded,
+                cacheProgress: cacheProgress, isStreaming: isStreaming,
+                hasRawSibling: hasRawSibling, burstCount: burstCount, duration: durationLabel,
+                list: false, selecting: isSelecting),
+            layout: .grid, selecting: isSelecting, selected: isSelected,
+            favoriteBesideTitle: true,
+            onOpen: onOpen, onSelect: { onToggleSelection?() },
+            onFavorite: onToggleFavorite, onBeginSelection: onBeginSelection
+        ) { artwork }
         // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
         .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
             await loadThumbnail()
             await loadDuration()
         }
-        // The `.task` cancels its in-flight load on disappear; the decoded thumbnail stays —
-        // `MediaCellThumbnailCache` bounds memory, so reappearing cells skip the disk re-decode.
-        .onDisappear {
-            durationLabel = nil
-        }
+        // Source task cancellation and bounded cached image lifetime remain app-owned.
+        .onDisappear { durationLabel = nil }
     }
 
-    @ViewBuilder private var overlay: some View {
-        if let cacheProgress {
-            ZStack {
-                Color.black.opacity(0.45)
-                VStack(spacing: 6) {
-                    if isStreaming {
-                        Text("CACHING \(Int(cacheProgress * 100))%")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.text)
-                    } else {
-                        Text("\(Int(cacheProgress * 100))%")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.text)
-                    }
-                    ProgressView(value: cacheProgress)
-                        .tint(LiveDesign.accent)
-                        .frame(width: 120)
-                }
-            }
-            .overlay(alignment: .bottom) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(LiveDesign.accent.opacity(0.25))
-                        Capsule()
-                            .fill(LiveDesign.accent)
-                            .frame(width: max(4, geo.size.width * cacheProgress))
-                    }
-                }
-                .frame(height: 3)
-            }
-        } else if isPhoto {
-            if !isDownloaded {
-                ZStack {
-                    Color.black.opacity(0.35)
-                    VStack(spacing: 4) {
-                        Image(systemName: "photo.circle.fill").font(.system(size: 26))
-                        Text("On camera").font(.system(size: 10, weight: .semibold))
-                    }
-                    .foregroundStyle(LiveDesign.text)
-                }
-            }
-        } else if !isDownloaded {
-            ZStack {
-                Color.black.opacity(0.35)
-                VStack(spacing: 4) {
-                    Image(systemName: "play.circle.fill").font(.system(size: 26))
-                    Text("On camera").font(.system(size: 10, weight: .semibold))
-                }
-                .foregroundStyle(LiveDesign.text)
-            }
-        } else {
-            VStack {
-                Spacer()
-                HStack {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(LiveDesign.text.opacity(0.9))
-                        .padding(8)
-                    Spacer()
-                    if clip.exportStatus == .exported {
-                        Image(systemName: "square.and.arrow.up.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(LiveDesign.good)
-                            .padding(8)
-                    }
-                }
+    private var artwork: some View {
+        ZStack {
+            LiveDesign.surface
+            if let thumbnail {
+                Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: isPhoto ? "photo" : "film")
+                    .font(.system(size: 28, weight: .light)).foregroundStyle(LiveDesign.faint)
             }
         }
     }

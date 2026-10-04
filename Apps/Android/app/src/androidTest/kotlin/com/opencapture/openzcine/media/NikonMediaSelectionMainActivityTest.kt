@@ -1071,6 +1071,299 @@ class NikonMediaSelectionMainActivityTest {
         return receipt.put("returnedMs", returned).put("elapsedMs", returned - started)
     }
 
+    @Test
+    fun actualCommonCardFavoriteFloorAcceptsNativeEdgeInput() {
+        val density = context.resources.displayMetrics.density
+        val floor = (44f * density + 0.5f).toInt()
+        val inset = (5f * density + 0.5f).toInt()
+        val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
+        val favoriteID = index.persistedClips(bucket).single {
+            it.filename == "SIMULATED-SEL-01.R3D"
+        }.libraryKey(bucket)
+        assertEquals(emptySet<String>(), index.favoriteIDs(bucket))
+
+        var inputOwner: Pair<Rect, Rect>? = null
+        var inputWindowID: Int? = null
+
+        fun edgeTap(description: String, layout: String) {
+            val deadline = SystemClock.uptimeMillis() + 5_000
+            var previous: Pair<Rect, Rect>? = null
+            var stable = 0
+            while (SystemClock.uptimeMillis() < deadline) {
+                freshAccessibility()
+                val root = instrumentation.uiAutomation.rootInActiveWindow
+                val matches = mutableListOf<Pair<Rect, Rect>>()
+                fun visit(node: AccessibilityNodeInfo) {
+                    if (node.isVisibleToUser && node.isEnabled &&
+                        node.packageName?.toString() == context.packageName &&
+                        node.contentDescription?.toString() == description) {
+                        val owner = node.parent
+                        if (owner != null && owner.isVisibleToUser && owner.isEnabled && owner.isClickable &&
+                            owner.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } &&
+                            owner.packageName?.toString() == context.packageName &&
+                            owner.windowId == node.windowId && owner.windowId == root?.windowId) {
+                            var labels = 0
+                            fun countLabels(child: AccessibilityNodeInfo) {
+                                if (child.contentDescription?.toString() == description) labels++
+                                for (index in 0 until child.childCount) child.getChild(index)?.let(::countLabels)
+                            }
+                            countLabels(owner)
+                            val ownerBounds = Rect().also(owner::getBoundsInScreen)
+                            val glyphBounds = Rect().also(node::getBoundsInScreen)
+                            if (labels == 1 && ownerBounds.contains(glyphBounds)) {
+                                matches += ownerBounds to glyphBounds
+                            }
+                        }
+                    }
+                    for (childIndex in 0 until node.childCount) {
+                        node.getChild(childIndex)?.let(::visit)
+                    }
+                }
+                root?.let(::visit)
+                val windows = instrumentation.uiAutomation.windows
+                val appWindow = root?.let { current ->
+                    windows.singleOrNull { it.id == current.windowId &&
+                        it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                }
+                val target = matches.singleOrNull()
+                val bounds = target?.first
+                val glyph = target?.second
+                val screen = Rect(0, 0, device.displayWidth, device.displayHeight)
+                val point = bounds?.let { Point(it.left + inset, it.centerY()) }
+                val blocked = if (appWindow != null && point != null) windows.any {
+                    it.type == AccessibilityWindowInfo.TYPE_SYSTEM && it.layer > appWindow.layer &&
+                        Region().also(it::getRegionInScreen).contains(point.x, point.y)
+                } else true
+                val available = root?.packageName?.toString() == context.packageName &&
+                    appWindow != null && bounds != null && glyph != null && point != null &&
+                    screen.contains(bounds) && bounds.width() >= floor && bounds.height() >= floor &&
+                    bounds.contains(point.x, point.y) && !blocked &&
+                    SystemClock.uptimeMillis() < deadline
+                if (available) {
+                    stable = if (target == previous) stable + 1 else 0
+                    previous = Rect(requireNotNull(bounds)) to Rect(requireNotNull(glyph))
+                    if (stable >= 2) {
+                        val ownerBounds = requireNotNull(bounds)
+                        val glyphBounds = requireNotNull(glyph)
+                        val input = requireNotNull(point)
+                        val sourceFloor = Rect(ownerBounds.centerX() - floor / 2, ownerBounds.centerY() - floor / 2,
+                            ownerBounds.centerX() - floor / 2 + floor, ownerBounds.centerY() - floor / 2 + floor)
+                        assertTrue("Edge input must lie inside the centered44dp source floor", sourceFloor.contains(input.x, input.y))
+                        assertTrue("Edge input must lie outside the actual drawn glyph bounds", !glyphBounds.contains(input.x, input.y))
+                        inputOwner = Rect(ownerBounds) to Rect(glyphBounds)
+                        inputWindowID = requireNotNull(appWindow).id
+                        val previousTrace = pointerTrace
+                        pointerTrace = JSONArray()
+                        try { tap(input) } finally {
+                            println("SIMULATED_MEDIA_CELL_FLOOR=" + JSONObject()
+                                .put("layout", layout).put("description", description)
+                                .put("bounds", ownerBounds.toShortString()).put("glyphBounds", glyphBounds.toShortString())
+                                .put("sourceFloorBounds", sourceFloor.toShortString()).put("density", density)
+                                .put("floorPixels", floor).put("x", input.x).put("y", input.y)
+                                .put("sourceGlyphWidthDp", 13).put("windowID", requireNotNull(appWindow).id)
+                                .put("layer", appWindow.layer).put("rotation", device.displayRotation)
+                                .put("displayWidth", device.displayWidth).put("displayHeight", device.displayHeight)
+                                .put("events", pointerTrace))
+                            pointerTrace = previousTrace
+                        }
+                        return
+                    }
+                } else {
+                    previous = null
+                    stable = 0
+                }
+                SystemClock.sleep(80)
+            }
+            nativeDiagnostic("card-floor-unavailable", includeFavorites = true)
+            error("Actual current44dp favorite owner is unavailable: $description")
+        }
+
+        fun observeListFrame(name: String, description: String, deadline: Long) {
+            val observation = JSONObject().put("name", name).put("deadlineMs", deadline)
+                .put("status", "unavailable")
+            fun currentOwner(): JSONObject {
+                val started = SystemClock.uptimeMillis()
+                val value = JSONObject().put("requestedMs", started).put("status", "unavailable")
+                if (started >= deadline) return value.put("returnedMs", started).put("reason", "deadline-before-native-read")
+                try {
+                    freshAccessibility()
+                    val root = instrumentation.uiAutomation.rootInActiveWindow
+                    val matches = mutableListOf<Pair<Rect, Rect>>()
+                    fun visit(node: AccessibilityNodeInfo) {
+                        if (node.isVisibleToUser && node.isEnabled &&
+                            node.packageName?.toString() == context.packageName &&
+                            node.contentDescription?.toString() == description) {
+                            val owner = node.parent
+                            if (owner != null && owner.isVisibleToUser && owner.isEnabled && owner.isClickable &&
+                                owner.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } &&
+                                owner.packageName?.toString() == context.packageName &&
+                                owner.windowId == node.windowId && owner.windowId == root?.windowId) {
+                                val bounds = Rect().also(owner::getBoundsInScreen)
+                                val glyph = Rect().also(node::getBoundsInScreen)
+                                if (bounds.contains(glyph)) matches += bounds to glyph
+                            }
+                        }
+                        for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
+                    }
+                    root?.let(::visit)
+                    val window = root?.let { current -> instrumentation.uiAutomation.windows.singleOrNull {
+                        it.id == current.windowId && it.type == AccessibilityWindowInfo.TYPE_APPLICATION
+                    } }
+                    val owner = matches.singleOrNull()
+                    val screen = Rect(0, 0, device.displayWidth, device.displayHeight)
+                    if (root?.packageName?.toString() == context.packageName && window != null &&
+                        window.id == inputWindowID && owner != null && owner == inputOwner &&
+                        screen.contains(owner.first) && device.displayRotation == 1 &&
+                        device.displayWidth > device.displayHeight && SystemClock.uptimeMillis() < deadline) {
+                        value.put("status", "available").put("windowID", window.id).put("layer", window.layer)
+                            .put("package", context.packageName).put("description", description)
+                            .put("ownerBounds", owner.first.toShortString()).put("glyphBounds", owner.second.toShortString())
+                            .put("rotation", device.displayRotation).put("displayWidth", device.displayWidth)
+                            .put("displayHeight", device.displayHeight)
+                    }
+                } catch (error: RuntimeException) {
+                    value.put("reason", error.javaClass.simpleName)
+                }
+                val returned = SystemClock.uptimeMillis()
+                if (returned >= deadline) value.put("status", "unavailable").put("reason", "native-read-deadline")
+                return value.put("returnedMs", returned)
+            }
+            var known: JSONObject? = null
+            var previous: String? = null
+            var stable = 0
+            while (SystemClock.uptimeMillis() < deadline) {
+                val current = currentOwner()
+                val key = if (current.optString("status") == "available") {
+                    listOf(current.getInt("windowID"), current.getInt("rotation"), current.getInt("displayWidth"),
+                        current.getInt("displayHeight"), current.getString("ownerBounds"), current.getString("glyphBounds")).toString()
+                } else null
+                stable = if (key != null && key == previous) stable + 1 else 0
+                previous = key
+                if (stable >= 2) { known = current; break }
+                SystemClock.sleep(80)
+            }
+            observation.put("stableNative", known ?: JSONObject.NULL)
+            if (known == null) {
+                println("SIMULATED_MEDIA_CELL_FRAME=" + observation.put("reason", "current-owner-or-orientation-unavailable"))
+                return
+            }
+            val stableNative = requireNotNull(known)
+            val expectedWindowID = stableNative.getInt("windowID")
+            val retired = AtomicBoolean(false)
+            val completion = CountDownLatch(1)
+            val frame = AtomicReference<JSONObject>()
+            val cancel = AtomicReference<(() -> Unit)?>(null)
+            val handler = Handler(Looper.getMainLooper())
+            handler.post {
+                if (!retired.get() && SystemClock.uptimeMillis() < deadline) try {
+                    requireNotNull(scenario).onActivity { activity ->
+                        val window = activity.window
+                        val decor = window.peekDecorView()
+                        val token = decor?.windowToken
+                        val node = decor?.createAccessibilityNodeInfo()
+                        val observer = decor?.viewTreeObserver
+                        val location = decor?.let { IntArray(2).also(it::getLocationOnScreen) }
+                        if (decor == null || token == null || node?.windowId != expectedWindowID ||
+                            node.packageName?.toString() != context.packageName ||
+                            activity.componentName.className != MainActivity::class.java.name ||
+                            activity.componentName.packageName != context.packageName || activity.isDestroyed ||
+                            activity.isFinishing || !decor.isAttachedToWindow || !decor.hasWindowFocus() ||
+                            !decor.isHardwareAccelerated || observer == null || !observer.isAlive ||
+                            decor.width != stableNative.getInt("displayWidth") || decor.height != stableNative.getInt("displayHeight")) {
+                            frame.set(JSONObject().put("status", "unavailable").put("reason", "exact-decor-unavailable"))
+                            completion.countDown()
+                        } else {
+                            val width = decor.width
+                            val height = decor.height
+                            val registered = SystemClock.uptimeMillis()
+                            val callback = Runnable {
+                                val committed = SystemClock.uptimeMillis()
+                                handler.post {
+                                    if (!retired.get()) try {
+                                        val currentNode = decor.createAccessibilityNodeInfo()
+                                        val same = activity.window === window && window.peekDecorView() === decor &&
+                                            decor.windowToken === token && currentNode.windowId == expectedWindowID &&
+                                            currentNode.packageName?.toString() == context.packageName &&
+                                            !activity.isDestroyed && !activity.isFinishing && decor.isAttachedToWindow &&
+                                            decor.hasWindowFocus() && decor.isHardwareAccelerated &&
+                                            decor.width == width && decor.height == height &&
+                                            IntArray(2).also(decor::getLocationOnScreen).contentEquals(location)
+                                        frame.set(JSONObject().put("status", if (same && SystemClock.uptimeMillis() < deadline) "available" else "unavailable")
+                                            .put("registeredMs", registered).put("commitCallbackMs", committed)
+                                            .put("checkedMs", SystemClock.uptimeMillis()).put("identityGeometryUnchanged", same)
+                                            .put("windowID", expectedWindowID).put("token", System.identityHashCode(token))
+                                            .put("hardware", true).put("submittedFrameOnly", true))
+                                        completion.countDown()
+                                    } catch (error: RuntimeException) {
+                                        frame.set(JSONObject().put("status", "unavailable").put("reason", "callback-" + error.javaClass.simpleName))
+                                        completion.countDown()
+                                    }
+                                }
+                            }
+                            cancel.set { if (observer.isAlive) observer.unregisterFrameCommitCallback(callback) }
+                            if (!retired.get() && registered < deadline) observer.registerFrameCommitCallback(callback)
+                        }
+                    }
+                } catch (error: RuntimeException) {
+                    frame.set(JSONObject().put("status", "unavailable").put("reason", error.javaClass.simpleName))
+                    completion.countDown()
+                }
+            }
+            val completed = try {
+                completion.await((deadline - SystemClock.uptimeMillis()).coerceAtLeast(0), TimeUnit.MILLISECONDS)
+            } finally {
+                retired.set(true)
+                handler.post { cancel.getAndSet(null)?.invoke() }
+            }
+            val submitted = frame.get() ?: JSONObject().put("status", "unavailable").put("reason", "no-passive-frame-before-deadline")
+            observation.put("frame", submitted).put("completedWithinWait", completed)
+            val current = currentOwner()
+            observation.put("afterCommitNative", current)
+            if (completed && submitted.optString("status") == "available" && current.optString("status") == "available" &&
+                SystemClock.uptimeMillis() < deadline) {
+                captureRenderedWindow(name, JSONObject().put("windowID", expectedWindowID).put("deadlineMs", deadline))
+                if (SystemClock.uptimeMillis() < deadline) {
+                    val directory = context.cacheDir.resolve("SIMULATED-selection-native").apply { mkdirs() }
+                    val requested = SystemClock.uptimeMillis()
+                    val captured = device.takeScreenshot(directory.resolve("$name-after-frame-physical.png"))
+                    val returned = SystemClock.uptimeMillis()
+                    observation.put("physicalRequestedMs", requested).put("physicalReturnedMs", returned)
+                        .put("physicalCaptured", captured).put("physicalWithinDeadline", returned < deadline)
+                }
+                observation.put("afterCopyNative", currentOwner()).put("status", "observed-submitted-frame")
+            }
+            println("SIMULATED_MEDIA_CELL_FRAME=" + observation)
+        }
+
+        device.setOrientationLeft()
+        for ((layout, grid) in listOf("grid" to true, "list" to false)) {
+            pressControl(if (grid) "Grid view" else "List view")
+            val first = stableRowBounds("01")
+            val second = stableRowBounds("02")
+            assertEquals("Actual row geometry must match the requested layout", grid,
+                first.centerX() != second.centerX())
+            assertTrue("Floor proof starts in actual landscape", device.displayWidth > device.displayHeight)
+            trace("card-floor-$layout-landscape-before")
+            edgeTap("Add SIMULATED-SEL-01.R3D to favorites", layout)
+            val favoriteDeadline = SystemClock.uptimeMillis() + 5_000
+            assertNotNull(waitForCurrentFavoriteControl("Remove SIMULATED-SEL-01.R3D from favorites"))
+            assertEquals(setOf(favoriteID), index.favoriteIDs(bucket))
+            trace("card-floor-$layout-landscape-favorite")
+            if (!grid) observeListFrame("card-floor-list-post-commit", "Remove SIMULATED-SEL-01.R3D from favorites", favoriteDeadline)
+            pressControl("Remove SIMULATED-SEL-01.R3D from favorites")
+            assertNotNull(waitForCurrentFavoriteControl("Add SIMULATED-SEL-01.R3D to favorites"))
+            assertEquals(emptySet<String>(), index.favoriteIDs(bucket))
+        }
+        hold(center(stableRowBounds("01")), 650)
+        selectedCount(1)
+        assertTrue(device.wait(Until.gone(By.desc("Add SIMULATED-SEL-01.R3D to favorites")), 5_000))
+        trace("card-floor-list-selecting")
+        pressControl("Exit media selection")
+        device.setOrientationNatural()
+        settleNaturalOrientation()
+        trace("card-floor-list-portrait")
+    }
+
     private fun trace(name: String) {
         val directory = context.cacheDir.resolve("SIMULATED-selection-native").apply { mkdirs() }
         device.takeScreenshot(directory.resolve("$name.png"))

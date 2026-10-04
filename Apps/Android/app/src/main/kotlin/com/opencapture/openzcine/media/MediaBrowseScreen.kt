@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.monitorui.MonitorClipCard
 import com.opencapture.monitorui.MonitorCatalogDisplayControls
 import com.opencapture.monitorui.MonitorCatalogHeader
 import com.opencapture.monitorui.MonitorMediaNavigation
@@ -29,7 +30,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
@@ -2619,8 +2619,9 @@ private fun MediaClipGrid(
             items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
                 val identity = clipIdentity(clip)
                 MonitorMediaHitTarget(registry = registry, id = identity) {
-                    MediaClipCell(
+                    MediaClipArtworkAdapter(
                         clip = clip,
+                        list = false,
                         source = source,
                         cameraID = cameraIDFor(clip),
                         hasRawSibling = hasRawSibling(clip),
@@ -2633,6 +2634,7 @@ private fun MediaClipGrid(
                         isSelecting = isSelecting,
                         onClick = { onOpen(clip) },
                         onLongPress = { onBeginSelection(clip) },
+                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(selectedIDs, identity)) },
                         onToggleFavorite = { onToggleFavorite(clip) },
                     )
                 }
@@ -2691,8 +2693,9 @@ private fun MediaClipList(
             items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
                 val identity = clipIdentity(clip)
                 MonitorMediaHitTarget(registry = registry, id = identity) {
-                    MediaClipListRow(
+                    MediaClipArtworkAdapter(
                         clip = clip,
+                        list = true,
                         source = source,
                         cameraID = cameraIDFor(clip),
                         hasRawSibling = hasRawSibling(clip),
@@ -2704,6 +2707,7 @@ private fun MediaClipList(
                         isSelecting = isSelecting,
                         onClick = { onOpen(clip) },
                         onLongPress = { onBeginSelection(clip) },
+                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(selectedIDs, identity)) },
                         onToggleFavorite = { onToggleFavorite(clip) },
                     )
                 }
@@ -2711,202 +2715,27 @@ private fun MediaClipList(
         }
     }
 }
-/** Grid card with action-safe metadata; a long press starts library selection. */
+/** Source artwork and intents adapted to the exercised common grid/list owner. */
 @Composable
-private fun MediaClipCell(
-    clip: MediaClipRecord,
-    source: MediaLibrarySource,
-    cameraID: String,
-    hasRawSibling: Boolean,
-    burstCount: Int? = null,
-    cameraConnected: Boolean,
-    connectionOwner: Long?,
-    cacheStore: MediaCacheStore,
-    favorite: Boolean,
-    selected: Boolean,
-    isSelecting: Boolean,
-    onClick: () -> Unit,
-    onLongPress: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun MediaClipArtworkAdapter(
+    clip: MediaClipRecord, source: MediaLibrarySource, cameraID: String,
+    hasRawSibling: Boolean, burstCount: Int? = null, cameraConnected: Boolean,
+    connectionOwner: Long?, cacheStore: MediaCacheStore, favorite: Boolean, selected: Boolean,
+    isSelecting: Boolean, list: Boolean, onClick: () -> Unit, onLongPress: () -> Unit,
+    onToggleSelection: () -> Unit, onToggleFavorite: () -> Unit, modifier: Modifier = Modifier,
 ) {
-    // While multi-selecting the common native host owns selecting pointer input; cell clickables
-    // would steal long-press and re-enable scroll competition.
-    val interaction =
-        if (isSelecting) {
-            Modifier
-        } else {
-            Modifier.combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongPress,
-                onLongClickLabel = "Select ${clip.filename}",
-            )
-        }
-    // Tight thumbnail↔filename gap (iOS cell spacing 8→4→2): less dead space under the frame.
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Box(
-            Modifier.fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                .background(LiveDesign.surface)
-                .border(
-                    if (selected) 2.dp else 1.dp,
-                    if (selected) LiveDesign.accent else LiveDesign.hairline,
-                    RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp),
-                ).semantics {
-                    contentDescription = clipAccessibilityLabel(clip, selected, isSelecting)
-                    role = Role.Button
-                }.then(interaction),
-            contentAlignment = Alignment.Center,
-        ) {
-            ClipArtwork(
-                clip = clip,
-                source = source,
-                cameraID = cameraID,
-                cameraConnected = cameraConnected,
-                connectionOwner = connectionOwner,
-                cacheStore = cacheStore,
-                modifier = Modifier.fillMaxSize(),
-            )
-            Text(
-                clipActionLabel(clip),
-                style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = if (clip.isPreviewable) LiveDesign.accent else LiveDesign.faint,
-                modifier =
-                    Modifier.align(Alignment.TopStart)
-                        .padding(7.dp)
-                        .badgeBackground()
-                        .padding(horizontal = 6.dp, vertical = 3.dp),
-            )
-            Text(
-                pairAwareBadgeLabel(clip, hasRawSibling),
-                style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = LiveDesign.text,
-                modifier =
-                    Modifier.align(Alignment.BottomEnd)
-                        .padding(7.dp)
-                        .badgeBackground()
-                        .padding(horizontal = 6.dp, vertical = 3.dp),
-            )
-            // Burst series: one cell stands for the run, badged with its frame count (like the
-            // body's series card). Tapping opens the Manage-series view.
-            if (burstCount != null && !isSelecting) {
-                Text(
-                    "⚡$burstCount",
-                    style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                    color = LiveDesign.text,
-                    modifier =
-                        Modifier.align(Alignment.BottomStart)
-                            .padding(7.dp)
-                            .badgeBackground()
-                            .padding(horizontal = 6.dp, vertical = 3.dp),
-                )
-            }
-            // iOS has no "ON DEVICE" cell badge — offline is implied by the library source.
-            if (isSelecting) {
-                SelectionMarker(selected = selected, modifier = Modifier.align(Alignment.TopEnd).padding(7.dp))
-            } else {
-                FavoriteButton(
-                    favorite = favorite,
-                    filename = clip.filename,
-                    onClick = onToggleFavorite,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(7.dp),
-                )
-            }
-        }
-        Text(
-            clip.filename,
-            style = chromeStyle(12f, FontWeight.Medium),
-            color = LiveDesign.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-/** Dense row version of [MediaClipCell]. */
-@Composable
-private fun MediaClipListRow(
-    clip: MediaClipRecord,
-    source: MediaLibrarySource,
-    cameraID: String,
-    hasRawSibling: Boolean,
-    cameraConnected: Boolean,
-    connectionOwner: Long?,
-    cacheStore: MediaCacheStore,
-    favorite: Boolean,
-    selected: Boolean,
-    isSelecting: Boolean,
-    onClick: () -> Unit,
-    onLongPress: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val interaction =
-        if (isSelecting) {
-            Modifier
-        } else {
-            Modifier.combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongPress,
-                onLongClickLabel = "Select ${clip.filename}",
-            )
-        }
-    Row(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-            .background(if (selected) LiveDesign.accentDim else LiveDesign.surface)
-            .border(
-                if (selected) 2.dp else 1.dp,
-                if (selected) LiveDesign.accent else LiveDesign.hairline,
-                RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp),
-            ).semantics {
-                contentDescription = clipAccessibilityLabel(clip, selected, isSelecting)
-                role = Role.Button
-            }.then(interaction)
-            .padding(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    MonitorClipCard(
+        clip = mediaClipCellPresentation(
+            clip, cameraID, favorite, hasRawSibling, burstCount, list, isSelecting, selected),
+        list = list, selecting = isSelecting, selected = selected,
+        onOpen = onClick, onSelect = if (isSelecting) onToggleSelection else onLongPress,
+        onFavorite = if (isSelecting) null else onToggleFavorite,
+        modifier = modifier, clicks = !isSelecting,
     ) {
-        Box(
-            Modifier.size(width = 104.dp, height = 62.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(LiveDesign.background),
-            contentAlignment = Alignment.Center,
-        ) {
-            ClipArtwork(
-                clip = clip,
-                source = source,
-                cameraID = cameraID,
-                cameraConnected = cameraConnected,
-                connectionOwner = connectionOwner,
-                cacheStore = cacheStore,
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (isSelecting) {
-                SelectionMarker(selected = selected, modifier = Modifier.align(Alignment.TopEnd).padding(5.dp))
-            }
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                clip.filename,
-                style = chromeStyle(13f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${pairAwareBadgeLabel(clip, hasRawSibling)} · ${clipActionLabel(clip)}",
-                style = chromeStyle(10f, FontWeight.Medium, mono = true),
-                color = LiveDesign.muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (!isSelecting) {
-            FavoriteButton(favorite = favorite, filename = clip.filename, onClick = onToggleFavorite)
-        }
+        ClipArtwork(
+            clip = clip, source = source, cameraID = cameraID, cameraConnected = cameraConnected,
+            connectionOwner = connectionOwner, cacheStore = cacheStore, modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
@@ -3099,55 +2928,6 @@ private fun cachedStillThumbnail(
     }
 }
 
-/** Favorite icon is a persisted library flag, not a camera mutation. */
-@Composable
-private fun FavoriteButton(
-    favorite: Boolean,
-    filename: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier =
-            modifier
-                .size(32.dp)
-                .glass(CircleShape)
-                .semantics {
-                    contentDescription =
-                        if (favorite) "Remove $filename from favorites" else "Add $filename to favorites"
-                    role = Role.Button
-                }.chromeClickable(onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            if (favorite) "★" else "☆",
-            style = chromeStyle(17f, FontWeight.Medium),
-            color = if (favorite) LiveDesign.accent else LiveDesign.text,
-        )
-    }
-}
-
-/** Visible selection state, including an unselected affordance for sweep mode. */
-@Composable
-private fun SelectionMarker(selected: Boolean, modifier: Modifier = Modifier) {
-    Box(
-        modifier =
-            modifier
-                .size(30.dp)
-                .background(
-                    if (selected) LiveDesign.accent else Color.Black.copy(alpha = 0.56f),
-                    CircleShape,
-                ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            if (selected) "✓" else "○",
-            style = chromeStyle(16f, FontWeight.Bold),
-            color = if (selected) LiveDesign.background else LiveDesign.text,
-        )
-    }
-}
-
 /** iOS-aligned loading state, specialized for its selected safe source. */
 @Composable
 private fun ListingState(source: MediaLibrarySource) {
@@ -3296,32 +3076,3 @@ private val CapsuleShape: RoundedCornerShape
 
 private fun Modifier.badgeBackground(): Modifier =
     background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(4.dp))
-
-private val MediaClipRecord.isPreviewable: Boolean
-    get() =
-        contentKind == MediaContentKind.PLAYABLE_PROXY ||
-            contentKind == MediaContentKind.STILL_PHOTO
-
-private fun clipActionLabel(clip: MediaClipRecord): String =
-    when (clip.contentKind) {
-        MediaContentKind.PLAYABLE_PROXY -> "PLAY"
-        MediaContentKind.STILL_PHOTO -> "VIEW"
-        MediaContentKind.R3D_MASTER -> "MASTER"
-        MediaContentKind.UNSUPPORTED -> "MEDIA"
-    }
-
-/** A paired still's one cell announces both sides (iOS `RAW+J` badge). */
-private fun pairAwareBadgeLabel(clip: MediaClipRecord, hasRawSibling: Boolean): String =
-    if (hasRawSibling) "${clip.sizeLabel} · RAW+J" else clip.badgeLabel
-
-private fun clipAccessibilityLabel(
-    clip: MediaClipRecord,
-    selected: Boolean,
-    isSelecting: Boolean,
-): String =
-    buildString {
-        append(clip.filename)
-        append(", ")
-        append(clipActionLabel(clip).lowercase())
-        if (isSelecting) append(if (selected) ", selected" else ", not selected")
-    }

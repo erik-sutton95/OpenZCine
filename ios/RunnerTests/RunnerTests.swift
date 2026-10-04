@@ -3156,3 +3156,159 @@ private struct NativeDefaultFilterFixtureView: View {
         .background(Color.black)
     }
 }
+
+struct MediaClipCellPresentationTests {
+    @Test func remotePhotoCarriesKnownPairAndBurstFactsWithoutInventingLocalSource() {
+        let clip = sample("01.JPG")
+        let value = MediaClipCellPresentation.value(
+            clip: clip, detail: "", isDownloaded: false, cacheProgress: nil,
+            isStreaming: false, hasRawSibling: true, burstCount: 4, duration: nil,
+            list: false, selecting: false)
+        #expect(value.id == clip.id && value.title == clip.filename)
+        #expect(value.source == "On camera" && value.duration == nil)
+        #expect(value.mediaBadge == "RAW+J" && value.burstCount == 4)
+        #expect(value.progress == nil && value.completionBadge == nil)
+        #expect(value.favoriteLabel == "Add to favorites")
+    }
+
+    @Test func realZeroProgressAndStreamingCaptionRemainKnown() {
+        let value = MediaClipCellPresentation.value(
+            clip: sample("01.MOV"), detail: "", isDownloaded: false, cacheProgress: 0,
+            isStreaming: true, hasRawSibling: false, duration: "00:08",
+            list: false, selecting: false)
+        #expect(value.progress == 0 && value.transferCaption == "CACHING 0%")
+        #expect(value.source == nil && value.duration == nil && value.completionBadge == nil)
+    }
+
+    @Test func completedExportAndLocalFavoriteStaySourceFacts() {
+        var clip = sample("01.MOV")
+        clip.exportStatus = .exported
+        clip.isFavorite = true
+        let value = MediaClipCellPresentation.value(
+            clip: clip, detail: "", isDownloaded: true, cacheProgress: nil,
+            isStreaming: false, hasRawSibling: false, duration: "00:08",
+            list: false, selecting: false)
+        #expect(value.duration == "00:08" && value.completionBadge == "EXPORTED")
+        #expect(value.favorite && value.favoriteLabel == "Remove from favorites")
+        #expect(value.source == nil)
+    }
+
+    @Test func selectionAndListProjectionPreserveExistingBadgePolicies() {
+        let clip = sample("01.JPG")
+        let selecting = MediaClipCellPresentation.value(
+            clip: clip, detail: "", isDownloaded: false, cacheProgress: nil,
+            isStreaming: false, hasRawSibling: true, burstCount: 4, duration: nil,
+            list: false, selecting: true)
+        #expect(selecting.burstCount == nil && selecting.mediaBadge == nil)
+        let list = MediaClipCellPresentation.value(
+            clip: clip, detail: "RAW+J · 1MB", isDownloaded: true, cacheProgress: 0.5,
+            isStreaming: true, hasRawSibling: true, burstCount: 4, duration: nil,
+            list: true, selecting: false)
+        #expect(list.detail == "RAW+J · 1MB" && list.transferCaption == "50%")
+        #expect(list.source == nil && list.burstCount == nil && list.mediaBadge == nil)
+    }
+
+    private func sample(_ filename: String) -> MediaClip {
+        MediaClip(
+            cameraID: "SIMULATED-cell", filename: filename, handle: 1, storageID: 65_537,
+            sizeBytes: 1_000_000, captureDate: "")
+    }
+}
+
+extension RunnerTests {
+    @MainActor
+    func testSharedMediaCellDefaultsKeepNativeFavoriteAndSelectionIndependent() async throws {
+        let item = MonitorMediaItem(
+            id: "SIMULATED-cell/01", filename: "01.MOV", metadata: "4K · 24",
+            duration: "00:08", availability: .proxy, favorite: false, photo: false,
+            permissions: [.favorite])
+        var favorites = 0
+        var selections = 0
+        let host = UIHostingController(
+            rootView: MonitorMediaCell(
+                clip: MonitorClipValue(item: item), layout: .grid, selecting: true, selected: true,
+                onOpen: { XCTFail("A child control must not open the clip") },
+                onSelect: { selections += 1 }, onFavorite: { favorites += 1 }
+            ) { Color.gray })
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        host.view.backgroundColor = UIColor(MonitorTheme.background)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        for layout in [MonitorMediaLayout.grid, .list] {
+            host.rootView = MonitorMediaCell(
+                clip: MonitorClipValue(item: item), layout: layout, selecting: true, selected: true,
+                onOpen: { XCTFail("A child control must not open the clip") },
+                onSelect: { selections += 1 }, onFavorite: { favorites += 1 },
+                thumbnail: { Color.gray }
+            )
+            let favorite = try await nativeFilterElement("Add favorite", host: host)
+            let selection = try await nativeFilterElement("Deselect 01.MOV", host: host)
+            XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.width, 44)
+            XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.height, 44)
+            XCTAssertTrue(favorite.accessibilityActivate())
+            XCTAssertTrue(selection.accessibilityActivate())
+            let attachment = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+                    host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+                })
+            attachment.name = "SIMULATED-common-media-cell-\(layout.rawValue)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertEqual(favorites, 2)
+        XCTAssertEqual(selections, 2)
+        host.rootView = MonitorMediaCell(
+            clip: MonitorClipValue(item: item), layout: .grid, selecting: false, selected: false,
+            favoriteEnabled: false, onOpen: {}, onSelect: {}, onFavorite: { favorites += 1 },
+            thumbnail: { Color.gray }
+        )
+        let disabled = try await nativeFilterElement("Add favorite", host: host)
+        XCTAssertTrue(disabled.accessibilityTraits.contains(.notEnabled))
+        XCTAssertEqual(favorites, 2)
+    }
+
+    @MainActor
+    func testNikonMediaCellUsesCommonBadgeAndFavoriteComposition() async throws {
+        let clip = MediaClip(
+            cameraID: "SIMULATED-cell", filename: "01.JPG", handle: 1, storageID: 65_537,
+            sizeBytes: 1_000_000, captureDate: "")
+        let value = MediaClipCellPresentation.value(
+            clip: clip, detail: "", isDownloaded: false, cacheProgress: nil,
+            isStreaming: false, hasRawSibling: true, burstCount: 4, duration: nil,
+            list: false, selecting: false)
+        var favorites = 0
+        let host = UIHostingController(
+            rootView: MonitorMediaCell(
+                clip: value, layout: .grid, selecting: false, selected: false,
+                favoriteBesideTitle: true, onOpen: {}, onSelect: {}, onFavorite: { favorites += 1 }
+            ) { Color.gray })
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        host.view.backgroundColor = UIColor(MonitorTheme.background)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        let favorite = try await nativeFilterElement("Add to favorites", host: host)
+        let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
+        XCTAssertTrue(labels.contains("On camera"))
+        XCTAssertTrue(labels.contains("RAW+J"))
+        XCTAssertTrue(labels.contains("4 frames"))
+        XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.width, 44)
+        XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.height, 44)
+        XCTAssertTrue(favorite.accessibilityActivate())
+        XCTAssertEqual(favorites, 1)
+        let attachment = XCTAttachment(
+            image: UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+                host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+            })
+        attachment.name = "SIMULATED-Nikon-common-media-cell"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}
