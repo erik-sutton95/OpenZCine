@@ -155,7 +155,35 @@ These checks do not qualify physical Nikon/HDMI behavior.
 SHELL-03 Z-2 conform candidate: `OpenCineMedia.MonitorConformPreview` owns preview math and
 labels; `OpenZCineCore.ConformPreview` is a public compatibility alias. Android delegates
 availability and finite-rate math to the same media module, retaining its nullable/nonfinite
-speed adapter. Nikon's asset metadata probe and playback/audio lifecycle remain app-owned.
+speed adapter. Nikon's asset metadata probe and player transport remain app-owned.
+
+SHELL-03 Z-2 decoded-audio candidate (locally implemented, automated checks passed): both shells
+consume existing shared audio owners. iOS `PlaybackAudioMeterController` aliases
+`OpenCineApple.MonitorPlaybackAudioMeterRuntime`, which owns the actual processing tap,
+track query, source retirement and polling. Portable meter values and ballistics alias
+`OpenCineMedia`; Nikon retains the camera's segment mapping, audio-session actions and
+conform mute policy. Android's Media3 adapter passes PCM bytes through unchanged and uses
+`native-runtime.MonitorPcmAudioInput` for sampling and source lifetime. Its existing JNI
+ballistics wire remains intact. Drained work captures the actual input identity; native
+stepping runs outside the source lock, followed by a short identity-checked publication.
+Flush, reset or close during stepping cannot publish retired levels or clear successor PCM.
+
+Parity: unmeasured audio stays absent, measured zero is silence, replacement discards held
+peaks, and playback disposal retires sampling on both platforms. iOS displays an empty meter
+track with an unavailable accessibility value while no measured source exists. Android keeps
+its existing absent-level presentation. Audio focus/session, output mute and conform preview
+remain app actions; paused measured playback can still decay a known meter normally.
+
+The Android app now consumes the existing local `native-runtime` module from the same
+OpenCine version and composite build. It also brings the shared `libopc_vulkan.so` transitively;
+debug and release APK checks confirm coexistence with Nikon's `libopenzcine_live_feed_vk.so`.
+No live-picture owner is migrated by this audio slice. The unchanged portable audio goldens
+pass 16 cases, full Swift passes 626, strict concurrency and both iOS simulator architectures
+build. Actual SIMULATED Apple tap replacement/cancellation and the existing meter golden pass
+3 cases. Android passes 964 unique consumer cases with no failures, errors or skips, including
+6 new absence, replacement and retired-step cases; staged JNI remains 73 exact exports.
+Native Android Media3 playback and physical iOS/Android playback, no-audio clips, mute/conform
+changes and return from covers remain untested. The local candidate has no app pin move.
 
 ## What changes for users
 

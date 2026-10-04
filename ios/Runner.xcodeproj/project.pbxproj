@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */; };
 		BA99F4602FF564EC9B91DE89 /* MediaLUTExportAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */; };
 		OZC000000000000000000003 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000002 /* OpenZCineCore */; };
 		OZC000000000000000000013 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000012 /* OpenZCineCore */; };
@@ -150,6 +151,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackAudioMeterAdoptionTests.swift; sourceTree = "<group>"; };
 		EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLUTExportAdapterTests.swift; sourceTree = "<group>"; };
 		0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InternetReachability.swift; sourceTree = "<group>"; };
 		1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackAssists.swift; sourceTree = "<group>"; };
@@ -301,6 +303,7 @@
 				3331FE29406D4BE33DA9E274 /* MediaDeliveryPanelValueTests.swift */,
 				2BD15F764C285E190D23ADBF /* MediaDeliveryCompositionTests.swift */,
 				EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */,
+				A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -586,6 +589,7 @@
 				E77B6A1CF7B37221F21C70C5 /* MediaDeliveryPanelValueTests.swift in Sources */,
 				2C14A5F3090DBBC27051DCBC /* MediaDeliveryCompositionTests.swift in Sources */,
 				BA99F4602FF564EC9B91DE89 /* MediaLUTExportAdapterTests.swift in Sources */,
+				A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

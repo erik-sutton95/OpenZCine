@@ -318,8 +318,8 @@ struct PlaybackAssistOverlayModule: View {
     let scopeAssist: ScopeAssistBundle
     /// Aspect-fit video rectangle in the overlay coordinate space.
     let videoRect: CGRect
-    /// Metered playback audio (from the player item's processing tap); silent when the tool is off.
-    var audioLevels: AudioMeterLevels = .silent
+    /// Metered playback audio; absent before a real sample or when the tool is off.
+    var audioLevels: AudioMeterLevels?
 
     var body: some View {
         let visible = model.preferences.playbackVisibleAssistTools
@@ -2574,7 +2574,7 @@ struct AudioMetersPanelMini: View {
     /// camera-control rails in the ~400 pt landscape monitor.
     static let panelSize = CGSize(width: 28, height: 168)
 
-    let levels: AudioMeterLevels
+    let levels: AudioMeterLevels?
     let sensitivity: String?
 
     private static let yellowFromDB = -18.0
@@ -2622,6 +2622,9 @@ struct AudioMetersPanelMini: View {
     }
 
     private var accessibilityValue: String {
+        guard let levels else {
+            return "Audio levels unavailable, sensitivity \(Self.displayedSensitivity(sensitivity))"
+        }
         func channel(_ name: String, _ ch: AudioMeterChannel) -> String {
             ch.levelDB <= AudioMeterBallistics.floorDB + 0.5
                 ? "\(name) silent"
@@ -2662,7 +2665,7 @@ struct AudioMetersPanelMini: View {
         let gap: CGFloat = 2
         let inset: CGFloat = 1
         let barWidth = (barsRect.width - gap - inset * 2) / 2
-        for (index, pair) in [("L", levels.left), ("R", levels.right)].enumerated() {
+        for (index, pair) in [("L", levels?.left), ("R", levels?.right)].enumerated() {
             let x = barsRect.minX + inset + CGFloat(index) * (barWidth + gap)
             let track = CGRect(
                 x: x, y: barsRect.minY, width: barWidth, height: barsRect.height)
@@ -2670,8 +2673,16 @@ struct AudioMetersPanelMini: View {
                 Path(roundedRect: track, cornerRadius: 2),
                 with: .color(LiveDesign.text.opacity(0.08)))
 
+            context.draw(
+                Text(pair.0)
+                    .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(LiveDesign.text.opacity(0.58)),
+                at: CGPoint(x: track.midX, y: size.height - labelReserve / 2))
+
+            // An unmeasured source draws the track without a fabricated silent readout.
+            guard let channel = pair.1 else { continue }
             // Zone-coloured fill clipped to the decaying bar level.
-            let levelY = y(pair.1.levelDB)
+            let levelY = y(channel.levelDB)
             if levelY < track.maxY - 0.5 {
                 var zones = context
                 zones.clip(
@@ -2697,19 +2708,14 @@ struct AudioMetersPanelMini: View {
             }
 
             // Peak-hold tick in the colour of the zone it sits in.
-            if pair.1.peakDB > floor + 0.5 {
-                let peakY = y(pair.1.peakDB)
+            if channel.peakDB > floor + 0.5 {
+                let peakY = y(channel.peakDB)
                 var tick = Path()
                 tick.move(to: CGPoint(x: track.minX, y: peakY))
                 tick.addLine(to: CGPoint(x: track.maxX, y: peakY))
-                context.stroke(tick, with: .color(zoneColor(pair.1.peakDB)), lineWidth: 1.5)
+                context.stroke(tick, with: .color(zoneColor(channel.peakDB)), lineWidth: 1.5)
             }
 
-            context.draw(
-                Text(pair.0)
-                    .font(.system(size: 7.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.58)),
-                at: CGPoint(x: track.midX, y: size.height - labelReserve / 2))
         }
     }
 }

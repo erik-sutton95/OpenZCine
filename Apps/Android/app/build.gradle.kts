@@ -301,6 +301,8 @@ dependencies {
     implementation(libs.opencine.nikon)
     // The shared cameras page, connection model and saved-camera document (SHELL-02).
     implementation(libs.opencine.appkit)
+    // Shared prepared PCM sampling and decoded-audio source lifetime.
+    implementation(libs.opencine.native.runtime)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))

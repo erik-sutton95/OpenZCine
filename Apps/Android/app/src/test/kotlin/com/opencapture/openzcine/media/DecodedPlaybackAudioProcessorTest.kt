@@ -109,6 +109,44 @@ class DecodedPlaybackAudioProcessorTest {
         }
     }
 
+    @Test
+    fun `prepared source stays absent until real PCM is observed`() {
+        val processor = configuredProcessor(channelCount = 2)
+        assertEquals(null, processor.drainSample())
+        processor.queueInput(pcm16(0, 0))
+        val measured = processor.drainSample()
+        assertTrue(measured != null)
+        assertEquals(0f, measured.left)
+        assertEquals(0f, measured.right)
+    }
+
+    @Test
+    fun `flush replaces the source without carrying a held peak`() {
+        val processor = configuredProcessor(channelCount = 2)
+        processor.queueInput(pcm16(-32_768, -32_768))
+        val old = processor.drainSample()
+        assertTrue(old != null)
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        assertEquals(null, processor.drainSample())
+        processor.queueInput(pcm16(0, 0))
+        val replacement = processor.drainSample()
+        assertTrue(replacement != null)
+        assertTrue(old.sourceGeneration != replacement.sourceGeneration)
+        assertEquals(0f, replacement.left)
+        assertEquals(0f, replacement.right)
+    }
+
+    @Test
+    fun `disposal closes sampling before late format and decoded callbacks`() {
+        val processor = configuredProcessor(channelCount = 2)
+        processor.queueInput(pcm16(-32_768, -32_768))
+        processor.close()
+        assertEquals(null, processor.drainSample())
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        processor.queueInput(pcm16(-32_768, -32_768))
+        assertEquals(null, processor.drainSample())
+    }
+
     private fun configuredProcessor(channelCount: Int): DecodedPlaybackAudioProcessor =
         DecodedPlaybackAudioProcessor().apply {
             val format = AudioProcessor.AudioFormat(48_000, channelCount, C.ENCODING_PCM_16BIT)

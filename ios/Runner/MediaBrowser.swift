@@ -1,5 +1,6 @@
 import AVFoundation
 import ImageIO
+import OSLog
 import MonitorPresentation
 import MonitorUI
 import OpenZCineCore
@@ -2125,8 +2126,11 @@ struct MediaPlayerView: View {
     @State private var videoDisplaySize = CGSize(width: 16, height: 9)
     @State private var playbackScopeAssist: ScopeAssistBundle = .empty
     @State private var playbackScopeController = PlaybackScopeController()
-    @State private var playbackAudioLevels = AudioMeterLevels.silent
-    @State private var audioMeterController = PlaybackAudioMeterController()
+    @State private var playbackAudioLevels: AudioMeterLevels?
+    @State private var audioMeterController = PlaybackAudioMeterController { status in
+        Logger(subsystem: "OpenZCine", category: "media-playback-audio")
+            .error("MTAudioProcessingTapCreate failed: \(status)")
+    }
     @State private var clipSlideEdge: Edge = .trailing
     @State private var playbackEffectsBox = MediaLUT.PlaybackEffectsBox()
     /// Bumps on each clip load so async asset probes cannot apply to a replaced clip.
@@ -3472,7 +3476,7 @@ struct MediaPlayerView: View {
         // Drop the audio mix before the item goes away — releasing an item with a live tap crashes.
         audioMeterController.stopPolling()
         audioMeterController.detach(from: player.currentItem)
-        playbackAudioLevels = .silent
+        playbackAudioLevels = nil
         removeEndObserver()
         if let observer = timeObserver {
             player.removeTimeObserver(observer)
@@ -3566,7 +3570,7 @@ struct MediaPlayerView: View {
     private func syncPlaybackAudioMetering() {
         guard playbackAudioMetersActive else {
             audioMeterController.stopPolling()
-            playbackAudioLevels = .silent
+            playbackAudioLevels = nil
             return
         }
         audioMeterController.startPolling { levels in

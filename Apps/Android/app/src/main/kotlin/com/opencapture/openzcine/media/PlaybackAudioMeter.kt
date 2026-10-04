@@ -11,6 +11,11 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.opencine.runtime.MonitorAudioPeakAccumulator
+import com.opencapture.opencine.runtime.MonitorAudioPeakSample
+import com.opencapture.opencine.runtime.MonitorPcmAudioInput
+import com.opencapture.opencine.runtime.MonitorPcmFormat
+import com.opencapture.opencine.runtime.MonitorPcmSampleType
 import com.opencapture.opencine.nikon.LiveAudioMeterChannel
 import com.opencapture.opencine.nikon.LiveAudioMeterLevels
 import java.nio.ByteBuffer
@@ -19,8 +24,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.math.abs
-import kotlin.math.max
 
 private const val PLAYBACK_AUDIO_METER_POLL_MILLIS = 42L
 private const val PLAYBACK_AUDIO_METER_WIRE_SIZE = 6
@@ -29,6 +32,12 @@ private const val PLAYBACK_AUDIO_METER_WIRE_SIZE = 6
 internal data class DecodedPlaybackAudioPeaks(
     val left: Float,
     val right: Float,
+)
+
+/** A drained measurement with the actual prepared native input that admitted it. */
+internal class DecodedPlaybackAudioTicket(
+    val sample: MonitorAudioPeakSample,
+    internal val input: MonitorPcmAudioInput,
 )
 
 /**
@@ -42,9 +51,10 @@ internal data class DecodedPlaybackAudioPeaks(
  * metered while output bytes and the caller's audio-focus policy stay untouched.
  */
 internal class DecodedPlaybackAudioProcessor : BaseAudioProcessor() {
-    private val peakLock = Any()
-    private var leftPeak = 0f
-    private var rightPeak = 0f
+    private val peaks = MonitorAudioPeakAccumulator()
+    private val sourceLock = Any()
+    @Volatile private var input: MonitorPcmAudioInput? = null
+    @Volatile private var closed = false
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount < 1) {
@@ -58,59 +68,71 @@ internal class DecodedPlaybackAudioProcessor : BaseAudioProcessor() {
             "Audio processor must be configured and flushed before queueInput."
         }
         if (!inputBuffer.hasRemaining()) return
-
-        val channelCount = inputAudioFormat.channelCount
-        val frameSize = inputAudioFormat.bytesPerFrame
-        var frameOffset = inputBuffer.position()
-        var observedLeft = 0f
-        var observedRight = 0f
-        while (frameOffset + frameSize <= inputBuffer.limit()) {
-            val left = linearMagnitude(inputBuffer.getShort(frameOffset))
-            val right =
-                if (channelCount > 1) {
-                    linearMagnitude(inputBuffer.getShort(frameOffset + Short.SIZE_BYTES))
-                } else {
-                    left
-                }
-            observedLeft = max(observedLeft, left)
-            observedRight = max(observedRight, right)
-            frameOffset += frameSize
-        }
-        synchronized(peakLock) {
-            leftPeak = max(leftPeak, observedLeft)
-            rightPeak = max(rightPeak, observedRight)
-        }
-
+        // Sampling observes complete frames without moving the Media3 input position.
+        input?.ingest(inputBuffer)
         val outputBuffer = replaceOutputBuffer(inputBuffer.remaining())
         outputBuffer.put(inputBuffer)
         outputBuffer.flip()
     }
 
-    /** Returns and clears the loudest samples observed since the preceding drain. */
-    fun drainPeaks(): DecodedPlaybackAudioPeaks =
-        synchronized(peakLock) {
-            DecodedPlaybackAudioPeaks(leftPeak, rightPeak).also {
-                leftPeak = 0f
-                rightPeak = 0f
-            }
+    /** Capture the actual input identity and its measurement in one short native-source lock. */
+    fun drainTicket(): DecodedPlaybackAudioTicket? = synchronized(sourceLock) {
+        val current = input ?: return@synchronized null
+        val sample = peaks.sampleAndReset() ?: return@synchronized null
+        DecodedPlaybackAudioTicket(sample, current)
+    }
+
+    /** Retired work cannot publish or disturb a successor; native stepping stays outside the lock. */
+    fun publishIfCurrent(ticket: DecodedPlaybackAudioTicket, publish: () -> Unit): Boolean =
+        synchronized(sourceLock) {
+            if (closed || input !== ticket.input) return@synchronized false
+            publish()
+            true
         }
 
+    /** Raw measurement compatibility; production presentation consumes [drainTicket]. */
+    fun drainSample(): MonitorAudioPeakSample? = drainTicket()?.sample
+
+    /** Existing raw-peak compatibility; production presentation consumes [drainSample]. */
+    fun drainPeaks(): DecodedPlaybackAudioPeaks {
+        val sample = drainSample()
+        return DecodedPlaybackAudioPeaks(sample?.left ?: 0f, sample?.right ?: 0f)
+    }
+
     override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
-        clearPeaks()
+        synchronized(sourceLock) {
+            input?.close()
+            input = null
+            if (!closed && inputAudioFormat != AudioProcessor.AudioFormat.NOT_SET) {
+                input = MonitorPcmAudioInput(peaks).also {
+                    it.prepare(
+                        MonitorPcmFormat(
+                            MonitorPcmSampleType.SIGNED16,
+                            inputAudioFormat.channelCount,
+                            null,
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     override fun onReset() {
-        clearPeaks()
-    }
-
-    private fun clearPeaks() {
-        synchronized(peakLock) {
-            leftPeak = 0f
-            rightPeak = 0f
+        synchronized(sourceLock) {
+            input?.close()
+            input = null
         }
     }
 
-    private fun linearMagnitude(sample: Short): Float = abs(sample.toInt()) / 32_768f
+    /** Player disposal is terminal; late format or decoded callbacks cannot reopen metering. */
+    fun close() {
+        synchronized(sourceLock) {
+            closed = true
+            input?.close()
+            input = null
+            peaks.close()
+        }
+    }
 }
 
 /**
@@ -215,6 +237,7 @@ internal class PlaybackAudioMeterCoordinator(
     private val pollIntervalMillis: Long = PLAYBACK_AUDIO_METER_POLL_MILLIS,
 ) {
     private val polling = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     private val mutableLevels = MutableStateFlow<LiveAudioMeterLevels?>(null)
 
     init {
@@ -230,9 +253,11 @@ internal class PlaybackAudioMeterCoordinator(
 
     /** Polls until cancellation, publishing only validated shared-core meter values. */
     suspend fun poll() {
+        check(!closed.get()) { "Playback audio meter is closed." }
         check(polling.compareAndSet(false, true)) { "Playback audio meter is already polling." }
-        audioProcessor.drainPeaks()
+        audioProcessor.drainSample()
         var previousPayload = FloatArray(0)
+        var previousInput: MonitorPcmAudioInput? = null
         var lastTickNanos = monotonicNanos()
         try {
             while (true) {
@@ -240,7 +265,18 @@ internal class PlaybackAudioMeterCoordinator(
                 val nowNanos = monotonicNanos()
                 val elapsedNanos = (nowNanos - lastTickNanos).coerceAtLeast(0L)
                 lastTickNanos = nowNanos
-                val peaks = audioProcessor.drainPeaks()
+                if (closed.get()) return
+                val ticket = audioProcessor.drainTicket()
+                val peaks = ticket?.sample
+                if (ticket == null || peaks == null) {
+                    previousPayload = FloatArray(0)
+                    previousInput = null
+                    mutableLevels.value = null
+                    continue
+                }
+                if (previousInput !== ticket.input) {
+                    previousPayload = FloatArray(0)
+                }
                 val payload =
                     stepper.step(
                         previousPayload = previousPayload,
@@ -249,13 +285,27 @@ internal class PlaybackAudioMeterCoordinator(
                         deltaTimeSeconds = elapsedNanos / 1_000_000_000f,
                     )
                 val wire = PlaybackAudioMeterWire.parse(payload)
-                previousPayload = wire?.payload ?: FloatArray(0)
-                mutableLevels.value = wire?.levels
+                val published = audioProcessor.publishIfCurrent(ticket) {
+                    previousInput = ticket.input
+                    previousPayload = wire?.payload ?: FloatArray(0)
+                    mutableLevels.value = wire?.levels
+                }
+                if (!published) {
+                    previousPayload = FloatArray(0)
+                    previousInput = null
+                    mutableLevels.value = null
+                }
             }
         } finally {
-            audioProcessor.drainPeaks()
+            audioProcessor.drainSample()
             mutableLevels.value = null
             polling.set(false)
         }
+    }
+
+    fun close() {
+        closed.set(true)
+        audioProcessor.close()
+        mutableLevels.value = null
     }
 }

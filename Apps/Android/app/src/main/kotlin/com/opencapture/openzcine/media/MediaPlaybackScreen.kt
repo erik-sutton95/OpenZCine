@@ -825,6 +825,7 @@ private fun ProgressivePlayer(
         onDispose {
             onPlayerChanged(null)
             playerView.player = null
+            audioMeterCoordinator.close()
             player.release()
         }
     }

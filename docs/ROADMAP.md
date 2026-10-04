@@ -257,6 +257,12 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   and a transfer-backed
   Android still-photo viewer (JPEG/PNG progressive preview; explicit thumbnail fallback for
   unsupported HEIF/RAW decoders). Android playback-assist parity is tracked by OPE-69.
+  The local OpenCine decoded-audio candidate adopts shared Apple tap ownership and Android PCM
+  sampling/source retirement, with portable ballistics shared through the existing JNI wire.
+  Unknown audio stays absent on both platforms. Portable 626, strict, both iOS architectures,
+  actual SIMULATED Apple native 3, Android 964/JNI 73 and debug/release package coexistence checks
+  passed locally. Android actual Media3 playback and physical checks remain untested; this
+  candidate does not complete the remaining playback migration.
 - **Android media-library delivery parity** (OPE-87, in progress): the browser persists small,
   medium, and large grid densities and composes container, resolution, Today, and camera-slot
   filters from authoritative clip metadata. Connected camera browsing also shows every valid card's

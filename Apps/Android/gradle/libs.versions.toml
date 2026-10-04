@@ -35,6 +35,7 @@ opencine-monitor-ui = { module = "com.opencapture.opencine:monitor-ui", version.
 opencine-multicam = { module = "com.opencapture.opencine:multicam", version.ref = "openCineCore" }
 opencine-nikon = { module = "com.opencapture.opencine:nikon", version.ref = "openCineCore" }
 opencine-appkit = { module = "com.opencapture.opencine:appkit", version.ref = "openCineCore" }
+opencine-native-runtime = { module = "com.opencapture.opencine:native-runtime", version.ref = "openCineCore" }
 # The android-application module needs the explicit JUnit variant: AGP's built-in
 # Kotlin support does not apply the framework inference the kotlin-jvm plugin does.
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
