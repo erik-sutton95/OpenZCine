@@ -1627,6 +1627,10 @@ internal fun MediaBrowseScreen(
         playingClip?.let { clip ->
             val owner = ownerCameraID(clip)
             MediaPlaybackScreen(
+                library = library,
+                playbackRecords = displayedClips.mapNotNull { row ->
+                    libraryCodec?.record(NikonLibraryClip(ownerCameraID(row), row))
+                },
                 initialClip = clip,
                 filteredClips = displayedClips,
                 cameraID = owner,

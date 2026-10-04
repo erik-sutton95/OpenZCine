@@ -456,3 +456,35 @@ The existing video fallback census also includes downloaded cached filenames eve
 their rows have no hardware location; the host supplies those exact storage retention facts
 through its unchanged download predicate. Removed remote-only metadata cannot manufacture
 a local survivor or trigger a replacement probe. No new native wire command is introduced.
+
+## Nikon shared player and page adoption
+
+Both actual players compose the existing shared `MonitorMediaPlaybackModel` and
+`MonitorPlaybackScreen`. The shared owners hold item/transport/conform
+and scrub state, canvas fitting and zoom, chrome visibility, page gestures, transport flashes,
+clip controls, scrubber and footer/header layout. The actual copied player page bodies retire.
+App policy arrives as explicit initial visibility, loop availability, share readiness, current
+parent playlist values and finite header/canvas/native-assist slots. Existing consumers retain
+their public defaults. Android retains its original framework double-tap zoom reset through an
+explicit neutral option and its canvas/desqueeze pan bounds through typed geometry inputs.
+Continuous bounded movement is an explicit opt-in owned by the common gesture engine, with
+mid-gesture clamping and immediate reversal; existing common defaults remain unchanged.
+
+Actual native adapters retain growing-file preparation, AVPlayer/Media3 attachment and captured
+stream cleanup. Android navigation still joins the old PTP transfer before applying current
+parent navigation; offline media keeps the captured record's real cache bucket. Nikon's strict
+250 ms Apple end latch remains a named app presentation policy. Apple rating shade state stays open
+across adjacent clips; Android retains its original outer active-clip key and native rating
+state lifetime. Initial DemoHarness clean view remains explicit, and UIKit delivery uses
+the measured share button frame separately from the assist bar frame. Existing native effects,
+scopes, audio taps, rating/camera admission, cache and wire primitive bodies remain unchanged.
+These native primitives do not become logical/page owners by wrapping them.
+
+Local automated checks passed: shared and app portable/strict checks, both simulator
+architecture builds, 53 SIMULATED native caller/page cases, the staged Android consumer
+(1,002 unique cases), shared Android checks (1,148 unique cases with two known Core skips),
+JNI73, Vulkan, production package byte linkage and three actual Compose Popup/gesture cases.
+The private simulator and complete Android guest/cold state were restored before assessment.
+Shared page layout can change control placement; physical device, visual and animation
+qualification remain untested. Native frame/effects processing remains a separate owner.
+No pins, dependencies or publication change.

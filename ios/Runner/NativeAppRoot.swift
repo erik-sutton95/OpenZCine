@@ -2445,6 +2445,12 @@ final class NativeAppModel {
     }
     /// Per-slot card capacity from the last `refreshMediaStorageSlots` pass.
     var mediaStorageSlots: [MediaStorageSlotDisplay] = []
+    /// Actual native stream task captured by an item; retired cleanup cannot stop a successor.
+    final class MediaClipStreamTicket {
+        let task: Task<Void, Never>
+        init(task: Task<Void, Never>) { self.task = task }
+    }
+    @ObservationIgnored private var clipStreamTicket: MediaClipStreamTicket?
     /// Background task streaming the clip currently open in the player, if any.
     @ObservationIgnored private var clipStreamTask: Task<Void, Never>?
     @ObservationIgnored private var clipStreamClipID: String?
@@ -13770,20 +13776,33 @@ extension NativeAppModel {
 
     /// Starts streaming one clip from the camera for progressive playback. No-op when already cached
     /// or when another stream for the same clip is in flight.
-    func startClipStream(_ clip: MediaClip) {
-        guard isConnected, !isClipDownloaded(clip), clip.handle != nil else { return }
-        if clipStreamClipID == clip.id, let clipStreamTask, !clipStreamTask.isCancelled { return }
+    @discardableResult
+    func startClipStream(_ clip: MediaClip) -> MediaClipStreamTicket? {
+        guard isConnected, !isClipDownloaded(clip), clip.handle != nil else { return nil }
+        if clipStreamClipID == clip.id, let clipStreamTask, !clipStreamTask.isCancelled {
+            return clipStreamTicket
+        }
         cancelClipStream()
         clipStreamClipID = clip.id
-        clipStreamTask = Task { await streamClip(clip) }
+        let task = Task { await streamClip(clip) }
+        clipStreamTask = task
+        let ticket = MediaClipStreamTicket(task: task)
+        clipStreamTicket = ticket
+        return ticket
     }
 
-    /// Stops the active clip stream (e.g. when the player dismisses). Partial bytes are kept so the
-    /// next open can resume.
+    /// Legacy unmigrated callers keep unconditional cancellation and all partial cache bytes.
     func cancelClipStream() {
         clipStreamTask?.cancel()
         clipStreamTask = nil
         clipStreamClipID = nil
+        clipStreamTicket = nil
+    }
+
+    /// Stop only the exact actual task captured by the outgoing item.
+    func cancelClipStream(_ ticket: MediaClipStreamTicket) {
+        guard clipStreamTicket === ticket else { return }
+        cancelClipStream()
     }
 
     /// Whether this clip is the one currently streaming from the camera.

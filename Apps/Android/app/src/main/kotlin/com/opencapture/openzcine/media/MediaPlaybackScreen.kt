@@ -2,55 +2,49 @@
 
 package com.opencapture.openzcine.media
 import com.opencapture.openzcine.performOperatorHaptic
+import com.opencapture.monitorui.MonitorPlaybackZoomBoundary
+import com.opencapture.monitorui.MonitorPlaybackActionChip
+import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.monitorui.MonitorPlaybackActions
+import com.opencapture.monitorui.MonitorPlaybackPresentation
+import com.opencapture.monitorui.MonitorPlaybackScreen
+import com.opencapture.monitorui.MonitorPlaybackPageSlots
+import com.opencapture.monitorui.MonitorPlaybackCanvasContext
+import com.opencapture.monitorui.MonitorPlaybackPictureGeometry
+import com.opencapture.monitorui.MonitorPlaybackToolsContext
+import com.opencapture.monitorui.MonitorPlaybackInspectorContext
+import com.opencapture.monitorui.MonitorEditingCancellation
+import com.opencapture.opencine.appkit.MonitorMediaLibraryModel
+import com.opencapture.opencine.appkit.MonitorMediaPlaybackModel
+import com.opencapture.opencine.appkit.MonitorMediaRecord
+import com.opencapture.opencine.media.MonitorPlaybackEvent
+import com.opencapture.opencine.media.MonitorPlaybackMetadata
+import com.opencapture.opencine.media.MonitorPlaybackItemToken
 
 import android.net.Uri
 import android.os.Build
-import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.outlined.CenterFocusWeak
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -63,38 +57,26 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -141,14 +123,12 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
-import com.opencapture.openzcine.liveFeedContentRect
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.rememberAndroidThermalTier
 import com.opencapture.openzcine.resolveFalseColorReference
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.withScale
-import com.opencapture.openzcine.zone
 import java.nio.file.Files
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -157,7 +137,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -168,33 +147,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonNative
 
-private const val PLAYBACK_ZOOM_MAX = 4f
-
-/** iOS `PlaybackChrome` — compact transport metrics. */
-/**
- * Sized so the full transport row fits the narrowest supported width, matching iOS
- * `MediaClipPlayerView.PlaybackChrome`. The row grew to eight controls when the conform preview
- * landed; on iOS that overflow dragged the top bar off screen, and the same arithmetic applies
- * here. Visual size only — the buttons keep their 44dp minimum touch target.
- */
-private object PlaybackChrome {
-    val transportButtonWidth = 38.dp
-    val transportButtonHeight = 36.dp
-    val actionButtonWidth = 32.dp
-    val actionButtonHeight = 36.dp
-    val transportIconSize = 18.dp
-    val primaryTransportIconSize = 22.dp
-    val actionIconSize = 16.dp
-    val corner = RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)
-}
-
-private data class PlaybackTransportFlash(val glyph: String, val generation: Long)
-
 /** A close or clip switch waits for the current Swift-owned transfer to stop. */
 private sealed interface PlaybackSessionAction {
     data object Close : PlaybackSessionAction
 
-    data class Navigate(val clip: MediaClipRecord) : PlaybackSessionAction
+    data class Navigate(val record: MonitorMediaRecord<NikonLibraryClip>) : PlaybackSessionAction
 }
 
 /**
@@ -208,6 +165,8 @@ private sealed interface PlaybackSessionAction {
  */
 @Composable
 internal fun MediaPlaybackScreen(
+    library: MonitorMediaLibraryModel<NikonLibraryClip>?,
+    playbackRecords: List<MonitorMediaRecord<NikonLibraryClip>>,
     initialClip: MediaClipRecord,
     filteredClips: List<MediaClipRecord>,
     cameraID: String,
@@ -233,18 +192,45 @@ internal fun MediaPlaybackScreen(
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ): Unit {
-    var activeClip by remember(initialClip.libraryKey(cameraID)) { mutableStateOf(initialClip) }
-    val playableClips = remember(filteredClips) { PlaybackNavigation.playableClips(filteredClips) }
-    val previous = PlaybackNavigation.adjacent(playableClips, activeClip, direction = -1)
-    val next = PlaybackNavigation.adjacent(playableClips, activeClip, direction = 1)
-    val favorite = activeClip.libraryKey(cameraID) in favoriteIDs
+    if (library == null) {
+        PlaybackLoading("Preparing media library…")
+        return
+    }
+    val initial = remember(library, initialClip.libraryKey(cameraID)) {
+        playbackRecords.firstOrNull { it.payload.bucket == cameraID && it.payload.clip == initialClip }
+    }
+    if (initial == null) {
+        PlaybackFailure("This clip is not in the current media library.")
+        return
+    }
+    val playbackScope = rememberCoroutineScope()
+    val session = remember(library, initialClip.libraryKey(cameraID)) {
+        NikonPlaybackSession(library, initial, playbackRecords, playbackScope)
+    }
+    val logicalState by session.owner.state.collectAsState()
+    if (logicalState.closed) {
+        PlaybackLoading("Closing media playback…")
+        return
+    }
+    val activeClip = logicalState.active?.payload?.clip ?: initialClip
+    DisposableEffect(session) { onDispose { session.owner.close() } }
+    val playableRecords = playbackRecords.filter { it.payload.clip.contentKind == MediaContentKind.PLAYABLE_PROXY }
+    val activeIndex = playableRecords.indexOfFirst { it.asset.id == logicalState.active?.asset?.id }
+    val previous = if (activeIndex > 0) playableRecords.getOrNull(activeIndex - 1) else null
+    val next = if (activeIndex >= 0) playableRecords.getOrNull(activeIndex + 1) else null
+    val activeBucket = logicalState.active?.payload?.bucket ?: cameraID
+    val favorite = activeClip.libraryKey(activeBucket) in favoriteIDs
 
     // Keying the complete session guarantees that a finished close of the old
     // transfer disposes its player/cache work before the next clip is composed.
-    key(activeClip.libraryKey(cameraID)) {
+    key(activeClip.libraryKey(activeBucket)) {
         PlaybackClipSession(
             clip = activeClip,
-            cameraID = cameraID,
+            session = session,
+            playback = session.owner,
+            native = session.native,
+            itemToken = logicalState.token,
+            cameraID = activeBucket,
             cameraTransferAvailable = cameraTransferAvailable,
             connectionOwner = connectionOwner,
             favorite = favorite,
@@ -264,21 +250,25 @@ internal fun MediaPlaybackScreen(
             onCaptureRatingCompletion = onCaptureRatingCompletion,
             onRatingDiagnostic = onRatingDiagnostic,
             onResolvedObjectSize = onResolvedObjectSize,
-            onNavigate = { target -> activeClip = target },
-            onClose = onClose,
+            onNavigate = { target -> session.navigate(target, playableRecords) },
+            onClose = { session.owner.close(); onClose() },
         )
     }
 }
 
 @Composable
 private fun PlaybackClipSession(
+    session: NikonPlaybackSession,
+    playback: MonitorMediaPlaybackModel<NikonLibraryClip, Unit>,
+    native: NikonPlaybackNativePort,
+    itemToken: MonitorPlaybackItemToken,
     clip: MediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean,
     connectionOwner: Long?,
     favorite: Boolean,
-    previous: MediaClipRecord?,
-    next: MediaClipRecord?,
+    previous: MonitorMediaRecord<NikonLibraryClip>?,
+    next: MonitorMediaRecord<NikonLibraryClip>?,
     framingConfiguration: LocalFramingAssistConfiguration,
     galleryFailureInjection: MediaGalleryFailureInjection,
     playbackAssistState: PlaybackAssistState,
@@ -293,7 +283,7 @@ private fun PlaybackClipSession(
     onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)?,
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit,
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit,
-    onNavigate: (MediaClipRecord) -> Unit,
+    onNavigate: (MonitorMediaRecord<NikonLibraryClip>) -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -308,6 +298,7 @@ private fun PlaybackClipSession(
             AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
         }
     val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
+    val currentOnNavigate by rememberUpdatedState(onNavigate)
     val coordinator =
         remember(cacheStore, cameraID, clip, cameraTransferAvailable, connectionOwner) {
             MediaTransferCoordinator(
@@ -348,7 +339,6 @@ private fun PlaybackClipSession(
     var activePlayer by remember(clip.handle) { mutableStateOf<Player?>(null) }
     val latestDeliveryJob = rememberUpdatedState(deliveryJob)
     val actionInProgress = pendingAction != null
-    var chromeVisible by remember(clip.handle) { mutableStateOf(true) }
     // Pulled down to rate, and left open across clips until pushed back up — so NOT keyed to the
     // clip, unlike the rating value itself (iOS `ratingShadeOpen`).
     var ratingShadeOpen by remember { mutableStateOf(false) }
@@ -424,7 +414,7 @@ private fun PlaybackClipSession(
         if (pendingAction == null) pendingAction = PlaybackSessionAction.Close
     }
 
-    fun requestNavigation(target: MediaClipRecord?) {
+    fun requestNavigation(target: MonitorMediaRecord<NikonLibraryClip>?) {
         if (target != null && pendingAction == null) {
             pendingAction = PlaybackSessionAction.Navigate(target)
         }
@@ -434,7 +424,7 @@ private fun PlaybackClipSession(
         if (deliveryInProgress || actionInProgress) return
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
-            activePlayer?.pause()
+            session.pauseForDelivery(activePlayer?.isPlaying == true)
             deliveryMessage = null
             coordinator.beginNativeShare(
                 selection = listOf(MediaDeliverySelection(cameraID, clip)),
@@ -454,7 +444,7 @@ private fun PlaybackClipSession(
         if (deliveryInProgress || actionInProgress) return
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
-            activePlayer?.pause()
+            session.pauseForDelivery(activePlayer?.isPlaying == true)
             deliveryMessage = null
             coordinator.beginSaveToPhotos(
                 selection = listOf(MediaDeliverySelection(cameraID, clip)),
@@ -468,8 +458,7 @@ private fun PlaybackClipSession(
 
     fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
         if (deliveryInProgress || actionInProgress) return
-        val resumeAfter = activePlayer?.isPlaying == true
-        activePlayer?.pause()
+        val playbackPause = session.pauseForDelivery(activePlayer?.isPlaying == true)
         var deliveryTicket: NikonDeliveryPresentation.ExternalTicket? = null
         val job =
             deliveryScope.launch(start = CoroutineStart.LAZY) {
@@ -521,7 +510,7 @@ private fun PlaybackClipSession(
                 } catch (error: Exception) {
                     deliveryMessage = error.message ?: "Couldn't deliver this clip to Frame.io."
                 } finally {
-                    if (resumeAfter && pendingAction == null) activePlayer?.play()
+                    if (pendingAction == null && playbackPause != null) session.resumeAfterDelivery(playbackPause)
                     deliveryTicket?.let { mediaDeliveryCoordinator?.finishExternalDelivery(it) }
                     if (deliveryJob === runningJob) {
                         deliveryJob = null
@@ -538,7 +527,9 @@ private fun PlaybackClipSession(
     }
 
     LaunchedEffect(coordinator) {
-        preparation = coordinator.prepare()
+        val prepared = coordinator.prepare()
+        preparation = prepared
+        if (prepared is MediaTransferPreparation.Failed) native.fail(itemToken, prepared.message)
     }
 
     // A progressive entry is playable before it is deliverable. Poll only the
@@ -576,10 +567,9 @@ private fun PlaybackClipSession(
         coordinator.close()
         when (action) {
             PlaybackSessionAction.Close -> onClose()
-            is PlaybackSessionAction.Navigate -> onNavigate(action.clip)
+            is PlaybackSessionAction.Navigate -> currentOnNavigate(action.record)
         }
     }
-    BackHandler(enabled = !actionInProgress) { requestClose() }
 
     // Activity teardown can dispose the surface without the in-app back path.
     // Preserve the camera invariant by stopping from a bounded IO coroutine.
@@ -604,20 +594,28 @@ private fun PlaybackClipSession(
             // This overlay owns every empty pixel; gestures never reach the paused monitor below it.
             .pointerInput(Unit) { detectTapGestures {} },
     ) {
-        when (val current = preparation) {
-            MediaTransferPreparation.Loading -> PlaybackLoading("Preparing camera media…")
-            is MediaTransferPreparation.Failed -> PlaybackFailure(current.message)
-            is MediaTransferPreparation.Ready ->
-                ProgressivePlayer(
-                    entry = current.entry,
+        NikonPlaybackPage(
+                    entry = (preparation as? MediaTransferPreparation.Ready)?.entry,
+                    preparation = preparation,
+                    title = clip.filename,
+                    favorite = favorite,
+                    previous = previous != null && !actionInProgress,
+                    next = next != null && !actionInProgress,
+                    onBack = ::requestClose,
+                    backEnabled = !actionInProgress,
+                    onAdjacent = { offset -> requestNavigation(if (offset < 0) previous else next) },
+                    onFavorite = onToggleFavorite,
+                    session = session,
+                    playback = playback,
+                    native = native,
+                    itemToken = itemToken,
                     framingConfiguration = framingConfiguration,
                     playbackAssistState = playbackAssistState,
                     sharedAssistState = sharedAssistState,
                     exposureAssistCameraInput = exposureAssistCameraInput,
                     operatorSettings = operatorSettings,
                     lutLibrary = lutLibrary,
-                    chromeVisible = chromeVisible,
-                    onChromeVisibleChanged = { chromeVisible = it },
+
                     ratingShadeOpen = ratingShadeOpen,
                     onRatingShadeOpenChanged = { ratingShadeOpen = it },
                     onPlayerChanged = { activePlayer = it },
@@ -628,108 +626,12 @@ private fun PlaybackClipSession(
                             cameraConnected = cameraTransferAvailable,
                         ),
                     deliveryInProgress = deliveryInProgress,
+                    coverPresented = deliveryChooserPresented || deliveryInProgress,
                     onShare = { deliveryChooserPresented = true },
                     ratingStars = ratingStars,
                     ratingMessage = ratingMessage,
                     onSelectRating = ::selectRating,
                 )
-            MediaTransferPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
-        }
-
-        previous?.let {
-            PlaybackNavigationButton(
-                label = "‹",
-                contentDescription = "Previous video in current filter",
-                modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp),
-                enabled = !actionInProgress,
-            ) { requestNavigation(it) }
-        }
-        next?.let {
-            PlaybackNavigationButton(
-                label = "›",
-                contentDescription = "Next video in current filter",
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
-                enabled = !actionInProgress,
-            ) { requestNavigation(it) }
-        }
-
-        if (chromeVisible) {
-            // iOS topBar: close · filename · favorite only (share sits on bottom transport).
-            Column(
-                Modifier.fillMaxWidth()
-                    .windowInsetsPadding(
-                        WindowInsets.displayCutout.only(
-                            WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
-                        ),
-                    )
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    PlaybackIconButton(
-                        icon = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        enabled = !actionInProgress,
-                        circular = true,
-                        size = 34.dp,
-                        onClick = { requestClose() },
-                    )
-                    Text(
-                        clip.filename,
-                        modifier = Modifier.weight(1f),
-                        style = chromeStyle(14f, FontWeight.SemiBold),
-                        color = LiveDesign.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    PlaybackIconButton(
-                        icon = if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
-                        contentDescription =
-                            if (favorite) {
-                                "Remove ${clip.filename} from favorites"
-                            } else {
-                                "Add ${clip.filename} to favorites"
-                            },
-                        enabled = !actionInProgress,
-                        circular = true,
-                        size = 34.dp,
-                        tint = if (favorite) LiveDesign.accent else LiveDesign.text,
-                        onClick = onToggleFavorite,
-                    )
-                }
-                when (shareState) {
-                    PlaybackShareState.BUFFERING ->
-                        Text(
-                            if (cameraTransferAvailable) {
-                                "Still caching from the camera. Share will finish the copy first."
-                            } else {
-                                "Buffering camera proxy. Delivery unlocks after the private cache completes."
-                            },
-                            modifier = Modifier.padding(start = 44.dp, top = 5.dp, end = 8.dp),
-                            style = chromeStyle(10.5f, FontWeight.Medium),
-                            color = LiveDesign.muted,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    PlaybackShareState.UNAVAILABLE,
-                    PlaybackShareState.READY,
-                    -> Unit
-                }
-                deliveryMessage?.let { message ->
-                    Text(
-                        message,
-                        modifier = Modifier.padding(start = 44.dp, top = 5.dp, end = 8.dp),
-                        style = chromeStyle(11f, FontWeight.Medium),
-                        color = LiveDesign.accent,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
 
         if (deliveryChooserPresented) {
             MediaDeliveryPopup(
@@ -768,8 +670,112 @@ private fun PlaybackClipSession(
     }
 }
 
+private class NikonNativePlaybackContent(
+    val aspect: Float, val buffered: Float, val error: String?,
+    val horizontalPresentationScale: Float, val verticalPresentationScale: Float,
+    val picture: @Composable (MonitorPlaybackPictureGeometry) -> Unit,
+    val canvas: @Composable (MonitorPlaybackCanvasContext) -> Unit,
+    val tools: @Composable (MonitorPlaybackToolsContext) -> Unit,
+    val inspector: @Composable (MonitorPlaybackInspectorContext) -> Unit,
+    val dismissInspector: () -> Boolean,
+)
+
 @Composable
-private fun ProgressivePlayer(
+private fun NikonPlaybackPage(
+    entry: MediaCacheEntry?, preparation: MediaTransferPreparation, title: String,
+    favorite: Boolean, previous: Boolean, next: Boolean,
+    onBack: () -> Unit, backEnabled: Boolean, onAdjacent: (Int) -> Unit, onFavorite: () -> Unit,
+    session: NikonPlaybackSession, playback: MonitorMediaPlaybackModel<NikonLibraryClip, Unit>,
+    native: NikonPlaybackNativePort, itemToken: MonitorPlaybackItemToken,
+    framingConfiguration: LocalFramingAssistConfiguration,
+    playbackAssistState: PlaybackAssistState, sharedAssistState: AssistState,
+    exposureAssistCameraInput: ExposureAssistCameraInput, operatorSettings: OperatorSettings,
+    lutLibrary: AndroidLutLibrary?, ratingShadeOpen: Boolean, onRatingShadeOpenChanged: (Boolean) -> Unit,
+    onPlayerChanged: (Player?) -> Unit, shareReady: Boolean, deliveryInProgress: Boolean, coverPresented: Boolean,
+    onShare: () -> Unit, ratingStars: Int?, ratingMessage: String?, onSelectRating: (Int) -> Unit,
+) {
+    val logical by playback.state.collectAsState()
+    val hapticView = LocalView.current
+    val content = entry?.let {
+        rememberNikonNativePlayback(session, playback, native, itemToken, it, framingConfiguration,
+            playbackAssistState, sharedAssistState, exposureAssistCameraInput, operatorSettings,
+            lutLibrary, onPlayerChanged)
+    }
+    val presentedPosition = if (logical.scrubbing) logical.scrubPosition else logical.position
+    val value = MonitorPlaybackPresentation(
+        item = itemToken, title = title, subtitle = "", source = null, metadata = emptyList(),
+        aspect = content?.aspect ?: 16f / 9f, ready = logical.ready,
+        error = (preparation as? MediaTransferPreparation.Failed)?.message ?: content?.error ?: logical.error,
+        progress = entry?.progress,
+        position = presentedPosition.toFloat(), duration = (logical.duration ?: 0.0).toFloat(),
+        positionLabel = formatPlaybackTime((presentedPosition * 1000.0).toLong()),
+        durationLabel = formatPlaybackTime(((logical.duration ?: 0.0) * 1000.0).toLong()),
+        playing = logical.reportedPlaying ?: logical.playRequested, reachedEnd = logical.reachedEnd,
+        scrubbing = logical.scrubbing, muted = logical.muted, looping = false,
+        previous = previous, next = next, favorite = favorite,
+        conform = logical.metadata.conform, conformTarget = logical.conformTarget,
+        loopAvailable = false, shareEnabled = shareReady && !deliveryInProgress,
+        buffered = content?.buffered ?: 0f, doubleTapResetsZoom = true, continuousPanBounds = true,
+        zoomBoundary = MonitorPlaybackZoomBoundary.CANVAS,
+        horizontalPresentationScale = content?.horizontalPresentationScale ?: 1f,
+        verticalPresentationScale = content?.verticalPresentationScale ?: 1f)
+    fun admitted(token: MonitorPlaybackItemToken, action: () -> Unit) {
+        if (playback.isActive && playback.state.value.token == token) action()
+    }
+    val actions = MonitorPlaybackActions(
+        back = onBack,
+        play = { token, play -> admitted(token) { playback.setPlaying(play) } },
+        restart = { token -> admitted(token) { playback.restart() } },
+        seekBy = { token, delta -> admitted(token) { playback.seekBy(delta) } },
+        mute = { token, muted -> admitted(token) { playback.setMuted(muted) } },
+        loop = { _, _ -> },
+        conform = { token, target -> admitted(token) { playback.setConformTarget(target) } },
+        adjacent = { token, offset -> admitted(token) { onAdjacent(offset) } },
+        favorite = { token -> admitted(token, onFavorite) },
+        share = { token -> admitted(token) { if (shareReady && !deliveryInProgress) onShare() } },
+        delete = null,
+        beginScrub = { token -> if (playback.isActive && playback.state.value.token == token)
+            playback.beginScrub() else null },
+        updateScrub = { edit, seconds -> playback.updateScrub(seconds, edit) },
+        updateFrameScrub = { edit, delta, width -> playback.updateFrameScrub(delta, width, edit) },
+        commitScrub = playback::commitScrub,
+        cancelScrub = { edit, why -> playback.cancelScrub(why == MonitorEditingCancellation.INTERRUPTED, edit) },
+        longPressFeedback = { hapticView.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS) },
+        dismissAssistInspector = { content?.dismissInspector?.invoke() ?: false })
+    MonitorPlaybackScreen(value, actions,
+        slots = MonitorPlaybackPageSlots(
+            headerAccessory = {
+                if (ratingStars != null) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(Modifier.size(52.dp, 20.dp).glass(CircleShape)
+                            .chromeClickable { onRatingShadeOpenChanged(!ratingShadeOpen) }
+                            .semantics { contentDescription = if (ratingShadeOpen) "Hide star rating" else "Show star rating" },
+                            horizontalArrangement = Arrangement.Center) {
+                            Icon(Icons.Filled.Star, null, tint = LiveDesign.muted, modifier = Modifier.size(11.dp))
+                            Icon(if (ratingShadeOpen) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                null, tint = LiveDesign.muted, modifier = Modifier.size(13.dp))
+                        }
+                        if (ratingShadeOpen) StarRatingRow(stars = ratingStars, onSelect = onSelectRating)
+                    }
+                }
+                if (ratingMessage != null) Text(ratingMessage, color = LiveDesign.text)
+            }, canvasDetails = { content?.canvas?.invoke(it) },
+            onChromeVisibilityChanged = { if (!it) content?.dismissInspector?.invoke() },
+            onAssistExpansionChanged = { if (!it) content?.dismissInspector?.invoke() }),
+        coverPresented = coverPresented,
+        backHandler = { handle -> BackHandler(enabled = backEnabled, onBack = handle) },
+        picture = { content?.picture?.invoke(it) },
+        feedAssists = {}, canvasAssists = {},
+        tools = { content?.tools?.invoke(it) },
+        assistInspector = { content?.inspector?.invoke(it) })
+}
+
+@Composable
+private fun rememberNikonNativePlayback(
+    session: NikonPlaybackSession,
+    playback: MonitorMediaPlaybackModel<NikonLibraryClip, Unit>,
+    native: NikonPlaybackNativePort,
+    itemToken: MonitorPlaybackItemToken,
     entry: MediaCacheEntry,
     framingConfiguration: LocalFramingAssistConfiguration,
     playbackAssistState: PlaybackAssistState,
@@ -777,29 +783,19 @@ private fun ProgressivePlayer(
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
-    chromeVisible: Boolean,
-    onChromeVisibleChanged: (Boolean) -> Unit,
     /** Owned by the parent so it survives clip changes, like the operator left it. */
-    ratingShadeOpen: Boolean,
-    onRatingShadeOpenChanged: (Boolean) -> Unit,
     onPlayerChanged: (Player?) -> Unit,
-    shareReady: Boolean = false,
-    deliveryInProgress: Boolean = false,
-    onShare: () -> Unit = {},
     /**
      * Camera-read clip star rating; null means offline or unreadable. The shade shows zero stars
      * in that case rather than nothing — an opened shade that renders empty reads as broken.
      */
-    ratingStars: Int? = null,
     /** Transient rating-write refusal line (with the body's response code); null hides it. */
-    ratingMessage: String? = null,
-    onSelectRating: (Int) -> Unit = {},
-) {
+) : NikonNativePlaybackContent {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val audioMeterCoordinator = remember(entry) { PlaybackAudioMeterCoordinator() }
+    val audioMeterCoordinator = remember(entry, itemToken) { PlaybackAudioMeterCoordinator() }
     val player =
-        remember(entry, audioMeterCoordinator) {
+        remember(entry, itemToken, audioMeterCoordinator) {
             val dataSourceFactory = DataSource.Factory { GrowingFileDataSource(entry) }
             ExoPlayer.Builder(context, audioMeterCoordinator.renderersFactory(context)).build().apply {
                 setAudioAttributes(
@@ -819,7 +815,6 @@ private fun ProgressivePlayer(
                 // effect-list replacement on the API 29–32 playback fallback.
                 if (Build.VERSION.SDK_INT in 29..32) setVideoEffects(emptyList())
                 prepare()
-                playWhenReady = true
             }
         }
     val playbackAudioLevels by audioMeterCoordinator.levels.collectAsState()
@@ -832,15 +827,26 @@ private fun ProgressivePlayer(
                 .inflate(R.layout.playback_player_view, null, false) as PlayerView
         }
     val textureView = remember(playerView) { playerView.videoSurfaceView as? TextureView }
-    DisposableEffect(player, playerView) {
+    var attachment by remember(player, itemToken) {
+        mutableStateOf<NikonPlaybackNativePort.Attachment?>(null)
+    }
+    DisposableEffect(player, playerView, itemToken) {
         playerView.player = player
         onPlayerChanged(player)
-        onDispose {
-            onPlayerChanged(null)
-            playerView.player = null
-            audioMeterCoordinator.close()
-            player.release()
-        }
+        val captured = native.attach(
+            player, itemToken,
+            beforeRelease = {
+                onPlayerChanged(null)
+                if (playerView.player === player) playerView.player = null
+                audioMeterCoordinator.close()
+            },
+            seekNative = { target, preview ->
+                player.setSeekParameters(if (preview) SeekParameters.CLOSEST_SYNC else SeekParameters.EXACT)
+                player.seekTo(target)
+            },
+        )
+        attachment = captured
+        onDispose { native.detach(captured) }
     }
     // Media3 owns audio focus through the configured movie attributes. Pausing
     // on lifecycle loss prevents an opened chooser or background app from
@@ -848,176 +854,32 @@ private fun ProgressivePlayer(
     DisposableEffect(lifecycleOwner, player) {
         val observer =
             LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_PAUSE) player.pause()
+                if (event == Lifecycle.Event.ON_PAUSE && playback.state.value.token == itemToken) {
+                    // Original Android policy never resumes merely because the app returns.
+                    session.scenePaused(itemToken)
+                } else if (event == Lifecycle.Event.ON_RESUME && playback.state.value.token == itemToken) {
+                    session.sceneResumed(itemToken)
+                }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    var position by remember(entry) { mutableLongStateOf(0L) }
-    var duration by remember(entry) { mutableLongStateOf(0L) }
     var bufferedFraction by remember(entry) { mutableFloatStateOf(0f) }
-    var playing by remember(entry) { mutableStateOf(true) }
-    var audioMode by remember(entry) { mutableStateOf(PlaybackAudioMode.AUDIBLE) }
     var playbackState by remember(entry) { mutableIntStateOf(Player.STATE_BUFFERING) }
     var playbackError by remember(entry) { mutableStateOf<PlaybackException?>(null) }
-    var reachedEnd by remember(entry) { mutableStateOf(false) }
-    var scrubPosition by remember(entry) { mutableFloatStateOf(0f) }
-    var scrubbing by remember(entry) { mutableStateOf(false) }
-    var wasPlayingBeforeScrub by remember(entry) { mutableStateOf(false) }
-    var lastPreviewSeekAt by remember(entry) { mutableLongStateOf(0L) }
-    var zoom by remember(entry) { mutableFloatStateOf(1f) }
-    var pan by remember(entry) { mutableStateOf(PlaybackPan()) }
-    var viewport by remember(entry) { mutableStateOf(IntSize.Zero) }
     var videoSize by remember(entry) { mutableStateOf(VideoSize.UNKNOWN) }
-    // Conform preview: what the track says it was shot at, and the target the operator picked.
-    // Real time (null) is always the default — this is a preview transform, never the clip.
-    var conformCaptureRate by remember(entry) { mutableStateOf<Float?>(null) }
-    var conformVariableRate by remember(entry) { mutableStateOf(false) }
-    var conformTarget by remember(entry) { mutableStateOf<Double?>(null) }
     var videoColorMode by
         remember(entry, player) {
             mutableStateOf(selectedPlaybackVideoColorMode(player.currentTracks))
         }
-    var assistMode by remember(entry) { mutableStateOf(false) }
     var assistOptionsTool by remember(entry) { mutableStateOf<AssistTool?>(null) }
     var assistToolbarBounds by remember(entry) { mutableStateOf<Rect?>(null) }
-    var frameScrubbing by remember(entry) { mutableStateOf(false) }
-    var frameScrubOrigin by remember(entry) { mutableLongStateOf(0L) }
-    var frameScrubHorizontal by remember(entry) { mutableFloatStateOf(0f) }
-    var playbackFlash by remember(entry) { mutableStateOf<PlaybackTransportFlash?>(null) }
     val playbackFramingConfiguration =
         playbackAssistState.framingConfiguration(framingConfiguration)
     val framingAssistsVisible = playbackFramingConfiguration.hasPlaybackFramingOverlay
-    val hapticView = LocalView.current
 
-    BackHandler(enabled = assistOptionsTool != null) { assistOptionsTool = null }
-    LaunchedEffect(chromeVisible, assistMode) {
-        if (!chromeVisible || !assistMode) assistOptionsTool = null
-    }
-
-    fun clampScrub(value: Float): Long =
-        PlaybackTimeline.clampPosition(value.toLong(), duration).also { scrubPosition = it.toFloat() }
-
-    fun resetZoom() {
-        zoom = 1f
-        pan = PlaybackPan()
-    }
-
-    fun enterCleanView() {
-        onChromeVisibleChanged(false)
-    }
-
-    fun restoreChrome() {
-        onChromeVisibleChanged(true)
-    }
-
-    val conformAvailability =
-        conformPreviewAvailability(conformCaptureRate?.toDouble(), conformVariableRate)
-    val conformSpeed =
-        conformPreviewSpeed(conformCaptureRate?.toDouble(), conformTarget)
-
-    // The conform is a clock change, so it rides on the player's speed rather than on the media.
-    LaunchedEffect(conformSpeed) {
-        player.setPlaybackSpeed(conformSpeed.toFloat())
-    }
-    // Audio at 40% without pitch correction still SOUNDS like audio, just wrong — the request
-    // rules that out, so a conform forces silence regardless of the mute toggle.
-    LaunchedEffect(conformTarget, audioMode) {
-        player.volume = if (conformTarget != null) 0f else audioMode.volume
-    }
-
-    fun togglePlayback(showFlash: Boolean = false) {
-        val glyph =
-            when {
-                reachedEnd -> "▶"
-                player.isPlaying -> "Ⅱ"
-                else -> "▶"
-            }
-        if (reachedEnd) {
-            player.seekTo(0L)
-            reachedEnd = false
-            player.play()
-        } else if (player.isPlaying) {
-            player.pause()
-        } else {
-            player.play()
-        }
-        if (showFlash) {
-            playbackFlash = PlaybackTransportFlash(glyph, SystemClock.elapsedRealtimeNanos())
-        }
-    }
-
-    fun finishFrameScrub() {
-        if (!frameScrubbing) return
-        val target = clampScrub(scrubPosition)
-        player.setSeekParameters(SeekParameters.EXACT)
-        player.seekTo(target)
-        position = target
-        scrubbing = false
-        frameScrubbing = false
-        reachedEnd = target >= duration && duration > 0
-        if (wasPlayingBeforeScrub) player.play()
-    }
-
-    LaunchedEffect(playbackFlash) {
-        val displayed = playbackFlash ?: return@LaunchedEffect
-        delay(700)
-        if (playbackFlash == displayed) playbackFlash = null
-    }
-
-    // The gesture box is the aspect-fit video rectangle, but the zoom transform
-    // pivots on the full-viewport video layer's centre — re-root the pinch
-    // centroid through the box's measured position in that viewport.
-    var gestureBoxOrigin by remember(entry) { mutableStateOf(Offset.Zero) }
-    val transformState =
-        rememberTransformableState { centroid, zoomChange, panChange, _ ->
-            val previousZoom = zoom
-            val nextZoom = (previousZoom * zoomChange).coerceIn(1f, PLAYBACK_ZOOM_MAX)
-            // Anchored pinch (iOS `AnchoredPinchZoom`): the point under the pinch
-            // centroid stays fixed across the scale step — see `anchoredPinchPan`.
-            val center = Offset(viewport.width / 2f, viewport.height / 2f)
-            val anchor = gestureBoxOrigin + centroid - center
-            val ratio = if (previousZoom > 0f) nextZoom / previousZoom else 1f
-            zoom = nextZoom
-            pan =
-                clampPlaybackPan(
-                    requested =
-                        anchoredPinchPan(
-                            current = pan,
-                            anchorX = anchor.x,
-                            anchorY = anchor.y,
-                            scaleRatio = ratio,
-                            panChangeX = panChange.x,
-                            panChangeY = panChange.y,
-                        ),
-                    viewportWidth = viewport.width.toFloat(),
-                    viewportHeight = viewport.height.toFloat(),
-                    zoom = nextZoom,
-                    horizontalPresentationScale =
-                        if (framingAssistsVisible) {
-                            playbackFramingConfiguration.horizontalPresentationScale
-                        } else {
-                            1f
-                        },
-                    verticalPresentationScale =
-                        if (framingAssistsVisible) {
-                            playbackFramingConfiguration.verticalPresentationScale
-                        } else {
-                            1f
-                        },
-                )
-            if (nextZoom <= 1.01f) pan = PlaybackPan()
-        }
-    // iOS `endGesture`: a pinch released just about 1× settles back to exactly 1×.
-    LaunchedEffect(transformState, entry) {
-        snapshotFlow { transformState.isTransformInProgress }
-            .collect { inProgress ->
-                if (!inProgress && zoom < 1.05f) resetZoom()
-            }
-    }
-
-    DisposableEffect(player) {
+    DisposableEffect(player, attachment) {
         val listener =
             object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
@@ -1025,11 +887,11 @@ private fun ProgressivePlayer(
                     // Seeking away from the end may emit a delayed non-ended state after the
                     // slider has already reset this flag. Mirror Media3 rather than latching the
                     // old end event so the primary button is Play again at a real seek position.
-                    reachedEnd = requiresPlaybackReplay(state)
+                    if (state == Player.STATE_ENDED) native.publish(attachment, MonitorPlaybackEvent.Ended)
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    playing = isPlaying
+                    native.publish(attachment, MonitorPlaybackEvent.Playing(isPlaying))
                 }
 
                 override fun onVideoSizeChanged(size: VideoSize) {
@@ -1042,35 +904,51 @@ private fun ProgressivePlayer(
                     // the demuxer never established one, which the policy treats as unknown and
                     // refuses — better than conforming against a guess.
                     val rate = selectedPlaybackVideoFrameRate(tracks)
-                    conformCaptureRate = rate
-                    if (rate == null) conformTarget = null
+                    native.publish(attachment, MonitorPlaybackEvent.Metadata(
+                        MonitorPlaybackMetadata(
+                            duration = player.duration.takeIf { it > 0 && it != C.TIME_UNSET }?.div(1000.0),
+                            width = videoSize.width.takeIf { it > 0 }?.toDouble(),
+                            height = videoSize.height.takeIf { it > 0 }?.toDouble(),
+                            conform = com.opencapture.opencine.media.MonitorConformPreview.Source(captureRate = rate?.toDouble()),
+                        ),
+                    ))
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
                     playbackError = error
+                    native.publish(attachment, MonitorPlaybackEvent.Failed(error.message ?: "Could not open that clip."))
                 }
             }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
 
-    LaunchedEffect(player) {
+    LaunchedEffect(player, attachment) {
+        if (attachment == null) return@LaunchedEffect
         while (isActive) {
-            position = max(0L, player.currentPosition)
-            duration = player.duration.takeIf { it > 0L && it != C.TIME_UNSET } ?: 0L
+            native.publish(attachment, MonitorPlaybackEvent.Position(max(0L, player.currentPosition) / 1000.0))
+            val observedDuration = player.duration.takeIf { it > 0L && it != C.TIME_UNSET }
+            native.publish(attachment, MonitorPlaybackEvent.Metadata(
+                MonitorPlaybackMetadata(
+                    duration = observedDuration?.div(1000.0),
+                    width = videoSize.width.takeIf { it > 0 }?.toDouble(),
+                    height = videoSize.height.takeIf { it > 0 }?.toDouble(),
+                    conform = com.opencapture.opencine.media.MonitorConformPreview.Source(
+                        captureRate = selectedPlaybackVideoFrameRate(player.currentTracks)?.toDouble()),
+                ),
+            ))
             // Prefer ExoPlayer buffered window; fall back to cache-download progress.
             val playerBuffered =
-                if (duration > 0L) {
-                    (player.bufferedPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                if (observedDuration != null) {
+                    (player.bufferedPosition.toFloat() / observedDuration.toFloat()).coerceIn(0f, 1f)
                 } else {
                     0f
                 }
             bufferedFraction =
                 max(playerBuffered, entry.progress.toFloat().coerceIn(0f, 1f))
-            playing = player.isPlaying
+            native.publish(attachment, MonitorPlaybackEvent.Playing(player.isPlaying))
             playbackState = player.playbackState
             playbackError = player.playerError
-            if (!scrubbing) scrubPosition = position.toFloat()
             delay(200)
         }
     }
@@ -1197,198 +1075,42 @@ private fun ProgressivePlayer(
         }
     }
 
-    val cacheFailed = entry.state == MediaCacheState.FAILED
-    // Apply de-squeeze whenever DESQ is on — do not require other framing tools.
-    val horizontalPresentationScale =
-        playbackFramingConfiguration.horizontalPresentationScale
-    val verticalPresentationScale =
-        playbackFramingConfiguration.verticalPresentationScale
-    val density = LocalDensity.current.density
-    val viewportWidthDp = viewport.width / density
-    val viewportHeightDp = viewport.height / density
-    val sourceWidth =
-        if (videoSize.width > 0) {
-            max(1, (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt())
-        } else {
-            16
-        }
-    val sourceHeight = if (videoSize.height > 0) videoSize.height else 9
-    val fittedVideo =
-        liveFeedContentRect(
-            containerWidth = viewport.width.toFloat(),
-            containerHeight = viewport.height.toFloat(),
-            sourceWidth = sourceWidth,
-            sourceHeight = sourceHeight,
-        )
-    SideEffect {
-        playbackEffectDisplaySize.update(
-            fittedVideo?.width?.toFloat() ?: viewport.width.toFloat(),
-            fittedVideo?.height?.toFloat() ?: viewport.height.toFloat(),
-        )
-    }
-    val feedFrame =
-        fittedVideo?.let { rect ->
-            ZoneFrame(
-                x = rect.left / density,
-                y = rect.top / density,
-                width = rect.width / density,
-                height = rect.height / density,
-            )
-        } ?: ZoneFrame(0f, 0f, viewportWidthDp, viewportHeightDp)
-    val topChromeClearance =
-        when {
-            !chromeVisible -> 0f
-            viewportWidthDp > viewportHeightDp -> 52f
-            else -> 62f
-        }
-    val bottomChromeClearance =
-        when {
-            !chromeVisible -> 0f
-            assistMode -> 82f
-            else -> 118f
-        }
-    val analysisViewport =
-        ZoneFrame(
-            x = 0f,
-            y = topChromeClearance,
-            width = viewportWidthDp,
-            height =
-                max(
-                    1f,
-                    viewportHeightDp - topChromeClearance - bottomChromeClearance,
-                ),
-        )
-    val playbackInfoBar = ZoneFrame(0f, 0f, viewportWidthDp, topChromeClearance)
     val thermalTier = rememberAndroidThermalTier()
-    Box(
-        Modifier.fillMaxSize()
-            .clipToBounds()
-            .onSizeChanged { viewport = it },
-    ) {
-        AndroidView(
-            factory = { playerView },
-            update = { view -> if (view.player !== player) view.player = player },
-            // TextureView is selected at PlayerView inflation time. It remains
-            // under Compose chrome, accepts the shared GPU RenderEffect, and
-            // exposes a clean SurfaceTexture bitmap to the scope sampler.
-            modifier =
-                Modifier.fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = zoom * horizontalPresentationScale
-                        scaleY = zoom * verticalPresentationScale
-                        translationX = pan.x
-                        translationY = pan.y
-                    },
-        )
-        // Match iOS: frame gestures belong to the exact aspect-fit video rectangle. Later-drawn
-        // chrome retains its own hit targets where it overlaps that rectangle.
-        Box(
-            Modifier.zone(feedFrame)
-                .onGloballyPositioned { gestureBoxOrigin = it.positionInParent() }
-                .pointerInput(frameScrubbing, density) {
-                    if (frameScrubbing) return@pointerInput
-                    awaitEachGesture {
-                        val first = awaitFirstDown(requireUnconsumed = false)
-                        var horizontal = 0f
-                        var vertical = 0f
-                        var pressed = true
-                        while (pressed) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == first.id } ?: break
-                            horizontal += change.position.x - change.previousPosition.x
-                            vertical += change.position.y - change.previousPosition.y
-                            pressed = change.pressed
-                        }
-                        playbackChromeVisibilityForSwipe(
-                            horizontalDeltaDp = horizontal / density,
-                            verticalDeltaDp = vertical / density,
-                        )?.let(onChromeVisibleChanged)
-                    }
-                }
-                .pointerInput(zoom, duration, viewport) {
-                    if (zoom <= 1.05f && duration > 0L && viewport.width > 0) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                wasPlayingBeforeScrub = player.isPlaying
-                                player.pause()
-                                frameScrubbing = true
-                                scrubbing = true
-                                frameScrubOrigin =
-                                    PlaybackTimeline.clampPosition(player.currentPosition, duration)
-                                frameScrubHorizontal = 0f
-                                scrubPosition = frameScrubOrigin.toFloat()
-                                hapticView.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
-                            },
-                            onDragEnd = ::finishFrameScrub,
-                            onDragCancel = ::finishFrameScrub,
-                        ) { change, dragAmount ->
-                            if (!frameScrubbing) return@detectDragGesturesAfterLongPress
-                            change.consume()
-                            frameScrubHorizontal += dragAmount.x
-                            val target =
-                                playbackFrameScrubTarget(
-                                    originMillis = frameScrubOrigin,
-                                    horizontalDeltaPixels = frameScrubHorizontal,
-                                    viewportWidthPixels = max(1, (feedFrame.width * density).roundToInt()),
-                                    durationMillis = duration,
-                                )
-                            scrubPosition = target.toFloat()
-                            reachedEnd = target >= duration
-                            val now = SystemClock.elapsedRealtime()
-                            if (PlaybackTimeline.shouldPreviewSeek(lastPreviewSeekAt, now)) {
-                                player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                                player.seekTo(target)
-                                lastPreviewSeekAt = now
-                            }
-                        }
-                    }
-                }
-                .transformable(transformState)
-                .pointerInput(zoom, scrubbing, reachedEnd) {
-                    detectTapGestures(
-                        onTap = {
-                            if (scrubbing) return@detectTapGestures
-                            togglePlayback(showFlash = true)
-                        },
-                        onDoubleTap = { resetZoom() },
-                    )
-                },
-        )
-        if (!chromeVisible) {
-            // The one control clean view keeps. Every other affordance is hidden, but the way back
-            // cannot be: the swipe restores it for operators who know the gesture, and this is
-            // here for everyone who does not. Dimmed so it is findable without competing with the
-            // picture, which is the whole reason the rest was hidden.
-            Box(
-                Modifier.align(Alignment.BottomEnd)
-                    .windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(
-                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
-                        ),
-                    )
-                    .padding(end = 16.dp, bottom = 24.dp)
-                    .alpha(0.85f),
-            ) {
-                PlaybackIconButton(
-                    icon = Icons.Filled.FullscreenExit,
-                    contentDescription = "Show playback controls",
-                    circular = true,
-                    onClick = { restoreChrome() },
-                )
-            }
-        }
+    val sourceWidth = if (videoSize.width > 0)
+        max(1, (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt()) else 16
+    val sourceHeight = if (videoSize.height > 0) videoSize.height else 9
+    return NikonNativePlaybackContent(
+        aspect = sourceWidth.toFloat() / sourceHeight,
+        horizontalPresentationScale = playbackFramingConfiguration.horizontalPresentationScale,
+        verticalPresentationScale = playbackFramingConfiguration.verticalPresentationScale,
+        buffered = bufferedFraction,
+        error = if (playbackError != null || entry.state == MediaCacheState.FAILED)
+            playbackFailureMessage(playbackError, entry.state == MediaCacheState.FAILED) else null,
+        picture = { geometry ->
+            SideEffect { playbackEffectDisplaySize.update(geometry.feed.width, geometry.feed.height) }
+            AndroidView(factory = { playerView },
+                update = { view -> if (view.player !== player) view.player = player },
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = geometry.zoom.scale * playbackFramingConfiguration.horizontalPresentationScale
+                    scaleY = geometry.zoom.scale * playbackFramingConfiguration.verticalPresentationScale
+                    translationX = geometry.zoom.offsetX
+                    translationY = geometry.zoom.offsetY
+                })
+        },
+        canvas = { context ->
+            val geometry = context.geometry
+            val density = LocalDensity.current.density
+            val feedFrame = ZoneFrame(geometry.feed.x / density, geometry.feed.y / density,
+                geometry.feed.width / density, geometry.feed.height / density)
+            val analysisViewport = ZoneFrame(context.analysis.x / density, context.analysis.y / density,
+                context.analysis.width / density, context.analysis.height / density)
+            val playbackInfoBar = ZoneFrame(0f, 0f, geometry.canvasWidth / density, context.analysis.y / density)
         if (framingAssistsVisible) {
             LocalFramingAssistOverlay(
                 configuration = playbackFramingConfiguration,
                 feedRect =
-                    fittedVideo?.let { rect ->
-                        FramingAssistRect(
-                            left = rect.left.toFloat(),
-                            top = rect.top.toFloat(),
-                            width = rect.width.toFloat(),
-                            height = rect.height.toFloat(),
-                        )
-                    },
+                    FramingAssistRect(geometry.feed.x, geometry.feed.y,
+                        geometry.feed.width, geometry.feed.height),
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -1396,7 +1118,7 @@ private fun ProgressivePlayer(
             textureView != null &&
                 SwiftCore.isAvailable &&
                 playbackAssistState.assists.selectedScopes.isNotEmpty() &&
-                viewport.width > 0
+                geometry.canvasWidth > 0
         ) {
             PlaybackScopePanels(
                 selectedScopes = playbackAssistState.assists.selectedScopes,
@@ -1442,329 +1164,38 @@ private fun ProgressivePlayer(
                 bottomChromeClearance = 0f,
                 // Keep the tall meter clear of the next-clip arrow in portrait.
                 trailingEdgeGap =
-                    if (viewportWidthDp < viewportHeightDp) 70f else 10f,
+                    if (geometry.canvasWidth < geometry.canvasHeight) 70f else 10f,
             )
         }
 
-        playbackFlash?.let { flash ->
-            Box(
-                Modifier.align(Alignment.Center).size(74.dp).glass(CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    flash.glyph,
-                    style = chromeStyle(34f, FontWeight.SemiBold),
-                    color = LiveDesign.text,
-                )
-            }
-        }
-        if (frameScrubbing && duration > 0L) {
-            Column(
-                Modifier.align(Alignment.Center)
-                    .glass(CircleShape)
-                    .padding(horizontal = 18.dp, vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    formatPlaybackTime(scrubPosition.toLong()),
-                    style = chromeStyle(16f, FontWeight.SemiBold, mono = true),
-                    color = LiveDesign.text,
-                )
-                Text(
-                    "/ ${formatPlaybackTime(duration)}",
-                    style = chromeStyle(10f, FontWeight.Medium, mono = true),
-                    color = LiveDesign.muted,
-                )
-            }
-        }
 
-        when {
-            playbackError != null || cacheFailed ->
-                PlaybackFailure(playbackFailureMessage(playbackError, cacheFailed))
-            playbackState == Player.STATE_BUFFERING ->
-                PlaybackLoading("Buffering ${(bufferedFraction * 100).toInt()}%")
-        }
-
-        if (chromeVisible) {
-            // Star rating, pulled down from the top and left there until pushed back up. It used
-            // to sit above the transport, costing a permanent band of picture for a control only
-            // wanted while actually rating. The handle is not decoration: a pull-down nobody knows
-            // about is the mistake the clean-view button exists to correct, so the shade always
-            // shows where to reach it. Tap only: pulling a shade down over a moving picture is
-            // fussy on a handheld rig, and the scrub is the gesture that has to stay reliable.
-            // Nothing at all without a camera-read rating: null means the clip has no handle or
-            // there is no session, so the rating could not be written either and the handle would
-            // advertise a control that cannot work (iOS `ratingShade`).
-            if (ratingStars != null) {
-            Column(
-                Modifier.align(Alignment.TopCenter)
-                    .windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(
-                            WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
-                        ),
-                    )
-                    .padding(top = 54.dp)
-                    .fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                if (ratingShadeOpen) {
-                    StarRatingRow(
-                        stars = ratingStars,
-                        modifier =
-                            Modifier.padding(bottom = 6.dp)
-                                .glass(CircleShape)
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                        onSelect = onSelectRating,
-                    )
+        },
+        tools = { context ->
+            Row(Modifier.offset(x = context.frame.x.dp, y = context.frame.y.dp)
+                .width(context.frame.width.dp).height(58.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (context.expanded) {
+                    AssistToolbar(
+                        state = playbackAssistState.assists,
+                        modifier = Modifier.weight(1f).height(58.dp)
+                            .onGloballyPositioned { assistToolbarBounds = it.boundsInRoot() },
+                        visibleTools = playbackAssistToolbarTools(operatorSettings.visibleAssistToolbarTools),
+                        imageEffectsAvailable = imageEffectsAvailable,
+                        framingConfiguration = playbackFramingConfiguration,
+                        onToggleFramingTool = playbackAssistState::toggle,
+                        hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                        onLongPressToolAnchored = { tool, bounds ->
+                            assistToolbarBounds = bounds; assistOptionsTool = tool
+                        })
                 }
-                Row(
-                    Modifier.size(width = 52.dp, height = 20.dp)
-                        .glass(CircleShape)
-                        .alpha(0.9f)
-                        .chromeClickable(onClick = { onRatingShadeOpenChanged(!ratingShadeOpen) })
-                        .semantics {
-                            contentDescription =
-                                if (ratingShadeOpen) "Hide star rating" else "Show star rating"
-                        },
-                    horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Star,
-                        contentDescription = null,
-                        tint = LiveDesign.muted,
-                        modifier = Modifier.size(11.dp),
-                    )
-                    Icon(
-                        imageVector =
-                            if (ratingShadeOpen) {
-                                Icons.Filled.KeyboardArrowUp
-                            } else {
-                                Icons.Filled.KeyboardArrowDown
-                            },
-                        contentDescription = null,
-                        tint = LiveDesign.muted,
-                        modifier = Modifier.size(13.dp),
-                    )
-                }
+                MonitorPlaybackActionChip(MonitorIcon.SLIDERS_HORIZONTAL,
+                    if (context.expanded) "Hide playback assist toolbar" else "Show playback assist toolbar",
+                    onClick = {
+                        assistOptionsTool = null
+                        context.onExpandedChanged(!context.expanded)
+                    }, active = context.expanded || playbackAssistState.hasAnyVisibleAssist)
             }
-            }
-
-            Column(
-                Modifier.align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(
-                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
-                        ),
-                    ),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                // Clip star rating on its own capsule above the transport (iOS
-                // player row) — written to the card, camera source of truth.
-                if (ratingMessage != null) {
-                    Text(
-                        ratingMessage,
-                        style = chromeStyle(12f, FontWeight.Medium),
-                        color = LiveDesign.text,
-                        modifier =
-                            Modifier.padding(bottom = 6.dp, start = 16.dp, end = 16.dp)
-                                .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
-                }
-                Column(
-                    Modifier.fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                        .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                if (assistMode) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        AssistToolbar(
-                            state = playbackAssistState.assists,
-                            modifier =
-                                Modifier.weight(1f)
-                                    .height(58.dp)
-                                    .onGloballyPositioned { assistToolbarBounds = it.boundsInRoot() },
-                            visibleTools =
-                                playbackAssistToolbarTools(
-                                    operatorSettings.visibleAssistToolbarTools,
-                                ),
-                            imageEffectsAvailable = imageEffectsAvailable,
-                            framingConfiguration = playbackFramingConfiguration,
-                            onToggleFramingTool = { tool ->
-                                playbackAssistState.toggle(tool)
-                                val next = playbackAssistState.framingConfiguration(framingConfiguration)
-                                pan =
-                                    clampPlaybackPan(
-                                        requested = pan,
-                                        viewportWidth = viewport.width.toFloat(),
-                                        viewportHeight = viewport.height.toFloat(),
-                                        zoom = zoom,
-                                        horizontalPresentationScale = next.horizontalPresentationScale,
-                                        verticalPresentationScale = next.verticalPresentationScale,
-                                    )
-                            },
-                            hapticsEnabled = operatorSettings.hapticsEnabled.value,
-                            onLongPressToolAnchored = { tool, bounds ->
-                                assistToolbarBounds = bounds
-                                assistOptionsTool = tool
-                            },
-                        )
-                        PlaybackIconButton(
-                            icon = Icons.Outlined.CenterFocusWeak,
-                            contentDescription = "Hide playback assist toolbar",
-                            highlighted = true,
-                            action = true,
-                            onClick = {
-                                assistOptionsTool = null
-                                assistMode = false
-                            },
-                        )
-                    }
-                } else {
-                    // iOS scrubber row: time · scrubber · duration
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        TimeLabel(if (scrubbing) scrubPosition.toLong() else position)
-                        PlaybackScrubber(
-                            progressMs = if (scrubbing) scrubPosition.toLong() else position,
-                            durationMs = duration,
-                            bufferedFraction = bufferedFraction,
-                            onScrubbingChanged = { active ->
-                                if (active && !scrubbing) {
-                                    wasPlayingBeforeScrub = player.isPlaying
-                                    player.pause()
-                                    player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                                    scrubbing = true
-                                } else if (!active) {
-                                    scrubbing = false
-                                }
-                            },
-                            onProgressChange = { target ->
-                                scrubPosition = target.toFloat()
-                                val now = SystemClock.elapsedRealtime()
-                                if (PlaybackTimeline.shouldPreviewSeek(lastPreviewSeekAt, now)) {
-                                    player.seekTo(target)
-                                    lastPreviewSeekAt = now
-                                }
-                            },
-                            onSeek = { target ->
-                                player.setSeekParameters(SeekParameters.EXACT)
-                                player.seekTo(target)
-                                position = target
-                                scrubPosition = target.toFloat()
-                                scrubbing = false
-                                reachedEnd = target >= duration && duration > 0L
-                                if (wasPlayingBeforeScrub) player.play()
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                        TimeLabel(duration)
-                    }
-                    // iOS transport: −15 · play/pause · +15 · spacer · mute · view assist · share
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        PlaybackSkipButton(seconds = 15, reverse = true) {
-                            val target =
-                                PlaybackTimeline.clampPosition(
-                                    player.currentPosition - 15_000L,
-                                    duration,
-                                )
-                            player.seekTo(target)
-                            reachedEnd = false
-                        }
-                        PlaybackIconButton(
-                            icon =
-                                when {
-                                    reachedEnd -> Icons.Filled.Replay
-                                    playing -> Icons.Filled.Pause
-                                    else -> Icons.Filled.PlayArrow
-                                },
-                            contentDescription =
-                                if (reachedEnd) "Replay from beginning" else "Play or pause",
-                            primary = true,
-                            onClick = { togglePlayback() },
-                        )
-                        PlaybackSkipButton(seconds = 15, reverse = false) {
-                            val target =
-                                PlaybackTimeline.clampPosition(
-                                    player.currentPosition + 15_000L,
-                                    duration,
-                                )
-                            player.seekTo(target)
-                            if (target < duration) reachedEnd = false
-                        }
-                        Spacer(Modifier.weight(1f))
-                        PlaybackIconButton(
-                            icon =
-                                if (audioMode == PlaybackAudioMode.MUTED) {
-                                    Icons.Filled.VolumeOff
-                                } else {
-                                    Icons.Filled.VolumeUp
-                                },
-                            contentDescription =
-                                if (audioMode == PlaybackAudioMode.MUTED) "Unmute" else "Mute",
-                            action = true,
-                            onClick = {
-                                audioMode = audioMode.toggled()
-                                player.volume = audioMode.volume
-                            },
-                        )
-                        // Conform preview cycles Real time -> each offered target -> Real time.
-                        // A cycle rather than a menu because the list is short and ordered, and
-                        // the current state is spelled out in full on the transport above.
-                        PlaybackIconButton(
-                            icon = Icons.Filled.SlowMotionVideo,
-                            contentDescription =
-                                conformAvailability.unavailableReason
-                                    ?: "Conform preview",
-                            enabled = conformAvailability.isAvailable,
-                            highlighted = conformTarget != null,
-                            action = true,
-                            onClick = {
-                                conformTarget =
-                                    nextConformTarget(conformTarget, conformAvailability.targets)
-                            },
-                        )
-                        // The swipe-down gesture has always hidden the chrome, but an
-                        // undisclosed gesture is indistinguishable from a missing feature — so
-                        // the capability gets a control you can see. The gesture stays for
-                        // operators who already know it.
-                        PlaybackIconButton(
-                            icon = Icons.Filled.Fullscreen,
-                            contentDescription = "Hide playback controls",
-                            action = true,
-                            onClick = { enterCleanView() },
-                        )
-                        PlaybackIconButton(
-                            icon = Icons.Outlined.CenterFocusWeak,
-                            contentDescription = "Show playback assist toolbar",
-                            highlighted = playbackAssistState.hasAnyVisibleAssist || assistMode,
-                            action = true,
-                            onClick = { assistMode = true },
-                        )
-                        PlaybackIconButton(
-                            icon = Icons.Filled.Share,
-                            contentDescription = "Share or deliver this clip",
-                            enabled = shareReady && !deliveryInProgress,
-                            action = true,
-                            onClick = onShare,
-                        )
-                    }
-                }
-                }
-            }
-        }
+        },
+        inspector = { _ ->
         assistOptionsTool?.let { tool ->
             PlaybackAssistOptionsOverlay(
                 tool = tool,
@@ -1777,7 +1208,10 @@ private fun ProgressivePlayer(
                 onDismiss = { assistOptionsTool = null },
             )
         }
-    }
+        },
+        dismissInspector = {
+            if (assistOptionsTool != null) { assistOptionsTool = null; true } else false
+        })
 }
 
 private val LocalFramingAssistConfiguration.hasPlaybackFramingOverlay: Boolean
@@ -1800,6 +1234,19 @@ private fun playbackFailureMessage(
     }
 
 @Composable
+private fun PlaybackFailure(message: String) {
+    Box(Modifier.fillMaxSize().padding(horizontal = 28.dp), contentAlignment = Alignment.Center) {
+        Text(
+            message,
+            style = chromeStyle(13f, FontWeight.Medium),
+            color = LiveDesign.muted,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun PlaybackLoading(message: String) {
     Column(
         Modifier.fillMaxSize(),
@@ -1814,150 +1261,6 @@ private fun PlaybackLoading(message: String) {
             color = LiveDesign.muted,
         )
     }
-}
-
-@Composable
-private fun PlaybackFailure(message: String) {
-    Box(Modifier.fillMaxSize().padding(horizontal = 28.dp), contentAlignment = Alignment.Center) {
-        Text(
-            message,
-            style = chromeStyle(13f, FontWeight.Medium),
-            color = LiveDesign.muted,
-            maxLines = 4,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun PlaybackNavigationButton(
-    label: String,
-    contentDescription: String,
-    modifier: Modifier,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier
-            .size(44.dp)
-            .glass(CircleShape)
-            .semantics {
-                this.contentDescription = contentDescription
-                role = Role.Button
-                if (!enabled) disabled()
-            }.chromeClickable { if (enabled) onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = chromeStyle(24f, FontWeight.SemiBold),
-            color = if (enabled) LiveDesign.accent else LiveDesign.faint,
-        )
-    }
-}
-
-/** iOS transport/action glass button with Material vector (SF Symbol stand-in). */
-@Composable
-private fun PlaybackIconButton(
-    icon: ImageVector,
-    contentDescription: String,
-    enabled: Boolean = true,
-    highlighted: Boolean = false,
-    primary: Boolean = false,
-    action: Boolean = false,
-    circular: Boolean = false,
-    size: androidx.compose.ui.unit.Dp? = null,
-    tint: Color? = null,
-    onClick: () -> Unit,
-) {
-    val width =
-        size
-            ?: if (action) {
-                PlaybackChrome.actionButtonWidth
-            } else {
-                PlaybackChrome.transportButtonWidth
-            }
-    val height = size ?: if (action) PlaybackChrome.actionButtonHeight else PlaybackChrome.transportButtonHeight
-    val iconSize =
-        when {
-            primary -> PlaybackChrome.primaryTransportIconSize
-            action || circular -> PlaybackChrome.actionIconSize
-            else -> PlaybackChrome.transportIconSize
-        }
-    val shape = if (circular || size != null) CircleShape else PlaybackChrome.corner
-    Box(
-        Modifier.size(width = width, height = height)
-            .then(
-                if (highlighted && !circular) {
-                    Modifier.background(LiveDesign.accentDim, shape)
-                } else {
-                    Modifier
-                },
-            )
-            .glass(shape)
-            .semantics {
-                this.contentDescription = contentDescription
-                role = Role.Button
-                if (!enabled) disabled()
-            }
-            .chromeClickable { if (enabled) onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(iconSize),
-            tint =
-                tint
-                    ?: when {
-                        !enabled -> LiveDesign.faint
-                        highlighted -> LiveDesign.accent
-                        else -> LiveDesign.text
-                    },
-        )
-    }
-}
-
-/** iOS `gobackward.15` / `goforward.15` compact skip control. */
-@Composable
-private fun PlaybackSkipButton(seconds: Int, reverse: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.size(
-                width = PlaybackChrome.transportButtonWidth,
-                height = PlaybackChrome.transportButtonHeight,
-            )
-            .glass(PlaybackChrome.corner)
-            .semantics {
-                contentDescription =
-                    if (reverse) "Back $seconds seconds" else "Forward $seconds seconds"
-                role = Role.Button
-            }
-            .chromeClickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                if (reverse) "↺" else "↻",
-                style = chromeStyle(11f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-            )
-            Text(
-                "$seconds",
-                style = chromeStyle(8f, FontWeight.Bold, mono = true),
-                color = LiveDesign.text,
-            )
-        }
-    }
-}
-
-@Composable
-private fun TimeLabel(milliseconds: Long) {
-    Text(
-        formatPlaybackTime(milliseconds),
-        modifier = Modifier.size(width = 40.dp, height = 18.dp),
-        style = chromeStyle(10f, FontWeight.Medium, mono = true),
-        color = LiveDesign.muted,
-    )
 }
 
 internal fun formatPlaybackTime(milliseconds: Long): String {
