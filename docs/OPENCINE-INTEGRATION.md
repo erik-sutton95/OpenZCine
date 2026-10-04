@@ -140,8 +140,11 @@ Operator Setup uses the shared page and migrated typed settings sections. Media 
 catalog controls, filter form, native selection and common Grid/List cell rendering. Nikon supplies
 artwork/cache/source facts and actions. Shared delivery popup and compact/expanded progress
 composition receive typed values and actions from both shells; the app retains project loading,
-network handoffs, coordinator lifetimes, native share providers and the reader/writer exporter.
-Catalog/cache, playback and those delivery service owners still require Z-2 adoption.
+network handoffs, coordinator lifetimes and native share providers. On iOS, OpenCineApple's
+reader/writer exporter owns native export, movie inspection, metadata encoding and timecode copy.
+Nikon keeps destination filename/storage policy, its 65-to-33 LUT preparation, metadata values,
+error/logging adapters and playback effects. Catalog/cache, playback and the remaining delivery
+service owners still require Z-2 adoption.
 
 The shared layout changes the visible viewport and chrome placement. Persisted FIT/FILL meanings
 and preference keys stay intact; pinch magnifies the chosen picture without changing FIT/FILL.
