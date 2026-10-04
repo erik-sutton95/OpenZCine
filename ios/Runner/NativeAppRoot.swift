@@ -5,6 +5,7 @@ import OpenCineApple
 import OpenCineAppKit
 import OpenCineCore
 import OpenCineFrameIO
+import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -937,6 +938,7 @@ final class NativeAppModel {
     var isStandaloneMediaLibraryPresented = false {
         didSet {
             if oldValue != isStandaloneMediaLibraryPresented { updateBluetoothShutter() }
+            if !isStandaloneMediaLibraryPresented, activePanel != .media { closeMediaBrowse() }
         }
     }
     /// Full-screen RED LUT download, presented from the app root (not the LUT picker) so it
@@ -2114,7 +2116,7 @@ final class NativeAppModel {
     /// Latest scope sample plus derived traffic-light readings — one publish per throttle tick.
     var scopeAssist: ScopeAssistBundle = .empty
     /// Convenience accessor for scope panels that only need bins / points.
-    var scopeSamples: ScopeSamples { scopeAssist.samples }
+    var scopeSamples: OpenZCineCore.ScopeSamples { scopeAssist.samples }
     /// Operator-dragged centres for the movable scopes / false-colour reference, keyed by panel id
     /// (in the live-canvas coordinate space). Session cache; persisted copy lives in
     /// `movablePanelPositions`. Absent in both = the default corner.
@@ -2141,6 +2143,7 @@ final class NativeAppModel {
             } else {
                 commonEditor = nil
             }
+            if oldValue == .media, activePanel != .media, !isStandaloneMediaLibraryPresented { closeMediaBrowse() }
             switch activePanel {
             case .settings: shell.open(.settings)
             case .media: shell.open(.media)
@@ -2355,7 +2358,9 @@ final class NativeAppModel {
     /// Tab the last listing pass that ran to completion (not cancelled) was scoped to, nil when
     /// none has. Lets the tab `didSet` skip redundant re-lists; cleared whenever a fresh pass is
     /// scheduled (browser open, source correction, foreground resume) and on session teardown.
-    @ObservationIgnored private var mediaFetchCompletedTab: MediaCategoryTab?
+    private var mediaFetchCompletedTab: MediaCategoryTab? {
+        mediaProducer?.service.coveredCategory.map(MediaCategoryTab.init)
+    }
     @ObservationIgnored private var thumbnailFetchTask: Task<Void, Never>?
     /// Bumped on every worker start/cancel so a finishing stale worker can't clear the
     /// single-flight slot of a successor (see `startThumbnailWorkerIfNeeded`).
@@ -4455,7 +4460,41 @@ final class NativeAppModel {
     /// path skip the per-frame eviction actor hop and evict once on transition instead.
     @ObservationIgnored private var rendererHoldsBakedFrame = false
     private let scopeSampler = FrameScopeSampler()
-    private var cameraSession: NativeCameraSession?
+    private var cameraSession: NativeCameraSession? {
+        didSet { if oldValue !== cameraSession { retireMediaProducer() } }
+    }
+    @ObservationIgnored private var mediaProducer: (io: NikonMediaCatalogAdapter, service: NikonMediaService)?
+    @ObservationIgnored private var mediaBrowse: (any CameraMediaBrowse)?
+
+    private func retireMediaProducer() {
+        mediaProducer?.service.retire(); mediaProducer = nil; mediaBrowse = nil
+        mediaFetchTask?.cancel(); mediaFetchTask = nil; mediaFetchGeneration += 1
+    }
+    private func currentMediaService() -> NikonMediaService? {
+        guard let native = cameraSession, let common = controlSession, isConnected else { return nil }
+        if let owner = mediaProducer, owner.io.native === native, owner.io.common === common { return owner.service }
+        retireMediaProducer()
+        let io = NikonMediaCatalogAdapter(native: native, common: common, namespace: mediaBucketID) { [weak self] in
+            self?.cameraSession === native && self?.controlSession === common && self?.isConnected == true
+        }
+        let service = NikonMediaService(session: common.id, io: io)
+        mediaProducer = (io, service)
+        return service
+    }
+    private func currentMediaServices() -> CameraServices {
+        var services = CameraServices()
+        if let service = currentMediaService() {
+            services.register(service, as: (any CameraMediaService).self)
+            services.register(service, as: (any NikonMediaCatalogRecordSource).self)
+        }
+        return services
+    }
+    private func closeMediaBrowse() {
+        mediaProducer?.service.cancelCatalog()
+        mediaFetchTask?.cancel(); mediaFetchTask = nil; mediaFetchGeneration += 1
+        let retired = mediaBrowse; mediaBrowse = nil
+        if let retired { Task { await retired.close() } }
+    }
 
     /// User-facing label for the live session's physical link ("Wi-Fi" / "USB-C"), or nil when no
     /// camera session is active.
@@ -4743,7 +4782,7 @@ final class NativeAppModel {
 
     var sharedConnection: NikonConnection? {
         guard isConnected, let controlSession, let connectedIdentity else { return nil }
-        return NikonConnection(session: controlSession, host: connectedIdentity.host, path: activeSessionPath?.kind)
+        return NikonConnection(session: controlSession, host: connectedIdentity.host, path: activeSessionPath?.kind, services: currentMediaServices())
     }
 
     /// The shared flow wants sightings again (a session ended, the cameras page shows). Never
@@ -6718,11 +6757,11 @@ final class NativeAppModel {
         // would keep hammering the old command channel through the shared transaction gate while
         // the next session tries to establish.
         cancelClipStream()
+        mediaProducer?.service.cancelCatalog()
         mediaFetchTask?.cancel()
         mediaFetchTask = nil
         galleryRelistTask?.cancel()
         galleryRelistTask = nil
-        mediaFetchCompletedTab = nil
         cancelThumbnailWork(resumingWaiters: true)
         resetLinkHealthMeasurements()
         cameraSession = nil
@@ -7377,7 +7416,7 @@ final class NativeAppModel {
     private func handleBodyFiredCapture(session: NativeCameraSession) {
         // The card object set changed — the next media pass must re-list (a backup twin fires
         // no event of its own).
-        mediaFetchCompletedTab = nil
+        mediaProducer?.service.invalidateCatalogCoverage()
         if isStandaloneMediaLibraryPresented, mediaBrowserSource == .camera {
             scheduleDebouncedGalleryRelist()
         }
@@ -7429,7 +7468,8 @@ final class NativeAppModel {
         // thumbnail queue is preserved so the worker picks it back up.
         cancelClipStream()
         if mediaFetchTask != nil {
-            mediaFetchTask?.cancel()
+            mediaProducer?.service.cancelCatalog()
+        mediaFetchTask?.cancel()
             mediaFetchTask = nil
             mediaFetchInterruptedByBackground = true
         }
@@ -7705,7 +7745,7 @@ final class NativeAppModel {
     /// `image` must be the clean decoded camera frame — never the assist-baked display frame.
     private func sampleLiveScopeAssist(
         image: UIImage, visibleScopes: Set<MonitorAssistTool>, thermalTier: ThermalTier
-    ) async -> ScopeSamples {
+    ) async -> OpenZCineCore.ScopeSamples {
         // ONE sampler for every surface — the same 200px/stride-2 CPU pipeline playback uses;
         // binning the full-resolution frame reads subtly differently from the shared downsampled
         // tap. [1:1 live/playback invariant]
@@ -10336,6 +10376,7 @@ final class NativeAppModel {
     func deleteMediaClips(_ clips: [MediaClip]) async -> Int {
         // A camera list enumerated before the deletions would re-add the rows when it
         // lands — cancel it up front and re-list fresh once the deletions are done.
+        mediaProducer?.service.cancelCatalog()
         mediaFetchTask?.cancel()
         mediaFetchTask = nil
         let targets = deletionPlan(for: clips).targets
@@ -12509,7 +12550,7 @@ extension NativeAppModel {
                     }
                 })
         else { return }
-        let camera = ConnectedCamera(saved: saved, session: controlSession)
+        let camera = ConnectedCamera(saved: saved, session: controlSession, services: currentMediaServices())
         if multicam.lentMember != nil {
             shell.borrow(camera) { [weak self] in self?.returnToMulticam() }
         } else {
@@ -13604,31 +13645,15 @@ extension NativeAppModel {
         mediaDateWindow = mediaDateWindow == window ? nil : window
     }
 
-    /// Refreshes per-slot storage cards from the connected camera (no-op when offline).
+    /// Preserves the original per-appearance storage read through the actual source producer.
     func refreshMediaStorageSlots() async {
-        guard let session = cameraSession, isConnected else {
-            mediaStorageSlots = []
-            return
-        }
-        let slots = await session.readAllStorageInfo()
-        let cameraName = cameraState.cameraName
-        mediaStorageSlots = slots.enumerated().map { index, slot in
-            // The physical slot lives in the storage ID's high word (0x000X0001) — the
-            // enumerated order does NOT follow it (the second card can arrive via the vendor
-            // storage list and get appended), which used to label slot 1's card "SLOT 2" and
-            // made its NEFs appear to belong to the JPEG-backup card. Fall back to list
-            // order only when an ID doesn't carry the slot-word pattern.
-            let physicalSlot = Int((slot.id >> 16) & 0xFF)
-            return MediaStorageSlotDisplay(
-                storageID: slot.id,
-                slotNumber: physicalSlot > 0 ? physicalSlot : index + 1,
-                cameraName: cameraName,
-                usedGigabytes: slot.info.gigabytesUsed,
-                freeGigabytes: slot.info.gigabytesFree,
-                totalGigabytes: slot.info.gigabytesTotal
-            )
-        }
-        .sorted { $0.slotNumber < $1.slotNumber }
+        guard let service = currentMediaService() else { mediaStorageSlots = []; return }
+        do {
+            try await service.refreshStorage()
+            guard mediaProducer?.service === service, isConnected else { return }
+            mediaStorageSlots = NikonMediaCatalogAdapter.displayStorage(
+                service.storageRecords, cameraName: cameraState.cameraName)
+        } catch { /* A retired source cannot update successor capacity cards. */ }
     }
 
     /// Reloads the library list from the on-disk cache + index for the active browser bucket.
@@ -13653,10 +13678,11 @@ extension NativeAppModel {
     /// `identityProbeBudget` caps how many reused handles are `GetObjectInfo`'d to
     /// catch a formatted card that recycled PTP handles (#296).
     func scheduleFetchClipsFromCamera(identityProbeBudget: Int = 8) {
+        guard currentMediaService() != nil else { return }
+        mediaProducer?.service.cancelCatalog()
         mediaFetchTask?.cancel()
         // Coverage re-arms only when the new pass runs to completion — until then a tab
         // switch must fall back to scheduling (see `mediaCategoryTab.didSet`).
-        mediaFetchCompletedTab = nil
         mediaFetchGeneration += 1
         let generation = mediaFetchGeneration
         mediaFetchTask = Task {
@@ -13697,9 +13723,9 @@ extension NativeAppModel {
     /// ghosts in the gallery (#296). The on-device `local` library is left intact.
     func clearAllMediaCaches() {
         cancelClipStream()
+        mediaProducer?.service.cancelCatalog()
         mediaFetchTask?.cancel()
         mediaFetchGeneration += 1
-        mediaFetchCompletedTab = nil
         mediaDownloadProgress.removeAll()
         for bucket in mediaClipStore.allBucketIDs() where bucket != MediaClipStore.localBucketID {
             mediaClipStore.clearCache(cameraID: bucket, preservingIndex: false)
@@ -13716,9 +13742,9 @@ extension NativeAppModel {
         cancelClipStream()
         // An in-flight enumeration would repopulate the freshly cleared index from its own
         // older snapshot; the generation bump makes its late writes fall on the floor.
+        mediaProducer?.service.cancelCatalog()
         mediaFetchTask?.cancel()
         mediaFetchGeneration += 1
-        mediaFetchCompletedTab = nil
         mediaDownloadProgress.removeAll()
 
         let clearingCameraBucket = mediaBrowserSource == .camera
@@ -13753,473 +13779,55 @@ extension NativeAppModel {
         try? mediaClipStore.localURL(cameraID: clip.cameraID, filename: clip.filename)
     }
 
-    /// Lists movie clips on the connected camera and merges them into the library index (metadata
-    /// only — clip bytes stream on demand). Delta-syncs against the cached `index.json` so
-    /// unchanged handles skip `GetObjectInfo`; discovers in batches so the grid updates
-    /// incrementally without blocking the main thread. Thumbnails fetch on demand when cells
-    /// appear. Safe no-op with no session. [ZR · verify-on-HW]
+    /// Consumes the real Nikon producer. Source enumeration/reconciliation lives below the app.
     private func fetchClipsFromCamera(generation: Int, identityProbeBudget: Int) async {
-        guard let session = cameraSession else { return }
+        guard let service = currentMediaService(), mediaFetchIsCurrent(generation) else { return }
+        let bucket = mediaBucketID
+        let cached = mediaClipStore.list(cameraID: bucket)
+        service.configure(.init(cached: NikonMediaCatalogAdapter.records(cached),
+            pairing: NikonMediaCatalogAdapter.pairingRecords(cached),
+            category: mediaCategoryTab.nikonMediaCategory, identityProbeBudget: identityProbeBudget,
+            retainedLocalFilenames: Set(cached.filter { self.isClipDownloaded($0) }.map(\.filename))))
         mediaFetchInProgress = true
+        guard mediaFetchIsCurrent(generation) else { return }
         mediaFetchListedCount = 0
         defer {
-            // A cancelled pass finishing late must not clear the state of a newer pass.
             if mediaFetchGeneration == generation {
                 mediaFetchInProgress = false
-                mediaFetchListedCount = 0
-                mediaFetchTask = nil
+                if mediaFetchGeneration == generation { mediaFetchListedCount = 0; mediaFetchTask = nil }
             }
         }
-
-        let bucket = mediaBucketID
-        if mediaBrowserSource == .camera {
-            refreshMediaClips()
-        }
-
-        let cached = mediaClipStore.list(cameraID: bucket)
-        // Identity is the (storageID, handle) pair: backup mode puts one filename on both
-        // cards as two objects, and one index row can carry several locations. A bare-handle
-        // key would let the second card's copy shadow (or crash into) the first's.
-        var cachedByLocation: [MediaObjectHandle: MediaClip] = [:]
-        for clip in cached {
-            for location in clip.allLocations { cachedByLocation[location] = clip }
-        }
-        let cachedLocationSet = Set(cachedByLocation.keys)
-
-        let listedHandles = await session.listMediaObjectHandles()
-        guard mediaFetchIsCurrent(generation) else { return }
-
-        // Removal detection always runs against the FULL listing — a scoped pass must never
-        // read "absent from my category" as "deleted from the card".
-        var delta = MediaClipDiscoveryDelta.compute(
-            cachedHandles: cachedLocationSet,
-            cameraHandles: listedHandles
-        )
-        delta = await verifyReusedIdentities(
-            delta,
-            cachedByLocation: cachedByLocation,
-            session: session,
-            budget: identityProbeBudget,
-            generation: generation
-        )
-        guard mediaFetchIsCurrent(generation) else { return }
-
-        // The pass itself is scoped to the active sidebar category: Videos fetches only videos,
-        // Photos only stills. Other categories' metadata is NOT enumerated here — each tab runs
-        // its own delta pass on selection (mediaCategoryTab.didSet).
-        // Superseded handles no longer name the cached file — drop them from the tab cache so
-        // they are treated as unknown and fetched, not skipped as the old type.
-        var scopedCache = cachedByLocation
-        for location in delta.supersededHandles { scopedCache.removeValue(forKey: location) }
-        let cameraHandles = await scopedHandles(
-            listedHandles,
-            for: mediaCategoryTab,
-            cachedByLocation: scopedCache,
-            session: session
-        )
-        guard mediaFetchIsCurrent(generation) else { return }
-
-        let staleHandles = delta.removedHandles.union(delta.supersededHandles)
-        if !staleHandles.isEmpty {
-            let removedFilenames = mediaClipStore.applyCameraRemoval(
-                cameraID: bucket,
-                removedHandles: staleHandles,
-                hasLocalFile: { isClipDownloaded($0) }
-            )
-            if mediaBrowserSource == .camera, bucket == mediaBucketID {
-                applyRemovedClipsToMemory(
-                    removedFilenames: removedFilenames,
-                    clearedLocations: staleHandles
-                )
-            }
-        }
-
-        var listedCount = 0
-        var pendingBatch: [MediaClip] = []
-        var r3dIndex = R3DClipIndex()
-        seedR3DIndex(from: cached, into: &r3dIndex)
-        let batchSize = 32
-        let flushInterval = Duration.milliseconds(120)
-        var lastFlush = ContinuousClock.now
-
-        func flushPendingBatch(force: Bool = false) {
-            guard mediaFetchIsCurrent(generation) else { return }
-            guard force || !pendingBatch.isEmpty else { return }
-            let shouldFlush =
-                force
-                || pendingBatch.count >= batchSize
-                || lastFlush.duration(to: .now) >= flushInterval
-            guard shouldFlush else { return }
-
-            let batch = pendingBatch
-            pendingBatch.removeAll(keepingCapacity: true)
-            lastFlush = .now
-            mediaClipStore.upsertBatch(batch, cameraID: bucket)
-            if mediaBrowserSource == .camera, bucket == mediaBucketID {
-                mergeDiscoveredClipsIntoMemory(batch)
-            }
-            mediaFetchListedCount = listedCount
-        }
-
-        let passTab = mediaCategoryTab
-        // Learn-then-skip: a record whose fetched type doesn't match the tab (possible when
-        // the body doesn't honour format-filtered listing) is still written to the index —
-        // so it is never fetched again on any tab — but isn't listed or counted.
-        func matchesTab(_ record: MediaClip) -> Bool {
-            switch passTab {
-            case .videos: record.mediaKind == .video
-            case .photos: record.mediaKind == .photo
-            case .all, .favorites: true
-            }
-        }
-        var learnedOffTab = 0
-        for objectHandle in cameraHandles {
-            if !mediaFetchIsCurrent(generation) { break }
-
-            let record: MediaClip
-            if delta.reuseHandles.contains(objectHandle),
-                let cachedClip = cachedByLocation[objectHandle]
-            {
-                record = cachedClip
-            } else {
-                guard
-                    let camera = await session.fetchMediaClip(
-                        handle: objectHandle.handle, storageID: objectHandle.storageID)
-                else { continue }
-                guard
-                    let builtRecord = await buildMediaClipRecord(
-                        from: camera, bucket: bucket, r3dIndex: &r3dIndex, session: session)
-                else { continue }
-                record = builtRecord
-            }
-
-            pendingBatch.append(record)
-            if matchesTab(record) {
-                listedCount += 1
-                mediaLibraryLogger.debug(
-                    "listed clip \(listedCount, privacy: .public): \(record.filename, privacy: .private(mask: .hash))"
-                )
-            } else {
-                learnedOffTab += 1
-            }
-            flushPendingBatch()
-            if (listedCount + learnedOffTab) % batchSize == 0 {
-                await Task.yield()
-            }
-        }
-
-        flushPendingBatch(force: true)
-        mediaLibraryLogger.info(
-            "delta sync listed \(listedCount, privacy: .public) clip(s) on this tab — card objects: \(delta.reuseHandles.count, privacy: .public) reused, \(delta.fetchHandles.count, privacy: .public) fetched (\(learnedOffTab, privacy: .public) learned off-tab), \(delta.removedHandles.count, privacy: .public) removed, \(delta.supersededHandles.count, privacy: .public) superseded"
-        )
-
-        /// R3D masters in this bucket with no same-stem playable proxy, plus the proxy census.
-        func unpairedR3DMasters() -> (masters: [String], proxyCount: Int) {
-            let filenames = mediaClipStore.list(cameraID: bucket).map(\.filename)
-            let proxyStems = MediaClipFilename.playableProxyStems(in: filenames)
-            let masters = filenames.filter {
-                MediaClipFilename.isR3D($0)
-                    && !proxyStems.contains(MediaClipFilename.stem(of: $0))
-            }
-            return (masters, proxyStems.count)
-        }
-
-        // Proxy-listing fallback (once per pass, only when masters are unpaired): some bodies
-        // keep the same-stem playable proxy files where the flat listing may not surface them
-        // [ZR · verify-on-HW], so one extra video-format-scoped listing recovers proxy handles
-        // the flat pass missed. Handles already processed above or already cached are skipped
-        // (dedupe by storageID+handle); ones this pass just removal-evicted are refetched — the
-        // flat listing dropping them is exactly the symptom this fallback covers.
-        var (unpairedMasters, proxyCount) = unpairedR3DMasters()
-        var fallbackProxyCount = 0
-        if !unpairedMasters.isEmpty, mediaFetchIsCurrent(generation),
-            let videoHandles = try? await session.listMediaObjectHandles(
-                formats: MediaObjectFormats.video)
-        {
-            let seenThisPass = Set(cameraHandles)
-            let refetchable = delta.removedHandles.union(delta.supersededHandles)
-            for objectHandle in videoHandles {
-                if !mediaFetchIsCurrent(generation) { break }
-                guard !seenThisPass.contains(objectHandle),
-                    cachedByLocation[objectHandle] == nil
-                        || refetchable.contains(objectHandle)
-                else { continue }
-                guard
-                    let camera = await session.fetchMediaClip(
-                        handle: objectHandle.handle, storageID: objectHandle.storageID),
-                    let record = await buildMediaClipRecord(
-                        from: camera, bucket: bucket, r3dIndex: &r3dIndex, session: session)
-                else { continue }
-                pendingBatch.append(record)
-                if matchesTab(record) { listedCount += 1 } else { learnedOffTab += 1 }
-                if MediaClipFilename.isPlayableProxy(record.filename) { fallbackProxyCount += 1 }
-                flushPendingBatch()
-                if (listedCount + learnedOffTab) % batchSize == 0 {
-                    await Task.yield()
+        do {
+            let browse: any CameraMediaBrowse
+            if let existing = mediaBrowse, service.isCurrent(existing.binding) { browse = existing }
+            else {
+                let opened = try await service.openBrowse()
+                guard mediaFetchIsCurrent(generation), mediaProducer?.service === service else {
+                    await opened.close(); return
                 }
+                mediaBrowse = opened; browse = opened
             }
-            flushPendingBatch(force: true)
-            (unpairedMasters, proxyCount) = unpairedR3DMasters()
-        }
-
-        // Proxy-pairing diagnostic: masters without a same-stem proxy stay visible in the
-        // grid (and un-openable), so one line per pass says whether the card's proxies were
-        // enumerated at all. [ZR · verify-on-HW: whether flat GetObjectHandles surfaces the
-        // in-folder proxy files]
-        if !unpairedMasters.isEmpty || fallbackProxyCount > 0 {
-            mediaLibraryLogger.info(
-                "proxy pairing: \(unpairedMasters.count, privacy: .public) R3D master(s) with no playable proxy (\(proxyCount, privacy: .public) proxies enumerated, \(fallbackProxyCount, privacy: .public) recovered by the video-scoped fallback)"
-            )
-        }
-
-        // Arm the tab-switch skip only for a pass that ran to the end — a cancelled pass may
-        // have left this tab's handles unfetched.
-        if mediaFetchIsCurrent(generation) {
-            mediaFetchCompletedTab = passTab
-        }
-    }
-
-    /// `GetObjectInfo` a spread of reused handles. One filename/date mismatch on a card
-    /// means that card's handles were recycled (format) and cached metadata is a lie.
-    private func verifyReusedIdentities(
-        _ delta: MediaClipDiscoveryDelta,
-        cachedByLocation: [MediaObjectHandle: MediaClip],
-        session: NativeCameraSession,
-        budget: Int,
-        generation: Int
-    ) async -> MediaClipDiscoveryDelta {
-        guard !delta.reuseHandles.isEmpty, budget > 0 else { return delta }
-        var cachedIdentities: [MediaObjectHandle: MediaClipObjectIdentity] = [:]
-        cachedIdentities.reserveCapacity(cachedByLocation.count)
-        for (location, clip) in cachedByLocation {
-            cachedIdentities[location] = MediaClipObjectIdentity(
-                location: location,
-                filename: clip.filename,
-                captureDate: clip.captureDate,
-                sizeBytes: clip.sizeBytes
-            )
-        }
-        var probed: [MediaObjectHandle: MediaClipObjectIdentity] = [:]
-        var working = delta
-        for location in delta.identityProbeHandles(budget: budget) {
-            guard mediaFetchIsCurrent(generation) else { return working }
-            guard working.reuseHandles.contains(location) else { continue }
-            let identity: MediaClipObjectIdentity
-            if let camera = await session.fetchMediaClip(
-                handle: location.handle, storageID: location.storageID),
-                let filename = MediaClipFilename.safeCameraBasename(camera.info.filename)
-            {
-                identity = MediaClipObjectIdentity(
-                    location: location,
-                    filename: filename,
-                    captureDate: camera.info.captureDate,
-                    sizeBytes: UInt64(camera.info.compressedSize)
-                )
-            } else {
-                identity = MediaClipObjectIdentity(
-                    location: location, filename: "", captureDate: "", sizeBytes: 0)
+            let cursor = try await browse.catalog()
+            guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { cursor.close(); return }
+            defer { cursor.close() }
+            while let delta = try await cursor.next() {
+                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
+                let merged = try NikonMediaCatalogAdapter.apply(delta, service: service, binding: browse.binding,
+                    bucket: bucket, store: mediaClipStore, current: mediaClips,
+                    isDownloaded: { self.isClipDownloaded($0) },
+                    admit: { self.mediaFetchIsCurrent(generation) && self.mediaProducer?.service === service })
+                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
+                if mediaBrowserSource == .camera, bucket == mediaBucketID { mediaClips = merged }
+                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
+                mediaStorageSlots = NikonMediaCatalogAdapter.displayStorage(service.storageRecords,
+                    cameraName: cameraState.cameraName)
+                guard mediaFetchIsCurrent(generation), service.isCurrent(browse.binding) else { return }
+                mediaFetchListedCount = service.listedCount
             }
-            probed[location] = identity
-            working = working.verifyingReusedIdentities(
-                cached: cachedIdentities, probed: probed)
-        }
-        return working
-    }
-
-    /// The handles a listing pass should process for the active sidebar category, newest first.
-    /// ponytail: "newest" = descending object handle — handles grow monotonically on Nikon
-    /// bodies; switch to capture-date ordering if a body proves otherwise.
-    ///
-    /// Membership: cached records decide by filename (exact — a warm pass on the Videos tab
-    /// never touches the card's hundreds of stills); new, never-fetched handles are scoped by
-    /// the camera's format-filtered listing when the body honours it. When it doesn't (rejected
-    /// op, or the partition comes back empty), new handles stay IN the pass — their type is
-    /// unknowable without `GetObjectInfo`, and dropping them would blank the tab on bodies that
-    /// ignore specification-by-format. [ZR · verify-on-HW]
-    private func scopedHandles(
-        _ handles: [MediaObjectHandle],
-        for tab: MediaCategoryTab,
-        cachedByLocation: [MediaObjectHandle: MediaClip],
-        session: NativeCameraSession
-    ) async -> [MediaObjectHandle] {
-        let newestFirst = handles.sorted { $0.handle > $1.handle }
-        let wantsVideo: Bool
-        switch tab {
-        case .videos: wantsVideo = true
-        case .photos: wantsVideo = false
-        case .all, .favorites: return newestFirst
-        }
-
-        var scoped: [MediaObjectHandle] = []
-        var unknown: [MediaObjectHandle] = []
-        for handle in newestFirst {
-            if let cached = cachedByLocation[handle] {
-                if (cached.mediaKind == .video) == wantsVideo { scoped.append(handle) }
-            } else {
-                unknown.append(handle)
-            }
-        }
-        guard !unknown.isEmpty else { return scoped }
-
-        // Partition NEW handles by querying BOTH categories: a body that ignores the format
-        // parameter returns the same set for every query, so "the two partitions differ" is the
-        // honor signal — a single query can't distinguish "camera filtered" from "camera dumped
-        // everything". When honored: keep wanted handles plus the unclassified remainder
-        // (R3D/NEF/HEIF ride on vendor codes outside both maps — the loop learns those and
-        // files non-matching ones without listing them). When not honored (or rejected): all
-        // unknowns stay in, and the loop's learn-then-skip keeps the wrong type off this tab.
-        let wantedFormats = wantsVideo ? MediaObjectFormats.video : MediaObjectFormats.photo
-        let otherFormats = wantsVideo ? MediaObjectFormats.photo : MediaObjectFormats.video
-        if let wantedPartition = try? await session.listMediaObjectHandles(
-            formats: wantedFormats),
-            let otherPartition = try? await session.listMediaObjectHandles(formats: otherFormats)
-        {
-            let wantedSet = Set(wantedPartition.map(\.handle))
-            let otherSet = Set(otherPartition.map(\.handle))
-            if wantedSet != otherSet {
-                scoped.append(
-                    contentsOf: unknown.filter {
-                        wantedSet.contains($0.handle) || !otherSet.contains($0.handle)
-                    })
-            } else {
-                scoped.append(contentsOf: unknown)
-            }
-        } else {
-            scoped.append(contentsOf: unknown)
-        }
-        return scoped.sorted { $0.handle > $1.handle }
-    }
-
-    private func seedR3DIndex(from clips: [MediaClip], into index: inout R3DClipIndex) {
-        for clip in clips {
-            if MediaClipFilename.isR3D(clip.filename),
-                let width = clip.pixelWidth, let height = clip.pixelHeight
-            {
-                index.registerR3D(filename: clip.filename, width: width, height: height)
-            } else if MediaClipFilename.isPlayableProxy(clip.filename) {
-                index.noteProxy(clip.filename)
-            }
-        }
-    }
-
-    private func applyRemovedClipsToMemory(
-        removedFilenames: Set<String>,
-        clearedLocations: Set<MediaObjectHandle>
-    ) {
-        if !removedFilenames.isEmpty {
-            mediaClips.removeAll { removedFilenames.contains($0.filename) }
-        }
-        for index in mediaClips.indices {
-            let locations = mediaClips[index].allLocations
-            guard !locations.isEmpty else { continue }
-            let survivors = locations.filter { !clearedLocations.contains($0) }
-            guard survivors.count != locations.count else { continue }
-            let primary = survivors.min(by: {
-                MediaClipStore.locationRank($0) < MediaClipStore.locationRank($1)
-            })
-            mediaClips[index].handle = primary?.handle
-            mediaClips[index].storageID = primary?.storageID
-            mediaClips[index].storageLocations = survivors.isEmpty ? nil : survivors
-        }
-    }
-
-    /// Builds one `MediaClip` from a PTP discovery record, including optional R3D header parsing.
-    private func buildMediaClipRecord(
-        from camera: NativeCameraSession.CameraClip,
-        bucket: String,
-        r3dIndex: inout R3DClipIndex,
-        session: NativeCameraSession
-    ) async -> MediaClip? {
-        guard let filename = MediaClipFilename.safeCameraBasename(camera.info.filename) else {
-            mediaLibraryLogger.error("ignored camera media object with unsafe filename")
-            return nil
-        }
-        var pixelWidth = camera.info.imagePixWidth
-        var pixelHeight = camera.info.imagePixHeight
-
-        if MediaClipFilename.isR3D(filename), pixelWidth == 0 || pixelHeight == 0 {
-            if let header = try? await session.getPartialObject(
-                handle: camera.handle,
-                offset: 0,
-                length: UInt32(R3DHeaderParser.minimumHeaderBytes)),
-                let parsed = R3DHeaderParser.parseDimensions(from: header)
-            {
-                pixelWidth = parsed.width
-                pixelHeight = parsed.height
-                mediaLibraryLogger.debug(
-                    "R3D header parse \(filename, privacy: .private(mask: .hash)): \(parsed.width, privacy: .public)×\(parsed.height, privacy: .public)"
-                )
-            }
-        }
-
-        var record = MediaClip(
-            cameraID: bucket, filename: filename, handle: camera.handle,
-            storageID: camera.storageID, sizeBytes: UInt64(camera.info.compressedSize),
-            captureDate: camera.info.captureDate,
-            pixelWidth: pixelWidth > 0 ? pixelWidth : nil,
-            pixelHeight: pixelHeight > 0 ? pixelHeight : nil)
-
-        if MediaClipFilename.isR3D(filename), let width = record.pixelWidth,
-            let height = record.pixelHeight
-        {
-            r3dIndex.registerR3D(filename: filename, width: width, height: height)
-            linkR3DSourceToExistingProxies(
-                r3dFilename: filename, width: width, height: height, bucket: bucket)
-        } else if MediaClipFilename.isPlayableProxy(filename) {
-            r3dIndex.noteProxy(filename)
-            if let sibling = r3dIndex.siblingForProxy(filename) {
-                record.sourcePixelWidth = sibling.width
-                record.sourcePixelHeight = sibling.height
-                record.linkedR3DFilename = sibling.filename
-            }
-        }
-        return record
-    }
-
-    /// Merges a discovery batch into the in-memory grid list without re-reading `index.json`.
-    private func mergeDiscoveredClipsIntoMemory(_ batch: [MediaClip]) {
-        guard !batch.isEmpty else { return }
-        var byFilename = Dictionary(uniqueKeysWithValues: mediaClips.map { ($0.filename, $0) })
-        for incoming in batch {
-            if let existing = byFilename[incoming.filename] {
-                byFilename[incoming.filename] = MediaClipStore.mergeCameraDiscovery(
-                    existing: existing, incoming: incoming)
-            } else {
-                byFilename[incoming.filename] = incoming
-            }
-        }
-        mediaClips = Array(byFilename.values)
-    }
-
-    /// Backfills R3D source dimensions onto proxy clips indexed before their R3D sibling arrived.
-    private func linkR3DSourceToExistingProxies(
-        r3dFilename: String,
-        width: UInt32,
-        height: UInt32,
-        bucket: String
-    ) {
-        let stem = MediaClipFilename.stem(of: r3dFilename)
-        let candidates =
-            mediaBrowserSource == .camera && bucket == mediaBucketID
-            ? mediaClips
-            : mediaClipStore.list(cameraID: bucket)
-        for clip in candidates {
-            guard MediaClipFilename.isPlayableProxy(clip.filename),
-                MediaClipFilename.stem(of: clip.filename) == stem,
-                clip.linkedR3DFilename == nil
-            else { continue }
-            mediaClipStore.update(cameraID: bucket, filename: clip.filename) {
-                $0.sourcePixelWidth = width
-                $0.sourcePixelHeight = height
-                $0.linkedR3DFilename = r3dFilename
-            }
-            if mediaBrowserSource == .camera, bucket == mediaBucketID,
-                let index = mediaClips.firstIndex(where: { $0.filename == clip.filename })
-            {
-                mediaClips[index].sourcePixelWidth = width
-                mediaClips[index].sourcePixelHeight = height
-                mediaClips[index].linkedR3DFilename = r3dFilename
-            }
+        } catch {
+            // Partial source facts stay indexed; failed or canceled passes never claim coverage.
+            guard mediaFetchIsCurrent(generation) else { return }
+            if !(error is CancellationError) { mediaLibraryLogger.debug("camera catalog pass did not complete") }
         }
     }
 

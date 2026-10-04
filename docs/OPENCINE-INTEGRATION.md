@@ -407,3 +407,52 @@ version and Maven coordinates). The steps are in `OpenCine/atlas/docs/PUBLISH.md
   While the host has surrendered control, phone/Watch/Wear/Bluetooth commands refuse. Wear
   confirms recording only after the camera/broadcaster reports the target; unknown remains
   unknown and a refusal or timeout does not acknowledge success.
+
+## Nikon media catalog adoption candidate
+
+The actual iOS `NativeAppModel` gallery and Android `MediaBrowseScreen` now compose the
+shared Nikon `CameraMediaService` producer. Both pairing registration and direct monitor
+connections forward one reused native/common-session instance. The app supplies exact
+native primitive IO on Apple and keeps legacy bucket/display/persistence configuration;
+it no longer owns handle reconciliation, category queries, metadata probes or R3D paging.
+Android's old parser and collector delegate to the shared producer pager so every original
+assertion remains exercised by the same implementation the gallery uses.
+
+The iOS adapter captures source records before persistence, matches old tombstones against
+current exact content and preserves downloaded survivors, backups, favorites, ratings,
+export/upload flags and filename-derived cache bytes. Android captures exact source records
+under its actual gallery lease before its existing checkpoint or UI publication and checks
+that binding again before durable completion. Nested viewer/player covers borrow the lease;
+actual gallery/native-session retirement cancels its source. A queued old Android close
+cannot exit a successor browse.
+
+Platform parity limits: Apple failed-card snapshots cannot tombstone or claim complete;
+the existing Android native wire retains its best-effort card policy and lacks both failed
+storage authority and removal size. Android opaque IDs use its exact storage/handle/date/name
+wire key; Apple additionally qualifies known size. No UTC capture time is invented from
+PTP civil dates. Unknown volume facts remain absent. RAW, burst, rating and multipart source
+policy and every existing JNI method remain unchanged.
+
+Local adoption automated checks passed: shared and app portable/strict checks, both simulator
+architecture builds, 20 SIMULATED native cases, and the actual staged Android consumer
+(966 cases), JNI73, Vulkan and package coexistence. The generated app library matches staging
+exactly; SDK runtime libraries retain explicit staged-to-merged-to-stripped APK byte linkage.
+Physical camera/device behavior is untested. Cache, transfer, deletion and full media/gallery
+shell exit remain open migration work. App pins and publication are unchanged.
+
+Apple catalog reconciliation: a successful authoritative storage list also retires
+cached records on absent cards, while failed/unknown card discovery cannot do so. Capture
+invalidates category coverage even outside the standalone gallery. Storage capacity reads
+retain the original per-appearance cadence, including local gallery appearances; accepted
+facts are qualified by the actual native/common source and epoch, and pending or superseded
+reads cannot expose old capacities. Every cached row supplies location-independent R3D
+pairing context, including downloaded files without camera handles. Accepted metadata-only
+proxy backfills update the exact existing legacy store/grid row while preserving its bytes,
+flags and absent hardware location. Apple cached pairing remains an explicit source-policy
+exception to Android's unchanged native fresh-cursor algorithm. These corrections and their deterministic
+scenarios passed the local automated qualification above; physical behavior remains untested.
+
+The existing video fallback census also includes downloaded cached filenames even when
+their rows have no hardware location; the host supplies those exact storage retention facts
+through its unchanged download predicate. Removed remote-only metadata cannot manufacture
+a local survivor or trigger a replacement probe. No new native wire command is introduced.

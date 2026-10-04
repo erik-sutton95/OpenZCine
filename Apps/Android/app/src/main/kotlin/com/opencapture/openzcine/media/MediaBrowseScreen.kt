@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -464,6 +465,7 @@ internal fun MediaBrowseScreen(
      * facade call is addressed to it; null (offline or demo) reaches no camera at all.
      */
     connectionOwner: Long?,
+    mediaService: com.opencapture.opencine.nikon.NikonMediaService? = null,
     savedCameraID: String? = null,
     cameraDisplayName: String? = null,
     /**
@@ -494,6 +496,8 @@ internal fun MediaBrowseScreen(
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onClose: () -> Unit,
 ) {
+    val catalogOwner = remember(mediaService) { mediaService?.let(::NikonMediaGalleryCatalog) }
+    DisposableEffect(catalogOwner) { onDispose { catalogOwner?.retire() } }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val playbackAssistState =
@@ -650,6 +654,7 @@ internal fun MediaBrowseScreen(
 
     LaunchedEffect(
         cameraID,
+        mediaService,
         offlineCameraIDs,
         librarySource,
         effectiveCameraConnected,
@@ -676,24 +681,31 @@ internal fun MediaBrowseScreen(
                                 libraryIndex.beginCameraListing(cameraID)
                             }
                         try {
-                            val clips =
-                                loadCameraMediaPages(
-                                    pageSize = MEDIA_BROWSE_PAGE_SIZE,
-                                    gateway = SwiftMediaBrowseGateway(connectionOwner),
-                                    onStart = { slots -> browseStorageSlots = slots },
-                                    onPage = { snapshot ->
-                                        listingCheckpoint.applyPage(
-                                            snapshot.addedClips,
-                                            snapshot.removedObjects,
-                                        )
-                                        state =
-                                            BrowseState.Loaded(
-                                                clips = snapshot.clips,
-                                                isLoadingMore = snapshot.hasMore,
-                                            )
-                                    },
-                                )
+                            val producer = mediaService ?: throw MediaBrowsePagingException("Camera media source unavailable.")
+                            val owner = catalogOwner ?: throw MediaBrowsePagingException("Camera media source unavailable.")
+                            val browse = owner.open()
+                            val cursor = browse.catalog()
+                            var catalog = com.opencapture.opencine.media.MediaCatalog()
+                            var clips: List<MediaClipRecord> = emptyList()
+                            try {
+                                while (true) {
+                                    val delta = cursor.next() ?: break
+                                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                                    if (!producer.isCurrent(browse.binding)) throw kotlinx.coroutines.CancellationException("Source retired")
+                                    val page = owner.capture(delta, catalog, browse.binding)
+                                    catalog = page.catalog; clips = page.clips
+                                    owner.admit(browse.binding)
+                                    listingCheckpoint.applyPage(page.additions, page.removals)
+                                    browseStorageSlots = producer.storageSlots(browse.binding)
+                                    if (!producer.isCurrent(browse.binding)) throw kotlinx.coroutines.CancellationException("Source retired")
+                                    state = BrowseState.Loaded(clips, isLoadingMore = !delta.complete)
+                                }
+                                owner.admit(browse.binding)
+                                check(catalog.complete) { "Partial source catalog cannot prune the legacy index." }
+                            } finally { cursor.close() }
+                            owner.admit(browse.binding)
                             withContext(Dispatchers.IO) {
+                                owner.admit(browse.binding)
                                 // The camera answered for every object it holds, so rows it never
                                 // listed are gone from the card — prune them unless a complete
                                 // local copy keeps the clip browsable offline.
@@ -710,6 +722,13 @@ internal fun MediaBrowseScreen(
                             BrowseState.Loaded(clips)
                         } catch (error: CancellationException) {
                             throw error
+                        } catch (error: com.opencapture.opencine.media.MediaServiceException) {
+                            if (error.failure == com.opencapture.opencine.media.MediaServiceFailure.RETIRED) {
+                                throw CancellationException("Camera media source retired", error)
+                            }
+                            withContext(Dispatchers.IO) { listingCheckpoint.commit() }
+                            val partial = (state as? BrowseState.Loaded)?.clips.orEmpty()
+                            incompleteCameraBrowseState(partial)
                         } catch (_: MediaBrowsePagingException) {
                             // A partial pass proves nothing about the rows it never reached.
                             withContext(Dispatchers.IO) { listingCheckpoint.commit() }
@@ -1402,9 +1421,7 @@ internal fun MediaBrowseScreen(
         if (frameioController.isInternetHopActive) {
             withContext(NonCancellable) { frameioController.endInternetHop() }
         }
-        if (effectiveCameraConnected && connectionOwner != null) {
-            withContext(Dispatchers.IO) { NikonNative.sessionExitMediaMode(connectionOwner) }
-        }
+        catalogOwner?.close()
         onClose()
     }
     BackHandler(enabled = playingClip == null && viewingPhoto == null) {

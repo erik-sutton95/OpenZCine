@@ -42,6 +42,7 @@ internal class AppNikonConnectPort(
     private val scope: CoroutineScope,
     private val offersDiagnostics: Boolean,
     /** Root-owned adapter, shared by pairing, cameras and the monitor. */
+    private val commonServices: (com.opencapture.opencine.nikon.CameraSession, NikonOpenCineSession) -> com.opencapture.opencine.core.CameraServices = { _, _ -> com.opencapture.opencine.core.CameraServices() },
     private val commonSession: (com.opencapture.opencine.nikon.CameraSession) -> NikonOpenCineSession = { NikonOpenCineSession(it, scope) },
 ) : NikonConnectPort {
     override val sightings = MutableStateFlow<List<NikonSighting>>(emptyList())
@@ -222,7 +223,8 @@ internal class AppNikonConnectPort(
                 }
             }
         onPaired(paired)
-        return NikonConnection(commonSession(paired.session), paired.savedCamera.host, kindOf(paired.savedCamera.transport))
+        val common = commonSession(paired.session)
+        return NikonConnection(common, paired.savedCamera.host, kindOf(paired.savedCamera.transport), commonServices(paired.session, common))
     }
 
     // ponytail: nothing to do; the integration cancels the coroutine running connect(), which

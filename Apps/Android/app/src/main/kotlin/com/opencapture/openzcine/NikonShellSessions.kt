@@ -1,5 +1,12 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.core.CameraServices
+import com.opencapture.opencine.media.CameraMediaService
+import com.opencapture.opencine.nikon.NikonMediaCatalogRecordSource
+import com.opencapture.opencine.nikon.NikonMediaService
+import com.opencapture.opencine.nikon.NikonNativeMediaSource
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.core.SessionCloseReason
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.NikonOpenCineSession
@@ -17,7 +24,27 @@ internal class NikonShellSessions(private val scope: CoroutineScope) {
     fun acquire(native: CameraSession): NikonOpenCineSession =
         sessions.getOrPut(native) { NikonOpenCineSession(native, scope) }
 
+    private data class MediaOwner(val common: NikonOpenCineSession, val service: NikonMediaService)
+    private val media = IdentityHashMap<CameraSession, MediaOwner>()
+
+    fun services(native: CameraSession, common: NikonOpenCineSession = acquire(native)): CameraServices {
+        if (native !is SwiftCoreCameraSession) return CameraServices()
+        var owner = media[native]
+        if (owner == null || owner.common !== common) {
+            owner?.service?.retire()
+            val identity = (native.state.value as? CameraSessionState.Connected)?.identity ?: return CameraServices()
+            val namespace = identity.serialNumber.ifBlank { "${identity.model}:${identity.name}" }
+            val service = NikonMediaService(common.id, NikonNativeMediaSource(native, common, namespace), scope)
+            owner = MediaOwner(common, service); media[native] = owner
+        }
+        return CameraServices().plus(CameraMediaService::class, owner.service)
+            .plus(NikonMediaCatalogRecordSource::class, owner.service)
+    }
+    fun media(native: CameraSession, common: NikonOpenCineSession = acquire(native)): NikonMediaService? =
+        services(native, common).get<CameraMediaService>() as? NikonMediaService
+
     fun retire(native: CameraSession) {
+        media.remove(native)?.service?.retire()
         sessions.remove(native)?.closeNow(SessionCloseReason.REQUESTED)
     }
 }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C1A000000000000000000002 /* NikonMediaCatalogAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* NikonMediaCatalogAdapter.swift */; };
 		A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */; };
 		BA99F4602FF564EC9B91DE89 /* MediaLUTExportAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */; };
 		OZC000000000000000000003 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000002 /* OpenZCineCore */; };
@@ -107,6 +108,7 @@
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
+		C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -151,6 +153,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C1A000000000000000000001 /* NikonMediaCatalogAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaCatalogAdapter.swift; sourceTree = "<group>"; };
 		A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackAudioMeterAdoptionTests.swift; sourceTree = "<group>"; };
 		EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLUTExportAdapterTests.swift; sourceTree = "<group>"; };
 		0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InternetReachability.swift; sourceTree = "<group>"; };
@@ -249,6 +252,7 @@
 		N0100000000000000000000D /* MulticamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinatorTests.swift; sourceTree = "<group>"; };
 		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
 		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
+		C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaCatalogAdoptionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -304,6 +308,7 @@
 				2BD15F764C285E190D23ADBF /* MediaDeliveryCompositionTests.swift */,
 				EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */,
 				A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */,
+				C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -344,6 +349,7 @@
 				DIAG00000000000000000001 /* AppDiagnostics.swift */,
 				C0DE00000000000000000002 /* NativeAppRoot.swift */,
 				N02000000000000000000001 /* NikonCamerasFlow.swift */,
+				C1A000000000000000000001 /* NikonMediaCatalogAdapter.swift */,
 				C0DE00000000000000000017 /* NativeCameraConnectionStore.swift */,
 				C0DE00000000000000000019 /* NativeCameraDiscovery.swift */,
 				INFR00000000000000000001 /* InfrastructureCameraFinder.swift */,
@@ -590,6 +596,7 @@
 				2C14A5F3090DBBC27051DCBC /* MediaDeliveryCompositionTests.swift in Sources */,
 				BA99F4602FF564EC9B91DE89 /* MediaLUTExportAdapterTests.swift in Sources */,
 				A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */,
+				C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -604,6 +611,7 @@
 				DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */,
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,
 				N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */,
+				C1A000000000000000000002 /* NikonMediaCatalogAdapter.swift in Sources */,
 				C0DE00000000000000000016 /* NativeCameraConnectionStore.swift in Sources */,
 				C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */,
 				UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */,

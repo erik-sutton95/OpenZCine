@@ -650,6 +650,7 @@ class MainActivity : ComponentActivity() {
                             scope = connectionScope,
                             offersDiagnostics = true,
                             commonSession = shellSessions::acquire,
+                            commonServices = shellSessions::services,
                         )
                     }
                 val camerasModel =
@@ -697,7 +698,7 @@ class MainActivity : ComponentActivity() {
                     } ?: SavedCamera(
                         id = "monitor:${common.id}", integration = IntegrationID("nikon"),
                         advertisedName = activeSavedCamera?.cameraName ?: "Monitor", model = "")
-                    val connected = ConnectedCamera(saved, common)
+                    val connected = ConnectedCamera(saved, common, shellSessions.services(native, common))
                     if (borrowed != null) {
                         shell.borrow(connected) {
                             monitorSession = null
@@ -1607,6 +1608,7 @@ class MainActivity : ComponentActivity() {
                                 MonitorOverlay.MEDIA ->
                                     MediaBrowseScreen(
                                         cameraID = cameraID,
+                                        mediaService = shellSessions.media(active, multicam.lentMember(active)?.control ?: shellSessions.acquire(active)),
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
                                         connectionOwner =

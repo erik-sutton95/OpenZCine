@@ -1,201 +1,97 @@
 package com.opencapture.openzcine.media
 
-import com.opencapture.opencine.nikon.CameraPropertySnapshotWire
-import com.opencapture.opencine.nikon.NativePropertyRefreshResult
-import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.opencine.nikon.CameraStorageSlotStatus
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.yield
-import com.opencapture.opencine.nikon.NikonNative
+import kotlinx.coroutines.sync.withLock
 
-/** Stable persisted identity shared by page additions and R3D-pair removals. */
-internal data class MediaObjectIdentity(
-    val storageID: Long,
-    val handle: Long,
-    val captureDate: String,
-    val filename: String,
-) {
-    constructor(clip: MediaClipRecord) :
-        this(clip.storageId, clip.handle, clip.captureDate, clip.filename)
-}
+typealias MediaObjectIdentity = com.opencapture.opencine.nikon.NikonMediaObjectIdentity
+typealias MediaBrowsePage = com.opencapture.opencine.nikon.NikonMediaBrowsePage
+typealias MediaBrowseSnapshot = com.opencapture.opencine.nikon.NikonMediaBrowseSnapshot
+typealias MediaBrowseStart = com.opencapture.opencine.nikon.NikonMediaBrowseStart
+typealias MediaBrowseGateway = com.opencapture.opencine.nikon.NikonMediaBrowseGateway
+typealias MediaBrowsePagingException = com.opencapture.opencine.nikon.NikonMediaBrowsePagingException
 
-/** One decoded page from the shared Swift media-browse cursor. */
-internal data class MediaBrowsePage(
-    val clips: List<MediaClipRecord>,
-    val removedObjects: List<MediaObjectIdentity>,
-    val inspectedObjectCount: Int,
-    val hasMore: Boolean,
-)
-
-/** Incremental catalog state delivered to the Compose media browser. */
-internal data class MediaBrowseSnapshot(
-    /** Full newest-first catalog for the incremental Compose presentation. */
-    val clips: List<MediaClipRecord>,
-    /** Additions from this native page only, for bounded persistence work. */
-    val addedClips: List<MediaClipRecord>,
-    val removedObjects: List<MediaObjectIdentity>,
-    val hasMore: Boolean,
-)
-
-/** One native cursor and the card generation captured before media ownership. */
-internal data class MediaBrowseStart(
-    val cursor: Long,
-    val storageSlots: List<CameraStorageSlotStatus>,
-)
-
-/** Stable parser for `MediaBrowseStartWire` from the Swift facade. */
 internal object MediaBrowseStarts {
-    private const val VERSION = "OZCMEDIASTART1"
-
-    fun parse(wire: String?): MediaBrowseStart? {
-        val separator = wire?.indexOf('\n')?.takeIf { it > 0 } ?: return null
-        val header = wire.substring(0, separator).split('\t')
-        if (header.size != 2 || header[0] != VERSION) return null
-        val cursor = header[1].toLongOrNull()?.takeIf { it > 0 } ?: return null
-        val readback = CameraPropertySnapshotWire.decode(wire.substring(separator + 1))
-        if (!readback.isValid || readback.result != NativePropertyRefreshResult.MEDIA_BUSY) {
-            return null
-        }
-        return MediaBrowseStart(cursor, readback.snapshot.storageSlots)
-    }
+    fun parse(wire: String?): MediaBrowseStart? = com.opencapture.opencine.nikon.NikonMediaBrowseStarts.parse(wire)
 }
-
-/** Stable parser for `MediaBrowsePageWire` from the Swift facade. */
 internal object MediaBrowsePages {
-    private const val VERSION = "OZCMEDIA2"
-    private const val MAXIMUM_PAGE_SIZE = 128
-
-    fun parse(wire: String): MediaBrowsePage? {
-        val lines = wire.split('\n')
-        val header = lines.firstOrNull()?.split('\t') ?: return null
-        if (header.size != 4 || header[0] != VERSION) return null
-        val hasMore =
-            when (header[1]) {
-                "0" -> false
-                "1" -> true
-                else -> return null
-            }
-        val inspectedObjectCount =
-            header[2].toIntOrNull()?.takeIf { it in 0..MAXIMUM_PAGE_SIZE } ?: return null
-        val removalCount =
-            header[3].toIntOrNull()?.takeIf { it in 0..MAXIMUM_PAGE_SIZE } ?: return null
-        if (lines.size < 1 + removalCount) return null
-        val removedObjects =
-            lines.drop(1).take(removalCount).map { line ->
-                val fields = line.split('\t')
-                if (fields.size != 5 || fields[0] != "-") return null
-                MediaObjectIdentity(
-                    storageID = fields[1].unsignedObjectValueOrNull() ?: return null,
-                    handle = fields[2].unsignedObjectValueOrNull() ?: return null,
-                    captureDate = fields[3],
-                    filename = fields[4].ifEmpty { return null },
-                )
-            }
-        val records = lines.drop(1 + removalCount).joinToString(separator = "\n")
-        val clips = MediaClips.parse(records)
-        if (clips.size + removedObjects.size > MAXIMUM_PAGE_SIZE) return null
-        return MediaBrowsePage(
-            clips = clips,
-            removedObjects = removedObjects,
-            inspectedObjectCount = inspectedObjectCount,
-            hasMore = hasMore,
-        )
-    }
+    fun parse(wire: String): MediaBrowsePage? = com.opencapture.opencine.nikon.NikonMediaBrowsePages.parse(wire)
 }
 
-/** Small injectable boundary around the three blocking JNI cursor calls. */
-internal interface MediaBrowseGateway {
-    fun begin(): String?
-
-    fun next(cursor: Long, maxObjects: Int): String?
-
-    fun cancel(cursor: Long)
-}
-
-/**
- * Production gateway for one camera's [connectionOwner]. Only [begin] names the owner: Swift
- * binds the returned cursor to that session, so next/cancel are already camera-addressed.
- */
+/** Legacy primitive JNI facade retained for unmigrated callers; no parser, pager or gallery owner. */
 internal class SwiftMediaBrowseGateway(private val connectionOwner: Long?) : MediaBrowseGateway {
-    override fun begin(): String? = connectionOwner?.let(NikonNative::sessionBeginMediaBrowse)
+    override fun begin(): String? = connectionOwner?.let(com.opencapture.opencine.nikon.NikonNative::sessionBeginMediaBrowse)
 
     override fun next(cursor: Long, maxObjects: Int): String? =
-        NikonNative.sessionNextMediaBrowsePage(cursor, maxObjects)
+        com.opencapture.opencine.nikon.NikonNative.sessionNextMediaBrowsePage(cursor, maxObjects)
 
-    override fun cancel(cursor: Long) = NikonNative.sessionCancelMediaBrowse(cursor)
+    override fun cancel(cursor: Long) = com.opencapture.opencine.nikon.NikonNative.sessionCancelMediaBrowse(cursor)
 }
 
-/** Sanitized failure from an incomplete or malformed native listing pass. */
-internal class MediaBrowsePagingException(message: String) : IllegalStateException(message)
 
-/**
- * Collects every bounded native page, publishing the growing newest-first
- * catalog after each one. JNI work runs off-main; cancellation is checked on
- * both sides of every page and always invalidates the native cursor.
- */
+/** Original tests and unmigrated helpers delegate to the same real producer pager. */
 internal suspend fun loadCameraMediaPages(
-    pageSize: Int,
-    gateway: MediaBrowseGateway,
+    pageSize: Int, gateway: MediaBrowseGateway,
     ioContext: CoroutineContext = Dispatchers.IO,
-    onStart: suspend (List<CameraStorageSlotStatus>) -> Unit = {},
+    onStart: suspend (List<com.opencapture.opencine.nikon.CameraStorageSlotStatus>) -> Unit = {},
     onPage: suspend (MediaBrowseSnapshot) -> Unit,
-): List<MediaClipRecord> {
-    require(pageSize in 1..128) { "Camera media page size must be between 1 and 128." }
-    var cursor = -1L
-    try {
-        val start =
-            withContext(ioContext) {
-                val parsed =
-                    MediaBrowseStarts.parse(gateway.begin())
-                        ?: throw MediaBrowsePagingException("Camera media listing could not start.")
-                cursor = parsed.cursor
-                parsed
-            }
-        onStart(start.storageSlots)
+): List<MediaClipRecord> = com.opencapture.opencine.nikon.collectNikonMediaPages(
+    pageSize, gateway, ioContext, onStart, onPage)
 
-        val clipsByIdentity = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
-        while (true) {
-            currentCoroutineContext().ensureActive()
-            val wire =
-                withContext(ioContext) { gateway.next(cursor, pageSize) }
-                    ?: throw MediaBrowsePagingException("Camera media listing stopped early.")
-            currentCoroutineContext().ensureActive()
-            val page =
-                MediaBrowsePages.parse(wire)
-                    ?: throw MediaBrowsePagingException("Camera returned an invalid media page.")
-            if (
-                page.inspectedObjectCount > pageSize ||
-                    page.clips.size + page.removedObjects.size > pageSize
-            ) {
-                throw MediaBrowsePagingException("Camera exceeded the requested media page size.")
-            }
-            page.clips.forEach { clip ->
-                clipsByIdentity[MediaObjectIdentity(clip)] = clip
-            }
-            page.removedObjects.forEach(clipsByIdentity::remove)
-            val clips = MediaClips.newestFirst(clipsByIdentity.values.toList())
-            onPage(
-                MediaBrowseSnapshot(
-                    clips = clips,
-                    addedClips = page.clips,
-                    removedObjects = page.removedObjects,
-                    hasMore = page.hasMore,
-                ),
-            )
-            if (!page.hasMore) return clips
-            yield()
+/** Gallery lease survives recompose/player covers; only its actual gallery retires it. */
+internal class NikonMediaGalleryCatalog(private val source: com.opencapture.opencine.nikon.NikonMediaService) {
+    private val opening = kotlinx.coroutines.sync.Mutex()
+    @Volatile private var browse: com.opencapture.opencine.media.CameraMediaBrowse? = null
+    @Volatile private var retired = false
+    suspend fun open(): com.opencapture.opencine.media.CameraMediaBrowse = opening.withLock {
+        check(!retired)
+        browse?.takeIf { source.isCurrent(it.binding) } ?: source.openBrowse().also {
+            if (retired) { source.retireBrowse(it.binding); throw kotlinx.coroutines.CancellationException("Gallery retired") }
+            browse = it
         }
-    } finally {
-        if (cursor > 0) {
-            withContext(ioContext + NonCancellable) { gateway.cancel(cursor) }
+    }
+    fun admit(binding: com.opencapture.opencine.media.MediaBrowseBinding) {
+        if (retired || browse?.binding != binding || !source.isCurrent(binding)) {
+            throw kotlinx.coroutines.CancellationException("Gallery source retired")
         }
+    }
+    fun capture(
+        delta: com.opencapture.opencine.media.MediaCatalogDelta,
+        catalog: com.opencapture.opencine.media.MediaCatalog,
+        binding: com.opencapture.opencine.media.MediaBrowseBinding,
+    ): NikonMediaGalleryPage {
+        admit(binding)
+        val additions = delta.upserts.map { asset ->
+            source.mediaCatalogRecord(asset.id, binding)?.clip
+                ?: throw MediaBrowsePagingException("Source record retired.")
+        }
+        val removals = delta.removed.map { asset ->
+            source.mediaCatalogRecord(asset, binding)?.identity
+                ?: throw MediaBrowsePagingException("Source removal retired.")
+        }
+        val next = catalog.applying(delta)
+        val clips = MediaClips.newestFirst(next.assets.map { asset ->
+            source.mediaCatalogRecord(asset.id, binding)?.clip
+                ?: throw MediaBrowsePagingException("Source record retired.")
+        })
+        admit(binding)
+        return NikonMediaGalleryPage(next, clips, additions, removals)
+    }
+    fun retire() {
+        retired = true
+        val old = browse; browse = null
+        if (old != null) source.retireBrowse(old.binding)
+    }
+    suspend fun close() {
+        retired = true
+        val old = browse; browse = null
+        old?.close()
     }
 }
 
-private fun String.unsignedObjectValueOrNull(): Long? =
-    toLongOrNull()?.takeIf { it in 0..0xFFFF_FFFFL }
+internal data class NikonMediaGalleryPage(
+    val catalog: com.opencapture.opencine.media.MediaCatalog,
+    val clips: List<MediaClipRecord>,
+    val additions: List<MediaClipRecord>,
+    val removals: List<MediaObjectIdentity>,
+)
