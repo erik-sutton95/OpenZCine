@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C1D000000000000000000002 /* NikonPeakingTinyWindowParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */; };
+		C1E000000000000000000002 /* NikonMediaDeliveryCoordinatorAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */; };
 		C1A000000000000000000002 /* NikonMediaCatalogAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* NikonMediaCatalogAdapter.swift */; };
 		C1B000000000000000000002 /* NikonMediaLibraryAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B000000000000000000001 /* NikonMediaLibraryAdapter.swift */; };
 		C1C000000000000000000002 /* NikonMediaGalleryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C000000000000000000001 /* NikonMediaGalleryProjection.swift */; };
@@ -159,6 +160,7 @@
 
 /* Begin PBXFileReference section */
 		C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonPeakingTinyWindowParityTests.swift; sourceTree = "<group>"; };
+		C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaDeliveryCoordinatorAdapterTests.swift; sourceTree = "<group>"; };
 		C1A000000000000000000001 /* NikonMediaCatalogAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaCatalogAdapter.swift; sourceTree = "<group>"; };
 		C1B000000000000000000001 /* NikonMediaLibraryAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaLibraryAdapter.swift; sourceTree = "<group>"; };
 		C1C000000000000000000001 /* NikonMediaGalleryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaGalleryProjection.swift; sourceTree = "<group>"; };
@@ -322,6 +324,7 @@
 				C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */,
 				C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */,
 				C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */,
+				C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -615,6 +618,7 @@
 				C1B000000000000000000004 /* NikonMediaLibraryAdoptionTests.swift in Sources */,
 				C1C000000000000000000004 /* NikonMediaGalleryProjectionTests.swift in Sources */,
 				C1D000000000000000000002 /* NikonPeakingTinyWindowParityTests.swift in Sources */,
+				C1E000000000000000000002 /* NikonMediaDeliveryCoordinatorAdapterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

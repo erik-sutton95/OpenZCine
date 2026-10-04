@@ -1,3 +1,4 @@
+import OpenCineAppKit
 import LinkPresentation
 import MonitorPresentation
 import MonitorUI
@@ -30,9 +31,9 @@ enum MediaDeliveryRunOutcome: Sendable {
 }
 
 /// Live progress for the on-clip delivery overlay.
-struct MediaDeliveryOverlayState: Equatable {
+struct MediaDeliveryOverlayState: Equatable, Sendable {
     /// Operator-visible step after export, when the determinate bar would otherwise freeze.
-    enum Phase: Equatable {
+    enum Phase: Equatable, Sendable {
         case working
         case awaitingPhotosAccess
         case savingToPhotos
@@ -102,144 +103,105 @@ struct MediaDeliveryOverlayState: Equatable {
     }
 }
 
-/// App-scoped delivery orchestration — survives navigation; drives global and on-clip overlays.
+/// App-scoped delivery orchestration survives navigation through the shared run owner.
 @MainActor
 @Observable
 final class MediaDeliveryCoordinator {
-    private(set) var overlayState: MediaDeliveryOverlayState?
-    var isExpanded = false
-    var sharePayload: MediaSharePayload?
-    /// Staging directory removed after the share sheet finishes (idempotent cleanup).
-    private(set) var shareStagingCleanupURL: URL?
-    private(set) var completionToast: String?
+    private let lifetime: MonitorDeliveryModel<
+        MediaDeliveryOwnedProgress, MediaDeliveryRunOutcome, MediaDeliveryShareResources
+    >
+    private let execute: @MainActor (
+        MediaDeliveryBeginRequest, NativeAppModel,
+        @escaping @MainActor (MediaDeliveryOverlayState) -> Void
+    ) async -> MediaDeliveryRunOutcome
 
-    private var deliveryTask: Task<Void, Never>?
-    private var activeRequest: MediaDeliveryBeginRequest?
-    private var cancelHandler: (() -> Void)?
-    private var localOverlayDepth = 0
-    /// Guards against stale progress callbacks re-showing the bar after a run finishes.
-    private var activeDeliveryToken = UUID()
+    init(
+        sleep: @escaping @MainActor (Duration) async throws -> Void = {
+            try await Task.sleep(for: $0)
+        },
+        execute: @escaping @MainActor (
+            MediaDeliveryBeginRequest, NativeAppModel,
+            @escaping @MainActor (MediaDeliveryOverlayState) -> Void
+        ) async -> MediaDeliveryRunOutcome = { request, model, progress in
+            await MediaDeliveryRunner.execute(request: request, model: model, onProgress: progress)
+        }
+    ) {
+        self.execute = execute
+        lifetime = .init(sleep: sleep, releaseShare: { resources in
+            MediaShareStaging.cleanupStaging(at: resources.cleanupURL)
+        })
+    }
 
+    var overlayState: MediaDeliveryOverlayState? { lifetime.state.progress?.overlay }
+    var currentClipFilename: String? { lifetime.state.progress?.filename }
+    var completionToast: String? { lifetime.state.toast }
+    var shareStagingCleanupURL: URL? { lifetime.state.share?.payload.cleanupURL }
     var isActive: Bool { overlayState != nil }
-
-    /// When a media view is visible, it claims the on-clip overlay; otherwise the global pill shows.
-    var showsLocalOverlay: Bool { localOverlayDepth > 0 }
-
+    var showsLocalOverlay: Bool { lifetime.state.showsLocalOverlay }
     var showsGlobalChrome: Bool { isActive && !showsLocalOverlay }
-
-    var currentClipFilename: String? {
-        guard let state = overlayState, let request = activeRequest else { return nil }
-        let index = min(max(state.clipIndex, 1), request.clips.count) - 1
-        guard request.clips.indices.contains(index) else { return nil }
-        return request.clips[index].filename
+    var isExpanded: Bool {
+        get { lifetime.state.expanded }
+        set { lifetime.setExpanded(newValue) }
     }
-
-    func enterLocalOverlayContext() {
-        localOverlayDepth += 1
+    var sharePayload: MediaSharePayload? {
+        lifetime.state.share.map {
+            .init(id: $0.id, urls: $0.payload.urls, metadataText: $0.payload.metadataText)
+        }
     }
-
-    func exitLocalOverlayContext() {
-        localOverlayDepth = max(0, localOverlayDepth - 1)
+    /// A delayed nil setter belongs to the exact sheet built with this binding.
+    var sharePresentation: Binding<MediaSharePayload?> {
+        let presentedID = sharePayload?.id
+        return Binding(get: { self.sharePayload }, set: { value in
+            if value == nil, let presentedID { self.clearSharePresentation(id: presentedID) }
+        })
     }
+    func enterLocalOverlayContext() { lifetime.enterLocalOverlayContext() }
+    func exitLocalOverlayContext() { lifetime.exitLocalOverlayContext() }
 
-    /// Starts export/upload work detached from the presenting view's lifecycle.
     func begin(
-        _ request: MediaDeliveryBeginRequest,
-        model: NativeAppModel,
+        _ request: MediaDeliveryBeginRequest, model: NativeAppModel,
         onCancel: (() -> Void)? = nil,
         onComplete: ((MediaDeliveryRunOutcome) -> Void)? = nil
     ) {
-        deliveryTask?.cancel()
-        let token = UUID()
-        activeDeliveryToken = token
-        activeRequest = request
-        cancelHandler = onCancel
-        isExpanded = false
-
-        deliveryTask = Task { @MainActor in
-            let outcome = await MediaDeliveryRunner.execute(
-                request: request,
-                model: model
-            ) { [weak self] state in
-                guard let self, self.activeDeliveryToken == token else { return }
-                self.overlayState = state
+        lifetime.begin(onCancel: onCancel, onComplete: { outcome in
+            onComplete?(outcome)
+            return nil
+        }) { progress in
+            let outcome = await self.execute(request, model) { overlay in
+                let index = min(max(overlay.clipIndex, 1), request.clips.count) - 1
+                let filename = request.clips.indices.contains(index)
+                    ? request.clips[index].filename : nil
+                progress(.init(overlay: overlay, filename: filename))
             }
-            guard activeDeliveryToken == token else { return }
-            finishDeliveryRun(
-                token: token,
-                outcome: outcome,
-                onComplete: onComplete
-            )
-        }
-    }
-
-    func cancel() {
-        activeDeliveryToken = UUID()
-        deliveryTask?.cancel()
-        deliveryTask = nil
-        cancelHandler?()
-        cancelHandler = nil
-        withAnimation(.spring(duration: 0.32)) {
-            overlayState = nil
-            activeRequest = nil
-            isExpanded = false
-        }
-    }
-
-    private func finishDeliveryRun(
-        token: UUID,
-        outcome: MediaDeliveryRunOutcome,
-        onComplete: ((MediaDeliveryRunOutcome) -> Void)?
-    ) {
-        guard activeDeliveryToken == token else { return }
-        activeDeliveryToken = UUID()
-        deliveryTask = nil
-        withAnimation(.spring(duration: 0.32)) {
-            overlayState = nil
-            activeRequest = nil
-            cancelHandler = nil
-            isExpanded = false
-        }
-        onComplete?(outcome)
-        handleOutcome(outcome)
-    }
-
-    func dismissCompletionToast() {
-        completionToast = nil
-    }
-
-    /// Dismisses the share sheet and deletes any cache staging directory.
-    func clearSharePresentation() {
-        let cleanup = shareStagingCleanupURL
-        shareStagingCleanupURL = nil
-        sharePayload = nil
-        MediaShareStaging.cleanupStaging(at: cleanup)
-    }
-
-    private func handleOutcome(_ outcome: MediaDeliveryRunOutcome) {
-        switch outcome {
-        case .share(let urls, let metadataText, let stagingCleanupURL):
-            shareStagingCleanupURL = stagingCleanupURL
-            sharePayload = MediaSharePayload(urls: urls, metadataText: metadataText)
-        case .savedToPhotos(let count):
-            let noun = count == 1 ? "clip" : "clips"
-            showCompletionToast("Saved \(count) \(noun) to Photos")
-        case .frameio(let summary):
-            showCompletionToast(summary)
-        case .failed(let message):
-            showCompletionToast(message)
-        }
-    }
-
-    private func showCompletionToast(_ message: String) {
-        withAnimation { completionToast = message }
-        Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            if completionToast == message {
-                withAnimation { completionToast = nil }
+            switch outcome {
+            case .share(let urls, let metadataText, let cleanup):
+                return .init(outcome, share: .init(
+                    urls: urls, metadataText: metadataText, cleanupURL: cleanup))
+            case .savedToPhotos(let count):
+                return .init(outcome, toast: "Saved \(count) \(count == 1 ? "clip" : "clips") to Photos")
+            case .frameio(let summary): return .init(outcome, toast: summary)
+            case .failed(let message): return .init(outcome, toast: message)
             }
         }
     }
+    func cancel() { withAnimation(.spring(duration: 0.32)) { lifetime.cancel() } }
+    /// The app root owns this lifetime; temporary gallery covers do not close it.
+    func close() { lifetime.close() }
+    func dismissCompletionToast() { lifetime.dismissToast() }
+    func clearSharePresentation(id: UUID? = nil) { lifetime.clearSharePresentation(id: id) }
+    @discardableResult func completeSharePresentation(id: UUID) -> Bool {
+        lifetime.completeSharePresentation(id: id)
+    }
+}
+
+private struct MediaDeliveryOwnedProgress: Sendable {
+    let overlay: MediaDeliveryOverlayState
+    let filename: String?
+}
+private struct MediaDeliveryShareResources: Sendable {
+    let urls: [URL]
+    let metadataText: String?
+    let cleanupURL: URL?
 }
 
 /// Pins delivery chrome below the top safe area (notch / Dynamic Island in landscape).
@@ -762,9 +724,14 @@ extension String {
 // MARK: - Share sheet
 
 struct MediaSharePayload: Identifiable {
-    let id = UUID()
+    let id: UUID
     let urls: [URL]
     let metadataText: String?
+    init(id: UUID = UUID(), urls: [URL], metadataText: String?) {
+        self.id = id
+        self.urls = urls
+        self.metadataText = metadataText
+    }
 }
 
 /// Supplies a typed video file via `NSItemProvider` so Launch Services can resolve share targets.
@@ -905,19 +872,23 @@ struct MediaDeliveryShareSheetModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if enabled {
-            @Bindable var delivery = coordinator
+            let delivery = coordinator
+            let presentedID = delivery.sharePayload?.id
             content
                 .sheet(
-                    item: $delivery.sharePayload,
+                    item: delivery.sharePresentation,
                     onDismiss: {
-                        delivery.clearSharePresentation()
-                        onDismiss?()
+                        if let presentedID, delivery.completeSharePresentation(id: presentedID) {
+                            onDismiss?()
+                        }
                     },
                     content: { payload in
                         MultiShareSheet(
                             urls: payload.urls,
                             metadataText: payload.metadataText,
-                            onFinished: { delivery.clearSharePresentation() }
+                            onFinished: {
+                                if delivery.completeSharePresentation(id: payload.id) { onDismiss?() }
+                            }
                         )
                     }
                 )

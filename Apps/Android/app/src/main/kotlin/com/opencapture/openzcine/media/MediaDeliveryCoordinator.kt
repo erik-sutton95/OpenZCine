@@ -1,9 +1,6 @@
 package com.opencapture.openzcine.media
 
 import android.content.Context
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
@@ -11,7 +8,6 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioPreparedArtifact
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import java.nio.file.Files
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 import kotlin.math.min
 import kotlinx.coroutines.CancellationException
@@ -19,10 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -102,60 +95,29 @@ internal class MediaDeliveryCoordinator(
     private val appContext: Context,
     private val frameioController: FrameioDeliveryController,
     private val galleryGateway: MediaGalleryGateway = AndroidMediaGalleryGateway(appContext.contentResolver),
+    scope: CoroutineScope,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val generation = AtomicLong(0L)
-    private var workJob: Job? = null
-
-    /**
-     * The Frame.io run stays on the media surface that owns the network hop, project pick, and
-     * result sentence — but the overlay's Cancel is here, so the running job is registered here
-     * too. Cancelling only [workJob] (null for the whole upload) left Cancel doing nothing while
-     * a multi-gigabyte upload continued.
-     */
-    private var externalJob: Job? = null
+    private val presentation = NikonDeliveryPresentation(scope)
+    val display get() = presentation.display
 
     /** Cache pre-pass store; the same private root the media surfaces resolve artifacts from. */
     private val cacheStore: MediaCacheStore by lazy {
         MediaCacheStore(appContext.noBackupFilesDir.resolve("media-cache").toPath())
     }
 
-    var overlayState by mutableStateOf<MediaDeliveryOverlayState?>(null)
-        private set
-    var completionToast by mutableStateOf<String?>(null)
-        private set
-    var isExpanded by mutableStateOf(false)
-
-    val isActive: Boolean
-        get() = overlayState != null
-
-    fun dismissToast() {
-        completionToast = null
-    }
-
-    fun cancel() {
-        generation.incrementAndGet()
-        workJob?.cancel()
-        workJob = null
-        externalJob?.cancel()
-        externalJob = null
-        overlayState = null
-        isExpanded = false
-    }
-
-    /**
-     * Registers the media surface's Frame.io job so [cancel] reaches the upload it is narrating.
-     * Pass null when that job finishes.
-     */
-    fun trackExternalDelivery(job: Job?) {
-        externalJob = job
-        // A run that ends during the cache pre-pass — nothing cached, so no upload state ever
-        // follows — must still take its own progress bar down.
-        if (job == null && overlayState?.isCaching == true && workJob?.isActive != true) {
-            overlayState = null
-            isExpanded = false
-        }
-    }
+    val overlayState: MediaDeliveryOverlayState? get() = presentation.overlayState
+    val completionToast: String? get() = presentation.completionToast
+    var isExpanded: Boolean
+        get() = presentation.isExpanded
+        set(value) { presentation.isExpanded = value }
+    val isActive: Boolean get() = overlayState != null
+    fun dismissToast() = presentation.dismissToast()
+    fun cancel() = presentation.cancel()
+    fun close() = presentation.close()
+    fun trackExternalDelivery(job: Job?): NikonDeliveryPresentation.ExternalTicket =
+        presentation.trackExternalDelivery(job)
+    fun finishExternalDelivery(ticket: NikonDeliveryPresentation.ExternalTicket) =
+        presentation.finishExternalDelivery(ticket)
 
     /**
      * Caches the selection from the camera and reports it on the shared overlay, for the one
@@ -165,7 +127,14 @@ internal class MediaDeliveryCoordinator(
         destination: MediaDeliveryKind,
         selection: List<MediaDeliverySelection>,
         cameraConnectionOwner: Long?,
-    ): MediaDeliveryCachePass = runCachePass(destination, selection, cameraConnectionOwner)
+        ticket: NikonDeliveryPresentation.ExternalTicket? = null,
+    ): MediaDeliveryCachePass {
+        // The popup pre-hop cache has no upload Job yet; it owns only captured preparation facts.
+        val captured = ticket ?: presentation.trackExternalDelivery(null)
+        return runCachePass(destination, selection, cameraConnectionOwner) { progress ->
+            presentation.publishCache(captured, progress)
+        }
+    }
 
     /**
      * Stages complete cache entries, optionally bakes a LUT, then opens the
@@ -183,8 +152,8 @@ internal class MediaDeliveryCoordinator(
             selection = selection,
             configuration = configuration,
             cameraConnectionOwner = cameraConnectionOwner,
-        ) { prepared, items, uncachedCount, gen ->
-            if (generation.get() != gen) return@start
+        ) { prepared, items, uncachedCount, publish ->
+            coroutineContext.ensureActive()
             publish(
                 MediaDeliveryOverlayState(
                     destination = MediaDeliveryKind.NATIVE_SHARE,
@@ -223,10 +192,10 @@ internal class MediaDeliveryCoordinator(
                         }
                     }
                 withContext(Dispatchers.Main.immediate) {
-                    if (generation.get() != gen) return@withContext
+                    coroutineContext.ensureActive()
                     onShareReady(published, metadata)
                 }
-                finish(gen, toast = null)
+                null
             } finally {
                 cleanupPrepared(prepared)
             }
@@ -246,7 +215,7 @@ internal class MediaDeliveryCoordinator(
                     it.clip.contentKind == MediaContentKind.STILL_PHOTO
             }
         if (savableSelection.isEmpty()) {
-            showToast("No video or photo in the selection can be saved to Gallery.")
+            presentation.showToast("No video or photo in the selection can be saved to Gallery.")
             return
         }
         start(
@@ -254,8 +223,8 @@ internal class MediaDeliveryCoordinator(
             selection = savableSelection,
             configuration = configuration,
             cameraConnectionOwner = cameraConnectionOwner,
-        ) { prepared, items, uncachedCount, gen ->
-            if (generation.get() != gen) return@start
+        ) { prepared, items, uncachedCount, publish ->
+            coroutineContext.ensureActive()
             publish(
                 MediaDeliveryOverlayState(
                     destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
@@ -280,78 +249,30 @@ internal class MediaDeliveryCoordinator(
                             coroutineContext.ensureActive()
                         }
                     }
-                if (generation.get() != gen) return@start
-                finish(
-                    gen,
-                    toast =
-                        result.operatorMessage(
+                coroutineContext.ensureActive()
+                result.operatorMessage(
                             MediaGalleryOmissions(
                                 nonVideoCount = selection.size - savableSelection.size,
                                 incompleteCount = uncachedCount,
                             ),
-                        ),
-                )
+                        )
             } finally {
                 cleanupPrepared(prepared)
             }
         }
     }
 
-    /**
-     * Mirrors [FrameioDeliveryController.deliveryState] into the same overlay
-     * so Frame.io uploads use one persistent chrome style.
-     */
-    fun bindFrameioDeliveryState(state: FrameioDeliveryState) {
-        when (state) {
-            is FrameioDeliveryState.Uploading -> {
-                if (workJob?.isActive == true) return
-                publish(
-                    MediaDeliveryOverlayState(
-                        destination = MediaDeliveryKind.FRAMEIO,
-                        totalClips = state.itemCount,
-                        clipIndex = state.itemIndex,
-                        clipFraction = state.progress.coerceIn(0.0, 1.0),
-                        filename = state.filename,
-                    ),
-                )
-            }
-            is FrameioDeliveryState.Completed -> {
-                if (workJob?.isActive == true) return
-                overlayState = null
-                isExpanded = false
-                showToast(
-                    buildString {
-                        append("Uploaded ${state.uploadedCount}")
-                        if (state.failedCount > 0) append(", ${state.failedCount} failed")
-                        if (state.skippedCount > 0) append(", ${state.skippedCount} skipped")
-                    },
-                )
-            }
-            is FrameioDeliveryState.Failed -> {
-                if (workJob?.isActive == true) return
-                overlayState = null
-                isExpanded = false
-                showToast(state.message)
-            }
-            FrameioDeliveryState.Idle -> {
-                // Idle also arrives while the media surface is still caching this run's clips
-                // from the camera; clearing then would erase the pre-pass overlay mid-transfer.
-                if (workJob?.isActive != true && externalJob?.isActive != true) {
-                    // Leave toast alone; only clear active bar when idle and no local job.
-                    if (overlayState?.destination == MediaDeliveryKind.FRAMEIO) {
-                        overlayState = null
-                        isExpanded = false
-                    }
-                }
-            }
-        }
-    }
+    fun bindFrameioDeliveryState(
+        ticket: NikonDeliveryPresentation.ExternalTicket,
+        state: FrameioDeliveryState,
+    ) = presentation.bindFrameioDeliveryState(ticket, state)
 
     /** Publishes the sequential camera-cache pre-pass on the shared overlay (iOS `isCaching`). */
     private suspend fun runCachePass(
         destination: MediaDeliveryKind,
         selection: List<MediaDeliverySelection>,
         cameraConnectionOwner: Long?,
+        publish: (MediaDeliveryOverlayState) -> Unit,
     ): MediaDeliveryCachePass =
         cacheSelectionForDelivery(
             selection = selection,
@@ -376,112 +297,86 @@ internal class MediaDeliveryCoordinator(
         selection: List<MediaDeliverySelection>,
         configuration: MediaDeliveryConfiguration,
         cameraConnectionOwner: Long?,
-        afterPrepare: suspend (List<PreparedClip>, List<MediaDeliveryWorkItem>, Int, Long) -> Unit,
+        afterPrepare: suspend (List<PreparedClip>, List<MediaDeliveryWorkItem>, Int,
+            (MediaDeliveryOverlayState) -> Unit) -> String?,
     ) {
-        val gen = generation.incrementAndGet()
-        workJob?.cancel()
-        isExpanded = false
-        publish(
-            MediaDeliveryOverlayState(
-                destination = destination,
-                totalClips = selection.size,
-                clipIndex = 1,
-                clipFraction = 0.0,
-                filename = selection.first().clip.filename,
-            ),
-        )
-        workJob =
-            scope.launch {
-                val shareCache = appContext.cacheDir.toPath()
-                val stager = MediaShareStager(shareCache)
-                val prepared = ArrayList<PreparedClip>(selection.size)
-                try {
-                    // One job spans cache → export → hand-off, so Cancel stops the whole run.
-                    val pass = runCachePass(destination, selection, cameraConnectionOwner)
-                    val items = pass.items
-                    if (generation.get() != gen) return@launch
-                    if (items.isEmpty()) {
-                        finish(
-                            gen,
-                            toast =
-                                if (pass.uncachedCount > 0) {
-                                    "${uncachedClipsMessage(pass.uncachedCount)} " +
-                                        "Check the camera connection and try again."
-                                } else {
-                                    "Nothing in the selection is ready to deliver."
-                                },
-                        )
-                        return@launch
-                    }
-                    items.forEachIndexed { index, item ->
-                        ensureActive()
-                        if (generation.get() != gen) return@launch
-                        publish(
-                            MediaDeliveryOverlayState(
-                                destination = destination,
-                                totalClips = items.size,
-                                clipIndex = index + 1,
-                                clipFraction = 0.0,
-                                filename = item.clip.filename,
-                            ),
-                        )
-                        val staged =
-                            withContext(Dispatchers.IO) {
-                                stager.stage(item.entry, item.clip) {
-                                    coroutineContext.ensureActive()
-                                }
-                            }
-                        val artifact =
-                            FrameioDeliveryArtifact(
-                                share = staged,
-                                byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
-                                context =
-                                    FrameioArtifactContext(
-                                        cameraID = item.cameraID,
-                                        captureDate = item.clip.captureDate,
-                                        supportsLutBake =
-                                            item.clip.contentKind ==
-                                                MediaContentKind.PLAYABLE_PROXY,
-                                        stableClipIdentity =
-                                            item.clip.libraryKey(item.cameraID),
-                                    ),
-                            )
-                        val baked =
-                            frameioController.prepareForExternalDelivery(
-                                artifact,
-                                configuration,
-                            ) { fraction ->
-                                if (generation.get() != gen) return@prepareForExternalDelivery
-                                publish(
-                                    MediaDeliveryOverlayState(
-                                        destination = destination,
-                                        totalClips = items.size,
-                                        clipIndex = index + 1,
-                                        clipFraction = fraction.coerceIn(0.0, 1.0),
-                                        filename = item.clip.filename,
-                                    ),
-                                )
-                            }
-                        prepared += PreparedClip(share = baked.share, prepared = baked)
-                    }
-                    afterPrepare(prepared, items, pass.uncachedCount, gen)
-                } catch (error: CancellationException) {
-                    cleanupPrepared(prepared)
-                    if (generation.get() == gen) {
-                        overlayState = null
-                        isExpanded = false
-                    }
-                    throw error
-                } catch (error: Exception) {
-                    cleanupPrepared(prepared)
-                    if (generation.get() == gen) {
-                        finish(
-                            gen,
-                            toast = error.message ?: "Couldn't prepare media for delivery.",
-                        )
+        presentation.beginNative { publish ->
+            publish(MediaDeliveryOverlayState(destination, selection.size, 1, 0.0,
+                selection.first().clip.filename))
+            val shareCache = appContext.cacheDir.toPath()
+            val stager = MediaShareStager(shareCache)
+            val prepared = ArrayList<PreparedClip>(selection.size)
+            try {
+                val pass = runCachePass(destination, selection, cameraConnectionOwner, publish)
+                val items = pass.items
+                coroutineContext.ensureActive()
+                if (items.isEmpty()) {
+                    return@beginNative if (pass.uncachedCount > 0) {
+                        "${uncachedClipsMessage(pass.uncachedCount)} " +
+                            "Check the camera connection and try again."
+                    } else {
+                        "Nothing in the selection is ready to deliver."
                     }
                 }
+                items.forEachIndexed { index, item ->
+                    coroutineContext.ensureActive()
+                    publish(
+                        MediaDeliveryOverlayState(
+                            destination = destination,
+                            totalClips = items.size,
+                            clipIndex = index + 1,
+                            clipFraction = 0.0,
+                            filename = item.clip.filename,
+                        ),
+                    )
+                    val staged =
+                        withContext(Dispatchers.IO) {
+                            stager.stage(item.entry, item.clip) {
+                                coroutineContext.ensureActive()
+                            }
+                        }
+                    val artifact =
+                        FrameioDeliveryArtifact(
+                            share = staged,
+                            byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
+                            context =
+                                FrameioArtifactContext(
+                                    cameraID = item.cameraID,
+                                    captureDate = item.clip.captureDate,
+                                    supportsLutBake =
+                                        item.clip.contentKind ==
+                                            MediaContentKind.PLAYABLE_PROXY,
+                                    stableClipIdentity =
+                                        item.clip.libraryKey(item.cameraID),
+                                ),
+                        )
+                    val baked =
+                        frameioController.prepareForExternalDelivery(
+                            artifact,
+                            configuration,
+                        ) { fraction ->
+                            coroutineContext.ensureActive()
+                            publish(
+                                MediaDeliveryOverlayState(
+                                    destination = destination,
+                                    totalClips = items.size,
+                                    clipIndex = index + 1,
+                                    clipFraction = fraction.coerceIn(0.0, 1.0),
+                                    filename = item.clip.filename,
+                                ),
+                            )
+                        }
+                    prepared += PreparedClip(share = baked.share, prepared = baked)
+                }
+                afterPrepare(prepared, items, pass.uncachedCount, publish)
+            } catch (error: CancellationException) {
+                cleanupPrepared(prepared)
+                throw error
+            } catch (error: Exception) {
+                cleanupPrepared(prepared)
+                error.message ?: "Couldn't prepare media for delivery."
             }
+        }
     }
 
     private suspend fun cleanupPrepared(prepared: List<PreparedClip>) {
@@ -489,26 +384,6 @@ internal class MediaDeliveryCoordinator(
             prepared.forEach { item ->
                 runCatching { frameioController.releaseExternalDelivery(item.prepared) }
             }
-        }
-    }
-
-    private fun finish(gen: Long, toast: String?) {
-        if (generation.get() != gen) return
-        workJob = null
-        overlayState = null
-        isExpanded = false
-        if (toast != null) showToast(toast)
-    }
-
-    private fun publish(state: MediaDeliveryOverlayState) {
-        overlayState = state
-    }
-
-    private fun showToast(message: String) {
-        completionToast = message
-        scope.launch {
-            delay(2_500)
-            if (completionToast == message) completionToast = null
         }
     }
 

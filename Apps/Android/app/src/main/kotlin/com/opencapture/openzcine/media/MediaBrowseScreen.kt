@@ -1238,7 +1238,7 @@ internal fun MediaBrowseScreen(
                 val stageContext = coroutineContext
                 // The upload runs here, not in the coordinator, so hand it the job the overlay's
                 // Cancel must reach — otherwise Cancel stopped nothing mid-upload.
-                mediaDeliveryCoordinator?.trackExternalDelivery(stageContext[Job])
+                val deliveryTicket = mediaDeliveryCoordinator?.trackExternalDelivery(stageContext[Job])
                 var skippedBeforeUpload: Int? = null
                 var completedWithoutFailures = false
                 var cancelled = false
@@ -1255,6 +1255,7 @@ internal fun MediaBrowseScreen(
                             connectionOwner.takeIf {
                                 effectiveCameraConnected && !frameioController.isInternetHopActive
                             },
+                        ticket = deliveryTicket,
                     )
                     val result =
                         withContext(Dispatchers.IO) {
@@ -1291,7 +1292,9 @@ internal fun MediaBrowseScreen(
                             }
                         }
                     skippedBeforeUpload = result.incompleteCount + result.failedCount
-                    frameioController.deliver(artifacts, options)
+                    frameioController.deliver(artifacts, options) { state ->
+                        deliveryTicket?.let { mediaDeliveryCoordinator?.bindFrameioDeliveryState(it, state) }
+                    }
                     val completed = frameioController.deliveryState as? FrameioDeliveryState.Completed
                     completedWithoutFailures = completed != null && completed.failedCount == 0
                 } catch (error: CancellationException) {
@@ -1320,7 +1323,7 @@ internal fun MediaBrowseScreen(
                             )
                         }
                     if (completedWithoutFailures && !cancelled) exitSelection()
-                    mediaDeliveryCoordinator?.trackExternalDelivery(null)
+                    deliveryTicket?.let { mediaDeliveryCoordinator?.finishExternalDelivery(it) }
                     frameioPreparationInProgress = false
                     shareInProgress = false
                     shareJob = null

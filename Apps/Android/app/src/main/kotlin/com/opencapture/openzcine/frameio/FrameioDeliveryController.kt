@@ -472,23 +472,28 @@ internal class FrameioDeliveryController(
     suspend fun deliver(
         artifacts: List<FrameioDeliveryArtifact>,
         options: FrameioDeliveryOptions = FrameioDeliveryOptions(),
+        onDeliveryState: (FrameioDeliveryState) -> Unit = {},
     ) {
         val rejoinAfterDelivery = isInternetHopActive
+        // This captured report is attached to this invocation, independent of global UI sampling.
+        val publishDeliveryState: (FrameioDeliveryState) -> Unit = { state ->
+            deliveryState = state
+            onDeliveryState(state)
+        }
         try {
             if (artifacts.isEmpty()) {
-                deliveryState = FrameioDeliveryState.Failed("Only complete cached media can be delivered.")
+                publishDeliveryState(FrameioDeliveryState.Failed("Only complete cached media can be delivered."))
                 return
             }
             val config = requireConfiguration() ?: return
             if (!requireOnline()) {
-                deliveryState =
-                    FrameioDeliveryState.Failed(
+                publishDeliveryState(FrameioDeliveryState.Failed(
                         errorMessage ?: "Frame.io needs a validated internet connection.",
-                    )
+                    ))
                 return
             }
             val destination = selectedDestination ?: run {
-                deliveryState = FrameioDeliveryState.Failed("Pick a Frame.io project before uploading.")
+                publishDeliveryState(FrameioDeliveryState.Failed("Pick a Frame.io project before uploading."))
                 return
             }
             var uploaded = 0
@@ -523,13 +528,12 @@ internal class FrameioDeliveryController(
                     skipped += 1
                     return@forEachIndexed
                 }
-                deliveryState =
-                    FrameioDeliveryState.Uploading(
+                publishDeliveryState(FrameioDeliveryState.Uploading(
                         itemIndex = index + 1,
                         itemCount = artifacts.size,
                         filename = artifact.share.displayName,
                         progress = 0.0,
-                    )
+                    ))
                 try {
                     val outcome =
                         uploadArtifact(
@@ -539,6 +543,7 @@ internal class FrameioDeliveryController(
                             options,
                             index + 1,
                             artifacts.size,
+                            publishDeliveryState,
                         )
                     if (outcome.metadataFailure) metadataFailures += 1
                     if (outcome.cleanupFailure) cleanupFailures += 1
@@ -563,8 +568,7 @@ internal class FrameioDeliveryController(
                     if (firstFailure == null) firstFailure = error.operatorMessage("Upload failed.")
                 }
             }
-            deliveryState =
-                FrameioDeliveryState.Completed(
+            publishDeliveryState(FrameioDeliveryState.Completed(
                     uploadedCount = uploaded,
                     skippedCount = skipped,
                     failedCount = failed,
@@ -572,9 +576,9 @@ internal class FrameioDeliveryController(
                     cleanupFailureCount = cleanupFailures,
                     historyFailureCount = historyFailures,
                     firstFailureMessage = firstFailure,
-                )
+                ))
         } catch (error: CancellationException) {
-            deliveryState = FrameioDeliveryState.Idle
+            publishDeliveryState(FrameioDeliveryState.Idle)
             throw error
         } finally {
             if (rejoinAfterDelivery) {
@@ -621,19 +625,19 @@ internal class FrameioDeliveryController(
         options: FrameioDeliveryOptions,
         itemIndex: Int,
         itemCount: Int,
+        publishDeliveryState: (FrameioDeliveryState) -> Unit,
     ): FrameioArtifactUploadOutcome {
         validateApprovedArtifact(artifact)
         val accessToken = accessToken(config)
         val prepared =
             artifactPreparer.prepare(artifact, options) { fraction ->
                 withContext(uiDispatcher) {
-                    deliveryState =
-                        FrameioDeliveryState.Uploading(
+                    publishDeliveryState(FrameioDeliveryState.Uploading(
                             itemIndex,
                             itemCount,
                             artifact.share.displayName,
                             (fraction.coerceIn(0.0, 1.0) * PREPARATION_PROGRESS_SHARE),
-                        )
+                        ))
                 }
             }
         var metadataFailure = false
@@ -691,13 +695,12 @@ internal class FrameioDeliveryController(
                         // owned by the UI coroutine, so return to its dispatcher
                         // before publishing incremental upload progress.
                         withContext(uiDispatcher) {
-                            deliveryState =
-                                FrameioDeliveryState.Uploading(
+                            publishDeliveryState(FrameioDeliveryState.Uploading(
                                     itemIndex,
                                     itemCount,
                                     filename,
                                     progress.coerceAtMost(UPLOAD_PROGRESS_END),
-                                )
+                                ))
                         }
                     }
                 requireSuccess(result, "Frame.io upload")
@@ -710,6 +713,7 @@ internal class FrameioDeliveryController(
                 itemIndex = itemIndex,
                 itemCount = itemCount,
                 filename = filename,
+                publishDeliveryState = publishDeliveryState,
             )
             metadataFailure = if (options.includeMetadata) {
                 try {
@@ -755,6 +759,7 @@ internal class FrameioDeliveryController(
         itemIndex: Int,
         itemCount: Int,
         filename: String,
+        publishDeliveryState: (FrameioDeliveryState) -> Unit,
     ) {
         repeat(MAX_UPLOAD_STATUS_POLLS) { attempt ->
             val response =
@@ -766,12 +771,12 @@ internal class FrameioDeliveryController(
                 )
             when (core.decodeUploadComplete(response)) {
                 true -> {
-                    deliveryState = FrameioDeliveryState.Uploading(itemIndex, itemCount, filename, 1.0)
+                    publishDeliveryState(FrameioDeliveryState.Uploading(itemIndex, itemCount, filename, 1.0))
                     return
                 }
                 false -> {
                     val progress = 0.85 + 0.1 * attempt.toDouble() / MAX_UPLOAD_STATUS_POLLS.toDouble()
-                    deliveryState = FrameioDeliveryState.Uploading(itemIndex, itemCount, filename, progress)
+                    publishDeliveryState(FrameioDeliveryState.Uploading(itemIndex, itemCount, filename, progress))
                 }
                 null -> throw FrameioDeliveryException("Frame.io returned an invalid upload status.")
             }

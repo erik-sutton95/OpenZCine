@@ -25,6 +25,29 @@ import kotlinx.coroutines.test.runTest
 /** Host-side coverage for Android's fail-closed Frame.io delivery state holder. */
 class FrameioDeliveryControllerTest {
     @Test
+    fun `captured delivery report follows actual wire phases without global successor sampling`() = runTest {
+        withReadyRoot { root ->
+            val source = root.resolve("CAPTURED.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val controller = connectedController(root)
+            controller.loadProjects()
+            val first = mutableListOf<FrameioDeliveryState>()
+            controller.deliver(listOf(FrameioDeliveryArtifact(
+                StagedMediaShare(source, "CAPTURED.MOV", "video/*"), 4))) { state ->
+                assertEquals(state, controller.deliveryState)
+                first += state
+            }
+            assertTrue(first.filterIsInstance<FrameioDeliveryState.Uploading>().any { it.progress == 1.0 })
+            assertEquals(1, assertIs<FrameioDeliveryState.Completed>(first.last()).uploadedCount)
+            val previous = first.toList()
+            val next = mutableListOf<FrameioDeliveryState>()
+            controller.deliver(emptyList()) { state -> next += state }
+            assertEquals(previous, first)
+            assertEquals(listOf<FrameioDeliveryState>(FrameioDeliveryState.Failed("Only complete cached media can be delivered.")), next)
+        }
+    }
+
+    @Test
     fun `unconfigured build never starts authorization`() {
         val core = FakeCore()
         val controller = controller(configuration = { null }, core = core)

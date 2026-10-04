@@ -153,6 +153,9 @@ import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.settings.SetupStreamSettings
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
@@ -387,17 +390,26 @@ class MainActivity : ComponentActivity() {
                     }
                 val frameioController =
                     remember { frameioDeliveryController(applicationContext, lutLibrary) }
+                // The root releases the delivery owners before their supplied scope.
+                val deliveryScope = remember(frameioController) {
+                    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+                }
                 // App-scoped share/export progress (iOS MediaDeliveryCoordinator).
                 val mediaDeliveryCoordinator =
                     remember(frameioController) {
                         MediaDeliveryCoordinator(
                             appContext = applicationContext,
                             frameioController = frameioController,
+                            scope = deliveryScope,
                         )
                     }
-                LaunchedEffect(frameioController.deliveryState) {
-                    mediaDeliveryCoordinator.bindFrameioDeliveryState(frameioController.deliveryState)
+                DisposableEffect(mediaDeliveryCoordinator) {
+                    onDispose {
+                        mediaDeliveryCoordinator.close()
+                        deliveryScope.cancel()
+                    }
                 }
+                val deliveryDisplay by mediaDeliveryCoordinator.display.collectAsState()
                 val liveViewGuide =
                     remember {
                         LiveViewGuideController(applicationContext, diagnostics::record)
@@ -1656,7 +1668,7 @@ class MainActivity : ComponentActivity() {
                 }
                 // Global delivery progress (iOS MediaDeliveryGlobalOverlay) — survives
                 // leaving media browser / playback while export or Frame.io upload runs.
-                mediaDeliveryCoordinator.overlayState?.let { state ->
+                deliveryDisplay.overlay?.let { state ->
                     Box(
                         Modifier
                             .align(Alignment.TopCenter)
@@ -1665,7 +1677,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                         MediaDeliveryProgressOverlay(
                             state = state,
-                            expanded = mediaDeliveryCoordinator.isExpanded,
+                            expanded = deliveryDisplay.expanded,
                             onCancel = mediaDeliveryCoordinator::cancel,
                             onExpandToggle = {
                                 mediaDeliveryCoordinator.isExpanded =
@@ -1674,7 +1686,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
-                mediaDeliveryCoordinator.completionToast?.let { toast ->
+                deliveryDisplay.toast?.let { toast ->
                     MediaDeliveryCompletionToast(
                         message = toast,
                         modifier = Modifier.align(Alignment.BottomCenter),

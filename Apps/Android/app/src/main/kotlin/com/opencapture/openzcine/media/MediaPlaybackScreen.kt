@@ -470,6 +470,7 @@ private fun PlaybackClipSession(
         if (deliveryInProgress || actionInProgress) return
         val resumeAfter = activePlayer?.isPlaying == true
         activePlayer?.pause()
+        var deliveryTicket: NikonDeliveryPresentation.ExternalTicket? = null
         val job =
             deliveryScope.launch(start = CoroutineStart.LAZY) {
                 val stageContext = coroutineContext
@@ -483,6 +484,7 @@ private fun PlaybackClipSession(
                                     selection = listOf(MediaDeliverySelection(cameraID, clip)),
                                     cameraConnectionOwner =
                                         connectionOwner.takeIf { cameraTransferAvailable },
+                                    ticket = deliveryTicket,
                                 )
                                 ?.items
                                 ?.firstOrNull()
@@ -509,7 +511,10 @@ private fun PlaybackClipSession(
                                     stableClipIdentity = clip.libraryKey(cameraID),
                                 ),
                         )
-                    frameioController.deliver(listOf(artifact), options)
+                    val capturedTicket = deliveryTicket
+                    frameioController.deliver(listOf(artifact), options) { state ->
+                        capturedTicket?.let { mediaDeliveryCoordinator?.bindFrameioDeliveryState(it, state) }
+                    }
                     deliveryMessage = "Uploaded to Frame.io."
                 } catch (error: CancellationException) {
                     throw error
@@ -517,7 +522,7 @@ private fun PlaybackClipSession(
                     deliveryMessage = error.message ?: "Couldn't deliver this clip to Frame.io."
                 } finally {
                     if (resumeAfter && pendingAction == null) activePlayer?.play()
-                    mediaDeliveryCoordinator?.trackExternalDelivery(null)
+                    deliveryTicket?.let { mediaDeliveryCoordinator?.finishExternalDelivery(it) }
                     if (deliveryJob === runningJob) {
                         deliveryJob = null
                         deliveryInProgress = false
@@ -528,7 +533,7 @@ private fun PlaybackClipSession(
         deliveryMessage = null
         deliveryInProgress = true
         // The overlay narrating this upload lives in the coordinator, and so must its Cancel.
-        mediaDeliveryCoordinator?.trackExternalDelivery(job)
+        deliveryTicket = mediaDeliveryCoordinator?.trackExternalDelivery(job)
         job.start()
     }
 
