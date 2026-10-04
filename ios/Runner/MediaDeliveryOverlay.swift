@@ -1,4 +1,6 @@
 import LinkPresentation
+import MonitorPresentation
+import MonitorUI
 import Photos
 import SwiftUI
 import UIKit
@@ -301,155 +303,47 @@ struct MediaDeliveryGlobalOverlay: View {
     }
 
     private func compactPill(state: MediaDeliveryOverlayState) -> some View {
-        HStack(spacing: 10) {
-            Button {
+        MonitorMediaDeliveryProgress(
+            value: state.monitorProgressValue,
+            onCancel: { coordinator.cancel() },
+            onExpand: {
                 withAnimation(.spring(duration: 0.28)) { coordinator.isExpanded = true }
-            } label: {
-                HStack(spacing: 10) {
-                    if state.showsBusySpinner {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(LiveDesign.accent)
-                    } else {
-                        Image(systemName: state.destination.systemImage)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(LiveDesign.accent)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(state.statusLine)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(LiveDesign.text)
-                            .lineLimit(1)
-                        if let batchLine = state.batchLine {
-                            Text(batchLine)
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundStyle(LiveDesign.muted)
-                        }
-                    }
-
-                    Spacer(minLength: 4)
-
-                    if !state.isPreparingClip {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(LiveDesign.hairline.opacity(0.55))
-                                Capsule()
-                                    .fill(LiveDesign.accent)
-                                    .frame(width: max(4, geo.size.width * state.overallFraction))
-                            }
-                        }
-                        .frame(width: 44, height: 4)
-                    }
-                }
+            },
+            destinationIcon: {
+                Image(systemName: state.destination.systemImage)
+                    .font(.system(size: 13, weight: .semibold))
             }
-            .buttonStyle(.zcTapTarget)
-
-            Button("Cancel") { coordinator.cancel() }
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        )
         .frame(maxWidth: 420)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(LiveDesign.hairline.opacity(0.65), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 
     private func expandedPanel(state: MediaDeliveryOverlayState) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            MediaDeliveryOverlay(state: state) { coordinator.cancel() }
-
-            if let filename = coordinator.currentClipFilename {
-                HStack(spacing: 6) {
-                    Text("File")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(LiveDesign.muted)
-                    Text(filename)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                }
-            }
-
-            Text("Destination: \(state.destination.title)")
-                .font(.system(size: 11))
-                .foregroundStyle(LiveDesign.muted)
-
-            Button("Collapse") {
+        MonitorMediaDeliveryProgressPanel(
+            value: state.monitorProgressValue,
+            details: .init(
+                filename: coordinator.currentClipFilename, destination: state.destination.title),
+            onCancel: { coordinator.cancel() },
+            onCollapse: {
                 withAnimation(.spring(duration: 0.28)) { coordinator.isExpanded = false }
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(LiveDesign.accent)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
+            },
+            destinationIcon: { EmptyView() }
+        )
         .frame(maxWidth: 420)
     }
 }
 
-/// Semi-transparent progress pill anchored over video or the media grid.
+/// Projects source-owned progress into the common expanded chrome on media surfaces.
 struct MediaDeliveryOverlay: View {
     let state: MediaDeliveryOverlayState
     var onCancel: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 10) {
-                if state.showsBusySpinner {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(LiveDesign.accent)
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    if let batchLine = state.batchLine {
-                        Text(batchLine)
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.muted)
-                    }
-                    Text(state.statusLine)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-
-                Spacer(minLength: 8)
-
-                if let onCancel {
-                    Button("Cancel", action: onCancel)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(LiveDesign.muted)
-                }
-            }
-
-            if !state.isPreparingClip {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(LiveDesign.hairline.opacity(0.55))
-                        Capsule()
-                            .fill(LiveDesign.accent)
-                            .frame(width: max(4, geo.size.width * state.overallFraction))
-                    }
-                }
-                .frame(height: 4)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        MonitorMediaDeliveryProgressPanel(
+            value: state.monitorProgressValue,
+            onCancel: onCancel,
+            destinationIcon: { EmptyView() }
+        )
         .frame(maxWidth: 420)
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .strokeBorder(LiveDesign.hairline.opacity(0.65), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 }
 

@@ -138,8 +138,10 @@ MF drive, shutter TV-lock, codec/focus mode tabs, scopes and native assist rende
 Nikon adapters. Relay/demo record binding and generic native runtime are explicit Z-3 followups;
 Operator Setup uses the shared page and migrated typed settings sections. Media uses shared
 catalog controls, filter form, native selection and common Grid/List cell rendering. Nikon supplies
-artwork/cache/source facts and actions; catalog/cache, playback and delivery owners still require
-Z-2 adoption.
+artwork/cache/source facts and actions. Shared delivery popup and compact/expanded progress
+composition receive typed values and actions from both shells; the app retains project loading,
+network handoffs, coordinator lifetimes, native share providers and the reader/writer exporter.
+Catalog/cache, playback and those delivery service owners still require Z-2 adoption.
 
 The shared layout changes the visible viewport and chrome placement. Persisted FIT/FILL meanings
 and preference keys stay intact; pinch magnifies the chosen picture without changing FIT/FILL.
