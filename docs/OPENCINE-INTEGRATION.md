@@ -137,8 +137,9 @@ Movie shutter/aperture join ISO/WB through camera-reported common descriptors. S
 MF drive, shutter TV-lock, codec/focus mode tabs, scopes and native assist renderers remain bounded
 Nikon adapters. Relay/demo record binding and generic native runtime are explicit Z-3 followups;
 Operator Setup uses the shared page and migrated typed settings sections. Media uses shared
-catalog controls, filter form and native selection; its cell rendering, catalog/cache, playback
-and delivery owners still require Z-2 adoption.
+catalog controls, filter form, native selection and common Grid/List cell rendering. Nikon supplies
+artwork/cache/source facts and actions; catalog/cache, playback and delivery owners still require
+Z-2 adoption.
 
 The shared layout changes the visible viewport and chrome placement. Persisted FIT/FILL meanings
 and preference keys stay intact; pinch magnifies the chosen picture without changing FIT/FILL.
