@@ -2,7 +2,7 @@ package com.opencapture.openzcine.multicam
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.asImageBitmap
-import com.opencapture.openzcine.JpegFrameDecoder
+import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.openzcine.pairing.PairingEnvironment
 import com.opencapture.openzcine.pairing.SavedCameraRecord
@@ -36,7 +36,7 @@ internal fun multicamLink(record: SavedCameraRecord, environment: PairingEnviron
 
 /** Tile-sized JPEG decoding, one bitmap ring per member. */
 internal fun multicamDecoder(): (ByteArray) -> androidx.compose.ui.graphics.ImageBitmap? {
-    val decoder = JpegFrameDecoder(maxLongSide = TILE_LONG_SIDE)
+    val decoder = MonitorJpegFrameDecoder(maxLongSide = TILE_LONG_SIDE)
     return { jpeg -> decoder.decode(jpeg)?.asImageBitmap() }
 }
 

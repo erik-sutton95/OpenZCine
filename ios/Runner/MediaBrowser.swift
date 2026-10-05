@@ -1607,7 +1607,7 @@ struct MediaPhotoViewer: View {
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var loadTask: Task<Void, Never>?
-    @State private var zoom = AnchoredPinchZoom()
+    @State private var zoom = MonitorPlaybackZoom()
     @State private var isSharePresented = false
     @State private var isPreparingShare = false
     @State private var isDeleteConfirmPresented = false
@@ -1864,8 +1864,8 @@ struct MediaPhotoViewer: View {
         MagnifyGesture()
             .onChanged { value in
                 zoom.pinchChanged(
-                    magnification: value.magnification, startAnchor: value.startAnchor,
-                    size: size)
+                    magnification: value.magnification, startAnchorX: value.startAnchor.x,
+                    startAnchorY: value.startAnchor.y, size: size)
             }
             .onEnded { _ in
                 withAnimation(.easeOut(duration: 0.2)) { zoom.endGesture(size: size) }
@@ -2019,65 +2019,6 @@ struct StarRatingRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .liquidGlass(in: Capsule())
-    }
-}
-
-/// Pinch/pan zoom that stays anchored under the fingers: the content point beneath the
-/// pinch centroid is held fixed as the scale changes (the system Photos feel), instead of
-/// growing from the view centre and drifting away from the gesture. The transform contract
-/// is `.scaleEffect(scale)` (centre-anchored) followed by `.offset(offset)`; a content
-/// point p renders at `p·scale + offset`, so holding centroid c means
-/// `offset' = c − (c − offset)·(scale'/scale)`.
-struct AnchoredPinchZoom {
-    static let maxScale: CGFloat = 4
-
-    private(set) var scale: CGFloat = 1
-    private(set) var offset: CGSize = .zero
-    private var committedScale: CGFloat = 1
-    private var committedOffset: CGSize = .zero
-
-    var isZoomed: Bool { scale > 1.001 }
-
-    /// One pinch update. `startAnchor` is the gesture's centroid as a UnitPoint in the
-    /// container the transform runs in; `size` is that container's size.
-    mutating func pinchChanged(magnification: CGFloat, startAnchor: UnitPoint, size: CGSize) {
-        let target = min(Self.maxScale, max(1, committedScale * magnification))
-        guard committedScale > 0 else { return }
-        let ratio = target / committedScale
-        let centroid = CGSize(
-            width: (startAnchor.x - 0.5) * size.width,
-            height: (startAnchor.y - 0.5) * size.height)
-        offset = CGSize(
-            width: centroid.width - (centroid.width - committedOffset.width) * ratio,
-            height: centroid.height - (centroid.height - committedOffset.height) * ratio)
-        scale = target
-    }
-
-    mutating func panChanged(translation: CGSize) {
-        guard isZoomed else { return }
-        offset = CGSize(
-            width: committedOffset.width + translation.width,
-            height: committedOffset.height + translation.height)
-    }
-
-    /// Commits the gesture: snaps back to 1× when nearly there, otherwise clamps the pan so
-    /// the content keeps covering the container. Call inside `withAnimation` for the snap.
-    mutating func endGesture(size: CGSize) {
-        if scale < 1.05 {
-            reset()
-            return
-        }
-        let maxX = size.width * (scale - 1) / 2
-        let maxY = size.height * (scale - 1) / 2
-        offset = CGSize(
-            width: min(maxX, max(-maxX, offset.width)),
-            height: min(maxY, max(-maxY, offset.height)))
-        committedScale = scale
-        committedOffset = offset
-    }
-
-    mutating func reset() {
-        self = AnchoredPinchZoom()
     }
 }
 

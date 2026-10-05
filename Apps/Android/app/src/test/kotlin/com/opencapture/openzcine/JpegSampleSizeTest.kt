@@ -21,7 +21,7 @@ class JpegSampleSizeTest {
             monitorJpegSampleSizeForLongSide(
                 feedWidth,
                 feedHeight,
-                JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE,
+                LIVE_FEED_MAX_LONG_SIDE,
             ),
         )
     }
@@ -46,13 +46,13 @@ class JpegSampleSizeTest {
 
     @Test
     fun `oversized sources are still bounded`() {
-        assertEquals(2, monitorJpegSampleSizeForLongSide(1920, 1080, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
-        assertEquals(4, monitorJpegSampleSizeForLongSide(4096, 2160, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
+        assertEquals(2, monitorJpegSampleSizeForLongSide(1920, 1080, LIVE_FEED_MAX_LONG_SIDE))
+        assertEquals(4, monitorJpegSampleSizeForLongSide(4096, 2160, LIVE_FEED_MAX_LONG_SIDE))
     }
 
     @Test
     fun `zero or invalid inputs never scale`() {
         assertEquals(1, monitorJpegSampleSizeForLongSide(feedWidth, feedHeight, 0))
-        assertEquals(1, monitorJpegSampleSizeForLongSide(0, 0, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
+        assertEquals(1, monitorJpegSampleSizeForLongSide(0, 0, LIVE_FEED_MAX_LONG_SIDE))
     }
 }

@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
 import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
 import com.opencapture.opencine.runtime.MonitorFrameDecodeWorker
 import com.opencapture.opencine.runtime.MonitorFramePacingStats
@@ -292,14 +293,15 @@ public class LiveFeedEffectsPresentationState {
 }
 
 /**
- * Decodes the live-view JPEG stream into a small ring of reused [Bitmap]s.
+ * The live-view JPEG decode cap, for the shared ring decoder
+ * ([com.opencapture.opencine.runtime.MonitorJpegFrameDecoder]).
  *
  * Decode-path decision (OPE-28 spike), measured on the SM-A127F floor device:
  * - **Chosen: [BitmapFactory.decodeByteArray] + `inBitmap` reuse.** After the
  *   ring fills, the steady state is zero per-frame allocation — the JPEG is
  *   decoded straight into an existing buffer. Sustains the 25 fps stream with
  *   ~2/3 of the frame budget idle on the test device.
- * - **Subsample via [maxLongSide]**: full 1080p texture upload every frame was
+ * - **Subsample via the long-side cap**: full 1080p texture upload every frame was
  *   janking the UI thread on A12-class (gfxinfo ~50 ms draw), so the long side
  *   is capped. That cap was 960 against a 1080p source; against the **1024**-wide
  *   live-view frame it quietly cost a factor of four. `inSampleSize` is
@@ -321,13 +323,7 @@ public class LiveFeedEffectsPresentationState {
  * The ring is 3 deep so the bitmap being decoded into is never the one the
  * RenderThread may still be drawing (current frame + one in flight).
  */
-class JpegFrameDecoder(private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE) {
-    private val native = com.opencapture.opencine.runtime.MonitorJpegFrameDecoder(maxLongSide)
-    fun decode(jpeg: ByteArray): Bitmap? = native.decode(jpeg)
-    companion object {
-        const val DEFAULT_MAX_LONG_SIDE: Int = 1024
-    }
-}
+const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
 
 /**
  * Renders a [LiveFrameSource] as the monitor feed: decodes off the main
@@ -568,7 +564,7 @@ fun LiveFeedView(
         //
         // The same power-of-two trap already cost this path once, when a 960 cap carried over from
         // a 1080p source halved every frame on every device.
-        val decoder = JpegFrameDecoder(maxLongSide = JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE)
+        val decoder = MonitorJpegFrameDecoder(maxLongSide = LIVE_FEED_MAX_LONG_SIDE)
         val stats = MonitorFramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
         val decodeWorker = MonitorFrameDecodeWorker("zc-feed-decode")
         try {
