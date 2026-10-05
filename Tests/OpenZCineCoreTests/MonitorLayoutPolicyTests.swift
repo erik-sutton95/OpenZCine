@@ -1,25 +1,7 @@
+import MonitorPresentation
 import Testing
 
 @testable import OpenZCineCore
-
-@Test func chromeInsetsUseMinimumMarginsWhenSafeAreaIsEmpty() {
-    let insets = MonitorEdgeInsets.chrome(for: .zero)
-
-    #expect(insets.top == 14)
-    #expect(insets.leading == 16)
-    #expect(insets.bottom == 12)
-    #expect(insets.trailing == 18)
-}
-
-@Test func chromeInsetsAddSafeAreaOnlyToInteractiveChrome() {
-    let safeArea = MonitorEdgeInsets(top: 24, leading: 59, bottom: 21, trailing: 44)
-    let insets = MonitorEdgeInsets.chrome(for: safeArea)
-
-    #expect(insets.top == 32)
-    #expect(insets.leading == 71)
-    #expect(insets.bottom == 29)
-    #expect(insets.trailing == 56)
-}
 
 @Test func feedLayoutMovesRightToClearLandscapeLeftNotch() {
     let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)
@@ -61,29 +43,6 @@ import Testing
     #expect(
         mirrored.x + mirrored.width
             == 896 - safeArea.trailing - MonitorFeedLayout.classicNotchRailwardShift)
-}
-
-@Test func horizontalLayoutDirectionUsesDeviceOrientationBeforeSafeAreaFallback() {
-    let ambiguousSafeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
-
-    #expect(
-        MonitorHorizontalLayoutDirection.resolve(
-            deviceOrientation: .landscapeLeft,
-            safeArea: ambiguousSafeArea
-        ) == .standard
-    )
-    #expect(
-        MonitorHorizontalLayoutDirection.resolve(
-            deviceOrientation: .landscapeRight,
-            safeArea: ambiguousSafeArea
-        ) == .mirrored
-    )
-    #expect(
-        MonitorHorizontalLayoutDirection.resolve(
-            deviceOrientation: .unknown,
-            safeArea: MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 59)
-        ) == .mirrored
-    )
 }
 
 @Test func feedLayoutFitsPreviewFrameInsideLandscapeLeftSafeArea() {
@@ -244,24 +203,6 @@ import Testing
     #expect(margins.leading == 20)
     #expect(margins.bottom == 39)
     #expect(margins.trailing == 20)
-}
-
-@Test func startupSideCutoutAvoidanceReservesOnlyTheNotchedSideLane() {
-    let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)
-    let avoidance = StartupSideCutoutAvoidance.resolve(for: safeArea)
-
-    #expect(avoidance.leading == 59)
-    #expect(avoidance.trailing == 0)
-    #expect(avoidance.hasSideCutout)
-}
-
-@Test func startupSideCutoutAvoidanceIgnoresOrdinaryCornerPadding() {
-    let safeArea = MonitorEdgeInsets(top: 0, leading: 24, bottom: 20, trailing: 24)
-    let avoidance = StartupSideCutoutAvoidance.resolve(for: safeArea)
-
-    #expect(avoidance.leading == 0)
-    #expect(avoidance.trailing == 0)
-    #expect(!avoidance.hasSideCutout)
 }
 
 @Test func compactStartupMarginsUseSmallerBasePadding() {
