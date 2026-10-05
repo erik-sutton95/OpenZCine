@@ -89,7 +89,9 @@ final class NikonScopePanels {
         // today's scale.
         let calibrated = (scopes["waveformParadeBrightnessCalibrationVersion"] as? Int ?? 0) >= 2
         func traceBrightness(_ key: String) -> Int {
-            guard let stored = number(scopes[key]) else { return MonitorWaveformOptions.defaultBrightness }
+            guard let stored = number(scopes[key]) else {
+                return MonitorWaveformOptions.defaultBrightness
+            }
             return Int(min(max(calibrated ? stored : stored * 4, 0), 200))
         }
         func center(_ id: String) -> MonitorScopeStoredCenter? {
@@ -114,7 +116,8 @@ final class NikonScopePanels {
                     ?? .x1,
                 brightness: number(scopes["vectorscopeBrightness"]).map { Int($0) }
                     ?? MonitorVectorscopeOptions.defaultBrightness,
-                scale: scale("vectorscopeScale") ?? 1, hasCustomScale: scale("vectorscopeScale") != nil,
+                scale: scale("vectorscopeScale") ?? 1,
+                hasCustomScale: scale("vectorscopeScale") != nil,
                 storedCenter: center("vector")),
             histogram: MonitorHistogramOptions(
                 trafficLights: scopes["histogramTrafficLights"] as? Bool ?? true,
@@ -235,18 +238,24 @@ struct NikonScopePlot: View {
         switch tool {
         case .waveform:
             let options = panels.waveform.options
-            MonitorScopePanelPlate(title: "Wave", chip: options.mode.rawValue.uppercased(), size: size) {
+            MonitorScopePanelPlate(
+                title: "Wave", chip: options.mode.rawValue.uppercased(), size: size
+            ) {
                 MonitorWaveformScopePlot(
-                    samples: bundle.samples, trail: bundle.trailSamples, mode: .waveform(options.mode),
+                    samples: bundle.samples, trail: bundle.trailSamples,
+                    mode: .waveform(options.mode),
                     axis: mapping.scopeLevelAxis, revision: bundle.revision,
                     intensity: Self.traceIntensity(options.brightness), guides: options.guides,
                     size: size)
             }
         case .parade:
             let options = panels.parade.options
-            MonitorScopePanelPlate(title: "Parade", chip: options.mode.rawValue.uppercased(), size: size) {
+            MonitorScopePanelPlate(
+                title: "Parade", chip: options.mode.rawValue.uppercased(), size: size
+            ) {
                 MonitorWaveformScopePlot(
-                    samples: bundle.samples, trail: bundle.trailSamples, mode: .parade(options.mode),
+                    samples: bundle.samples, trail: bundle.trailSamples,
+                    mode: .parade(options.mode),
                     axis: mapping.scopeLevelAxis, revision: bundle.revision,
                     intensity: Self.traceIntensity(options.brightness), guides: options.guides,
                     size: size)
@@ -267,7 +276,8 @@ struct NikonScopePlot: View {
                     showTrafficLights: panels.histogram.options.trafficLights)
             }
         case .trafficLights:
-            MonitorTrafficLightsMeter(reading: bundle.traffic).frame(width: size.width, height: size.height)
+            MonitorTrafficLightsMeter(reading: bundle.traffic).frame(
+                width: size.width, height: size.height)
         default:
             EmptyView()
         }
@@ -296,7 +306,8 @@ struct NikonScopeOverlay: View {
                 slot: panels.slot(for: tool), tool: tool, base: Self.base(tool), canvas: canvas,
                 clearance: clearance, onOptions: onOptions
             ) { size in
-                NikonScopePlot(tool: tool, panels: panels, bundle: bundle, mapping: mapping, size: size)
+                NikonScopePlot(
+                    tool: tool, panels: panels, bundle: bundle, mapping: mapping, size: size)
             }
         }
     }

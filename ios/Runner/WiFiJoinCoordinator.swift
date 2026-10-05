@@ -1,7 +1,7 @@
 import Foundation
 import NetworkExtension
-import os
 import OpenZCineCore
+import os
 
 /// Joins a Nikon ZR camera Wi‑Fi network.
 ///

@@ -2,8 +2,8 @@ import CoreMotion
 import MonitorPresentation
 import MonitorUI
 import OpenCineMedia
-import SwiftUI
 import OpenZCineCore
+import SwiftUI
 
 struct FeedAssistOverlayModule: View {
     @Environment(NativeAppModel.self) private var model
@@ -966,7 +966,8 @@ enum FalseColorReference {
             },
             markers: scale == .stops
                 ? stopAxisMarkers(mapping: mapping).map {
-                    MonitorFalseColorReferenceMarker(id: $0.id, label: $0.label, fraction: $0.fraction)
+                    MonitorFalseColorReferenceMarker(
+                        id: $0.id, label: $0.label, fraction: $0.fraction)
                 } : [],
             axisLabels: axisLabels)
     }

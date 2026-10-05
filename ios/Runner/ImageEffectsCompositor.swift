@@ -220,7 +220,9 @@ enum ImageEffectsCompositor {
     ) -> CIImage {
         MonitorBlockArtifactCompositor.applyFlatSmoothing(
             to: source,
-            settings: MonitorBlockSmoothing(radius: settings.radius, gateLevels: settings.gateLevels, strength: settings.strength),
+            settings: MonitorBlockSmoothing(
+                radius: settings.radius, gateLevels: settings.gateLevels,
+                strength: settings.strength),
             extent: extent)
     }
 
@@ -267,10 +269,13 @@ enum ImageEffectsCompositor {
     }
 
     static func resolvedZebra(settings: ZebraSettings) -> MonitorCodeZebraSpec {
-        let highlight = settings.highlightEnabled
-            ? ExposureScale.signalNative(monitorPercent: settings.highlightIRE,
+        let highlight =
+            settings.highlightEnabled
+            ? ExposureScale.signalNative(
+                monitorPercent: settings.highlightIRE,
                 mapping: settings.mapping) / 255.0 : nil
-        let centre = settings.midtoneEnabled ? midtoneComparisonNative(settings: settings) / 255.0 : nil
+        let centre =
+            settings.midtoneEnabled ? midtoneComparisonNative(settings: settings) / 255.0 : nil
         let halfWidth = 5.0 / 255.0
         return MonitorCodeZebraSpec(
             thresholds: MonitorZebraCodeThresholds(

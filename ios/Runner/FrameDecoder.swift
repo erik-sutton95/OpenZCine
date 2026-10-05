@@ -15,7 +15,9 @@ final class FrameDecoder: Sendable {
     func source(_ owner: AnyObject) -> MonitorJPEGDecodeSource? { native.source(owner) }
     func retireSource() -> MonitorJPEGDecodeSource { native.retireSource() }
 
-    func resetProcessors(source: MonitorJPEGDecodeSource) async { await native.resetProcessors(source: source) }
+    func resetProcessors(source: MonitorJPEGDecodeSource) async {
+        await native.resetProcessors(source: source)
+    }
 
     func decode(_ jpeg: Data, source: MonitorJPEGDecodeSource) async -> sending UIImage? {
         await native.decode(jpeg, source: source, preferHardware: !DemoHarness.forcesCPUJPEGDecode)
@@ -24,4 +26,3 @@ final class FrameDecoder: Sendable {
 
 // Existing native window assertions keep their exact names and values.
 typealias LiveFeedNoiseFilter = MonitorTemporalNoiseFilter
-

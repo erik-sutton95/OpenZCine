@@ -438,7 +438,8 @@ import XCTest
         model.refreshMediaClips()
         XCTAssertTrue(owner === model.mediaLibrary)
         XCTAssertTrue(diagnosticAction.isCurrent, "Matching canonical insertion retains admission")
-        XCTAssertTrue(diagnosticAction.canMutate(observed), "Current inserted row matches captured content")
+        XCTAssertTrue(
+            diagnosticAction.canMutate(observed), "Current inserted row matches captured content")
         release.signal()
         let confirmed = await pending.value
         XCTAssertEqual(confirmed, 0)

@@ -1,8 +1,8 @@
 import AVFoundation
 import ImageIO
-import OSLog
 import MonitorPresentation
 import MonitorUI
+import OSLog
 import OpenCineAppKit
 import OpenCineMedia
 import OpenZCineCore
@@ -1983,7 +1983,9 @@ private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
     let mapping: ExposureSignalMapping
     let vectorscopeCube: CubeLUT?
 
-    func bundle(samples: OpenCineMedia.ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
+    func bundle(samples: OpenCineMedia.ScopeSamples, previous: ScopeAssistBundle)
+        -> ScopeAssistBundle
+    {
         ScopeAssistSampling.bundle(
             samples: samples,
             trafficLightsCrushClip: trafficLightsCrushClip,
@@ -2177,8 +2179,10 @@ struct MediaPlayerView: View {
             loopAvailable: false, shareEnabled: canShareActiveClip)
     }
 
-    private func admitted(_ item: MonitorPlaybackItemToken,
-        _ action: (MonitorMediaPlaybackModel<MediaClip, String>) -> Void) {
+    private func admitted(
+        _ item: MonitorPlaybackItemToken,
+        _ action: (MonitorMediaPlaybackModel<MediaClip, String>) -> Void
+    ) {
         guard let playback, playback.isActive, playback.token == item else { return }
         action(playback)
     }
@@ -2193,14 +2197,19 @@ struct MediaPlayerView: View {
             loop: { _, _ in },
             conform: { item, target in admitted(item) { $0.setConformTarget(target) } },
             adjacent: { item, offset in admitted(item) { _ in goToAdjacentClip(offset: offset) } },
-            favorite: { item in admitted(item) { _ in
-                model.toggleClipFavorite(activeClip); isFavorite.toggle()
-            } },
-            share: { item in admitted(item) { _ in
-                guard canShareActiveClip else { return }
-                deliveryPause = session?.pauseForDelivery(playing: isPlaying)
-                deliveryPresentation = MediaDeliveryPresentation(clip: activeClip)
-            } },
+            favorite: { item in
+                admitted(item) { _ in
+                    model.toggleClipFavorite(activeClip)
+                    isFavorite.toggle()
+                }
+            },
+            share: { item in
+                admitted(item) { _ in
+                    guard canShareActiveClip else { return }
+                    deliveryPause = session?.pauseForDelivery(playing: isPlaying)
+                    deliveryPresentation = MediaDeliveryPresentation(clip: activeClip)
+                }
+            },
             beginScrub: { item in
                 guard let playback, playback.isActive, playback.token == item else { return nil }
                 return playback.beginScrub()
@@ -2281,12 +2290,13 @@ struct MediaPlayerView: View {
                 onBarFrame: { playbackBarFrame = $0 },
                 slots: MonitorPlaybackPageSlots(
                     headerAccessory: {
-                        AnyView(VStack(spacing: 0) {
-                            if ratingShadeMounts {
-                                ratingShadeHandle
-                                if ratingShadeOpen { ratingStarRow }
-                            }
-                        })
+                        AnyView(
+                            VStack(spacing: 0) {
+                                if ratingShadeMounts {
+                                    ratingShadeHandle
+                                    if ratingShadeOpen { ratingStarRow }
+                                }
+                            })
                     },
                     onShareButtonFrame: { shareButtonFrame = $0 }),
                 picture: {
@@ -2294,15 +2304,17 @@ struct MediaPlayerView: View {
                         .scaleEffect(desqueezeScale(model.playbackDesqueeze), anchor: .center)
                 },
                 feedAssists: { rect in
-                    FeedAlignedAssists(clean: false, feed: rect,
+                    FeedAlignedAssists(
+                        clean: false, feed: rect,
                         excludeTools: [.level], usePlaybackContext: true)
                 },
                 canvasAssists: { size, rect in
                     if playbackScopesActive || playbackAudioMetersActive {
                         PlaybackAssistOverlayModule(
                             scopeAssist: playbackScopeAssist, videoRect: rect,
-                            audioLevels: playbackAudioLevels, onOptions: { assistOptionsTool = $0 })
-                            .frame(width: size.width, height: size.height)
+                            audioLevels: playbackAudioLevels, onOptions: { assistOptionsTool = $0 }
+                        )
+                        .frame(width: size.width, height: size.height)
                     }
                 }, tools: { context in playbackTools(context) })
             if deliveryCoordinator.showsLocalOverlay,
@@ -2350,7 +2362,9 @@ struct MediaPlayerView: View {
             let item = playback?.token
             let captured = activeClip
             let stars = await model.mediaStarRating(for: captured)
-            guard !Task.isCancelled, item == playback?.token, captured.id == activeClip.id else { return }
+            guard !Task.isCancelled, item == playback?.token, captured.id == activeClip.id else {
+                return
+            }
             playerRatingStars = stars
         }
         .animation(.easeInOut(duration: 0.28), value: activeClip.id)
@@ -2680,10 +2694,14 @@ struct MediaPlayerView: View {
     /// Starts playback at the conform rate. Setting a non-zero `rate` IS play, so this replaces
     /// `player.play()` everywhere — calling `play()` would snap back to 1x and silently drop the
     /// conform the operator selected.
-    private func restartPlayback() { tailPresentation.reset(); playback?.restart() }
+    private func restartPlayback() {
+        tailPresentation.reset()
+        playback?.restart()
+    }
 
     private func seek(by seconds: Double) {
-        tailPresentation.seeking(to: min(max(0, currentTime + seconds), duration), duration: duration)
+        tailPresentation.seeking(
+            to: min(max(0, currentTime + seconds), duration), duration: duration)
         playback?.seek(by: seconds)
     }
 
@@ -2722,7 +2740,6 @@ struct MediaPlayerView: View {
 // MARK: - Supporting views
 
 /// Draggable playback timeline — drag to scrub in real time, release for a precise seek.
-
 
 /// Hosts an `AVPlayerLayer` with no native transport chrome, so the LiveDesign controls are the UI.
 private struct PlayerLayerView: UIViewRepresentable {

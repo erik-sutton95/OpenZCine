@@ -1,7 +1,7 @@
+import OpenCineMedia
 import Testing
 
 @testable import OpenZCineCore
-import OpenCineMedia
 
 @Suite("Scope display scale")
 struct ScopeDisplayScaleTests {
@@ -108,7 +108,8 @@ struct ScopeDisplayScaleTests {
         histogram[floor] = 4
         histogram[180] = 3
         histogram[255] = 2
-        #expect(axis.remapHistogram(histogram).map(Double.init)
-            == ScopeDisplayScale.remapHistogram(histogram, mapping: mapping))
+        #expect(
+            axis.remapHistogram(histogram).map(Double.init)
+                == ScopeDisplayScale.remapHistogram(histogram, mapping: mapping))
     }
 }

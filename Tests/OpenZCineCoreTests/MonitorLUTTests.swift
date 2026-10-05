@@ -233,7 +233,8 @@ func cubeIsFinite(look: MonitorLUT) {
         LUTResolution.splitComparison(visibleTools: [.peaking], enabled: true, vertical: false)
             == nil)
     #expect(
-        LUTResolution.splitComparison(visibleTools: [.lut, .peaking], enabled: true, vertical: false)
+        LUTResolution.splitComparison(
+            visibleTools: [.lut, .peaking], enabled: true, vertical: false)
             == .horizontal)
 }
 
@@ -243,10 +244,12 @@ func cubeIsFinite(look: MonitorLUT) {
     let tools: Set<MonitorAssistTool> = [.lut]
 
     #expect(
-        LUTResolution.splitComparison(visibleTools: tools, enabled: true, vertical: true, muted: false)
+        LUTResolution.splitComparison(
+            visibleTools: tools, enabled: true, vertical: true, muted: false)
             == .vertical)
     #expect(
-        LUTResolution.splitComparison(visibleTools: tools, enabled: true, vertical: true, muted: true)
+        LUTResolution.splitComparison(
+            visibleTools: tools, enabled: true, vertical: true, muted: true)
             == nil)
     #expect(LUTResolution.showsSplitComparisonKey(visibleTools: tools, enabled: true))
 

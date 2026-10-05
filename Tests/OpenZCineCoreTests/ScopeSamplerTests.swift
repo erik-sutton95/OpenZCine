@@ -1,5 +1,6 @@
-import enum OpenCineMedia.MonitorCrushClipCompensation
 import Testing
+
+import enum OpenCineMedia.MonitorCrushClipCompensation
 
 @testable import OpenZCineCore
 

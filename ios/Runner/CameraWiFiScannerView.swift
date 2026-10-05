@@ -1,6 +1,6 @@
+import OpenZCineCore
 import SwiftUI
 import VisionKit
-import OpenZCineCore
 
 /// Apple-native modal that reads the camera's on-screen Connection wizard (SSID + Key) with the
 /// phone's rear camera and hands validated credentials back to the connect popup. VisionKit does

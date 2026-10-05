@@ -1,7 +1,7 @@
-import OpenCineAppKit
 import LinkPresentation
 import MonitorPresentation
 import MonitorUI
+import OpenCineAppKit
 import Photos
 import SwiftUI
 import UIKit
@@ -107,29 +107,35 @@ struct MediaDeliveryOverlayState: Equatable, Sendable {
 @MainActor
 @Observable
 final class MediaDeliveryCoordinator {
-    private let lifetime: MonitorDeliveryModel<
-        MediaDeliveryOwnedProgress, MediaDeliveryRunOutcome, MediaDeliveryShareResources
-    >
-    private let execute: @MainActor (
-        MediaDeliveryBeginRequest, NativeAppModel,
-        @escaping @MainActor (MediaDeliveryOverlayState) -> Void
-    ) async -> MediaDeliveryRunOutcome
+    private let lifetime:
+        MonitorDeliveryModel<
+            MediaDeliveryOwnedProgress, MediaDeliveryRunOutcome, MediaDeliveryShareResources
+        >
+    private let execute:
+        @MainActor (
+            MediaDeliveryBeginRequest, NativeAppModel,
+            @escaping @MainActor (MediaDeliveryOverlayState) -> Void
+        ) async -> MediaDeliveryRunOutcome
 
     init(
         sleep: @escaping @MainActor (Duration) async throws -> Void = {
             try await Task.sleep(for: $0)
         },
-        execute: @escaping @MainActor (
-            MediaDeliveryBeginRequest, NativeAppModel,
-            @escaping @MainActor (MediaDeliveryOverlayState) -> Void
-        ) async -> MediaDeliveryRunOutcome = { request, model, progress in
-            await MediaDeliveryRunner.execute(request: request, model: model, onProgress: progress)
-        }
+        execute:
+            @escaping @MainActor (
+                MediaDeliveryBeginRequest, NativeAppModel,
+                @escaping @MainActor (MediaDeliveryOverlayState) -> Void
+            ) async -> MediaDeliveryRunOutcome = { request, model, progress in
+                await MediaDeliveryRunner.execute(
+                    request: request, model: model, onProgress: progress)
+            }
     ) {
         self.execute = execute
-        lifetime = .init(sleep: sleep, releaseShare: { resources in
-            MediaShareStaging.cleanupStaging(at: resources.cleanupURL)
-        })
+        lifetime = .init(
+            sleep: sleep,
+            releaseShare: { resources in
+                MediaShareStaging.cleanupStaging(at: resources.cleanupURL)
+            })
     }
 
     var overlayState: MediaDeliveryOverlayState? { lifetime.state.progress?.overlay }
@@ -151,9 +157,11 @@ final class MediaDeliveryCoordinator {
     /// A delayed nil setter belongs to the exact sheet built with this binding.
     var sharePresentation: Binding<MediaSharePayload?> {
         let presentedID = sharePayload?.id
-        return Binding(get: { self.sharePayload }, set: { value in
-            if value == nil, let presentedID { self.clearSharePresentation(id: presentedID) }
-        })
+        return Binding(
+            get: { self.sharePayload },
+            set: { value in
+                if value == nil, let presentedID { self.clearSharePresentation(id: presentedID) }
+            })
     }
     func enterLocalOverlayContext() { lifetime.enterLocalOverlayContext() }
     func exitLocalOverlayContext() { lifetime.exitLocalOverlayContext() }
@@ -163,26 +171,33 @@ final class MediaDeliveryCoordinator {
         onCancel: (() -> Void)? = nil,
         onComplete: ((MediaDeliveryRunOutcome) -> Void)? = nil
     ) {
-        lifetime.begin(onCancel: onCancel, onComplete: { outcome in
-            onComplete?(outcome)
-            return nil
-        }) { progress in
-            let outcome = await self.execute(request, model) { overlay in
-                let index = min(max(overlay.clipIndex, 1), request.clips.count) - 1
-                let filename = request.clips.indices.contains(index)
-                    ? request.clips[index].filename : nil
-                progress(.init(overlay: overlay, filename: filename))
-            }
-            switch outcome {
-            case .share(let urls, let metadataText, let cleanup):
-                return .init(outcome, share: .init(
-                    urls: urls, metadataText: metadataText, cleanupURL: cleanup))
-            case .savedToPhotos(let count):
-                return .init(outcome, toast: "Saved \(count) \(count == 1 ? "clip" : "clips") to Photos")
-            case .frameio(let summary): return .init(outcome, toast: summary)
-            case .failed(let message): return .init(outcome, toast: message)
-            }
-        }
+        lifetime.begin(
+            onCancel: onCancel,
+            onComplete: { outcome in
+                onComplete?(outcome)
+                return nil
+            },
+            operation: { progress in
+                let outcome = await self.execute(request, model) { overlay in
+                    let index = min(max(overlay.clipIndex, 1), request.clips.count) - 1
+                    let filename =
+                        request.clips.indices.contains(index)
+                        ? request.clips[index].filename : nil
+                    progress(.init(overlay: overlay, filename: filename))
+                }
+                switch outcome {
+                case .share(let urls, let metadataText, let cleanup):
+                    return .init(
+                        outcome,
+                        share: .init(
+                            urls: urls, metadataText: metadataText, cleanupURL: cleanup))
+                case .savedToPhotos(let count):
+                    return .init(
+                        outcome, toast: "Saved \(count) \(count == 1 ? "clip" : "clips") to Photos")
+                case .frameio(let summary): return .init(outcome, toast: summary)
+                case .failed(let message): return .init(outcome, toast: message)
+                }
+            })
     }
     func cancel() { withAnimation(.spring(duration: 0.32)) { lifetime.cancel() } }
     /// The app root owns this lifetime; temporary gallery covers do not close it.
@@ -887,7 +902,9 @@ struct MediaDeliveryShareSheetModifier: ViewModifier {
                             urls: payload.urls,
                             metadataText: payload.metadataText,
                             onFinished: {
-                                if delivery.completeSharePresentation(id: payload.id) { onDismiss?() }
+                                if delivery.completeSharePresentation(id: payload.id) {
+                                    onDismiss?()
+                                }
                             }
                         )
                     }

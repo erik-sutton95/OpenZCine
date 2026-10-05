@@ -1,7 +1,7 @@
 import MonitorUI
+import OpenZCineCore
 import SwiftUI
 import UIKit
-import OpenZCineCore
 
 /// Light selection tap for operator-setup controls; respects the Controls-tab haptics preference.
 enum OperatorSettingsHaptics {
@@ -372,13 +372,15 @@ struct NikonSettingsChoices: View {
     let onSelect: (String) -> Void
 
     var body: some View {
-        MonitorSegmentedControl(options: options,
+        MonitorSegmentedControl(
+            options: options,
             selection: Binding(get: { selected }, set: onSelect),
             compact: compact, stacked: stacked, title: { $0 },
             onSelectionFeedback: {
                 OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-            })
-            .buttonStyle(MonitorSettingsButtonStyle())
+            }
+        )
+        .buttonStyle(MonitorSettingsButtonStyle())
     }
 }
 
@@ -393,9 +395,12 @@ struct NikonSettingsSwitch: View {
     let action: () -> Void
 
     var body: some View {
-        MonitorSettingsSwitchInlineRow(title: title, help: help,
+        MonitorSettingsSwitchInlineRow(
+            title: title, help: help,
             showTopDivider: showTopDivider, stacked: stacked, isOn: isOn,
-            feedback: { OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled) },
+            feedback: {
+                OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+            },
             action: action)
     }
 }

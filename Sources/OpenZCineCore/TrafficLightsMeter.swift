@@ -1,4 +1,5 @@
 import Foundation
+
 import enum OpenCineMedia.MonitorCrushClipCompensation
 
 /// Which half of a goal-post column shows level fill — exposure balance reads from centre gray.

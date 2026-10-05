@@ -2,8 +2,8 @@ import CoreMedia
 import CoreVideo
 import Metal
 import MetalKit
-import SwiftUI
 import OpenCineApple
+import SwiftUI
 import UIKit
 import VideoToolbox
 import os
@@ -136,12 +136,14 @@ struct MetalLiveView: UIViewRepresentable {
         init(fileStore: LUTFileStore) {
             device = MTLCreateSystemDefaultDevice()!
             baker = MetalFeedFrameBaker(device: device, fileStore: fileStore)
-            presenter = MonitorMetalPicturePresenter(device: device, baker: baker.native,
+            presenter = MonitorMetalPicturePresenter(
+                device: device, baker: baker.native,
                 logSubsystem: "OpenZCine", captureLabel: MetalCaptureLabels.liveFeed,
                 enabled: { FeedRenderMode.metalFeedEnabled },
                 options: {
                     MonitorPresentationOptions(
-                        upscaler: MonitorUpscaler(rawValue: FeedUpscaleSwitch.rendererReadsUpscaler.rawValue)
+                        upscaler: MonitorUpscaler(
+                            rawValue: FeedUpscaleSwitch.rendererReadsUpscaler.rawValue)
                             ?? .lanczos,
                         previewSuperResolutionInput: FeedUpscaleSwitch.presentsSuperResolutionInput,
                         resampling: .selectedUpscaler, exactCopyAtNativeSize: true)
@@ -154,8 +156,10 @@ struct MetalLiveView: UIViewRepresentable {
         }
 
         @discardableResult
-        func update(image: UIImage, effects: LiveImageEffects,
-            source: LiveFrameSampleBus.Source? = nil) -> Bool {
+        func update(
+            image: UIImage, effects: LiveImageEffects,
+            source: LiveFrameSampleBus.Source? = nil
+        ) -> Bool {
             let imageChanged = currentImage !== image
             let sourceChanged = currentSource !== source
             if sourceChanged { baker.reset() }
@@ -179,7 +183,8 @@ struct MetalLiveView: UIViewRepresentable {
         private func scheduleBake() {
             let size = presenter.drawableSize
             guard let image = currentImage, size.width > 0, size.height > 0 else { return }
-            baker.scheduleBake(image: image, effects: currentEffects, drawableSize: size,
+            baker.scheduleBake(
+                image: image, effects: currentEffects, drawableSize: size,
                 pixelFormat: .bgra8Unorm, source: currentSource,
                 onComplete: { [weak mtkView] in
                     Task { @MainActor in mtkView?.setNeedsDisplay() }
@@ -567,4 +572,3 @@ final class FeedUpscaleSwitch {
     /// What `Off` came from, so the second tap goes back to it rather than to a default.
     @ObservationIgnored private var restoreAfterOff: FeedUpscaler?
 }
-

@@ -79,18 +79,22 @@ public enum ScopeSampler {
         rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, stride: Int = 3,
         includePoints: Bool = true
     ) -> ScopeSamples {
-        let raw = OpenCineMedia.ScopeSampler.sampleRaw(bytes: rgba, width: width, height: height,
+        let raw = OpenCineMedia.ScopeSampler.sampleRaw(
+            bytes: rgba, width: width, height: height,
             bytesPerRow: bytesPerRow, transfer: .rec709, includePoints: includePoints,
-            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true)
+            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true
+        )
         return sourceSamples(raw)
     }
 
     /// Exact legacy representation bridge. Only absent shared coordinates use the old -1 value.
     public static func sourceSamples(_ raw: OpenCineMedia.ScopeSamples) -> ScopeSamples {
-        return ScopeSamples(histogramLuma: raw.histogramLuma, histogramRed: raw.histogramRed,
+        return ScopeSamples(
+            histogramLuma: raw.histogramLuma, histogramRed: raw.histogramRed,
             histogramGreen: raw.histogramGreen, histogramBlue: raw.histogramBlue,
             points: raw.points.map { point in
-                ScopePoint(xRatio: point.xRatio, yRatio: point.yRatio,
+                ScopePoint(
+                    xRatio: point.xRatio, yRatio: point.yRatio,
                     sampleX: point.sampleX ?? -1, sampleY: point.sampleY ?? -1,
                     red: point.red, green: point.green, blue: point.blue, luma: point.luma)
             })

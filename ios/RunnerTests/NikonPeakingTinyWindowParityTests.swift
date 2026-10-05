@@ -1,6 +1,6 @@
 import CoreImage
-import OpenZCineCore
 import OpenCineApple
+import OpenZCineCore
 import UIKit
 import XCTest
 import os
@@ -126,19 +126,23 @@ final class NikonPeakingTinyWindowParityTests: XCTestCase {
                                 over: source, source: source, extent: source.extent,
                                 color: rgb, sense: sense, gateScale: gateScale)
                             let actual = render(implicit, with: context, extent: source.extent)
-                            XCTAssertEqual(actual,
+                            XCTAssertEqual(
+                                actual,
                                 render(explicit, with: context, extent: source.extent))
-                            XCTAssertEqual(actual,
+                            XCTAssertEqual(
+                                actual,
                                 render(chain, with: context, extent: source.extent))
-                            paintedChannels += zip(actual, plain).filter {
-                                abs(Int($0.0) - Int($0.1)) > 2
-                            }.count
+                            paintedChannels +=
+                                zip(actual, plain).filter {
+                                    abs(Int($0.0) - Int($0.1)) > 2
+                                }.count
                         }
                     }
                 }
             }
         }
-        XCTAssertGreaterThan(paintedChannels, 0,
+        XCTAssertGreaterThan(
+            paintedChannels, 0,
             "The unchanged shared default must exercise actual painted filter-chain pixels")
     }
 

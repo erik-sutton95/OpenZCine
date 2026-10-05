@@ -1,5 +1,5 @@
-import SwiftUI
 import OpenZCineCore
+import SwiftUI
 
 /// Nikon's saved assist identifiers remain owned by its existing Codable preferences.
 typealias MonitorAssistTool = OpenZCineCore.MonitorAssistTool

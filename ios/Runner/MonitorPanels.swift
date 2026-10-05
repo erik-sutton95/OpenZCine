@@ -1,8 +1,8 @@
-import OpenCineApple
-import OpenCineMedia
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineApple
+import OpenCineMedia
 import OpenCineNikon
 import OpenZCineCore
 import PhotosUI
@@ -920,15 +920,18 @@ struct PickerPanel: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if let field = commonCaptureField {
                     let offered = currentOptions.compactMap { label in
-                        picker.nikonControlSetting.flatMap { NikonCameraSession.setting($0, label: label) }
+                        picker.nikonControlSetting.flatMap {
+                            NikonCameraSession.setting($0, label: label)
+                        }
                     }
                     MonitorCaptureDrum(
                         control: model.shell.control, field: field,
                         enabled: !isDrumInteractionLocked,
                         haptics: model.preferences.hapticsEnabled,
                         choices: field.choices.filter { offered.contains($0.value) },
-                        marked: markedValues)
-                        .id(selectedMode)
+                        marked: markedValues
+                    )
+                    .id(selectedMode)
                 } else {
                     AccentDrumWheel(
                         options: currentOptions,
@@ -1948,7 +1951,9 @@ struct AccentDrumWheel: View {
             modes: MonitorWaveformMode.allCases, mode: options.mode,
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
-                set: { options.wrappedValue.brightness = MonitorWaveformOptions.clampedBrightness($0) }),
+                set: {
+                    options.wrappedValue.brightness = MonitorWaveformOptions.clampedBrightness($0)
+                }),
             guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity when the preview is dark or low contrast.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
@@ -1960,7 +1965,9 @@ struct AccentDrumWheel: View {
             modes: MonitorParadeMode.allCases, mode: options.mode,
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
-                set: { options.wrappedValue.brightness = MonitorParadeOptions.clampedBrightness($0) }),
+                set: {
+                    options.wrappedValue.brightness = MonitorParadeOptions.clampedBrightness($0)
+                }),
             guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity for the separated channel lanes.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
@@ -1973,7 +1980,8 @@ struct AccentDrumWheel: View {
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
                 set: {
-                    options.wrappedValue.brightness = MonitorVectorscopeOptions.clampedBrightness($0)
+                    options.wrappedValue.brightness = MonitorVectorscopeOptions.clampedBrightness(
+                        $0)
                 }),
             zoomHelp:
                 "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the monitor image after its active LUT or display tone map.",
@@ -2774,7 +2782,9 @@ struct OperatorSettingsPanel: View {
         OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
 
-    private func preferenceBinding(_ keyPath: WritableKeyPath<OperatorPreferences, Bool>) -> Binding<Bool> {
+    private func preferenceBinding(_ keyPath: WritableKeyPath<OperatorPreferences, Bool>)
+        -> Binding<Bool>
+    {
         Binding(
             get: { model.preferences[keyPath: keyPath] },
             set: { model.preferences[keyPath: keyPath] = $0 }
@@ -2908,55 +2918,59 @@ struct OperatorSettingsPanel: View {
 
         MonitorConnectionSettings(
             transport: transportLabel,
-            transportHelp: "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
+            transportHelp:
+                "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
             phase: model.connection.label,
             phaseHelp: "The current connection state reported by this device."
         )
         if (selectableVideoSources.count > 1 && model.monitorAvailability.offersSourceSwitch)
-            || model.videoSource == .hdmiCapture || model.videoSource == .relay {
+            || model.videoSource == .hdmiCapture || model.videoSource == .relay
+        {
             MonitorSettingsRowCard(title: "Picture Source") {
-            // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
-            // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
-            // offering a single choice is a readout pretending to be a control. Stating the rule
-            // this way also means any future source that narrows the list hides it too.
-            if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
-                MonitorSettingsInlineRow(
-                    title: "Picture Source",
-                    help:
-                        "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
-                ) {
-                    NikonSettingsChoices(
-                        options: selectableVideoSources.map(\.title),
-                        selected: model.videoSource.title
-                    ) { value in
-                        guard
-                            let kind = selectableVideoSources.first(where: { $0.title == value })
-                        else { return }
-                        model.selectVideoSource(kind)
+                // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
+                // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
+                // offering a single choice is a readout pretending to be a control. Stating the rule
+                // this way also means any future source that narrows the list hides it too.
+                if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
+                    MonitorSettingsInlineRow(
+                        title: "Picture Source",
+                        help:
+                            "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
+                    ) {
+                        NikonSettingsChoices(
+                            options: selectableVideoSources.map(\.title),
+                            selected: model.videoSource.title
+                        ) { value in
+                            guard
+                                let kind = selectableVideoSources.first(where: { $0.title == value }
+                                )
+                            else { return }
+                            model.selectVideoSource(kind)
+                        }
                     }
                 }
-            }
-            if model.videoSource == .hdmiCapture {
-                MonitorSettingsInlineRow(
-                    title: "Capture Device",
-                    help:
-                        "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR."
-                ) {
-                    MonitorSettingsValueText(value: model.hdmiCaptureState.shortStatus)
+                if model.videoSource == .hdmiCapture {
+                    MonitorSettingsInlineRow(
+                        title: "Capture Device",
+                        help:
+                            "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR."
+                    ) {
+                        MonitorSettingsValueText(value: model.hdmiCaptureState.shortStatus)
+                    }
                 }
-            }
-            if model.videoSource == .relay {
-                // The ask/give-back moved onto the live view itself (bottom centre) — control
-                // is exercised while watching, not inside a settings sheet. The readout stays.
-                MonitorSettingsInlineRow(
-                    title: "Held By",
-                    help: "Which device the camera is currently taking commands from."
-                ) {
-                    MonitorSettingsValueText(
-                        value: model.relayHoldsControl
-                            ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
+                if model.videoSource == .relay {
+                    // The ask/give-back moved onto the live view itself (bottom centre) — control
+                    // is exercised while watching, not inside a settings sheet. The readout stays.
+                    MonitorSettingsInlineRow(
+                        title: "Held By",
+                        help: "Which device the camera is currently taking commands from."
+                    ) {
+                        MonitorSettingsValueText(
+                            value: model.relayHoldsControl
+                                ? "This device"
+                                : (model.relayControlHolderName ?? "The broadcaster"))
+                    }
                 }
-            }
             }
         }
 
@@ -3074,9 +3088,11 @@ struct OperatorSettingsPanel: View {
         MonitorInputOrientationSettings(
             remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
             remoteTitle: "Bluetooth Remote Shutter",
-            remoteHelp: "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
+            remoteHelp:
+                "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
             autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
-            rotationHelp: "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected.",
+            rotationHelp:
+                "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected.",
             feedback: settingsFeedback
         )
     }
@@ -3186,7 +3202,9 @@ struct OperatorSettingsPanel: View {
         }
     }
 
-    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode) -> [MonitorDisplayToggle] {
+    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode)
+        -> [MonitorDisplayToggle]
+    {
         DisplayChromeVisibility.configurableSections(in: mode).map { section in
             MonitorDisplayToggle(
                 id: section.rawValue, title: section.title,
@@ -3209,30 +3227,42 @@ struct OperatorSettingsPanel: View {
     @ViewBuilder private var systemRows: some View {
         MonitorSupportSettings(
             reportTitle: "Report a Problem",
-            reportHelp: "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue.",
+            reportHelp:
+                "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue.",
             reportActionTitle: "Report",
             actions: [
-                MonitorSupportAction(id: "support.open", title: "Support",
-                    help: "Connection guides, camera controls, media workflows, and troubleshooting.",
-                    actionTitle: "Open", accessibilityLabel: "Open Support") {
-                        requestInternetDestination(.support)
-                    },
-                MonitorSupportAction(id: "support.feature", title: "Request a Feature",
+                MonitorSupportAction(
+                    id: "support.open", title: "Support",
+                    help:
+                        "Connection guides, camera controls, media workflows, and troubleshooting.",
+                    actionTitle: "Open", accessibilityLabel: "Open Support"
+                ) {
+                    requestInternetDestination(.support)
+                },
+                MonitorSupportAction(
+                    id: "support.feature", title: "Request a Feature",
                     help: "Start an idea in the project’s feature-request discussion category.",
-                    actionTitle: "Request", accessibilityLabel: "Request a Feature") {
-                        requestInternetDestination(.featureRequest)
-                    },
-                MonitorSupportAction(id: "support.diagnostics", title: "Share Diagnostics",
-                    help: "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
+                    actionTitle: "Request", accessibilityLabel: "Request a Feature"
+                ) {
+                    requestInternetDestination(.featureRequest)
+                },
+                MonitorSupportAction(
+                    id: "support.diagnostics", title: "Share Diagnostics",
+                    help:
+                        "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
                     actionTitle: isPreparingDiagnostics ? "Preparing…" : "Share",
-                    accessibilityLabel: "Share Diagnostics", enabled: !isPreparingDiagnostics) {
-                        prepareDiagnosticsReport()
-                    },
-                MonitorSupportAction(id: "support.guide", title: "Live View Guide",
-                    help: "Show the short control guide now when live view is open, or again on the next live view.",
-                    actionTitle: "Show Again", accessibilityLabel: "Show Live View Guide Again") {
-                        model.replayLiveViewGuide()
-                    },
+                    accessibilityLabel: "Share Diagnostics", enabled: !isPreparingDiagnostics
+                ) {
+                    prepareDiagnosticsReport()
+                },
+                MonitorSupportAction(
+                    id: "support.guide", title: "Live View Guide",
+                    help:
+                        "Show the short control guide now when live view is open, or again on the next live view.",
+                    actionTitle: "Show Again", accessibilityLabel: "Show Live View Guide Again"
+                ) {
+                    model.replayLiveViewGuide()
+                },
             ],
             report: { requestInternetDestination(.reportProblem) }
         )
@@ -3247,7 +3277,8 @@ struct OperatorSettingsPanel: View {
         MonitorAppInformationSettings(
             theme: "Warm Dark", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
             themeHelp: "Dark earth interface tuned for low reflection on set.",
-            protocolHelp: "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
+            protocolHelp:
+                "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
             versionHelp: "Current OpenZCine build from the native project metadata."
         )
     }
@@ -3392,8 +3423,10 @@ struct OperatorSettingsPanel: View {
 
         MonitorCacheSettings(
             sizeLabel: cacheSizeLabel,
-            scopeHelp: "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
-            clearHelp: "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
+            scopeHelp:
+                "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
+            clearHelp:
+                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
         ) {
             model.clearAllMediaCaches()
             cacheSizeBytes = model.totalMediaCacheByteCount()
@@ -4412,14 +4445,54 @@ struct NikonViewAssistSettings: View {
     var body: some View {
         let menus = NikonAssistMenuAdapter(model: model, compact: true)
         MonitorViewAssistSettings(sections: [
-            .falseColor(menus.falseColor, reset: { resetFeedback(); resetFalseColor() }),
-            .zebra(menus.zebra, reset: { resetFeedback(); resetZebra() }),
-            .waveform(menus.waveform, reset: { resetFeedback(); resetWaveform() }),
-            .parade(menus.parade, reset: { resetFeedback(); resetParade() }),
-            .histogram(menus.histogram, reset: { resetFeedback(); resetHistogram() }),
-            .vectorscope(menus.vectorscope, reset: { resetFeedback(); resetVectorscope() }),
-            .peaking(menus.peaking, reset: { resetFeedback(); resetPeaking() }),
-            .trafficLights(menus.trafficLights, reset: { resetFeedback(); resetTrafficLights() }),
+            .falseColor(
+                menus.falseColor,
+                reset: {
+                    resetFeedback()
+                    resetFalseColor()
+                }),
+            .zebra(
+                menus.zebra,
+                reset: {
+                    resetFeedback()
+                    resetZebra()
+                }),
+            .waveform(
+                menus.waveform,
+                reset: {
+                    resetFeedback()
+                    resetWaveform()
+                }),
+            .parade(
+                menus.parade,
+                reset: {
+                    resetFeedback()
+                    resetParade()
+                }),
+            .histogram(
+                menus.histogram,
+                reset: {
+                    resetFeedback()
+                    resetHistogram()
+                }),
+            .vectorscope(
+                menus.vectorscope,
+                reset: {
+                    resetFeedback()
+                    resetVectorscope()
+                }),
+            .peaking(
+                menus.peaking,
+                reset: {
+                    resetFeedback()
+                    resetPeaking()
+                }),
+            .trafficLights(
+                menus.trafficLights,
+                reset: {
+                    resetFeedback()
+                    resetTrafficLights()
+                }),
         ])
     }
 
@@ -4437,21 +4510,24 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetWaveform() {
-        let store = model.scopePanels.waveform, base = MonitorWaveformOptions.default
+        let store = model.scopePanels.waveform
+        let base = MonitorWaveformOptions.default
         store.options.mode = base.mode
         store.options.guides = base.guides
         store.options.brightness = base.brightness
     }
 
     private func resetParade() {
-        let store = model.scopePanels.parade, base = MonitorParadeOptions.default
+        let store = model.scopePanels.parade
+        let base = MonitorParadeOptions.default
         store.options.mode = base.mode
         store.options.guides = base.guides
         store.options.brightness = base.brightness
     }
 
     private func resetHistogram() {
-        model.scopePanels.histogram.options.trafficLights = MonitorHistogramOptions.default.trafficLights
+        model.scopePanels.histogram.options.trafficLights =
+            MonitorHistogramOptions.default.trafficLights
         model.assist.resetOptions(.histogram)
     }
 
@@ -4465,7 +4541,8 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetVectorscope() {
-        let store = model.scopePanels.vectorscope, base = MonitorVectorscopeOptions.default
+        let store = model.scopePanels.vectorscope
+        let base = MonitorVectorscopeOptions.default
         store.options.zoom = base.zoom
         store.options.brightness = base.brightness
     }
