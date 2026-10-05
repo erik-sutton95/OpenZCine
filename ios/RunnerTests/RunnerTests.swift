@@ -1,4 +1,5 @@
 import CoreImage
+import MetalKit
 import MonitorPresentation
 import MonitorUI
 import Network
@@ -445,6 +446,152 @@ final class RunnerTests: XCTestCase {
             if let view = find(host.view), !view.bounds.isEmpty { return view }
         }
         return try XCTUnwrap(find(host.view), "The production native picture host was not mounted")
+    }
+
+    /// SIMULATED HDMI raster through the actual mounted Metal picture host. The shared native
+    /// baker keeps the held frame current and presentable through transport recovery and an
+    /// in-recovery repaint; only an explicit clear retires it, and a successor mounts a new owner.
+    @MainActor
+    func testMountedMetalPictureKeepsHeldFrameThroughRecoveryUntilExplicitClear() async throws {
+        func solid(_ color: UIColor) -> UIImage {
+            UIGraphicsImageRenderer(size: CGSize(width: 160, height: 90)).image { context in
+                color.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 160, height: 90))
+            }
+        }
+        let isGreen: (RGB) -> Bool = { $0.green > 200 && $0.red < 60 && $0.blue < 60 }
+        let isRed: (RGB) -> Bool = { $0.red > 200 && $0.green < 60 && $0.blue < 60 }
+        let model = NativeAppModel()
+        model.preferences = OperatorPreferences.defaults
+        model.isMonitorPresented = true
+        model.videoSource = .hdmiCapture
+        model.liveFrameImage = solid(.green)
+        let held = try XCTUnwrap(model.liveFrameSource)
+        let session = NikonPictureLifetimeSession()
+        let saved = SavedCamera(
+            id: "SIMULATED-held-recovery",
+            integration: IntegrationID("org.opencapture.nikon-ptp"),
+            advertisedName: "SIMULATED camera", model: "SIMULATED")
+        model.shell.present(ConnectedCamera(saved: saved, session: session))
+        let delivery = MediaDeliveryCoordinator()
+        let content = GeometryReader { proxy in
+            NikonMonitorShell(
+                context: LiveViewLayoutContext(
+                    proxy: proxy, deviceOrientation: .unknown, screenWidth: nil)
+            ).environment(model).environment(delivery)
+        }
+        let host = UIHostingController(rootView: content)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        window.rootViewController = host
+        window.isHidden = false
+        var acquired: [(MonitorFrameBaker, MonitorFrameBaker.Frame)] = []
+        defer {
+            for (owner, frame) in acquired { owner.releaseBakedTexture(frame.texture) }
+            model.liveFrameImage = nil
+            model.shell.close()
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        func mounted() async throws -> (MTKView, MonitorMetalPicturePresenter, MonitorFrameBaker) {
+            let found = try await picture(in: host)
+            let view = try XCTUnwrap(found as? MTKView, "The Metal feed must mount the picture")
+            let presenter = try XCTUnwrap(view.delegate as? MonitorMetalPicturePresenter)
+            // Read-only reflection of the actual mounted owner; no production test seam.
+            let baker = try XCTUnwrap(
+                Mirror(reflecting: presenter).descendant("baker") as? MonitorFrameBaker)
+            return (view, presenter, baker)
+        }
+        func presented(
+            _ owner: (MTKView, MonitorMetalPicturePresenter, MonitorFrameBaker),
+            _ matches: (RGB) -> Bool
+        ) async throws -> MonitorFrameBaker.Frame {
+            let (view, presenter, baker) = owner
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline {
+                // Exactly the presenter's draw-time acquisition for its current drawable.
+                if let frame = baker.acquireFrame(
+                    for: presenter.drawableSize, pixelFormat: view.colorPixelFormat)
+                {
+                    if frame.isCurrent, try matches(centerPixel(of: frame.texture)) {
+                        acquired.append((baker, frame))
+                        return frame
+                    }
+                    baker.releaseBakedTexture(frame.texture)
+                }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            XCTFail("No current matching frame was baked for the mounted presenter")
+            throw XCTestError(.timeoutWhileWaiting)
+        }
+
+        let owner = try await mounted()
+        let first = try await presented(owner, isGreen)
+
+        // Recovery: control and link are lost while the held raster remains admitted.
+        session.loseControl()
+        model.connection = .reconnecting
+        let (view, presenter, baker) = owner
+        let recovering = try await picture(in: host)
+        XCTAssertTrue(recovering === view, "Recovery must keep the mounted native picture host")
+        XCTAssertTrue(view.delegate === presenter)
+        XCTAssertTrue(model.liveFrameSource === held)
+        XCTAssertTrue(held.isActive)
+        XCTAssertTrue(first.isCurrent, "Transport recovery must not retire the held baked frame")
+        _ = try await presented(owner, isGreen)
+
+        // A repaint during recovery keeps the same lease and bakes through the same owner.
+        model.liveFrameImage = solid(.red)
+        XCTAssertTrue(model.liveFrameSource === held)
+        let repainted = try await presented(owner, isRed)
+        XCTAssertTrue(first.isCurrent)
+        XCTAssertTrue(repainted.isCurrent)
+
+        // Explicit clear retires the lease, every acquired frame and the mounted owner.
+        model.liveFrameImage = nil
+        XCTAssertFalse(held.isActive)
+        XCTAssertFalse(first.isCurrent)
+        XCTAssertFalse(repainted.isCurrent)
+        for _ in 0..<300 where view.delegate != nil {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            await Task.yield()
+        }
+        XCTAssertNil(view.delegate, "Explicit clear must dismantle the mounted presenter")
+        XCTAssertNil(
+            baker.acquireFrame(for: presenter.drawableSize, pixelFormat: view.colorPixelFormat))
+
+        // A successor raster admits a new lease and a new mounted owner; the old stays retired.
+        model.liveFrameImage = solid(.green)
+        let successor = try XCTUnwrap(model.liveFrameSource)
+        XCTAssertFalse(successor === held)
+        let next = try await mounted()
+        XCTAssertFalse(next.0 === view)
+        let admitted = try await presented(next, isGreen)
+        XCTAssertTrue(admitted.isCurrent)
+        XCTAssertFalse(first.isCurrent)
+        XCTAssertFalse(repainted.isCurrent)
+        XCTAssertEqual(session.commands, 0, "A captured frame never sends a camera command")
+    }
+
+    struct RGB { let red, green, blue: UInt8 }
+
+    /// Reads the centre texel of a private BGRA8 bake through a blit into shared memory.
+    private func centerPixel(of texture: MTLTexture) throws -> RGB {
+        XCTAssertEqual(texture.pixelFormat, .bgra8Unorm)
+        let device = texture.device
+        let buffer = try XCTUnwrap(device.makeBuffer(length: 4, options: .storageModeShared))
+        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
+        let blit = try XCTUnwrap(command.makeBlitCommandEncoder())
+        blit.copy(
+            from: texture, sourceSlice: 0, sourceLevel: 0,
+            sourceOrigin: MTLOrigin(x: texture.width / 2, y: texture.height / 2, z: 0),
+            sourceSize: MTLSize(width: 1, height: 1, depth: 1), to: buffer,
+            destinationOffset: 0, destinationBytesPerRow: 4, destinationBytesPerImage: 4)
+        blit.endEncoding()
+        command.commit()
+        command.waitUntilCompleted()
+        let bytes = buffer.contents().assumingMemoryBound(to: UInt8.self)
+        return RGB(red: bytes[2], green: bytes[1], blue: bytes[0])
     }
 
     @MainActor
