@@ -3,6 +3,7 @@ package com.opencapture.openzcine.pairing
 import android.content.Context
 import android.content.SharedPreferences
 import com.opencapture.opencine.nikon.NikonLocalInterface
+import com.opencapture.opencine.nikon.nikonAssignedName
 import com.opencapture.openzcine.settings.LiveViewQualityBias
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
@@ -437,8 +438,8 @@ public object SavedCameraRecords {
     }
 
     public fun cameraNamesMatch(lhs: String, rhs: String): Boolean {
-        val normalizedLhs = normalizedAssignedCameraName(lhs) ?: return false
-        val normalizedRhs = normalizedAssignedCameraName(rhs) ?: return false
+        val normalizedLhs = nikonAssignedName(lhs) ?: return false
+        val normalizedRhs = nikonAssignedName(rhs) ?: return false
         return normalizedLhs == normalizedRhs
     }
 
@@ -494,8 +495,8 @@ public object SavedCameraRecords {
     }
 
     private fun namesCompatible(lhs: String, rhs: String): Boolean {
-        val left = normalizedAssignedCameraName(lhs) ?: return true
-        val right = normalizedAssignedCameraName(rhs) ?: return true
+        val left = nikonAssignedName(lhs) ?: return true
+        val right = nikonAssignedName(rhs) ?: return true
         return left == right
     }
 
@@ -537,26 +538,6 @@ public object SavedCameraRecords {
         cameraName.trim().takeIf(String::isNotEmpty) ?: "Camera $host"
 
     private fun normalizedTag(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)
-
-    private fun normalizedAssignedCameraName(value: String): String? {
-        val trimmed = value.trim()
-        if (trimmed.isEmpty()) return null
-        val folded = trimmed.lowercase(Locale.ROOT)
-        if (
-            folded in
-                setOf(
-                    "camera",
-                    "nikon camera",
-                    "nikon zr",
-                    "nikon corporation zr",
-                    "ptp-ip camera",
-                )
-        ) {
-            return null
-        }
-        if (folded.startsWith("camera ")) return null
-        return folded
-    }
 }
 
 /**
