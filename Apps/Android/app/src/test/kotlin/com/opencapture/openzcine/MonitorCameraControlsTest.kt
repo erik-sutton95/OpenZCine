@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorLayoutPolicy
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.opencine.nikon.CameraControl
@@ -688,37 +689,9 @@ class MonitorCameraControlsTest {
     }
 
     @Test
-    fun `portrait fill rail stays inside feed and above capture strip`() {
+    fun `portrait fill trailing false color key leaves the collapsed assist palette reachable`() {
         val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
-        val collapsed =
-            portraitFillAssistRailFrame(
-                zones.feed,
-                zones.captureStrip,
-                expanded = false,
-            )
-        val expanded =
-            portraitFillAssistRailFrame(
-                zones.feed,
-                zones.captureStrip,
-                expanded = true,
-            )
-
-        assertTrue(collapsed.y + collapsed.height <= requireNotNull(zones.captureStrip).y - 10f)
-        assertTrue(expanded.x >= zones.feed.x)
-        assertTrue(expanded.y >= zones.feed.y)
-        assertTrue(expanded.y + expanded.height <= zones.feed.y + zones.feed.height)
-        assertTrue(expanded.y + expanded.height <= requireNotNull(zones.captureStrip).y - 10f)
-    }
-
-    @Test
-    fun `portrait fill trailing false color key leaves collapsed rail reachable`() {
-        val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
-        val rail =
-            portraitFillAssistRailFrame(
-                zones.feed,
-                zones.captureStrip,
-                expanded = false,
-            )
+        val palette = MonitorLayoutPolicy.portraitAssists(floor = 610f, tablet = false)
         val reference =
             falseColorReferenceDefaultFrame(
                 feed = zones.feed,
@@ -726,7 +699,7 @@ class MonitorCameraControlsTest {
                 horizontalFraction = 1f,
             )
 
-        assertTrue(reference.x >= rail.x + rail.width)
+        assertTrue(reference.x >= palette.x + palette.width)
     }
 
     @Test

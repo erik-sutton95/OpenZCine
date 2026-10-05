@@ -3100,22 +3100,13 @@ internal fun MonitorScreen(
         }
         if (liveViewGuideVisible) {
             val guideController = requireNotNull(liveViewGuideController)
-            val guideAssistTarget =
-                if (isPortraitFill) {
-                    portraitFillAssistRailFrame(
-                        feed = zones.feed,
-                        captureStrip = zones.captureStrip.takeIf { cameraValuesVisible },
-                        expanded = false,
-                    )
-                } else {
-                    zones.assistStrip
-                }
+            // The shared palette sits at zones.assistStrip in every orientation; its portrait
+            // form is the vertical slider, fit or fill.
             LiveViewGuideOverlay(
                 controller = guideController,
                 zones = zones,
                 isPortrait = isPortrait,
-                usesVerticalAssistRail = isPortraitFill,
-                assistTarget = guideAssistTarget,
+                usesVerticalAssistRail = isPortrait,
             )
         }
         if (chromeEditorMode != null) {

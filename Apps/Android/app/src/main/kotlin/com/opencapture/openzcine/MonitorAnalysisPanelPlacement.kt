@@ -164,7 +164,6 @@ private fun ZoneFrame.intersectsWithGap(other: ZoneFrame, gap: Float): Boolean =
 /** Actual monitor chrome surfaces mounted beside analysis panels in the current DISP/layout mode. */
 internal data class MonitorAnalysisChromeMounts(
     val assistStrip: Boolean,
-    val assistRail: Boolean,
     val captureStrip: Boolean,
     /**
      * Which landscape rail controls are on screen, or `null` in portrait. One plan instead of the
@@ -187,7 +186,6 @@ internal fun monitorAnalysisChromeMounts(
     val sideMounts =
         MonitorAnalysisChromeMounts(
             assistStrip = false,
-            assistRail = false,
             captureStrip = false,
             landscapeRail = landscapeRail.takeIf { !isPortrait },
         )
@@ -195,21 +193,18 @@ internal fun monitorAnalysisChromeMounts(
     if (isPortrait) {
         return if (isPortraitFill) {
             MonitorAnalysisChromeMounts(
-                assistStrip = false,
-                assistRail = assistToolbarVisible,
+                assistStrip = assistToolbarVisible,
                 captureStrip = cameraValuesVisible,
             )
         } else {
             MonitorAnalysisChromeMounts(
                 assistStrip = assistToolbarVisible,
-                assistRail = false,
                 captureStrip = false,
             )
         }
     }
     return MonitorAnalysisChromeMounts(
         assistStrip = !isClean && assistToolbarVisible,
-        assistRail = false,
         captureStrip = !isClean && cameraValuesVisible,
         landscapeRail = sideMounts.landscapeRail,
     )
@@ -266,7 +261,7 @@ internal data class NormalizedPanelCenter(
  * matching the iOS “almost anywhere” free roam while keeping those rails hittable. Top status and
  * bottom assist/capture strips are **not** subtracted from drag bounds (defaults still clear them).
  * Portrait fill uses the mapped feed as its exact viewport, then clears the top bar, capture strip,
- * system rail, and the existing expanded assist-rail footprint.
+ * system rail, and the assist palette's portrait column.
  */
 internal fun monitorAnalysisPanelLayout(
     zones: MonitorZones,
@@ -288,14 +283,11 @@ internal fun monitorAnalysisPanelLayout(
         if (statusBarVisible) {
             top = max(top, zones.infoBar.y + zones.infoBar.height + PANEL_CONTROL_CLEARANCE_DP)
         }
-        if (chromeMounts.assistRail) {
-            val rail =
-                portraitFillAssistRailFrame(
-                    feed = zones.feed,
-                    captureStrip = zones.captureStrip.takeIf { chromeMounts.captureStrip },
-                    expanded = true,
-                )
-            left = max(left, rail.x + rail.width + PANEL_CONTROL_CLEARANCE_DP)
+        // The assist palette's portrait column grows up the leading edge; clear its full width.
+        if (chromeMounts.assistStrip) {
+            zones.assistStrip?.let { palette ->
+                left = max(left, palette.x + palette.width + PANEL_CONTROL_CLEARANCE_DP)
+            }
         }
         if (chromeMounts.captureStrip) {
             zones.captureStrip?.let { strip ->

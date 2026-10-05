@@ -90,7 +90,7 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
-    fun `portrait fill clears top capture system and worst case expanded assist rail`() {
+    fun `portrait fill clears top capture system and the assist palette column`() {
         val zones = portraitZones()
         val layout =
             requireNotNull(
@@ -103,16 +103,12 @@ class MonitorAnalysisPanelPlacementTest {
                     chromeMounts = PORTRAIT_FILL_CHROME,
                 ),
             )
-        val expandedRail =
-            portraitFillAssistRailFrame(
-                feed = zones.feed,
-                captureStrip = zones.captureStrip,
-                expanded = true,
-            )
+        val palette = requireNotNull(zones.assistStrip)
 
         assertEquals(zones.feed, layout.viewport)
-        assertEquals(ZoneFrame(78f, 60f, 322f, 542f), layout.safeBounds)
-        assertTrue(layout.safeBounds.x > expandedRail.x + expandedRail.width)
+        // Palette column 8 + 56 wide, then the 8 dp control clearance.
+        assertEquals(ZoneFrame(72f, 60f, 328f, 542f), layout.safeBounds)
+        assertTrue(layout.safeBounds.x > palette.x + palette.width)
         assertTrue(layout.safeBounds.y + layout.safeBounds.height < requireNotNull(zones.captureStrip).y)
         assertTrue(layout.safeBounds.y + layout.safeBounds.height < zones.systemCluster.y)
     }
@@ -156,12 +152,12 @@ class MonitorAnalysisPanelPlacementTest {
                 cameraValuesVisible = true,
             )
 
-        assertEquals(MonitorAnalysisChromeMounts(false, true, true), livePortraitFill)
+        assertEquals(MonitorAnalysisChromeMounts(assistStrip = true, captureStrip = true), livePortraitFill)
         assertEquals(livePortraitFill, cleanPortraitFill)
-        assertEquals(MonitorAnalysisChromeMounts(false, false, false), commandPortraitFill)
-        assertEquals(MonitorAnalysisChromeMounts(false, false, false), cleanLandscape)
+        assertEquals(MonitorAnalysisChromeMounts(assistStrip = false, captureStrip = false), commandPortraitFill)
+        assertEquals(MonitorAnalysisChromeMounts(assistStrip = false, captureStrip = false), cleanLandscape)
         assertEquals(
-            ZoneFrame(78f, 60f, 322f, 542f),
+            ZoneFrame(72f, 60f, 328f, 542f),
             requireNotNull(
                 monitorAnalysisPanelLayout(
                     zones = portraitZones(),
@@ -626,7 +622,8 @@ class MonitorAnalysisPanelPlacementTest {
             feed = ZoneFrame(0f, 52f, 400f, 622f),
             infoBar = ZoneFrame(0f, 0f, 400f, 52f),
             captureStrip = ZoneFrame(0f, 610f, 400f, 64f),
-            assistStrip = null,
+            // The shared portrait palette (MonitorLayoutPolicy.portraitAssists): 48 + 8 wide at x 8.
+            assistStrip = ZoneFrame(8f, 511f, 56f, 83f),
             systemCluster = ZoneFrame(0f, 680f, 400f, 90f),
             lock = ZoneFrame(0f, 680f, 80f, 90f),
             disp = ZoneFrame(80f, 680f, 80f, 90f),
@@ -671,11 +668,10 @@ class MonitorAnalysisPanelPlacementTest {
         val LANDSCAPE_LIVE_CHROME =
             MonitorAnalysisChromeMounts(
                 assistStrip = true,
-                assistRail = false,
                 captureStrip = true,
                 landscapeRail = RAIL_ALL,
             )
-        val PORTRAIT_FILL_CHROME = MonitorAnalysisChromeMounts(false, true, true)
-        val PORTRAIT_FIT_CHROME = MonitorAnalysisChromeMounts(true, false, false)
+        val PORTRAIT_FILL_CHROME = MonitorAnalysisChromeMounts(assistStrip = true, captureStrip = true)
+        val PORTRAIT_FIT_CHROME = MonitorAnalysisChromeMounts(assistStrip = true, captureStrip = false)
     }
 }

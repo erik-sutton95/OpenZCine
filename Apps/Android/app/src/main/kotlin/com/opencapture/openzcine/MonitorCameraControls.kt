@@ -1112,21 +1112,6 @@ internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
         this == MonitorPickerKind.QUALITY
 
 /**
- * Seats iOS's portrait-fill assist rail inside the shared feed frame and
- * above the shared capture-strip frame.
- */
-internal fun portraitFillAssistRailFrame(
-    feed: ZoneFrame,
-    captureStrip: ZoneFrame?,
-    expanded: Boolean,
-): ZoneFrame =
-    MonitorPortraitLayout.fillAssistRail(
-        feed = feed,
-        captureStripTop = captureStrip?.y,
-        expanded = expanded,
-    )
-
-/**
  * Anchored glass camera-control picker (iOS `PickerPanel` / `PanelHost`).
  *
  * - Capture / portrait: slides **up** from below the frame.
