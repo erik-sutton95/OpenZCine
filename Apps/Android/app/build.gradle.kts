@@ -290,6 +290,8 @@ dependencies {
     implementation(libs.opencine.appkit)
     // Shared prepared PCM sampling and decoded-audio source lifetime.
     implementation(libs.opencine.native.runtime)
+    // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.
+    implementation(libs.opencine.vulkan)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))
