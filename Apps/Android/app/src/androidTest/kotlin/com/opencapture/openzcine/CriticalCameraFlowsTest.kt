@@ -50,7 +50,11 @@ class CriticalCameraFlowsTest {
     fun scriptedPairingShowsConnectingThenConnectedCamera() {
         relaunch(launchMainActivity().putExtra(EXTRA_PAIRING_STEP, PAIRING_CONNECTING))
 
-        device.waitForText("Connecting to your camera…", CONNECTING_TIMEOUT_MILLIS)
+        // The pair page's connect status line (`conn_connecting_title`, copy since #228).
+        device.waitForText(
+            instrumentation.targetContext.getString(R.string.conn_connecting_title),
+            CONNECTING_TIMEOUT_MILLIS,
+        )
         device.waitForContentDescription(CAMERA_CONNECTED, CONNECTION_TIMEOUT_MILLIS)
     }
 
@@ -128,7 +132,9 @@ class CriticalCameraFlowsTest {
         const val CAMERA_CONNECTED = "Camera connected"
         const val LIVE_VIEW_TIMEOUT_MILLIS = 10_000L
         const val CONNECTING_TIMEOUT_MILLIS = 5_000L
-        const val CONNECTION_TIMEOUT_MILLIS = 15_000L
+        // The `connecting` script holds the handshake 30 s for its screenshot (DemoHarness
+        // PHASE_HOLD_MILLIS) after the scripted join and discovery, then connects.
+        const val CONNECTION_TIMEOUT_MILLIS = 45_000L
         const val ORIENTATION_TIMEOUT_MILLIS = 5_000L
         const val ORIENTATION_POLL_MILLIS = 50L
     }

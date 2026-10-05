@@ -6,20 +6,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHeightIsAtLeast
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.opencapture.openzcine.LiveViewGuideController
+import com.opencapture.openzcine.LiveViewGuideStatus
 import com.opencapture.openzcine.OpenZCineTheme
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -31,6 +28,7 @@ class SystemRowsComposeTest {
         val actions = RecordingSystemSettingsActions()
         val controller = freshController("system-links")
         var report = 0
+        var guide = 0
         compose.setContent {
             OpenZCineTheme {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -38,19 +36,21 @@ class SystemRowsComposeTest {
                         actions = actions,
                         onReportProblem = { report += 1 },
                         guideController = controller,
-                        onShowGuideNow = null,
+                        onShowGuideNow = { guide += 1 },
                         onShowGuideOnNextRealFrame = controller::replayOnNextRealFrame,
                     )
                 }
             }
         }
 
+        // The shared Help & Feedback and Project & Legal cards (iOS System page since #228).
         val actionDescriptions =
             listOf(
                 "Open Support",
-                "Report an Android Problem",
+                "Report a Problem",
                 "Request a Feature",
                 "Share Diagnostics",
+                "Show Live View Guide Again",
                 "Open Source Code",
                 "Open Privacy Policy",
                 "Open Terms of Use",
@@ -67,6 +67,7 @@ class SystemRowsComposeTest {
             assertEquals(1, report)
             assertEquals(1, actions.feature)
             assertEquals(1, actions.diagnostics)
+            assertEquals(1, guide)
             assertEquals(1, actions.source)
             assertEquals(1, actions.privacy)
             assertEquals(1, actions.terms)
@@ -76,7 +77,6 @@ class SystemRowsComposeTest {
     @Test
     fun replayActionsExposeCurrentFrameAvailabilityAndPersistScheduling() {
         val controller = freshController("system-guide")
-        var replayNow = 0
         compose.setContent {
             OpenZCineTheme {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -84,29 +84,28 @@ class SystemRowsComposeTest {
                         actions = RecordingSystemSettingsActions(),
                         onReportProblem = {},
                         guideController = controller,
-                        onShowGuideNow = { replayNow += 1 },
+                        onShowGuideNow = controller::replayNow,
                         onShowGuideOnNextRealFrame = controller::replayOnNextRealFrame,
                     )
                 }
             }
         }
+        val showAgain = compose.onNodeWithContentDescription("Show Live View Guide Again")
 
-        compose.onNodeWithText("Will show on the first real frame").performScrollTo().assertIsDisplayed()
-        assertTrue(
-            compose.onAllNodesWithContentDescription("Show Live View Guide Now")
-                .fetchSemanticsNodes()
-                .isEmpty(),
-        )
-        compose.onNodeWithContentDescription("Show Live View Guide on Next Real Frame")
-            .performScrollTo()
-            .performClick()
-        compose.onNodeWithText("Scheduled for next real frame").assertIsDisplayed()
+        // No real frame yet: Show Again schedules the guide for the next real frame, durably.
+        showAgain.performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(LiveViewGuideStatus.SCHEDULED, controller.status)
+            assertEquals(LiveViewGuideStatus.SCHEDULED, freshControllerReading("system-guide").status)
+            controller.onRealDecodedFrame()
+            assertEquals(LiveViewGuideStatus.SHOWING, controller.status)
+            controller.skip()
+            assertEquals(LiveViewGuideStatus.COMPLETED, controller.status)
+        }
 
-        compose.runOnIdle { controller.onRealDecodedFrame() }
-        compose.onNodeWithContentDescription("Show Live View Guide Now")
-            .performScrollTo()
-            .performClick()
-        compose.runOnIdle { assertEquals(1, replayNow) }
+        // A current real frame: Show Again replays immediately.
+        showAgain.performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(LiveViewGuideStatus.SHOWING, controller.status) }
     }
 
     private fun freshController(name: String): LiveViewGuideController {
@@ -114,6 +113,11 @@ class SystemRowsComposeTest {
         val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
         return LiveViewGuideController(preferences)
+    }
+
+    private fun freshControllerReading(name: String): LiveViewGuideController {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        return LiveViewGuideController(context.getSharedPreferences(name, Context.MODE_PRIVATE))
     }
 
     private class RecordingSystemSettingsActions : SystemSettingsActions {
