@@ -24,12 +24,12 @@ jbyte* pinBytes(JNIEnv* env, jbyteArray arr, jboolean* copy, std::vector<uint8_t
 extern "C" {
 
 JNIEXPORT jboolean JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_isAvailable(JNIEnv*, jobject) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_isAvailable(JNIEnv*, jobject) {
     return LiveFeedVk_IsAvailable() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_nativeInitAssets(
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_nativeInitAssets(
     JNIEnv* env,
     jobject,
     jobject assetManager) {
@@ -37,19 +37,19 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_nativeInitAssets(
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_createSession(JNIEnv*, jobject) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_createSession(JNIEnv*, jobject) {
     if (!gAssets) return 0;
     auto* session = LiveFeedVk_Create(gAssets);
     return reinterpret_cast<jlong>(session);
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_destroySession(JNIEnv*, jobject, jlong session) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_destroySession(JNIEnv*, jobject, jlong session) {
     LiveFeedVk_Destroy(reinterpret_cast<LiveFeedVkSession*>(session));
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_attachSurface(
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_attachSurface(
     JNIEnv* env,
     jobject,
     jlong session,
@@ -63,12 +63,12 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_attachSurface(
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_detachSurface(JNIEnv*, jobject, jlong session) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_detachSurface(JNIEnv*, jobject, jlong session) {
     LiveFeedVk_DetachSurface(reinterpret_cast<LiveFeedVkSession*>(session));
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_resize(
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_resize(
     JNIEnv*,
     jobject,
     jlong session,
@@ -78,27 +78,27 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_resize(
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_resume(JNIEnv*, jobject, jlong session) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_resume(JNIEnv*, jobject, jlong session) {
     LiveFeedVk_Resume(reinterpret_cast<LiveFeedVkSession*>(session));
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_pause(JNIEnv*, jobject, jlong session) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_pause(JNIEnv*, jobject, jlong session) {
     LiveFeedVk_Pause(reinterpret_cast<LiveFeedVkSession*>(session));
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_clearFrame(JNIEnv*, jobject, jlong session) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_clearFrame(JNIEnv*, jobject, jlong session) {
     LiveFeedVk_ClearFrame(reinterpret_cast<LiveFeedVkSession*>(session));
 }
 
 JNIEXPORT void JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_clearPlan(JNIEnv*, jobject, jlong session) {
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_clearPlan(JNIEnv*, jobject, jlong session) {
     LiveFeedVk_ClearPlan(reinterpret_cast<LiveFeedVkSession*>(session));
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_submitBitmap(
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_submitBitmap(
     JNIEnv* env,
     jobject,
     jlong session,
@@ -109,7 +109,7 @@ Java_com_opencapture_openzcine_VulkanLiveFeedNative_submitBitmap(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_opencapture_openzcine_VulkanLiveFeedNative_setPlan(
+Java_com_opencapture_openzcine_FrozenNikonVulkanLiveFeedNative_setPlan(
     JNIEnv* env,
     jobject,
     jlong session,

@@ -2,6 +2,8 @@ import CoreImage
 import UIKit
 import os
 import OpenZCineCore
+import OpenCineApple
+import OpenCineMedia
 
 /// Process-wide memo of generated/parsed LUT cubes, keyed by `LUTSelection.cacheKey` (or a
 /// false-colour scale key). The log-look cubes run ~10⁵ `pow`/`exp` calls to build, so generating
@@ -169,55 +171,16 @@ struct ZebraSettings: Equatable, Sendable {
     }
 }
 
-/// Downsamples a live frame to a small tightly-packed RGBA8 buffer for the scopes. The scopes only
-/// need a coarse read of the distribution, so shrinking to a couple hundred pixels wide keeps the
-/// per-frame sampling cheap; `ScopeSampler` then strides over what's left.
+/// Source-compatible sampling addresses; the shared native runtime owns the buffers and contexts.
 enum FrameSampling {
-    /// One device-RGB color space for every downsample — per-sample creation (~8–12 Hz) is
-    /// allocator churn on the scope path.
-    private static let rgbColorSpace = CGColorSpaceCreateDeviceRGB()
-
-    /// The transfer space camera files carry (BT.709 tags on the ZR's MP4/MOV containers). Scope
-    /// taps render into this space to recover the file's raw code values — undoing the
-    /// 709→sRGB conversion AVFoundation applies into the composition working space — so playback
-    /// scopes read the same numbers live view samples straight off the feed JPEG.
-    static let cameraFileColorSpace: CGColorSpace =
-        CGColorSpace(name: CGColorSpace.itur_709) ?? CGColorSpaceCreateDeviceRGB()
-
-    /// One shared context for scope-tap renders — a per-call `CIContext` is an allocator and
-    /// GPU-state churn hazard on a repeating path.
-    private static let scopeTapContext = CIContext(options: [.cacheIntermediates: false])
-
-    /// Downsamples a `CVPixelBuffer` (e.g. from `AVPlayerItemVideoOutput`) into a small RGBA buffer.
-    static func rgbaBuffer(
-        from pixelBuffer: CVPixelBuffer, maxWidth: Int
-    ) -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)? {
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = scopeTapContext.createCGImage(ciImage, from: ciImage.extent)
-        else { return nil }
-        return rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: maxWidth)
+    static let cameraFileColorSpace = MonitorImageSampling.fileCodeColorSpace
+    static func rgbaBuffer(from pixelBuffer: CVPixelBuffer, maxWidth: Int)
+        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)? {
+        MonitorImageSampling.rgbaBuffer(from: pixelBuffer, maxWidth: maxWidth)
     }
-
-    static func rgbaBuffer(
-        from image: UIImage, maxWidth: Int
-    ) -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)? {
-        guard let cgImage = image.cgImage, cgImage.width > 0, cgImage.height > 0 else { return nil }
-        let scale = min(1.0, Double(maxWidth) / Double(cgImage.width))
-        let width = max(1, Int((Double(cgImage.width) * scale).rounded()))
-        let height = max(1, Int((Double(cgImage.height) * scale).rounded()))
-        let bytesPerRow = width * 4
-        var data = [UInt8](repeating: 0, count: bytesPerRow * height)
-        let drew = data.withUnsafeMutableBytes { raw -> Bool in
-            guard let base = raw.baseAddress,
-                let ctx = CGContext(
-                    data: base, width: width, height: height, bitsPerComponent: 8,
-                    bytesPerRow: bytesPerRow, space: rgbColorSpace,
-                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
-            else { return false }
-            ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-        return drew ? (data, width, height, bytesPerRow) : nil
+    static func rgbaBuffer(from image: UIImage, maxWidth: Int)
+        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)? {
+        MonitorImageSampling.rgbaBuffer(from: image, maxWidth: maxWidth)
     }
 }
 
@@ -356,7 +319,7 @@ extension NativeAppModel {
 
     /// Publishes scope bins/points and derived traffic-light readings in one assignment.
     /// Heavy derivation runs off the main actor; only the final `scopeAssist` assignment is main-bound.
-    func publishScopeAssist(samples: ScopeSamples) async {
+    func publishScopeAssist(samples: OpenZCineCore.ScopeSamples) async {
         let trafficLightsCrushClip = assistConfiguration.scopes.crushClipCompensation
         let mapping = exposureSignalMapping
         let vectorscopeCube = vectorscopeMonitorCube(
@@ -387,209 +350,80 @@ extension NativeAppModel {
         let includePoints =
             full || ScopeAssistSampling.needsPointSamples(visible: visible)
         let stride = ScopeAssistSampling.pointStride
-        let samples = ScopeSampler.sample(
+        let samples = OpenZCineCore.ScopeSampler.sample(
             rgba: buffer.data, width: buffer.width, height: buffer.height,
             bytesPerRow: buffer.bytesPerRow, stride: stride, includePoints: includePoints)
         await publishScopeAssist(samples: samples)
     }
 }
 
-/// Applies the monitor analysis effects to each live frame on the GPU.
-///
-/// Pipeline per frame: pick a *base* look — false colour (which overrides the creative grade,
-/// because it _is_ the monitoring image) or the selected LUT — then layer focus peaking and zebra
-/// over it. LUTs and all false-colour scales use cached `CIColorCube` filters; OpenZCine's smoothstep
-/// transitions are baked into those cubes. Peaking and zebra are stock Core Image filter chains
-/// tuned to the thresholds defined in `OpenZCineCore`. Edges and exposure are measured from the
-/// *original* frame, so a grade never changes what reads as in-focus or clipped.
+/// Source cube and calibration facts; shared native runtime owns the complete image graph and memo.
 final class LiveFrameProcessor {
-    // 16-bit half-float pipeline + matching output so cube interpolation and the composites don't
-    // posterize, and Core Animation dithers the result down to the panel (see the LUT banding fix).
-    // The working space is sRGB; camera inputs are explicitly marked unmanaged below so the LUT,
-    // false-colour, zebra, and peaking tools receive encoded code values instead of an automatic
-    // sRGB→linear conversion. That is the domain `ExposureScale` and the `.cube` files use.
-    private static let displaySpace =
-        CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-    private let context = CIContext(options: [
-        // 8-bit, not half-float. The half-float working space was chosen to stop LUT
-        // banding when the frame was read back and handed to a UIImageView; presenting
-        // straight to an 8-bit panel removes that reason and halves the bandwidth of every
-        // Core Image intermediate — which is the dominant per-frame cost. `MediaLUTExport`
-        // deliberately stays at RGBAh: it writes files, where banding matters and a
-        // millisecond does not.
-        .workingFormat: CIFormat.BGRA8,
-        .workingColorSpace: displaySpace,
-        .cacheIntermediates: false,
-    ])
-    private let outputColorSpace = displaySpace
     private let fileStore: LUTFileStore
-    // One CIColorCube filter per look, kept for the renderer's life so switching back to a look is
-    // instant (the cube tables themselves are memoized process-wide in `LUTCubeCache`).
-    private var cubeFilters: [String: CIFilter] = [:]
-    /// Memoizes the last GPU bake so unrelated SwiftUI invalidation doesn't repeat `createCGImage`.
-    /// Holds a strong ref and compares by identity (`===`): a bare `ObjectIdentifier` could be
-    /// reused by a later allocation and serve a stale bake — a frozen frame reads as a shoot
-    /// failure, so one retained `UIImage` buys a collision-proof memo.
-    private var lastRenderInput: UIImage?
-    private var lastRenderEffects: LiveImageEffects?
-    private var lastRenderedImage: UIImage?
+    private let native = MonitorUIImageGraphProcessor<LiveImageEffects>(
+        beginReadback: { LiveViewSignposts.beginCreateCGImageReadback() },
+        endReadback: { LiveViewSignposts.endCreateCGImageReadback() })
 
-    init(fileStore: LUTFileStore) {
-        self.fileStore = fileStore
-    }
+    init(fileStore: LUTFileStore) { self.fileStore = fileStore }
 
-    /// Returns `image` with every active effect baked in, or unchanged when nothing is on or the
-    /// frame can't be read as a `CIImage`.
     func render(_ image: UIImage, effects: LiveImageEffects) -> UIImage {
-        if effects.isIdentity {
-            evictRenderCache()
-            return image
-        }
-        if image === lastRenderInput, effects == lastRenderEffects,
-            let cached = lastRenderedImage
-        {
-            return cached
-        }
-        guard let output = outputCIImage(for: image, effects: effects) else { return image }
-        LiveViewSignposts.beginCreateCGImageReadback()
-        defer { LiveViewSignposts.endCreateCGImageReadback() }
-        guard
-            let cgImage = context.createCGImage(
-                output, from: output.extent, format: .BGRA8, colorSpace: outputColorSpace)
-        else { return image }
-        let rendered = UIImage(
-            cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
-        lastRenderInput = image
-        lastRenderEffects = effects
-        lastRenderedImage = rendered
-        return rendered
+        native.render(image, settings: effects, identity: effects.isIdentity) { graph(for: effects) }
     }
 
-    /// Drops the single-frame render memo so assists-off paths do not retain a baked `CGImage`.
-    func evictRenderCache() {
-        lastRenderInput = nil
-        lastRenderEffects = nil
-        lastRenderedImage = nil
-    }
+    func evictRenderCache() { native.evictRenderCache() }
 
-    /// Builds the output `CIImage` with every active effect applied, or `nil` when nothing is on or
-    /// the frame can't be read. Shared by the `UIImageView` path (→ `createCGImage`, a GPU→CPU
-    /// readback) and the Metal path (→ rendered straight to a `CAMetalLayer` drawable, no readback).
-    /// Pure graph-building — uses no `CIContext`, so a Metal renderer can drive it with its own.
     func outputCIImage(for image: UIImage, effects: LiveImageEffects) -> CIImage? {
-        // Camera JPEGs and demo stills carry an sRGB tag, but their RGB components are the encoded
-        // signal values the monitoring cubes measure. Suppress Core Image's automatic input match
-        // (normally sRGB → linear working values) so Log3G10/N-Log thresholds see those code values.
-        guard
-            !effects.isIdentity,
-            let input = CIImage(image: image, options: [.colorSpace: NSNull()])
-        else { return nil }
-        let extent = input.extent
-
-        // The block filters run on the DISPLAY path only. `input` stays the pristine decode because
-        // three things below measure it rather than show it: zebras would under-report clipping if
-        // handed smoothed code values, false colour would mis-assign exposure zones, and peaking —
-        // which measures blur RADIUS since 15d1186 — would end up measuring its own smoothing.
-        // Splitting here is what lets the operator see a deblocked image while every assist keeps
-        // reading what the sensor actually sent, so none of them need recalibrating.
-        //
-        // Smoothing goes BEFORE the look on purpose: blocking is uniform in the encoded domain, and
-        // a shadow-lifting tone curve amplifies it non-uniformly. Filter it where it is still flat.
-        // Dither goes AFTER, for the opposite reason — see `applyDither`.
-        var display = input
-        if let smoothing = effects.blockSmoothing {
-            display = ImageEffectsCompositor.applyFlatSmoothing(
-                to: input, settings: smoothing, extent: extent)
-        }
-
-        var output = display
-        if let falseColor = effects.falseColor, falseColor.scale == .limits {
-            // Limits keeps the monitor's normal look between the zones: grade first (the selected
-            // LUT, or the untouched feed), then composite the crush/clip paint on top through a
-            // zone-weight mask. Both limits cubes measure the raw code values in `input`; only the
-            // graded background the operator looks at comes off the smoothed `display`.
-            if let lut = effects.lut {
-                output = ImageEffectsCompositor.splitting(
-                    applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) },
-                    over: display, extent: extent, orientation: effects.splitComparison)
-            }
-            let mappingKey = "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
-            let paint = applyBaseCube(to: input, key: "limitsPaint:\(mappingKey)") {
-                FalseColorMap.limitsPaintCube(mapping: falseColor.mapping)
-            }
-            let weight = applyBaseCube(to: input, key: "limitsWeight:\(mappingKey)") {
-                FalseColorMap.limitsWeightCube(mapping: falseColor.mapping)
-            }
-            output = paint.cropped(to: extent).applyingFilter(
-                "CIBlendWithMask",
-                parameters: [
-                    kCIInputBackgroundImageKey: output.cropped(to: extent),
-                    kCIInputMaskImageKey: weight.cropped(to: extent),
-                ])
-        } else if let falseColor = effects.falseColor {
-            output = applyBaseCube(
-                to: input,
-                key:
-                    "false:\(falseColor.scale.rawValue):\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
-            ) {
-                FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
-            }
-        } else if let lut = effects.lut {
-            // Grade only the LUT half when a 50/50 comparison is on. Peaking and zebra below still
-            // measure `input`, so the assists read the same across the boundary. Both halves come
-            // off `display`, so the comparison varies the grade and nothing else.
-            output = ImageEffectsCompositor.splitting(
-                applyBaseCube(to: display, key: lut.cacheKey) { self.cube(for: lut) },
-                over: display, extent: extent, orientation: effects.splitComparison)
-        }
-
-        // After the look — the noise has to sit in the same space as the artifact it masks, and the
-        // tone curve has already stretched both. Before the overlays, so peaking and zebra paint
-        // stays clean rather than picking up grain.
-        if let dither = effects.blockDither {
-            output = ImageEffectsCompositor.applyDither(
-                to: output, settings: dither, extent: extent)
-        }
-
-        if let peaking = effects.peaking {
-            output = ImageEffectsCompositor.applyPeaking(
-                over: output, source: input, settings: peaking, extent: extent)
-        }
-        if let zebra = effects.zebra {
-            output = ImageEffectsCompositor.applyZebra(
-                over: output, source: input, settings: zebra, extent: extent)
-        }
-        return output
+        guard !effects.isIdentity else { return nil }
+        return native.outputCIImage(for: image, graph: graph(for: effects))
     }
 
-    // MARK: - Base look (LUT or false colour)
-
-    private func applyBaseCube(to input: CIImage, key: String, makeCube: () -> CubeLUT?) -> CIImage
-    {
-        let versionedKey = LUTCubeCache.versionedKey(forKey: key)
-        let filter: CIFilter?
-        if let cached = cubeFilters[versionedKey] {
-            filter = cached
-        } else if let cube = LUTCubeCache.cube(forKey: key, makeCube)?.preparedForRenderer() {
-            let data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
-            let built = CIFilter(
-                name: "CIColorCube",
-                parameters: ["inputCubeDimension": cube.size, "inputCubeData": data])
-            cubeFilters[versionedKey] = built
-            filter = built
-        } else {
-            filter = nil
+    private func graph(for effects: LiveImageEffects) -> MonitorUIImageGraph {
+        var graph = MonitorUIImageGraph()
+        let split = effects.splitComparison.map { $0 == .vertical }
+        let grade = effects.lut.map { lut in
+            request(key: lut.cacheKey) { self.cube(for: lut) }
         }
-        guard let filter else { return input }
-        filter.setValue(input, forKey: kCIInputImageKey)
-        return filter.outputImage ?? input
+        if let falseColor = effects.falseColor, falseColor.scale == .limits {
+            let mappingKey = "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
+            graph.look = .limits(grade: grade, splitVertical: split,
+                paint: request(key: "limitsPaint:\(mappingKey)") {
+                    FalseColorMap.limitsPaintCube(mapping: falseColor.mapping)
+                },
+                weight: request(key: "limitsWeight:\(mappingKey)") {
+                    FalseColorMap.limitsWeightCube(mapping: falseColor.mapping)
+                })
+        } else if let falseColor = effects.falseColor {
+            graph.look = .replacement(request(
+                key: "false:\(falseColor.scale.rawValue):\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)") {
+                    FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
+                })
+        } else if let grade { graph.look = .grade(grade, splitVertical: split) }
+        graph.smoothing = effects.blockSmoothing.map {
+            MonitorBlockSmoothing(radius: $0.radius, gateLevels: $0.gateLevels, strength: $0.strength)
+        }
+        graph.dither = effects.blockDither.map { MonitorBlockDither(levels: $0.levels) }
+        graph.peaking = effects.peaking.map {
+            _ = ImageEffectsCompositor.fusedPeakingAvailable
+            return MonitorPeakingOverlay(color: MonitorRGB($0.color.rgb),
+                sensitivity: MonitorPeakingSensitivity(ratioThreshold: $0.sensitivity.ratioThreshold,
+                    noiseGate: $0.sensitivity.noiseGate), gateScale: $0.gateScale,
+                fusedWindowPolicy: .admittedKernel)
+        }
+        graph.zebra = effects.zebra.map { ImageEffectsCompositor.resolvedZebra(settings: $0) }
+        return graph
+    }
+
+    private func request(key: String, makeCube: @escaping () -> CubeLUT?) -> MonitorNativeCubeRequest {
+        MonitorNativeCubeRequest(key: LUTCubeCache.versionedKey(forKey: key)) {
+            guard let cube = LUTCubeCache.cube(forKey: key, makeCube)?.preparedForRenderer() else { return nil }
+            return (cube.size, cube.rgbaComponents.withUnsafeBytes { Data($0) })
+        }
     }
 
     private func cube(for selection: LUTSelection) -> CubeLUT? {
         switch selection {
         case .builtIn(let look): return look.cube()
-        case .stored(let category, let fileName):
-            return fileStore.cube(category: category, fileName: fileName)
+        case .stored(let category, let fileName): return fileStore.cube(category: category, fileName: fileName)
         }
     }
 }

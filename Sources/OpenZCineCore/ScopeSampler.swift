@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineMedia
 
 /// One sampled pixel feeding the waveform and parade scopes: its horizontal position (0–1 across the
 /// frame) and its 8-bit channel values plus Rec.709 luma. Compact by design — a frame yields
@@ -81,63 +82,21 @@ public enum ScopeSampler {
         rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, stride: Int = 3,
         includePoints: Bool = true
     ) -> ScopeSamples {
-        guard width > 0, height > 0, stride > 0, bytesPerRow >= width * 4,
-            rgba.count >= bytesPerRow * height
-        else { return .empty }
+        let raw = OpenCineMedia.ScopeSampler.sampleRaw(bytes: rgba, width: width, height: height,
+            bytesPerRow: bytesPerRow, transfer: .rec709, includePoints: includePoints,
+            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true)
+        return sourceSamples(raw)
+    }
 
-        var histY = [Int](repeating: 0, count: 256)
-        var histR = [Int](repeating: 0, count: 256)
-        var histG = [Int](repeating: 0, count: 256)
-        var histB = [Int](repeating: 0, count: 256)
-        var points = [ScopePoint]()
-        if includePoints {
-            let columns = (width + stride - 1) / stride
-            let rows = (height + stride - 1) / stride
-            points.reserveCapacity(columns * rows)
-        }
-        let widthDivisor = Double(width)
-        let heightDivisor = Double(height)
-
-        rgba.withUnsafeBufferPointer { buffer in
-            var y = 0
-            while y < height {
-                let rowStart = y * bytesPerRow
-                var x = 0
-                while x < width {
-                    let i = rowStart + x * 4
-                    let r = buffer[i]
-                    let g = buffer[i + 1]
-                    let b = buffer[i + 2]
-                    // Rec.709 luma, rounded to a code value (the prototype floors with `|0`, but
-                    // rounding bins more accurately — and keeps pure white off the 254 boundary).
-                    let lumaValue = 0.2126 * Double(r) + 0.7152 * Double(g) + 0.0722 * Double(b)
-                    let luma = UInt8(min(255, max(0, lumaValue.rounded())))
-                    histY[Int(luma)] += 1
-                    histR[Int(r)] += 1
-                    histG[Int(g)] += 1
-                    histB[Int(b)] += 1
-                    if includePoints {
-                        points.append(
-                            ScopePoint(
-                                xRatio: Double(x) / widthDivisor,
-                                yRatio: Double(y) / heightDivisor,
-                                sampleX: x,
-                                sampleY: y,
-                                red: r,
-                                green: g,
-                                blue: b,
-                                luma: luma)
-                        )
-                    }
-                    x += stride
-                }
-                y += stride
-            }
-        }
-
-        return ScopeSamples(
-            histogramLuma: histY, histogramRed: histR, histogramGreen: histG, histogramBlue: histB,
-            points: points)
+    /// Exact legacy representation bridge. Only absent shared coordinates use the old -1 value.
+    public static func sourceSamples(_ raw: OpenCineMedia.ScopeSamples) -> ScopeSamples {
+        return ScopeSamples(histogramLuma: raw.histogramLuma, histogramRed: raw.histogramRed,
+            histogramGreen: raw.histogramGreen, histogramBlue: raw.histogramBlue,
+            points: raw.points.map { point in
+                ScopePoint(xRatio: point.xRatio, yRatio: point.yRatio,
+                    sampleX: point.sampleX ?? -1, sampleY: point.sampleY ?? -1,
+                    red: point.red, green: point.green, blue: point.blue, luma: point.luma)
+            })
     }
 
     /// Traffic-light clip/crush flags from scope samples. Always computed from the per-channel
