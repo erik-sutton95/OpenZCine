@@ -219,7 +219,8 @@ private fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mult
             MultiviewCameraAction(MultiviewCameraAction.LIVE_VIEW, "Open Live View", enabled = member.isLive),
             MultiviewCameraAction(
                 MulticamTileAction.RECORD, if (member.recording == true) "Stop recording" else "Start recording",
-                MultiviewCameraAction.Kind.RECORD, enabled = member.isLive,
+                MultiviewCameraAction.Kind.RECORD,
+                enabled = member.isLive && !coordinator.groupBusy && coordinator.plan(member.id).isExecutable,
             ),
             MultiviewCameraAction(MulticamTileAction.RECONNECT, "Reconnect", closes = true),
             MultiviewCameraAction(MulticamTileAction.REMOVE, "Remove camera", MultiviewCameraAction.Kind.DESTRUCTIVE),
