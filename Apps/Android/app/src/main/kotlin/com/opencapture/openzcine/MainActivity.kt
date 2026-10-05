@@ -657,6 +657,8 @@ class MainActivity : ComponentActivity() {
                                     recordsAfterSharedEdit(savedCameras, savedCameraStore, pairingEnvironment.credentials::remove)
                             },
                             connectionScope,
+                            // A reachable setup beats a newer offline one (Nikon main's row rule).
+                            CamerasModel.RoutePolicy.PREFER_REACHABLE,
                         ).also { model -> savedCameraStore.onReplaced = model::reloadSaved }
                     }
                 val shell = remember(camerasModel, connectionScope) {

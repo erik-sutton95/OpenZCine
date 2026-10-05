@@ -556,7 +556,9 @@ extension NativeAppModel {
         _ = NativeCameraConnectionStore.shared
         let cameras = CamerasModel(
             integrations: [AppIntegration(NikonIntegration(port: nikonPort), slots: slots)],
-            store: NikonCameras.store { [weak self] in self?.reloadSavedCameraRecords() })
+            store: NikonCameras.store { [weak self] in self?.reloadSavedCameraRecords() },
+            // A reachable setup beats a newer offline one (Nikon main's row rule).
+            routePolicy: .preferReachable)
         NativeCameraConnectionStore.shared.onSavedCamerasChanged = { [weak cameras] in
             cameras?.reloadSaved()
         }
