@@ -1880,34 +1880,8 @@ struct AccentDrumWheel: View {
     }
 
     private var falseColorReference: MonitorFalseColorReferenceValues {
-        let scale = model.assist.falseColorScale.nikonScale
-        let mapping = model.exposureSignalMapping
-        let subtitle: String
-        switch mapping.curve {
-        case .redLog3G10: subtitle = "L3G10"
-        case .nikonNLog: subtitle = "N-Log"
-        case .srgb: subtitle = "sRGB"
-        case .hlg: subtitle = "HLG"
-        }
-        let axes: [String]
-        switch scale {
-        case .stops: axes = []
-        case .ire: axes = ["clip / shadows", "18%", "skin hi", "highlights → clip"]
-        case .limits: axes = ["crushed", "midtones untouched", "clipped"]
-        }
-        return MonitorFalseColorReferenceValues(
-            subtitle: subtitle,
-            segments: FalseColorReference.segments(scale: scale, mapping: mapping).map {
-                MonitorFalseColorReferenceSegment(
-                    id: $0.id,
-                    lowerFraction: $0.lowerFraction, upperFraction: $0.upperFraction,
-                    red: $0.band.red, green: $0.band.green, blue: $0.band.blue)
-            },
-            markers: scale == .stops
-                ? FalseColorReference.stopAxisMarkers(mapping: mapping).map {
-                    MonitorFalseColorReferenceMarker(
-                        id: $0.id, label: $0.label, fraction: $0.fraction)
-                } : [], axisLabels: axes)
+        FalseColorReference.values(
+            scale: model.assist.falseColorScale.nikonScale, mapping: model.exposureSignalMapping)
     }
 
     var zebra: MonitorZebraMenu<AssistConfiguration.Zebra.Unit, MonitorZebraPaint> {

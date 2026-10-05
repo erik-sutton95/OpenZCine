@@ -56,7 +56,7 @@ struct FeedAssistOverlayModule: View {
                         mapping: model.exposureSignalMapping, canvas: screenBounds,
                         clearance: chromeClearance, onOptions: { model.presentAssistOptions($0) })
                     if visible.contains(.audioMeters) {
-                        let size = AudioMetersPanelMini.panelSize
+                        let size = MonitorAudioMetrics.panelSize
                         MovablePanel(
                             id: "audio", size: size,
                             defaultCenter: feedOutsideCenter(
@@ -64,7 +64,7 @@ struct FeedAssistOverlayModule: View {
                                 bounds: screenBounds, chromeClearance: chromeClearance),
                             bounds: screenBounds
                         ) {
-                            AudioMetersPanelMini(
+                            NikonAudioMeter(
                                 levels: model.liveAudioLevels,
                                 sensitivity: model.commandMicrophoneSensLabel)
                         }
@@ -72,17 +72,17 @@ struct FeedAssistOverlayModule: View {
                     if visible.contains(.falseColor)
                         && model.assist.falseColorReference
                     {
-                        let size = FalseColorReference.panelSize
+                        let size = MonitorFalseColorReference.panelSize
                         MovablePanel(
                             id: "fcref", size: size,
-                            defaultCenter: feedOutsideCenter(
-                                feedRect, size, .bottomLeading,
-                                bounds: screenBounds, chromeClearance: chromeClearance),
+                            // An unplaced key starts at the canvas centre, as on Pocket.
+                            defaultCenter: CGPoint(x: screenBounds.midX, y: screenBounds.midY),
                             bounds: screenBounds
                         ) {
-                            FalseColorReference(
-                                scale: model.assist.falseColorScale.nikonScale,
-                                mapping: model.exposureSignalMapping)
+                            MonitorFalseColorReference(
+                                values: FalseColorReference.values(
+                                    scale: model.assist.falseColorScale.nikonScale,
+                                    mapping: model.exposureSignalMapping))
                         }
                     }
                 }
@@ -97,7 +97,7 @@ struct FeedAssistOverlayModule: View {
     }
 }
 
-/// Default centre for a floating scope panel anchored just outside the video feed edge. When the
+/// Default centre for the floating audio meter, anchored just outside the video feed edge. When the
 /// outside position doesn't fit `bounds` — landscape's full-bleed feed spans the whole screen, so
 /// "outside" is off-screen and `MovablePanel`'s clamp would park the panel behind the floating
 /// chrome — the anchor mirrors to just inside the feed edge instead, pushed past `chromeClearance`
@@ -154,29 +154,29 @@ struct PlaybackAssistOverlayModule: View {
                     mapping: model.playbackExposureSignalMapping, canvas: screenBounds,
                     onOptions: onOptions)
                 if visible.contains(.audioMeters) {
-                    let size = AudioMetersPanelMini.panelSize
+                    let size = MonitorAudioMetrics.panelSize
                     MovablePanel(
                         id: "playback-audio", size: size,
                         defaultCenter: feedOutsideCenter(
                             feedRect, size, .bottomTrailing, bounds: screenBounds),
                         bounds: screenBounds
                     ) {
-                        AudioMetersPanelMini(levels: audioLevels, sensitivity: nil)
+                        NikonAudioMeter(levels: audioLevels, sensitivity: nil)
                     }
                 }
                 if visible.contains(.falseColor)
                     && model.assist.falseColorReference
                 {
-                    let size = FalseColorReference.panelSize
+                    let size = MonitorFalseColorReference.panelSize
                     MovablePanel(
                         id: "playback-fcref", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .bottomLeading, bounds: screenBounds),
+                        defaultCenter: CGPoint(x: screenBounds.midX, y: screenBounds.midY),
                         bounds: screenBounds
                     ) {
-                        FalseColorReference(
-                            scale: model.assist.falseColorScale.nikonScale,
-                            mapping: model.playbackExposureSignalMapping)
+                        MonitorFalseColorReference(
+                            values: FalseColorReference.values(
+                                scale: model.assist.falseColorScale.nikonScale,
+                                mapping: model.playbackExposureSignalMapping))
                     }
                 }
             }
@@ -926,7 +926,9 @@ private struct LevelAxisGauge: View {
     }
 }
 
-struct FalseColorReference: View {
+/// The camera-aware false-colour key (the Nikon typed extension: zones placed on this camera's
+/// curve and clip), drawn by the shared `MonitorFalseColorReference`.
+enum FalseColorReference {
     struct Segment: Equatable, Identifiable {
         let id: Int
         let lowerFraction: Double
@@ -940,62 +942,41 @@ struct FalseColorReference: View {
         let fraction: Double
     }
 
-    static let panelSize = CGSize(width: 264, height: 52)
-
-    let scale: FalseColorScale
-    let mapping: ExposureSignalMapping
-
-    /// The measured curve's compact key label — the photo previews are display-referred.
-    private var curveKeyLabel: String {
-        switch mapping.curve {
-        case .redLog3G10: "L3G10"
-        case .nikonNLog: "N-Log"
-        case .srgb: "sRGB"
-        case .hlg: "HLG"
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text("False Color")
-                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                Spacer()
-                Text("\(scaleLabel) · \(curveKeyLabel)")
-                    .font(.system(size: 7.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
+    static func values(
+        scale: FalseColorScale, mapping: ExposureSignalMapping
+    ) -> MonitorFalseColorReferenceValues {
+        let scaleLabel =
+            switch scale {
+            case .stops: "ZC Stops"
+            case .ire: "IRE"
+            case .limits: "Limits"
             }
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    LinearGradient(
-                        colors: neutralGradientColors,
-                        startPoint: .leading,
-                        endPoint: .trailing)
-                    ForEach(Self.segments(scale: scale, mapping: mapping)) { segment in
-                        Rectangle()
-                            .fill(
-                                Color(
-                                    red: segment.band.red,
-                                    green: segment.band.green,
-                                    blue: segment.band.blue)
-                            )
-                            .frame(
-                                width: max(
-                                    1,
-                                    geometry.size.width
-                                        * (segment.upperFraction - segment.lowerFraction))
-                            )
-                            .offset(x: geometry.size.width * segment.lowerFraction)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+        // The measured curve's compact key label; the photo previews are display-referred.
+        let curveLabel =
+            switch mapping.curve {
+            case .redLog3G10: "L3G10"
+            case .nikonNLog: "N-Log"
+            case .srgb: "sRGB"
+            case .hlg: "HLG"
             }
-            .frame(height: 8)
-            axisView
-        }
-        .padding(7)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
+        let axisLabels: [String] =
+            switch scale {
+            case .stops: []
+            case .ire: ["clip / shadows", "18%", "skin hi", "highlights → clip"]
+            case .limits: ["crushed", "midtones untouched", "clipped"]
+            }
+        return MonitorFalseColorReferenceValues(
+            subtitle: "\(scaleLabel) · \(curveLabel)",
+            segments: segments(scale: scale, mapping: mapping).map {
+                MonitorFalseColorReferenceSegment(
+                    id: $0.id, lowerFraction: $0.lowerFraction, upperFraction: $0.upperFraction,
+                    red: $0.band.red, green: $0.band.green, blue: $0.band.blue)
+            },
+            markers: scale == .stops
+                ? stopAxisMarkers(mapping: mapping).map {
+                    MonitorFalseColorReferenceMarker(id: $0.id, label: $0.label, fraction: $0.fraction)
+                } : [],
+            axisLabels: axisLabels)
     }
 
     static func segments(
@@ -1058,208 +1039,20 @@ struct FalseColorReference: View {
         guard value.isFinite else { return infiniteFallback }
         return min(1, max(0, (value - domain.lowerBound) / (domain.upperBound - domain.lowerBound)))
     }
-
-    @ViewBuilder private var axisView: some View {
-        if scale == .stops {
-            GeometryReader { geometry in
-                ForEach(Self.stopAxisMarkers(mapping: mapping)) { marker in
-                    Text(marker.label)
-                        .font(.system(size: 5.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                        .position(
-                            x: min(
-                                geometry.size.width - 8,
-                                max(8, geometry.size.width * marker.fraction)),
-                            y: 3.5)
-                }
-            }
-            .frame(height: 7)
-        } else {
-            HStack(spacing: 4) {
-                ForEach(Array(axisLabels.enumerated()), id: \.offset) { index, label in
-                    if index > 0 { Spacer(minLength: 0) }
-                    Text(label)
-                        .font(.system(size: 5.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-            }
-        }
-    }
-
-    private var neutralGradientColors: [Color] {
-        switch scale {
-        case .stops: [Color(white: 0.04), Color(white: 0.86)]
-        case .ire, .limits: [Color(white: 0.54), Color(white: 0.75)]
-        }
-    }
-
-    private var axisLabels: [String] {
-        switch scale {
-        case .stops: []
-        case .ire: ["clip / shadows", "18%", "skin hi", "highlights → clip"]
-        case .limits: ["crushed", "midtones untouched", "clipped"]
-        }
-    }
-
-    private var scaleLabel: String {
-        switch scale {
-        case .stops: "ZC Stops"
-        case .ire: "IRE"
-        case .limits: "Limits"
-        }
-    }
 }
 
-struct AudioMetersPanelMini: View {
-    /// Slim on purpose: two readable tracks without competing with the picture or the
-    /// camera-control rails in the ~400 pt landscape monitor.
-    static let panelSize = CGSize(width: 28, height: 168)
-
+/// The shared Pocket / Insta audio meter over this camera's levels. A source that has not
+/// reported yet draws at the floor, as on Pocket.
+struct NikonAudioMeter: View {
     let levels: AudioMeterLevels?
     let sensitivity: String?
 
-    private static let yellowFromDB = -18.0
-    private static let redFromDB = -6.0
-    private static let guideMarks: [Double] = [0, -6, -18, -36]
-
-    static func displayedSensitivity(_ value: String?) -> String {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "—" : trimmed.uppercased()
-    }
-
     var body: some View {
-        VStack(spacing: 2) {
-            Text("AUDIO")
-                .font(.system(size: 6, weight: .bold, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.58))
-            Canvas { context, size in
-                drawMeters(in: context, size: size)
-            }
-            VStack(spacing: 0) {
-                Text("SENS")
-                    .font(.system(size: 5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.42))
-                Text(Self.displayedSensitivity(sensitivity))
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.72))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .padding(.horizontal, 3)
-        .padding(.vertical, 7)
-        .frame(width: Self.panelSize.width, height: Self.panelSize.height)
-        .background(Color(red: 0.025, green: 0.036, blue: 0.03).opacity(0.72))
-        .clipShape(RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.34), radius: 16, x: 0, y: 12)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Audio Levels")
-        .accessibilityValue(accessibilityValue)
-    }
-
-    private var accessibilityValue: String {
-        guard let levels else {
-            return "Audio levels unavailable, sensitivity \(Self.displayedSensitivity(sensitivity))"
-        }
-        func channel(_ name: String, _ ch: AudioMeterChannel) -> String {
-            ch.levelDB <= AudioMeterBallistics.floorDB + 0.5
-                ? "\(name) silent"
-                : String(format: "%@ %.0f dB, peak %.0f", name, ch.levelDB, ch.peakDB)
-        }
-        return
-            "\(channel("left", levels.left)), \(channel("right", levels.right)), sensitivity \(Self.displayedSensitivity(sensitivity))"
-    }
-
-    private func zoneColor(_ db: Double) -> Color {
-        if db >= Self.redFromDB { return MonitorScopePalette.rgba(255, 92, 82, 0.95) }
-        if db >= Self.yellowFromDB { return MonitorScopePalette.rgba(245, 208, 82, 0.95) }
-        return MonitorScopePalette.rgba(86, 235, 132, 0.9)
-    }
-
-    private func drawMeters(in context: GraphicsContext, size: CGSize) {
         let floor = AudioMeterBallistics.floorDB
-        let labelReserve: CGFloat = 10
-        let barsRect = CGRect(
-            x: 0, y: 2, width: size.width,
-            height: size.height - labelReserve - 2)
-        func y(_ db: Double) -> CGFloat {
-            let fraction = max(0, min(1, (db - floor) / -floor))
-            return barsRect.maxY - CGFloat(fraction) * barsRect.height
-        }
-
-        // Keep a few hairline references for visual rhythm, without the dB-number column that made
-        // the meter unnecessarily wide.
-        for mark in Self.guideMarks {
-            let tickY = y(mark)
-            var line = Path()
-            line.move(to: CGPoint(x: barsRect.minX, y: tickY))
-            line.addLine(to: CGPoint(x: barsRect.maxX, y: tickY))
-            context.stroke(
-                line, with: .color(MonitorScopePalette.rgba(220, 235, 225, 0.10)), lineWidth: 1)
-        }
-
-        let gap: CGFloat = 2
-        let inset: CGFloat = 1
-        let barWidth = (barsRect.width - gap - inset * 2) / 2
-        for (index, pair) in [("L", levels?.left), ("R", levels?.right)].enumerated() {
-            let x = barsRect.minX + inset + CGFloat(index) * (barWidth + gap)
-            let track = CGRect(
-                x: x, y: barsRect.minY, width: barWidth, height: barsRect.height)
-            context.fill(
-                Path(roundedRect: track, cornerRadius: 2),
-                with: .color(LiveDesign.text.opacity(0.08)))
-
-            context.draw(
-                Text(pair.0)
-                    .font(.system(size: 7.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.58)),
-                at: CGPoint(x: track.midX, y: size.height - labelReserve / 2))
-
-            // An unmeasured source draws the track without a fabricated silent readout.
-            guard let channel = pair.1 else { continue }
-            // Zone-coloured fill clipped to the decaying bar level.
-            let levelY = y(channel.levelDB)
-            if levelY < track.maxY - 0.5 {
-                var zones = context
-                zones.clip(
-                    to: Path(
-                        roundedRect: CGRect(
-                            x: track.minX, y: levelY, width: track.width,
-                            height: track.maxY - levelY),
-                        cornerRadius: 2))
-                let bands: [(from: Double, to: Double)] = [
-                    (floor, Self.yellowFromDB), (Self.yellowFromDB, Self.redFromDB),
-                    (Self.redFromDB, 0),
-                ]
-                for band in bands {
-                    let top = y(band.to)
-                    let bottom = y(band.from)
-                    zones.fill(
-                        Path(
-                            CGRect(
-                                x: track.minX, y: top, width: track.width,
-                                height: bottom - top)),
-                        with: .color(zoneColor(band.from)))
-                }
-            }
-
-            // Peak-hold tick in the colour of the zone it sits in.
-            if channel.peakDB > floor + 0.5 {
-                let peakY = y(channel.peakDB)
-                var tick = Path()
-                tick.move(to: CGPoint(x: track.minX, y: peakY))
-                tick.addLine(to: CGPoint(x: track.maxX, y: peakY))
-                context.stroke(tick, with: .color(zoneColor(channel.peakDB)), lineWidth: 1.5)
-            }
-
-        }
+        let label = sensitivity?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        MonitorAudioMeter(
+            left: levels?.left.levelDB ?? floor, leftPeak: levels?.left.peakDB ?? floor,
+            right: levels?.right.levelDB ?? floor, rightPeak: levels?.right.peakDB ?? floor,
+            sensitivityLabel: label?.isEmpty == false ? label : nil)
     }
 }

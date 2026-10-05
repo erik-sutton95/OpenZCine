@@ -1197,7 +1197,7 @@ final class RunnerTests: XCTestCase {
     }
 
     func testFalseColorReferenceUsesCompactProportionalScales() {
-        XCTAssertEqual(FalseColorReference.panelSize, CGSize(width: 264, height: 52))
+        XCTAssertEqual(MonitorFalseColorReference.panelSize, CGSize(width: 264, height: 52))
         let mapping = ExposureSignalMapping(curve: .redLog3G10)
         let ire = FalseColorReference.segments(scale: .ire, mapping: mapping)
 
@@ -1229,13 +1229,9 @@ final class RunnerTests: XCTestCase {
             accuracy: 0.0001)
     }
 
-    func testAudioMeterPanelUsesQuarterOriginalWidthAndFormatsSensitivity() {
-        XCTAssertEqual(AudioMetersPanelMini.panelSize.width, 28)
-        XCTAssertEqual(AudioMetersPanelMini.panelSize.height, 168)
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity("Auto"), "AUTO")
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity("12"), "12")
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity("  "), "—")
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity(nil), "—")
+    func testAudioMeterPanelUsesQuarterOriginalWidth() {
+        XCTAssertEqual(MonitorAudioMetrics.panelSize.width, 28)
+        XCTAssertEqual(MonitorAudioMetrics.panelSize.height, 168)
     }
 
     /// Live view samples the feed JPEG's raw codes straight through UIKit; playback taps the
