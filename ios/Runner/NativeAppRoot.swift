@@ -740,6 +740,8 @@ final class NativeAppModel {
     /// The operator chose the camera list over the wizard while owning zero saved cameras.
     /// A watcher-only device joins broadcasts from the list and may never pair anything, so
     /// once it has been there, an empty camera list must not bounce it back into the wizard.
+    /// Mirrors `shell.camerasChosen` (the shell's route); kept here because discovery reads it
+    /// while the shell's cameras model is still being made.
     var showsCameraListWithoutSavedCameras = false
 
     /// Which discovery backend the connect screen's Wi-Fi / USB-C segment shows. Seeded from the
@@ -813,9 +815,9 @@ final class NativeAppModel {
     var lastConnectFailureReason: ConnectionFailure.Reason?
     @ObservationIgnored lazy var nikonPort = NativeNikonPort(model: self)
     @ObservationIgnored lazy var cameras = makeCamerasModel()
+    /// The root (`AppShell`): the camera monitor, the shared pair page (a NEARBY camera's Pair)
+    /// and the standalone Media and Settings covers.
     @ObservationIgnored lazy var shell = makeShellModel()
-    /// A NEARBY camera's Pair: the shared pair page with that sighting chosen.
-    var isPairingNearby = false
     var diagnosticsShareItem: DiagnosticsShareItem?
     var diagnosticsErrorMessage: String?
     var isPreparingDiagnostics = false
@@ -917,6 +919,13 @@ final class NativeAppModel {
                 updateBluetoothShutter()
                 AppDiagnostics.shared.record(
                     isMonitorPresented ? .monitorPresented : .monitorDismissed)
+                // The shell shows the camera monitor exactly while it is up (the relay watcher,
+                // HDMI and demo monitors are not the shell's: no camera session).
+                if isMonitorPresented {
+                    ensureShellMonitor()
+                } else if shell.monitor != nil {
+                    shell.close()
+                }
             }
         }
     }
@@ -926,19 +935,38 @@ final class NativeAppModel {
     /// True while the full-screen clip player owns the process-wide audio session, including when
     /// paused. The Bluetooth shutter must not reconfigure or deactivate that shared session.
     @ObservationIgnored private var mediaPlaybackOwnsAudioSession = false
-    /// Full-screen Media browser opened from the connection menu (no live-view session required).
-    var isStandaloneMediaLibraryPresented = false {
-        didSet {
-            if oldValue != isStandaloneMediaLibraryPresented { updateBluetoothShutter() }
-            if !isStandaloneMediaLibraryPresented, activePanel != .media { closeMediaBrowse() }
-        }
+    /// Full-screen Media browser opened from the connection menu (no live-view session required):
+    /// the shell's Media cover, not the monitor's panel.
+    var isStandaloneMediaLibraryPresented: Bool {
+        get { shell.cover == .media && activePanel != .media }
+        set { setStandalone(.media, newValue) }
     }
     /// Full-screen RED LUT download, presented from the app root (not the LUT picker) so it
     /// survives the monitor collapsing when the internet hop tears the camera session down.
     var isRedDownloadPresented = false
     /// Operator Setup presented standalone from the startup home (no camera connection needed —
-    /// e.g. signing in to Frame.io or clearing the media cache before a shoot).
-    var isStandaloneSettingsPresented = false
+    /// e.g. signing in to Frame.io or clearing the media cache before a shoot): the shell's
+    /// Settings cover, not the monitor's panel.
+    var isStandaloneSettingsPresented: Bool {
+        get { shell.cover == .settings && activePanel != .settings }
+        set { setStandalone(.settings, newValue) }
+    }
+
+    private func setStandalone(_ cover: ShellModel.Cover, _ shown: Bool) {
+        if shown {
+            shell.open(cover)
+        } else if shell.cover == cover, activePanel != (cover == .media ? .media : .settings) {
+            shell.dismissCover()
+        }
+    }
+
+    /// The shell's cover changed (opened, closed, or cleared by a connect or the monitor
+    /// leaving): the Bluetooth shutter follows what is in front, and a closed standalone Media
+    /// browser stops its camera reads.
+    func noteShellCoverChange(from old: ShellModel.Cover?, to new: ShellModel.Cover?) {
+        updateBluetoothShutter()
+        if old == .media, new != .media, activePanel != .media { closeMediaBrowse() }
+    }
     /// Root-owned presentation state for the report flow, so it survives a camera-AP internet hop.
     var isBugReportPresented = false
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
@@ -2229,7 +2257,9 @@ final class NativeAppModel {
             switch activePanel {
             case .settings: shell.open(.settings)
             case .media: shell.open(.media)
-            default: shell.dismissCover()
+            default:
+                // Only the panel's own cover closes with it, never a standalone one.
+                if oldValue == .settings || oldValue == .media { shell.dismissCover() }
             }
             // The Bluetooth shutter only listens while the live view is front — re-reconcile
             // when a full-screen panel opens or closes over it.
@@ -3485,10 +3515,10 @@ final class NativeAppModel {
     /// Returns to the saved-camera home, clearing any explicit pairing override.
     func showSavedCameras() {
         isPairingNewCamera = false
-        isPairingNearby = false
         // Zero saved cameras is a legitimate place to live once the operator has chosen the
         // list — the wizard's "open the camera list" row is exactly that choice.
         showsCameraListWithoutSavedCameras = true
+        shell.showCameras()
         refreshSavedCameras()
         applyStartupDestination()
         startDiscoveryLoop(resetResults: false)
@@ -4565,7 +4595,6 @@ final class NativeAppModel {
                 "Connect to a saved camera first."
             return
         }
-        ensureShellMonitor()
         connection = .preparingLiveView
         connectionPhase = .preparingLiveView
         // Matches Android: fill AF / lens / subject / audio before the feed opens.
@@ -5454,33 +5483,28 @@ final class NativeAppModel {
                 return
             }
             internetHopReturn = (host, ssid)
-            if rehostActivePanel {
-                // Long-running downloads and account sign-in keep their initiating surface alive
-                // as a root cover. Support/report actions deliberately skip this: their selected
-                // destination becomes the next surface after the camera session drops.
-                if activePanel == .media {
-                    activePanel = nil
-                    isStandaloneMediaLibraryPresented = true
-                } else {
-                    if activePanel == .settings {
-                        activePanel = nil
-                        isStandaloneSettingsPresented = true
-                    }
-                    pendingHopShareResumeClips = nil
-                }
-            } else {
-                pendingHopShareResumeClips = nil
-            }
-            // Nothing may pull the phone back onto the camera AP mid-download.
-            stopDiscoveryLoop()
-            disconnectCameraSession(resetConnection: true)
-            connection = .disconnected
+            leaveMonitorForInternetHop(rehostActivePanel: rehostActivePanel)
             WiFiJoinCoordinator.shared.leaveCameraNetwork(ssid: ssid)
             // The cached SSID is what AP detection reads — clear it now, or a stale
             // A cached Nikon Z SSID keeps isOnCameraAccessPoint true and the post-hop internet wait
             // spins its full timeout.
             connectedWiFiSSID = nil
         }
+    }
+
+    /// The hop's teardown. Long-running downloads and account sign-in keep their initiating
+    /// surface alive as a standalone cover, opened once the monitor has gone (leaving it closes
+    /// its panels). Support/report actions skip this: their selected destination becomes the
+    /// next surface after the camera session drops.
+    func leaveMonitorForInternetHop(rehostActivePanel: Bool) {
+        let panel = rehostActivePanel ? activePanel : nil
+        if panel != .media { pendingHopShareResumeClips = nil }
+        // Nothing may pull the phone back onto the camera AP mid-download.
+        stopDiscoveryLoop()
+        disconnectCameraSession(resetConnection: true)
+        connection = .disconnected
+        if panel == .media { isStandaloneMediaLibraryPresented = true }
+        if panel == .settings { isStandaloneSettingsPresented = true }
     }
 
     /// True when the phone is joined to the camera's local-only AP (no internet route).
@@ -13259,10 +13283,11 @@ struct NativeAppRoot: View {
     var body: some View {
         ZStack {
             MonitorTheme.background.ignoresSafeArea()
-            if model.isMonitorPresented {
+            if model.isMonitorPresented, model.shell.monitor == nil {
+                // Monitors that are not the shell's: the relay watcher, HDMI capture, the demo.
                 MonitorExperience()
                     .environment(model)
-            } else if model.multicam.isPresented {
+            } else if model.multicam.isPresented, model.shell.monitor == nil {
                 MulticamStage(
                     coordinator: model.multicam,
                     confirmsRecord: model.preferences.recordConfirmationEnabled,
@@ -13300,52 +13325,11 @@ struct NativeAppRoot: View {
                 showsLaunchSplash = false
             }
         }
-        .fullScreenCover(isPresented: standaloneMediaLibraryPresented) {
-            // Passes the real device safe area exactly like the monitor host does — with `.zero`
-            // the top bar and category strip render under the status bar / Dynamic Island (only
-            // visible now that this cover can be portrait; landscape hid it behind the side rail).
-            GeometryReader { proxy in
-                let insets = proxy.safeAreaInsets
-                let islandOnLeading = insets.leading >= insets.trailing
-                MediaBrowserView(
-                    safeArea: MonitorEdgeInsets(
-                        top: Double(insets.top),
-                        leading: islandOnLeading ? Double(insets.leading) : 0,
-                        bottom: Double(insets.bottom),
-                        trailing: islandOnLeading ? 0 : Double(insets.trailing)
-                    ).clearingWindowControls
-                )
-                .environment(model)
-                .environment(deliveryCoordinator)
-            }
-        }
         // Root-level (not inside the LUT picker) so the cover survives the monitor collapsing
         // when the RED internet hop tears the camera session down mid-download.
         .fullScreenCover(isPresented: redDownloadPresented) {
             RedDownloadView { url in await model.importRedZip(from: url) }
                 .environment(model)
-        }
-        // Operator Setup without a camera (startup home → Settings): Frame.io sign-in and the
-        // media cache are managed here before/after a shoot. Passes the real device safe area
-        // exactly like the monitor host does — with `.zero` the panel rendered wider than its
-        // in-monitor twin and the floating close button overlapped the title.
-        .fullScreenCover(isPresented: standaloneSettingsPresented) {
-            GeometryReader { proxy in
-                // iOS reports the landscape Dynamic Island lane on both short edges; zero the
-                // clean side (the smaller inset) so the surface hugs that bezel, matching the
-                // monitor's `fullScreenPanelSafeArea`.
-                let insets = proxy.safeAreaInsets
-                let islandOnLeading = insets.leading >= insets.trailing
-                OperatorSettingsPanel(
-                    safeArea: MonitorEdgeInsets(
-                        top: Double(insets.top),
-                        leading: islandOnLeading ? Double(insets.leading) : 0,
-                        bottom: Double(insets.bottom),
-                        trailing: islandOnLeading ? 0 : Double(insets.trailing)
-                    ).clearingWindowControls
-                )
-                .environment(model)
-            }
         }
         .fullScreenCover(isPresented: bugReportPresented) {
             BugReportFlowView(
@@ -13356,6 +13340,9 @@ struct NativeAppRoot: View {
                 onBrowserHandoff: { model.isBugReportPresented = false }
             )
             .environment(model)
+        }
+        .onChange(of: model.shell.cover) { old, new in
+            model.noteShellCoverChange(from: old, to: new)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(MonitorTheme.background.ignoresSafeArea())
@@ -13431,24 +13418,10 @@ struct NativeAppRoot: View {
         // other into a tap that does nothing at all.
         .takeOverConfirmation(model: model)
     }
-    private var standaloneMediaLibraryPresented: Binding<Bool> {
-        Binding(
-            get: { model.isStandaloneMediaLibraryPresented },
-            set: { model.isStandaloneMediaLibraryPresented = $0 }
-        )
-    }
-
     private var redDownloadPresented: Binding<Bool> {
         Binding(
             get: { model.isRedDownloadPresented },
             set: { model.isRedDownloadPresented = $0 }
-        )
-    }
-
-    private var standaloneSettingsPresented: Binding<Bool> {
-        Binding(
-            get: { model.isStandaloneSettingsPresented },
-            set: { model.isStandaloneSettingsPresented = $0 }
         )
     }
 

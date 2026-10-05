@@ -2851,7 +2851,7 @@ final class NikonSessionPortMappingTests: XCTestCase {
 
 /// SIMULATED public-contract control lifetime for the production monitor composition test.
 @MainActor
-private final class NikonPictureLifetimeSession: CameraSession {
+final class NikonPictureLifetimeSession: CameraSession {
     nonisolated let id = CameraSessionID()
     private var snapshot: CameraSnapshot
     private var subscribers: [AsyncStream<CameraSnapshot>.Continuation] = []

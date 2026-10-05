@@ -266,4 +266,24 @@ class NikonCamerasMigrationTest {
         assertTrue(phone.legacyJson()!!.contains("\"not a record\""), "an undecodable record is never overwritten")
         assertTrue(phone.app.records().filter { it.cameraName == "ZR_3001234" }.all { it.customName == "A-prime" })
     }
+
+    @Test
+    fun `missing setup kinds offer exactly what the camera lacks`() {
+        fun record(host: String, transport: SavedCameraTransport) =
+            SavedCameraRecord(host = host, cameraName = "ZR_6002199", transport = transport, lastSeenAtEpochMillis = 1L, wifiSsid = null)
+        val group = listOf(record("10.99.0.20", SavedCameraTransport.INFRASTRUCTURE), record("usb:zr", SavedCameraTransport.USB_C))
+        // Router stays on offer even though this camera already has one: a body can live on a
+        // studio network, a home one and a location's, and each is its own setup keyed by the
+        // network's name. Every other kind is singular by definition.
+        assertEquals(
+            listOf(SavedCameraTransport.CAMERA_ACCESS_POINT, SavedCameraTransport.INFRASTRUCTURE, SavedCameraTransport.PHONE_HOTSPOT),
+            missingSetupKinds(group),
+        )
+        assertEquals(
+            listOf(SavedCameraTransport.INFRASTRUCTURE),
+            missingSetupKinds(
+                group + listOf(record("192.168.1.1", SavedCameraTransport.CAMERA_ACCESS_POINT), record("172.20.10.8", SavedCameraTransport.PHONE_HOTSPOT)),
+            ),
+        )
+    }
 }
