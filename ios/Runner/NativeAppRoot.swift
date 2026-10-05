@@ -4608,7 +4608,7 @@ final class NativeAppModel {
     /// Whether the CPU renderer's memo may hold a baked frame — lets the identity/Metal display
     /// path skip the per-frame eviction actor hop and evict once on transition instead.
     @ObservationIgnored private var rendererHoldsBakedFrame = false
-    private let scopeSampler = FrameScopeSampler()
+    private let scopeSampler = MonitorUIImageScopeSampler()
     private var cameraSession: NativeCameraSession? {
         didSet { if oldValue !== cameraSession { retireMediaProducer() } }
     }
@@ -7952,7 +7952,8 @@ final class NativeAppModel {
         let stride = ScopeAssistSampling.pointStride
         let includePoints = ScopeAssistSampling.needsPointSamples(visible: visibleScopes)
         return await scopeSampler.sample(
-            from: image, maxWidth: 200, stride: stride, includePoints: includePoints)
+            from: image, maxWidth: 200, stride: stride, includePoints: includePoints,
+            includeSampleCoordinates: true)
     }
 
     /// Bakes active monitor assists into a decoded frame off the main actor so the feed view only
