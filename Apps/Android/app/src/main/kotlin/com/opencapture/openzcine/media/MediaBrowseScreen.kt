@@ -123,7 +123,6 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
-import com.opencapture.openzcine.frameio.FrameioPreparedArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
@@ -177,25 +176,6 @@ private data class BatchShareResult(
     val firstFailure: String?,
 )
 
-/** Gallery writer result paired with the selection items omitted before writing. */
-private data class GalleryDelivery(
-    val result: MediaGalleryBatchResult,
-    val omissions: MediaGalleryOmissions,
-)
-
-/** One configured, verified artifact paired with its stable source record. */
-private data class PreparedExternalMedia(
-    val clip: MediaClipRecord,
-    val artifact: FrameioPreparedArtifact,
-)
-
-/** Partial-safe result from applying one export configuration to staged media. */
-private data class ExternalMediaPreparation(
-    val prepared: List<PreparedExternalMedia>,
-    val failedCount: Int,
-    val firstFailure: String?,
-)
-
 /**
  * Stages the exact same immutable ready copies for native Share, Gallery, and
  * Frame.io delivery. This is intentionally the only bridge from a camera cache
@@ -240,55 +220,6 @@ private fun stageSelectedMedia(
         }
     }
     return BatchShareResult(staged, stagedClips, incomplete, failed, firstFailure)
-}
-
-private suspend fun prepareExternalMedia(
-    controller: FrameioDeliveryController,
-    cameraID: String,
-    staged: BatchShareResult,
-    configuration: MediaDeliveryConfiguration,
-    cancellationCheck: () -> Unit,
-): ExternalMediaPreparation {
-    val prepared = mutableListOf<PreparedExternalMedia>()
-    var failed = 0
-    var firstFailure: String? = null
-    try {
-        staged.staged.zip(staged.stagedClips).forEach { (share, clip) ->
-            cancellationCheck()
-            try {
-                val artifact =
-                    controller.prepareForExternalDelivery(
-                    FrameioDeliveryArtifact(
-                        share = share,
-                        byteCount = withContext(Dispatchers.IO) { Files.size(share.file) },
-                        context =
-                            FrameioArtifactContext(
-                                cameraID = cameraID,
-                                captureDate = clip.captureDate,
-                                supportsLutBake =
-                                    clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
-                                stableClipIdentity = clip.libraryKey(cameraID),
-                            ),
-                    ),
-                    configuration,
-                )
-                prepared += PreparedExternalMedia(clip, artifact)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                failed += 1
-                if (firstFailure == null) firstFailure = error.message
-            }
-        }
-    } catch (error: CancellationException) {
-        withContext(NonCancellable) {
-            prepared.forEach { item ->
-                runCatching { controller.releaseExternalDelivery(item.artifact) }
-            }
-        }
-        throw error
-    }
-    return ExternalMediaPreparation(prepared, failed, firstFailure)
 }
 
 /** Privacy-bounded details attached to Android's share intent only when requested. */
@@ -470,9 +401,8 @@ internal fun MediaBrowseScreen(
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary,
     frameioController: FrameioDeliveryController,
-    mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
+    mediaDeliveryCoordinator: MediaDeliveryCoordinator,
     autoPlayFirstProxy: Boolean = false,
-    galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     /** Bumped when Settings clears the camera media cache so an open gallery reloads. */
     cacheRevision: Int = 0,
     /** The actual root's canonical index also receives Settings clear/delete mutations. */
@@ -511,10 +441,6 @@ internal fun MediaBrowseScreen(
             retired?.close()
         }
     }
-    val galleryGateway =
-        remember(context, galleryFailureInjection) {
-            AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
-        }
     LaunchedEffect(cameraID, savedCameraID, cameraDisplayName) {
         val savedID = savedCameraID ?: return@LaunchedEffect
         val displayName = cameraDisplayName ?: return@LaunchedEffect
@@ -949,125 +875,19 @@ internal fun MediaBrowseScreen(
     fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedSeriesClips
-        val coordinator = mediaDeliveryCoordinator
-        if (coordinator != null) {
-            // The whole selection goes to the coordinator: it caches whatever is still only on
-            // the camera before delivering. Filtering to already-cached entries here is what
-            // silently shipped 2 of 10 selected clips.
-            coordinator.beginNativeShare(
-                selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                configuration = configuration,
-                cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
-            ) { published, metadata ->
-                context.startActivity(
-                    AndroidMediaShareIntent.chooserIntent(context, published, metadata),
-                )
-                exitSelection()
-            }
-            return
+        // The whole selection goes to the coordinator: it caches whatever is still only on
+        // the camera before delivering. Filtering to already-cached entries here is what
+        // silently shipped 2 of 10 selected clips.
+        mediaDeliveryCoordinator.beginNativeShare(
+            selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
+            configuration = configuration,
+            cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
+        ) { published, metadata ->
+            context.startActivity(
+                AndroidMediaShareIntent.chooserIntent(context, published, metadata),
+            )
+            exitSelection()
         }
-        val selectionSnapshotLegacy = selectedSeriesClips
-        shareInProgress = true
-        shareMessage = null
-        shareJob =
-            scope.launch {
-                val stageContext = coroutineContext
-                try {
-                    val staged =
-                        withContext(Dispatchers.IO) {
-                            stageSelectedMedia(
-                                context,
-                                cacheStore,
-                                cameraID,
-                                selectionSnapshotLegacy,
-                                cameraIDFor = ::ownerCameraID,
-                            ) { stageContext.ensureActive() }
-                        }
-                    if (staged.staged.isEmpty()) {
-                        shareMessage =
-                            staged.firstFailure
-                                ?: "Only complete cached media can be shared."
-                    } else {
-                        val configured =
-                            prepareExternalMedia(
-                                frameioController,
-                                cameraID,
-                                staged,
-                                configuration,
-                            ) { stageContext.ensureActive() }
-                        val published = mutableListOf<StagedMediaShare>()
-                        val publishedClips = mutableListOf<MediaClipRecord>()
-                        var publicationFailures = 0
-                        var cleanupFailures = 0
-                        configured.prepared.forEach { item ->
-                            try {
-                                val share =
-                                    if (item.artifact.transientExport == null) {
-                                        item.artifact.share
-                                    } else {
-                                        withContext(Dispatchers.IO) {
-                                            MediaShareStager(context.cacheDir.toPath())
-                                                .stagePreparedArtifact(
-                                                    source = item.artifact.share.file,
-                                                    expectedBytes = item.artifact.byteCount,
-                                                    displayName = item.artifact.share.displayName,
-                                                    mimeType = item.artifact.share.mimeType,
-                                                ) { stageContext.ensureActive() }
-                                        }
-                                    }
-                                published += share
-                                publishedClips += item.clip
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (_: Exception) {
-                                publicationFailures += 1
-                            } finally {
-                                val released =
-                                    withContext(NonCancellable) {
-                                        runCatching {
-                                            frameioController.releaseExternalDelivery(item.artifact)
-                                        }.isSuccess
-                                    }
-                                if (!released) cleanupFailures += 1
-                            }
-                        }
-                        if (published.isEmpty()) {
-                            shareMessage =
-                                configured.firstFailure
-                                    ?: "Couldn't produce a complete configured share artifact."
-                            return@launch
-                        }
-                        val metadata =
-                            mediaDeliveryMetadataSummary(publishedClips)
-                                .takeIf { configuration.includeMetadata }
-                        context.startActivity(
-                            AndroidMediaShareIntent.chooserIntent(context, published, metadata),
-                        )
-                        val skipped =
-                            staged.incompleteCount +
-                                staged.failedCount +
-                                configured.failedCount +
-                                publicationFailures
-                        shareMessage =
-                            buildString {
-                                append("Sharing ${published.size} configured item")
-                                if (published.size != 1) append('s')
-                                if (skipped > 0) append("; $skipped skipped")
-                                if (cleanupFailures > 0) {
-                                    append("; $cleanupFailures temporary export cleanup failed")
-                                }
-                            }
-                        exitSelection()
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    shareMessage = error.message ?: "Couldn't prepare the selected media for sharing."
-                } finally {
-                    shareInProgress = false
-                    shareJob = null
-                }
-            }
     }
 
     fun presentNativeDelivery() {
@@ -1093,104 +913,14 @@ internal fun MediaBrowseScreen(
                     .operatorMessage(MediaGalleryOmissions(nonVideoCount = omittedCount))
             return
         }
-        val coordinator = mediaDeliveryCoordinator
-        if (coordinator != null) {
-            // The full snapshot goes across: the coordinator caches the on-camera clips first and
-            // reports the non-savable ones itself, so nothing is dropped between here and Gallery.
-            coordinator.beginSaveToPhotos(
-                selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                configuration = configuration,
-                cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
-            )
-            exitSelection()
-            return
-        }
-        shareInProgress = true
-        shareMessage = null
-        shareJob =
-            scope.launch {
-                val stageContext = coroutineContext
-                try {
-                    val staged =
-                        withContext(Dispatchers.IO) {
-                            stageSelectedMedia(
-                                context,
-                                cacheStore,
-                                cameraID,
-                                savableSelection,
-                            ) { stageContext.ensureActive() }
-                        }
-                    val configured =
-                        prepareExternalMedia(
-                            frameioController,
-                            cameraID,
-                            staged,
-                            configuration,
-                        ) { stageContext.ensureActive() }
-                    var artifactFailures = 0
-                    val artifacts =
-                        withContext(Dispatchers.IO) {
-                            configured.prepared.mapNotNull { item ->
-                                runCatching {
-                                    MediaGalleryArtifact.fromStagedShare(
-                                        item.artifact.share,
-                                        mediaCaptureTimestampMillis(item.clip.captureDate)
-                                            .takeIf { configuration.includeMetadata },
-                                    )
-                                }.onFailure { artifactFailures += 1 }
-                                    .getOrNull()
-                            }
-                        }
-                    var cleanupFailures = 0
-                    val result =
-                        try {
-                            withContext(Dispatchers.IO) {
-                                MediaGallerySaver(galleryGateway).save(artifacts) {
-                                    stageContext.ensureActive()
-                                }
-                            }
-                        } finally {
-                            configured.prepared.forEach { item ->
-                                val released =
-                                    withContext(NonCancellable) {
-                                        runCatching {
-                                            frameioController.releaseExternalDelivery(item.artifact)
-                                        }.isSuccess
-                                    }
-                                if (!released) cleanupFailures += 1
-                            }
-                        }
-                    val delivery =
-                        GalleryDelivery(
-                            result = result,
-                            omissions =
-                                MediaGalleryOmissions(
-                                    nonVideoCount = omittedCount,
-                                    incompleteCount = staged.incompleteCount,
-                                    preparationFailureCount =
-                                        staged.failedCount +
-                                            configured.failedCount +
-                                            artifactFailures,
-                                    temporaryCleanupFailureCount = cleanupFailures,
-                                ),
-                        )
-                    shareMessage = delivery.result.operatorMessage(delivery.omissions)
-                    if (
-                        delivery.result.savedCount == savableSelection.size &&
-                            delivery.result.failedCount == 0 &&
-                            delivery.omissions.totalCount == 0
-                    ) {
-                        exitSelection()
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Exception) {
-                    shareMessage = "Couldn't prepare the selected media for Gallery."
-                } finally {
-                    shareInProgress = false
-                    shareJob = null
-                }
-            }
+        // The full snapshot goes across: the coordinator caches the on-camera clips first and
+        // reports the non-savable ones itself, so nothing is dropped between here and Gallery.
+        mediaDeliveryCoordinator.beginSaveToPhotos(
+            selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
+            configuration = configuration,
+            cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
+        )
+        exitSelection()
     }
 
     fun presentFrameioDelivery() {
@@ -1211,7 +941,7 @@ internal fun MediaBrowseScreen(
                 val stageContext = coroutineContext
                 // The upload runs here, not in the coordinator, so hand it the job the overlay's
                 // Cancel must reach — otherwise Cancel stopped nothing mid-upload.
-                val deliveryTicket = mediaDeliveryCoordinator?.trackExternalDelivery(stageContext[Job])
+                val deliveryTicket = mediaDeliveryCoordinator.trackExternalDelivery(stageContext[Job])
                 var skippedBeforeUpload: Int? = null
                 var completedWithoutFailures = false
                 var cancelled = false
@@ -1220,7 +950,7 @@ internal fun MediaBrowseScreen(
                     // without this pass an uncached selection uploaded nothing and said nothing.
                     // Mid-hop the phone is off the camera's Wi-Fi — that selection was already
                     // cached before the hop, and retrying here would only stall on dead sockets.
-                    mediaDeliveryCoordinator?.cacheFromCamera(
+                    mediaDeliveryCoordinator.cacheFromCamera(
                         destination = MediaDeliveryKind.FRAMEIO,
                         selection =
                             selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
@@ -1266,7 +996,7 @@ internal fun MediaBrowseScreen(
                         }
                     skippedBeforeUpload = result.incompleteCount + result.failedCount
                     frameioController.deliver(artifacts, options) { state ->
-                        deliveryTicket?.let { mediaDeliveryCoordinator?.bindFrameioDeliveryState(it, state) }
+                        mediaDeliveryCoordinator.bindFrameioDeliveryState(deliveryTicket, state)
                     }
                     val completed = frameioController.deliveryState as? FrameioDeliveryState.Completed
                     completedWithoutFailures = completed != null && completed.failedCount == 0
@@ -1296,7 +1026,7 @@ internal fun MediaBrowseScreen(
                             )
                         }
                     if (completedWithoutFailures && !cancelled) exitSelection()
-                    deliveryTicket?.let { mediaDeliveryCoordinator?.finishExternalDelivery(it) }
+                    mediaDeliveryCoordinator.finishExternalDelivery(deliveryTicket)
                     frameioPreparationInProgress = false
                     shareInProgress = false
                     shareJob = null
@@ -1484,7 +1214,7 @@ internal fun MediaBrowseScreen(
                     },
                 busy = shareInProgress || frameioPreparationInProgress,
                 onCacheBeforeHop = {
-                    mediaDeliveryCoordinator?.cacheFromCamera(
+                    mediaDeliveryCoordinator.cacheFromCamera(
                         destination = MediaDeliveryKind.FRAMEIO,
                         selection =
                             selectedSeriesClips.map { MediaDeliverySelection(ownerCameraID(it), it) },
@@ -1610,7 +1340,6 @@ internal fun MediaBrowseScreen(
                 cameraTransferAvailable = cameraConnected,
                 connectionOwner = connectionOwner,
                 favoriteIDs = favorites,
-                galleryFailureInjection = galleryFailureInjection,
                 assists = assists,
                 exposureAssistCameraInput = exposureAssistCameraInput,
                 operatorSettings = operatorSettings,

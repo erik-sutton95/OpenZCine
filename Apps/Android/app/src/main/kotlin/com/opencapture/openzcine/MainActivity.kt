@@ -76,6 +76,7 @@ import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
 import com.opencapture.openzcine.diagnostics.AndroidBugReportClient
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
+import com.opencapture.openzcine.media.AndroidMediaGalleryGateway
 import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.media.MediaDeliveryCompletionToast
@@ -390,6 +391,11 @@ class MainActivity : ComponentActivity() {
                         MediaDeliveryCoordinator(
                             appContext = applicationContext,
                             frameioController = frameioController,
+                            galleryGateway =
+                                AndroidMediaGalleryGateway(
+                                    applicationContext.contentResolver,
+                                    DemoHarness.galleryFailureInjection(intent),
+                                ),
                             scope = deliveryScope,
                         )
                     }
@@ -1608,8 +1614,6 @@ class MainActivity : ComponentActivity() {
                                         frameioController = frameioController,
                                         mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
-                                        galleryFailureInjection =
-                                            DemoHarness.galleryFailureInjection(intent),
                                         onRatingDiagnostic = diagnostics::record,
                                         onClose = { shell.dismissCover() },
                                     )
