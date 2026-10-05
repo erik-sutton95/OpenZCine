@@ -818,29 +818,7 @@ internal fun FalseColorReferenceOverlay(
         modifier
             .zone(frame)
             .zIndex(if (isDragging) 1f else 0f)
-            .graphicsLayer {
-                scaleX = if (isDragging) 1.03f else 1f
-                scaleY = if (isDragging) 1.03f else 1f
-                shadowElevation = if (isDragging) 18.dp.toPx() else 0f
-                shape = ChromeShape
-                clip = true
-                ambientShadowColor = Color.Black.copy(alpha = 0.5f)
-                spotShadowColor = Color.Black.copy(alpha = 0.5f)
-            }
-            .glass(ChromeShape)
-            .semantics {
-                contentDescription = referenceDescription
-                if (placementStore != null) {
-                    customActions =
-                        listOf(
-                            CustomAccessibilityAction(recenterDescription) {
-                                placementStore.recenter(panelID)
-                                frame = clampScopeFrame(default, resolvedLayout.safeBounds)
-                                true
-                            },
-                        )
-                }
-            }
+            // Outside the lift layer, so the 1.03 lift never scales the finger's delta.
             .pointerInput(default, resolvedLayout, placementRevision, hapticsEnabled) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
@@ -877,7 +855,30 @@ internal fun FalseColorReferenceOverlay(
                     }
                     frame = snapped
                 }
-            },
+            }
+            .graphicsLayer {
+                scaleX = if (isDragging) 1.03f else 1f
+                scaleY = if (isDragging) 1.03f else 1f
+                shadowElevation = if (isDragging) 18.dp.toPx() else 0f
+                shape = ChromeShape
+                clip = true
+                ambientShadowColor = Color.Black.copy(alpha = 0.5f)
+                spotShadowColor = Color.Black.copy(alpha = 0.5f)
+            }
+            .glass(ChromeShape)
+            .semantics {
+                contentDescription = referenceDescription
+                if (placementStore != null) {
+                    customActions =
+                        listOf(
+                            CustomAccessibilityAction(recenterDescription) {
+                                placementStore.recenter(panelID)
+                                frame = clampScopeFrame(default, resolvedLayout.safeBounds)
+                                true
+                            },
+                        )
+                }
+            }
     ) {
         drawFalseColorReference(presentation, copy)
     }

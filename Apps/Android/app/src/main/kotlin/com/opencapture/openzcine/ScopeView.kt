@@ -936,28 +936,7 @@ internal fun FloatingScopePanel(
             Modifier
                 .size(frame.width.dp, frame.height.dp)
                 .zIndex(if (lifted) 1f else 0f)
-                .graphicsLayer {
-                    scaleX = if (lifted) 1.03f else 1f
-                    scaleY = if (lifted) 1.03f else 1f
-                    shadowElevation = if (lifted) 18.dp.toPx() else 0f
-                    shape = ChromeShape
-                    clip = true
-                    ambientShadowColor = Color.Black.copy(alpha = 0.5f)
-                    spotShadowColor = Color.Black.copy(alpha = 0.5f)
-                }
-                .semantics {
-                    contentDescription = panelDescription
-                    if (placementStore != null) {
-                        customActions =
-                            listOf(
-                                CustomAccessibilityAction(recenterDescription) {
-                                    placementStore.recenter(panelID)
-                                    frame = clampScopeFrame(default, panelLayout.safeBounds)
-                                    true
-                                },
-                            )
-                    }
-                }
+                // Outside the lift layer, so the 1.03 lift never scales the finger's delta.
                 .pointerInput(
                     kind,
                     default,
@@ -1003,7 +982,29 @@ internal fun FloatingScopePanel(
                     }
                     frame = snapped
                 }
-            },
+            }
+                .graphicsLayer {
+                    scaleX = if (lifted) 1.03f else 1f
+                    scaleY = if (lifted) 1.03f else 1f
+                    shadowElevation = if (lifted) 18.dp.toPx() else 0f
+                    shape = ChromeShape
+                    clip = true
+                    ambientShadowColor = Color.Black.copy(alpha = 0.5f)
+                    spotShadowColor = Color.Black.copy(alpha = 0.5f)
+                }
+                .semantics {
+                    contentDescription = panelDescription
+                    if (placementStore != null) {
+                        customActions =
+                            listOf(
+                                CustomAccessibilityAction(recenterDescription) {
+                                    placementStore.recenter(panelID)
+                                    frame = clampScopeFrame(default, panelLayout.safeBounds)
+                                    true
+                                },
+                            )
+                    }
+                }
         ) {
             content(Modifier.fillMaxSize())
         }
