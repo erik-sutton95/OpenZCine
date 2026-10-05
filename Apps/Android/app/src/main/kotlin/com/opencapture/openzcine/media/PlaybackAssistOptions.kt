@@ -168,7 +168,6 @@ private data class AssistOptionsActions(
     val selectStoredLut: (StoredLutSelection) -> Unit,
     val selectFalseColorScale: (FeedFalseColorScale) -> Unit,
     val resetFalseColorScale: () -> Unit,
-    val recenterPanel: (() -> Unit)?,
     val contextLabel: String,
     /** Opens the full-screen RED IPP2 download flow (iOS `isRedDownloadPresented`). */
     val openRedDownload: () -> Unit = {},
@@ -207,7 +206,6 @@ internal fun PlaybackAssistOptionsOverlay(
                 resetFalseColorScale = {
                     playbackState.resetSharedFalseColorScale(sharedAssistState)
                 },
-                recenterPanel = null,
                 contextLabel = "playback",
             ),
         settings = settings,
@@ -226,7 +224,6 @@ internal fun LiveAssistOptionsOverlay(
     settings: OperatorSettings,
     cameraInput: ExposureAssistCameraInput,
     lutLibrary: AndroidLutLibrary?,
-    onRecenterPanel: (() -> Unit)? = null,
     onOpenRedDownload: () -> Unit = {},
     onRequestLutImport: (() -> Unit)? = null,
     onDismiss: () -> Unit,
@@ -257,7 +254,6 @@ internal fun LiveAssistOptionsOverlay(
                 selectStoredLut = assistState::selectStoredLut,
                 selectFalseColorScale = assistState::selectFalseColorScale,
                 resetFalseColorScale = assistState::resetFalseColorSelection,
-                recenterPanel = onRecenterPanel,
                 contextLabel = "live monitor",
                 openRedDownload = {
                     onDismiss()

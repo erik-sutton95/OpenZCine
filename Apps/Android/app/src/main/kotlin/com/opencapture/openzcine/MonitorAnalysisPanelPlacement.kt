@@ -525,15 +525,3 @@ internal fun ScopeKind.monitorAnalysisPanelID(): MonitorAnalysisPanelID =
         ScopeKind.VECTORSCOPE -> MonitorAnalysisPanelID.VECTORSCOPE
         ScopeKind.TRAFFIC_LIGHTS -> MonitorAnalysisPanelID.TRAFFIC_LIGHTS
     }
-
-/** Only floating scopes and the false-colour key own placement. Feed-aligned assists never do. */
-internal fun AssistTool.monitorAnalysisPanelID(): MonitorAnalysisPanelID? =
-    when (this) {
-        AssistTool.FALSE -> MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE
-        AssistTool.WAVE -> MonitorAnalysisPanelID.WAVEFORM
-        AssistTool.PARADE -> MonitorAnalysisPanelID.PARADE
-        AssistTool.HISTO -> MonitorAnalysisPanelID.HISTOGRAM
-        AssistTool.VECTOR -> MonitorAnalysisPanelID.VECTORSCOPE
-        AssistTool.LIGHTS -> MonitorAnalysisPanelID.TRAFFIC_LIGHTS
-        else -> null
-    }

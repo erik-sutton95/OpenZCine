@@ -3189,13 +3189,6 @@ internal fun MonitorScreen(
                 }
             }
         activeAssistOptions?.let { request ->
-            val recenterPanel =
-                request.tool.monitorAnalysisPanelID()?.takeIf { analysisPanelLayout != null }?.let { id ->
-                    {
-                        analysisPanelPlacementStore.recenter(id)
-                        analysisPanelPlacementRevision += 1
-                    }
-                }
             CompositionLocalProvider(LocalMonitorGlass provides glass) {
                 LiveAssistOptionsOverlay(
                     tool = request.tool,
@@ -3204,7 +3197,6 @@ internal fun MonitorScreen(
                     settings = operatorSettings,
                     cameraInput = exposureAssistCameraInput,
                     lutLibrary = lutLibrary,
-                    onRecenterPanel = recenterPanel,
                     onOpenRedDownload = { redDownloadPresented = true },
                     onRequestLutImport =
                         lutLibrary?.let {
