@@ -185,7 +185,7 @@ class LegacyLiveFeedGlSurfaceTest {
         val originalColor = Color.rgb(180, 64, 210)
         val reusedColor = Color.rgb(30, 190, 70)
         val source = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
-        val pool = LegacyLiveFeedFramePool(size = 1)
+        val pool = com.opencapture.opencine.runtime.MonitorBitmapFramePool(size = 1)
         source.eraseColor(originalColor)
         val lease = requireNotNull(pool.copy(source))
         try {

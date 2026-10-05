@@ -3,7 +3,6 @@ package com.opencapture.openzcine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LiveFeedGlSurfaceTest {
@@ -60,19 +59,6 @@ class LiveFeedGlSurfaceTest {
         assertFalse(liveFeedEffectsCanRender(32, true, LiveFeedColorMode.HDR))
         assertFalse(liveFeedEffectsCanRender(36, true, LiveFeedColorMode.UNSUPPORTED))
         assertFalse(liveFeedEffectsCanRender(36, true, LiveFeedColorMode.UNKNOWN))
-    }
-
-    @Test
-    fun `legacy GL viewport exactly mirrors fit and portrait fill canvas geometry`() {
-        assertEquals(
-            LiveFeedGlViewport(x = 0, y = 187, width = 400, height = 225),
-            liveFeedGlViewport(400, 600, 1_920, 1_080, aspectFill = false),
-        )
-        assertEquals(
-            LiveFeedGlViewport(x = -333, y = 0, width = 1_067, height = 600),
-            liveFeedGlViewport(400, 600, 1_920, 1_080, aspectFill = true),
-        )
-        assertNull(liveFeedGlViewport(0, 600, 1_920, 1_080, aspectFill = true))
     }
 
     @Test

@@ -299,22 +299,3 @@ fun MonitorGlassBudgetLoop(glass: MonitorGlass) {
         }
     }
 }
-
-/**
- * Feed content-rect helper retained for glass-era layout tests (analysis
- * placement still uses the same fit/fill math as the old grab pass).
- */
-internal fun glassBackdropContentRect(
-    feedWidth: Float,
-    feedHeight: Float,
-    sourceWidth: Int,
-    sourceHeight: Int,
-    aspectFill: Boolean,
-): LiveFeedContentRect? =
-    liveFeedContentRect(
-        containerWidth = feedWidth,
-        containerHeight = feedHeight,
-        sourceWidth = sourceWidth,
-        sourceHeight = sourceHeight,
-        aspectFill = aspectFill,
-    )

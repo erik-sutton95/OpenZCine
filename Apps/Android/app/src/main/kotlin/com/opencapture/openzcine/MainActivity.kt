@@ -104,6 +104,7 @@ import com.opencapture.openzcine.pairing.SavedCameraConnector
 import com.opencapture.openzcine.pairing.isOnCameraAccessPointNetwork
 import com.opencapture.openzcine.pairing.isWifiRadioEnabled
 import com.opencapture.openzcine.pairing.WifiOffPromptDialog
+import com.opencapture.openzcine.pairing.attachedUsbAutoReconnectSuppressions
 import com.opencapture.openzcine.pairing.mayAutoReconnectUsb
 import com.opencapture.openzcine.pairing.nearbyBroadcastItems
 import com.opencapture.openzcine.pairing.nikonIntegrationSlots
@@ -725,7 +726,7 @@ class MainActivity : ComponentActivity() {
                     val attached =
                         usbCameras.filter { it.access == UsbPtpCameraAccess.READY }.mapNotNull { it.hostKey }.toSet()
                     attemptedUsbReconnectHosts = attemptedUsbReconnectHosts.intersect(attached)
-                    suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts.intersect(attached)
+                    suppressedUsbAutoReconnectHosts = attachedUsbAutoReconnectSuppressions(suppressedUsbAutoReconnectHosts, attached)
                     if (camerasState.attempts.isNotEmpty() || monitorSession != null || requestedReconnectID != null) return@LaunchedEffect
                     val match =
                         savedCameras.firstOrNull {

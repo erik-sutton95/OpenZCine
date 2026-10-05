@@ -326,13 +326,9 @@ class JpegFrameDecoder(private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE) {
     }
 }
 
-/** Power-of-two [BitmapFactory.Options.inSampleSize] so long side ≤ [maxLongSide]. */
-internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int): Int =
-    com.opencapture.opencine.runtime.monitorJpegSampleSizeForLongSide(width, height, maxLongSide)
-
 /**
  * Renders a [LiveFrameSource] as the monitor feed: decodes off the main
- * thread with latest-wins conflation ([pumpFrames]) and draws the newest
+ * thread with latest-wins conflation ([pumpFramesWithSourceFrame]) and draws the newest
  * frame into the full modifier bounds. [aspectFill] selects the portrait
  * centre-crop path; the default keeps the whole frame visible.
  *

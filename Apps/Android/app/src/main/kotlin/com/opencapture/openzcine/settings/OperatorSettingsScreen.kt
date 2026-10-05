@@ -700,10 +700,6 @@ private fun LinkRows(
     }
 }
 
-/** Digits-only direct entry with the same closed-range clamp as iOS. */
-internal fun normalizedZebraEntry(raw: String, maximum: Int): Int? =
-    raw.toIntOrNull()?.coerceIn(0, maximum)
-
 /** Controls whose effects stay wholly within the Android shell. */
 @Composable
 private fun ControlsRows(

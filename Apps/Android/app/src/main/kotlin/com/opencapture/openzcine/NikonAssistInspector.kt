@@ -59,6 +59,7 @@ import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
 import com.opencapture.opencine.appkit.MonitorToolUsagePreferences
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.StoredLutCategory
+import com.opencapture.openzcine.lut.reconciledLutSelectionAfterDeletion
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.nikonAssistSection
@@ -554,10 +555,12 @@ private fun LutOptions(
                         FeedLutSelection.Stored(entry.selection)
                     ) {
                         // iOS: keep LUT tool on; same-category replacement else Log3G10→709.
-                        val replacement = library.firstPreparedReplacement(entry.selection)
                         assists.selectLut(
-                            replacement?.let(FeedLutSelection::Stored)
-                                ?: FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709),
+                            reconciledLutSelectionAfterDeletion(
+                                assists.lut,
+                                entry.selection,
+                                library.firstPreparedReplacement(entry.selection),
+                            ),
                         )
                     }
                     feedback = "${entry.displayName} deleted."

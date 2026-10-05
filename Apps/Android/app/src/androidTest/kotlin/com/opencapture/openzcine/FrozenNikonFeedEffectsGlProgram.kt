@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.opengl.GLES20
 import androidx.media3.common.util.GlProgram
 import androidx.media3.common.util.GlUtil
+import com.opencapture.opencine.media.feedEffectsCubeAtlas
 import java.nio.ByteBuffer
 
 private const val FEED_EFFECTS_VERTEX_SHADER = FROZEN_NIKON_PLAYBACK_FEED_VERTEX_ES2

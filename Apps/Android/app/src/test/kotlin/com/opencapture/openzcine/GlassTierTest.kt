@@ -85,8 +85,8 @@ class GlassTierTest {
 
     @Test
     fun backdropUsesTheFeedRenderersFitAndFillTransforms() {
-        val fit = requireNotNull(glassBackdropContentRect(400f, 600f, 1_920, 1_080, false))
-        val fill = requireNotNull(glassBackdropContentRect(400f, 600f, 1_920, 1_080, true))
+        val fit = requireNotNull(liveFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = false))
+        val fill = requireNotNull(liveFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true))
 
         assertTrue(fit.top > 0)
         assertEquals(400, fit.width)

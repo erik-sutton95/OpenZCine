@@ -60,11 +60,11 @@ class PumpFramesTest {
         val source = MutableSharedFlow<LiveFrame>()
         val presented = mutableListOf<Byte>()
         val pump = launch {
-            pumpFrames(
+            pumpFramesWithSourceFrame(
                 frames = source,
                 stats = FramePacingStats(log = {}),
-                decode = { it[0] },
-                present = { presented.add(it) },
+                decode = { it.jpegData[0] },
+                present = { _, decoded -> presented.add(decoded) },
             )
         }
         testScheduler.advanceUntilIdle() // subscribe before emitting
@@ -82,11 +82,11 @@ class PumpFramesTest {
         // A burst the consumer never gets between: latest-wins keeps only the
         // first frame (taken immediately) and the newest one. The drop ledger
         // itself is covered deterministically in FramePacingStatsTest.
-        pumpFrames(
+        pumpFramesWithSourceFrame(
             frames = (0 until 10).map(::frame).asFlow(),
             stats = FramePacingStats(log = {}),
-            decode = { it[0] },
-            present = { presented.add(it) },
+            decode = { it.jpegData[0] },
+            present = { _, decoded -> presented.add(decoded) },
         )
         assertEquals(listOf<Byte>(0, 9), presented)
     }
@@ -96,11 +96,11 @@ class PumpFramesTest {
         val source = MutableSharedFlow<LiveFrame>()
         val presented = mutableListOf<Byte>()
         val pump = launch {
-            pumpFrames(
+            pumpFramesWithSourceFrame(
                 frames = source,
                 stats = FramePacingStats(log = {}),
-                decode = { bytes -> bytes[0].takeIf { it.toInt() % 2 == 0 } },
-                present = { presented.add(it) },
+                decode = { frame -> frame.jpegData[0].takeIf { it.toInt() % 2 == 0 } },
+                present = { _, decoded -> presented.add(decoded) },
             )
         }
         testScheduler.advanceUntilIdle()
@@ -117,11 +117,11 @@ class PumpFramesTest {
         val firstSource = MutableSharedFlow<LiveFrame>()
         val presented = mutableListOf<Byte>()
         val firstPump = launch {
-            pumpFrames(
+            pumpFramesWithSourceFrame(
                 frames = firstSource,
                 stats = FramePacingStats(log = {}),
-                decode = { it[0] },
-                present = { presented.add(it) },
+                decode = { it.jpegData[0] },
+                present = { _, decoded -> presented.add(decoded) },
             )
         }
         testScheduler.advanceUntilIdle()
@@ -130,11 +130,11 @@ class PumpFramesTest {
         // Source switch: the shell cancels the old collector and pumps the new
         // source (LaunchedEffect keyed on the source does exactly this).
         firstPump.cancelAndJoin()
-        pumpFrames(
+        pumpFramesWithSourceFrame(
             frames = listOf(frame(10)).asFlow(),
             stats = FramePacingStats(log = {}),
-            decode = { it[0] },
-            present = { presented.add(it) },
+            decode = { it.jpegData[0] },
+            present = { _, decoded -> presented.add(decoded) },
         )
         assertEquals(listOf<Byte>(1, 10), presented)
     }

@@ -66,20 +66,6 @@ internal fun liveFeedEffectsCanRender(
 ): Boolean =
     liveFeedEffectsPlatformAvailable(sdk, swiftCoreAvailable) && colorMode == LiveFeedColorMode.SDR
 
-/** Source-facing compatibility names over the shared pixel-rounded viewport. */
-internal typealias LiveFeedGlViewport = com.opencapture.opencine.runtime.MonitorBitmapGlViewport
-
-internal fun liveFeedGlViewport(
-    surfaceWidth: Int, surfaceHeight: Int,
-    sourceWidth: Int, sourceHeight: Int, aspectFill: Boolean,
-): LiveFeedGlViewport? = com.opencapture.opencine.runtime.monitorBitmapGlViewport(
-    surfaceWidth, surfaceHeight, sourceWidth, sourceHeight, aspectFill,
-)
-
-/** Native owners retain copy slots, render thread, texture/programs and terminal retirement. */
-internal typealias LegacyLiveFeedFrameLease = com.opencapture.opencine.runtime.MonitorBitmapFrameLease
-internal typealias LegacyLiveFeedFramePool = com.opencapture.opencine.runtime.MonitorBitmapFramePool
-
 internal class LegacyLiveFeedGlSurface(context: Context) :
     com.opencapture.opencine.runtime.MonitorBitmapGlesSurface(context, ::Media3FeedGlBackend) {
     fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean, mirrored: Boolean) =
