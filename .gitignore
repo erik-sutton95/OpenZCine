@@ -140,7 +140,7 @@ captures/
 # Local test footage (real camera clips are large; never commit)
 samples/
 .worktrees/
-Apps/Android/app/.cxx/
+Apps/Android/*/.cxx/
 feedback/
 
 # ── Handbook (Astro Starlight) dependencies, build output and generated types ──

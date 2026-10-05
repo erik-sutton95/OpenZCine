@@ -44,3 +44,5 @@ include(":core-api")
 // process can host without giving the watch a Nikon/PTP implementation.
 include(":wear-relay")
 include(":wear")
+// androidTest-only frozen donor for Vulkan rendered-pixel parity (NikonBitmapVulkanPixelParityTest).
+include(":frozen-vulkan-donor")
