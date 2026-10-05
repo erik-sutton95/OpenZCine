@@ -450,7 +450,8 @@ private struct NikonMonitorSystem: View {
                 "Open Media", size: CGSize(width: layout.media.width, height: layout.media.height),
                 action: model.openMediaBrowser
             ) {
-                MonitorIcon.film
+                // Nikon main: a photo glyph reads as "media" on the stills side; cinema keeps film.
+                if model.isPhotographyMode { MonitorIcon.image } else { MonitorIcon.film }
             }.accessibilityIdentifier("monitor.system.media").liveViewGuideAnchor(.media)
                 .chromeEditable(.railMedia, editing: editing)
         } record: {

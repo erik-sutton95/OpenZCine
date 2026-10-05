@@ -2581,7 +2581,10 @@ internal fun MonitorScreen(
                     settings = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenSettings() } },
                         contentDescription = stringResource(R.string.a11y_monitor_settings)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.SETTINGS, null, glyphModifier, tint) } },
                     media = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenMedia() } },
-                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.FILM, null, glyphModifier, tint) } },
+                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint ->
+                            // Nikon main: a photo glyph reads as "media" on the stills side; cinema keeps film.
+                            MonitorIcon(if (isPhotographyMode) MonitorIcon.IMAGE else MonitorIcon.FILM, null, glyphModifier, tint)
+                        } },
                     record = { enabled ->
                         if (isPhotographyMode) PhotographyShutterButton(stillCapturing, enabled = enabled && !controlsSurrendered,
                             timerRemaining = photoTimerRemaining, bodyShutterPulse = bodyShutterPulse,
