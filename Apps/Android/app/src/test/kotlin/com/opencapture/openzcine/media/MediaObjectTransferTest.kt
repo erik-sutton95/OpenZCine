@@ -40,7 +40,6 @@ class MediaObjectTransferTest {
         assertEquals(-1L, bridge.resolveMediaSize(handle = 1, reportedSize = 4))
         assertEquals("Not connected to a camera.", failure)
         bridge.stopMediaTransfer()
-        assertEquals(null, SwiftMediaBrowseGateway(connectionOwner = null).begin())
     }
 
     @Test

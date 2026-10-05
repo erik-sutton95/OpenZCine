@@ -19,7 +19,6 @@ import com.opencapture.opencine.runtime.MonitorMovieExportLut
 import com.opencapture.opencine.runtime.MonitorMovieExportContainer
 import com.opencapture.opencine.runtime.MonitorMovieCodecFactory
 import com.opencapture.opencine.runtime.MonitorMovieCodec
-import com.opencapture.opencine.runtime.MonitorMovieExportProgressWatchdog
 import com.opencapture.opencine.runtime.MonitorNativeMovieExporter
 import com.opencapture.opencine.runtime.MonitorMovieExportPreparer
 import com.opencapture.opencine.runtime.MonitorMovieExportInput
@@ -27,8 +26,6 @@ import com.opencapture.opencine.runtime.MonitorPreparedMovieExport
 import com.opencapture.opencine.runtime.MonitorLutMovieExporter
 import com.opencapture.opencine.runtime.MonitorMovieExportErrorFactory
 import com.opencapture.opencine.runtime.MonitorMovieExportFailure
-import com.opencapture.opencine.runtime.finalizeMovieExportContainer
-import com.opencapture.opencine.runtime.pruneOwnedMovieExports
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -202,8 +199,6 @@ internal class AndroidMedia3FrameioLutVideoExporter(
         owner.export(source, target, lut, onProgress)
 }
 
-internal typealias FrameioExportProgressWatchdog = MonitorMovieExportProgressWatchdog
-
 /** Composition supplies the approved LUT, branded filename and existing operator errors. */
 internal class AndroidFrameioArtifactPreparer(
     exportRoot: Path,
@@ -244,17 +239,6 @@ internal class AndroidFrameioArtifactPreparer(
         MonitorPreparedMovieExport(prepared.share.file, prepared.share.displayName, prepared.share.mimeType, prepared.byteCount, prepared.appliedLutName, prepared.transientExport),
     )
 }
-
-internal fun finalizeMediaExportContainer(target: Path, container: MediaExportContainer) =
-    finalizeMovieExportContainer(target, container, frameioMovieExportErrors)
-
-internal fun pruneOwnedFrameioExports(
-    root: Path,
-    protected: Set<Path> = emptySet(),
-    nowEpochMillis: Long = System.currentTimeMillis(),
-    maximumAgeMillis: Long = 24L * 60L * 60L * 1_000L,
-    maximumBytes: Long = 2L * 1_024L * 1_024L * 1_024L,
-) = pruneOwnedMovieExports(root, protected, nowEpochMillis, maximumAgeMillis, maximumBytes, "frameio")
 
 private val frameioMovieExportErrors = MonitorMovieExportErrorFactory { reason, filename ->
     FrameioDeliveryException(when (reason) {
@@ -437,6 +421,3 @@ internal class AndroidFrameioMetadataSidecarWriter(
         const val MAXIMUM_SIDECARS = 100
     }
 }
-
-/** Retains the existing codec helper signature over the shared packed cube. */
-internal fun FrameioLutPayload.toMedia3Cube(): Array<Array<IntArray>> = toArgbCube()

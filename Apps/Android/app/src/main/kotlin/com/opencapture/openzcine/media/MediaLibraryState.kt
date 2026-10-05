@@ -607,12 +607,6 @@ internal fun MediaClipRecord.formatFilter(): MediaFormatFilter? =
     com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.formatKey(this)?.let { key ->
         MediaFormatFilter.entries.firstOrNull { it.title == key }
     }
-internal fun List<MediaClipRecord>.stillPixelWidths(): List<Int> =
-    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.stillWidths(this)
-internal fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? =
-    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.photoSizeKey(this, presentWidths)?.let { key ->
-        MediaPhotoSizeFilter.entries.firstOrNull { it.title == key }
-    }
 internal data class MediaFilterOptions(
     val formats: List<MediaFormatFilter> = emptyList(),
     val resolutions: List<MediaResolutionFilter> = emptyList(),
@@ -621,20 +615,6 @@ internal data class MediaFilterOptions(
 ) {
     val isEmpty get() = formats.isEmpty() && resolutions.isEmpty() && photoSizes.isEmpty() && dateWindows.isEmpty()
 }
-internal object MediaFilterDerivation {
-    fun options(clips: List<MediaClipRecord>, today: LocalDate = LocalDate.now()): MediaFilterOptions {
-        val offered = com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.offered(clips, today)
-        return MediaFilterOptions(
-            offered.formats.mapNotNull { key -> MediaFormatFilter.entries.firstOrNull { it.title == key } },
-            offered.resolutions.mapNotNull { key -> MediaResolutionFilter.entries.firstOrNull { it.title == key } },
-            offered.photoSizes.mapNotNull { key -> MediaPhotoSizeFilter.entries.firstOrNull { it.title == key } },
-            offered.dateWindows.mapNotNull { key -> MediaDateWindowFilter.entries.firstOrNull { it.title == key } })
-    }
-}
-internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
-    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.resolutionKey(this)?.let { key ->
-        MediaResolutionFilter.entries.firstOrNull { it.title == key }
-    }
 
 /** Pure set updates used by long-press, tap, and sweep selection. */
 internal object MediaLibrarySelection {
