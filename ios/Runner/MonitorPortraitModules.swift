@@ -61,7 +61,7 @@ struct PortraitRecOptionsButton: View {
                 .frame(width: 40, height: 40)
                 .liquidGlass(in: Circle())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .popover(isPresented: $popoverOpen, attachmentAnchor: .point(.bottomTrailing)) {
             recOptionsMenu
                 .presentationCompactAdaptation(.popover)

@@ -13373,7 +13373,7 @@ struct NativeAppRoot: View {
 
     var body: some View {
         ZStack {
-            ZCBackground()
+            MonitorTheme.background.ignoresSafeArea()
             if model.isMonitorPresented {
                 MonitorExperience()
                     .environment(model)
@@ -13473,7 +13473,7 @@ struct NativeAppRoot: View {
             .environment(model)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ZCBackground().ignoresSafeArea())
+        .background(MonitorTheme.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
         .task {

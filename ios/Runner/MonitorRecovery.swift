@@ -1,3 +1,4 @@
+import MonitorUI
 import OpenZCineCore
 import SwiftUI
 
@@ -9,7 +10,7 @@ import SwiftUI
 /// shared `SessionRecoveryState`: retry here, or leave for the operator menu.
 ///
 /// Deliberately built from the monitor's own chrome idiom (`LiveDesign` palette, `liquidGlass`,
-/// `DesignTokens.cornerRadius`, `minTapTarget`) rather than a system alert: alerts are portrait-
+/// `MonitorTheme.radius`, `minTapTarget`) rather than a system alert: alerts are portrait-
 /// biased and this app is a ~400pt-tall landscape monitor.
 struct MonitorRecoveryOverlay: View {
     @Environment(NativeAppModel.self) private var model
@@ -91,7 +92,7 @@ struct MonitorRecoveryOverlay: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
         .liquidGlass(
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+            in: RoundedRectangle(cornerRadius: MonitorTheme.radius, style: .continuous)
         )
         .shadow(color: .black.opacity(0.35), radius: 22, y: 10)
     }

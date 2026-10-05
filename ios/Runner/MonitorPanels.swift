@@ -507,7 +507,7 @@ struct CommandSmallTile: View {
                     .stroke(LiveDesign.hairline, lineWidth: 1)
             )
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .disabled(picker == nil)
     }
 }
@@ -1226,7 +1226,7 @@ struct PickerPanel: View {
                 .frame(width: 32, height: 32)
                 .liquidGlass(in: Circle())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .disabled(!enabled)
     }
 
@@ -1304,7 +1304,7 @@ struct PickerPanel: View {
                                 active ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
                     }
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .opacity(modeDisabled ? 0.35 : 1)
                 .disabled(modeDisabled)
                 // Full locks (shutter / R3D record) freeze tabs; Auto ISO only freezes the drum.
@@ -1668,7 +1668,7 @@ struct QualityPickerPanel: View {
                         .stroke(active ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1)
                 }
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
     private func seed() {
@@ -1803,7 +1803,7 @@ struct AccentDrumWheel: View {
         }
         // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
         // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
         .accessibilityLabel(label)
@@ -2185,7 +2185,7 @@ struct LUTPickerContent: View {
                         ? LiveDesign.accentDim : LiveDesign.glassBright,
                     in: Capsule())
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             if model.assist.splitComparison {
                 SegmentedButtons(
                     items: SplitComparisonOrientation.allCases.map(\.rawValue),
@@ -2316,7 +2316,7 @@ struct LUTPickerContent: View {
                         .padding(.vertical, 6)
                         .background(isOn ? LiveDesign.accentDim : LiveDesign.glass, in: Capsule())
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
         .frame(maxWidth: .infinity)
@@ -2412,7 +2412,7 @@ struct LUTPickerContent: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(LiveDesign.glassBright, in: Capsule())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
     @ViewBuilder private var customTab: some View {
@@ -2469,7 +2469,7 @@ struct LUTPickerContent: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(LiveDesign.glassBright, in: Capsule())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .fileImporter(
             isPresented: $importing,
             allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data]
@@ -3367,7 +3367,7 @@ struct OperatorSettingsPanel: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color(.systemRed))
                     }
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
                 } else if !model.isFrameioConfigured {
                     MonitorSettingsValueText(value: "Not set up in this build")
                 } else if frameioSigningIn {
@@ -3380,7 +3380,7 @@ struct OperatorSettingsPanel: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(LiveDesign.accent)
                     }
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
                 } else {
                     Button {
                         frameioSigningIn = true
@@ -3399,7 +3399,7 @@ struct OperatorSettingsPanel: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(LiveDesign.accent)
                     }
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
                 }
             }
             if let frameioSignInError {
@@ -3633,7 +3633,7 @@ private struct BugReportPathChooserView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LiveDesign.text)
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityLabel("Close report options")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -3711,7 +3711,7 @@ private struct BugReportPathChooserView: View {
             }
             .font(.system(size: 11.5, weight: .semibold))
             .foregroundStyle(LiveDesign.accent)
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityLabel("Open private GitHub security advisory")
         }
         .padding(12)
@@ -3805,7 +3805,7 @@ private struct BugReportPathCard: View {
             .contentShape(
                 RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(accessibilityHint)
     }
@@ -3874,7 +3874,7 @@ struct BugReportFormView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LiveDesign.text)
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityLabel("Close bug report")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -4035,7 +4035,7 @@ struct BugReportFormView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(LiveDesign.accent)
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Choose screenshots to attach")
                 .accessibilityHint(
                     "Selected images are re-rendered without embedded file metadata.")
@@ -4097,7 +4097,7 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Remove screenshot \(index + 1)")
             }
         }
@@ -4147,7 +4147,7 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Open private GitHub security advisory")
             }
         }
@@ -4190,7 +4190,7 @@ struct BugReportFormView: View {
                         in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
                     )
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .disabled(model.isSubmitting)
             .accessibilityLabel("Submit anonymous bug report")
         }
@@ -4225,7 +4225,7 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Open public GitHub issue")
             }
 
@@ -4235,12 +4235,12 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
 
                 Button("Done", action: onDismiss)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LiveDesign.text)
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

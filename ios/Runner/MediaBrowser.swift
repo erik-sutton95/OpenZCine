@@ -558,7 +558,7 @@ struct MediaBrowserView: View {
                 } label: {
                     MediaStorageCard(slot: slot, isActive: active, compact: true)
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
     }
@@ -610,7 +610,7 @@ struct MediaBrowserView: View {
                     .padding(.vertical, 8)
                     .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .disabled(selectedClipIDs.isEmpty)
             .confirmationDialog(
                 // Context-aware: pair/master/backup notes appear only when this selection
@@ -643,7 +643,7 @@ struct MediaBrowserView: View {
                     )
                     .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .disabled(selectedClipIDs.isEmpty)
             .background {
                 GeometryReader { proxy in
@@ -766,7 +766,7 @@ struct MediaBrowserView: View {
             .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
             .opacity(model.mediaFetchInProgress ? 0.5 : 1)
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .disabled(model.mediaFetchInProgress)
         .accessibilityLabel("Refresh camera media")
     }
@@ -1033,10 +1033,10 @@ private struct MediaStorageCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             isActive ? LiveDesign.accentDim : LiveDesign.surface.opacity(0.55),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+            in: RoundedRectangle(cornerRadius: MonitorTheme.radius, style: .continuous)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: MonitorTheme.radius, style: .continuous)
                 .stroke(
                     isActive ? LiveDesign.accent.opacity(0.5) : LiveDesign.hairline, lineWidth: 1)
         )
@@ -1663,7 +1663,7 @@ struct MediaPhotoViewer: View {
                         CircleIconButton(systemName: "xmark", size: 34)
                             .contentShape(Circle())
                     }
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
                     Text(displayClip.filename)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(LiveDesign.text)
@@ -1683,7 +1683,7 @@ struct MediaPhotoViewer: View {
                             .padding(.horizontal, 12).padding(.vertical, 8)
                             .liquidGlass(in: Capsule(), interactive: true)
                         }
-                        .buttonStyle(.zcTapTarget)
+                        .buttonStyle(.monitorTapTarget)
                     }
                     deleteButton
                     shareButton
@@ -1755,7 +1755,7 @@ struct MediaPhotoViewer: View {
             CircleIconButton(systemName: "trash", size: 34)
                 .contentShape(Circle())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .confirmationDialog(
             model.deletionConfirmMessage(for: [clip]),
             isPresented: $isDeleteConfirmPresented,
@@ -1803,7 +1803,7 @@ struct MediaPhotoViewer: View {
                     .contentShape(Circle())
             }
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel("Share photo")
     }
 
@@ -1831,7 +1831,7 @@ struct MediaPhotoViewer: View {
                 .padding(.vertical, 6)
                 .background(isActive ? LiveDesign.accentDim : Color.clear, in: Capsule())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
     /// Switches the viewer to the other side of the pair and loads/streams that file.
@@ -2012,7 +2012,7 @@ struct StarRatingRow: View {
                         .font(.system(size: 19, weight: .medium))
                         .foregroundStyle(star <= stars ? LiveDesign.accent : LiveDesign.muted)
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
         .padding(.horizontal, 16)
@@ -2452,12 +2452,12 @@ struct MediaPlayerView: View {
 
     // MARK: Bottom bar (playback transport or inline view-assist)
 
-    /// Compact playback chrome — primary controls use 44pt hit targets via `ZCTapTargetButtonStyle`.
+    /// Compact playback chrome — primary controls use 44pt hit targets via `MonitorTapTargetButtonStyle`.
     ///
     /// Sized so the full transport row fits the narrowest supported width. It grew to eight
     /// controls when the conform preview landed and silently overflowed: an HStack of fixed-size
     /// children does not compress, so the row widened the whole chrome stack and pushed the TOP
-    /// bar's back and favourite buttons off both screen edges. Visual size only — `.zcTapTarget`
+    /// bar's back and favourite buttons off both screen edges. Visual size only — `.monitorTapTarget`
     /// keeps every hit target at 44pt regardless.
     enum PlaybackChrome {
         static let barPaddingH: CGFloat = 10
@@ -2559,7 +2559,7 @@ struct MediaPlayerView: View {
             .liquidGlass(in: Capsule(), interactive: true)
             .opacity(0.9)
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
     }
 

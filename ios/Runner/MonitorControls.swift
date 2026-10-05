@@ -199,7 +199,7 @@ struct SegmentedButtons: View {
                             in: Capsule()
                         )
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
     }
@@ -239,7 +239,7 @@ struct GridToggle: View {
         Button(action: action) {
             GlassChoice(title: title, isSelected: isOn)
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 }
 
@@ -329,7 +329,7 @@ struct SettingActionCard: View {
                     )
             )
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 }
 
@@ -349,7 +349,7 @@ struct HelpBadge: View {
                 .background(LiveDesign.background.opacity(0.5), in: Circle())
                 .overlay(Circle().stroke(LiveDesign.hairline, lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .popover(isPresented: $showing) {
             Text(text)
                 .font(.system(size: 12, weight: .regular))
@@ -533,7 +533,7 @@ struct CloseButton: View {
                 .frame(width: size, height: size)
                 .glassCircle(interactive: true)
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 }
 
@@ -641,7 +641,7 @@ struct WhiteBalanceTintPad: View {
                 .frame(width: 28, height: 28)
                 .background(LiveDesign.glassBright, in: Circle())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel("Shift toward \(label)")
     }
 
@@ -820,7 +820,7 @@ struct ChromeEditBadge: View {
                 .background(on ? LiveDesign.accent : Color.black.opacity(0.9), in: Circle())
                 .overlay(Circle().strokeBorder(LiveDesign.text.opacity(0.55), lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         // A 26pt disc is well under the 44pt minimum, and these sit over live chrome where a near
         // miss would otherwise fall through to the element behind.
         .minTapTarget()
@@ -905,7 +905,7 @@ struct ChromeEditBanner: View {
                     .padding(.vertical, 6)
                     .background(LiveDesign.accent, in: Capsule())
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityIdentifier("monitor.chromeEdit.done")
         }
         .padding(.leading, 12)

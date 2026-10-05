@@ -1,5 +1,6 @@
 import AVFoundation
 import MonitorPresentation
+import MonitorUI
 import OpenCineAppKit
 import OpenCineApple
 import OpenZCineCore
@@ -687,10 +688,10 @@ struct StartupWizardPrepareCards: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     StartupColors.card,
-                    in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                    in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                    RoundedRectangle(cornerRadius: MonitorTheme.radius)
                         .stroke(StartupColors.border.opacity(0.10), lineWidth: 1)
                 )
             }
@@ -738,10 +739,10 @@ struct StartupWizardDeviceInstructionCard: View {
         .padding(.vertical, style.isTight ? 10 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            StartupColors.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+            StartupColors.card, in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+            RoundedRectangle(cornerRadius: MonitorTheme.radius)
                 .stroke(StartupColors.border.opacity(0.10), lineWidth: 1)
         )
     }
@@ -924,7 +925,7 @@ struct StartupFirstPairWizardView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
 }
@@ -1096,7 +1097,7 @@ struct StartupWizardTransportCard: View {
                         StartupColors.accent.opacity(0.1),
                         in: RoundedRectangle(cornerRadius: 9))
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
     }
@@ -1440,10 +1441,10 @@ struct StartupDiscoveredCameraCard: View {
             .padding(.horizontal, compact ? 12 : 16)
             .frame(height: compact ? 64 : 84)
             .background(
-                StartupColors.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                StartupColors.card, in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                RoundedRectangle(cornerRadius: MonitorTheme.radius)
                     .stroke(
                         selected
                             ? StartupColors.accent.opacity(0.50)
@@ -1451,7 +1452,7 @@ struct StartupDiscoveredCameraCard: View {
                         lineWidth: selected ? 2 : 1)
             )
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
     private func sourceLabel(_ source: DiscoverySource) -> String {
@@ -1576,10 +1577,10 @@ struct StartupEmptyDiscoveryCard: View {
         .padding(.horizontal, compact ? 12 : 18)
         .padding(.vertical, compact ? 12 : 24)
         .background(
-            StartupColors.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+            StartupColors.card, in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
+            RoundedRectangle(cornerRadius: MonitorTheme.radius).stroke(
                 StartupColors.border.opacity(0.10), lineWidth: 1))
     }
 }
@@ -1587,7 +1588,7 @@ struct StartupEmptyDiscoveryCard: View {
 struct StartupIconSquare: View {
     let systemName: String
     var size: CGFloat = 56
-    var cornerRadius: CGFloat = DesignTokens.cornerRadius
+    var cornerRadius: CGFloat = MonitorTheme.radius
     var tint: Color = StartupColors.accent
 
     var body: some View {
@@ -1616,10 +1617,10 @@ struct StartupOutlineButtonStyle: ButtonStyle {
             .padding(.vertical, 14)
             .background(
                 StartupColors.control.opacity(configuration.isPressed ? 0.98 : 0.82),
-                in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
+                RoundedRectangle(cornerRadius: MonitorTheme.radius).stroke(
                     StartupColors.border.opacity(0.12), lineWidth: 1)
             )
             .opacity(configuration.isPressed ? 0.78 : 1)
@@ -1645,7 +1646,7 @@ struct StartupFilledButtonStyle: ButtonStyle {
                 .padding(.vertical, 14)
                 .background(
                     StartupColors.accent.opacity(configuration.isPressed ? 0.80 : 1),
-                    in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                    in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
                 )
                 .opacity(isEnabled ? 1 : 0.4)
         }
@@ -1674,7 +1675,7 @@ struct StartupWizardFilledButtonStyle: ButtonStyle {
                     isEnabled
                         ? StartupColors.accent.opacity(configuration.isPressed ? 0.80 : 1)
                         : StartupColors.control.opacity(0.6),
-                    in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                    in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
                 )
                 .opacity(isEnabled ? 1 : 0.55)
         }

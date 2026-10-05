@@ -26,8 +26,8 @@ enum LiveDesign {
     /// Standard height for the bottom control bars (assist toolbar + value strip).
     static let controlHeight: CGFloat = 58
 
-    /// See `DesignTokens.cornerRadius` — single source of truth for rounded chrome surfaces.
-    static let cornerRadius = DesignTokens.cornerRadius
+    /// See `MonitorTheme.radius` — single source of truth for rounded chrome surfaces.
+    static let cornerRadius = MonitorTheme.radius
 
 }
 
@@ -1059,7 +1059,7 @@ struct InstantReviewOverlay: View {
                                 .frame(width: 42, height: 42)
                                 .liquidGlass(in: Circle(), interactive: true)
                         }
-                        .buttonStyle(.zcTapTarget)
+                        .buttonStyle(.monitorTapTarget)
                     }
                     if model.assistConfiguration.instantReviewShowsCaptureInfo,
                         let info = review.infoLine
@@ -1233,7 +1233,7 @@ struct WatcherControlKey: View {
                         model.relayHoldsControl ? LiveDesign.accent : LiveDesign.hairline,
                         lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 }
@@ -1265,7 +1265,7 @@ struct BroadcasterControlKey: View {
             .background(.black.opacity(0.55), in: Capsule())
             .overlay(Capsule().strokeBorder(LiveDesign.accent, lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 }
@@ -1626,7 +1626,7 @@ struct CaptureSettingButton: View {
                     readoutLabel
                         .opacity(isISORecordingLocked || isModeReadOnly ? 0.55 : 1.0)
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
         // Publish this readout's global frame so a tap on it (through the picker backdrop) can

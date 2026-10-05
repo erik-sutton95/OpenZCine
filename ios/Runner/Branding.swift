@@ -1,3 +1,4 @@
+import MonitorUI
 import SwiftUI
 
 /// OpenZCine brand palette — Nikon-inspired gold on charcoal (no third-party trademarks).
@@ -17,7 +18,7 @@ enum BrandColors {
 /// OZC monogram mark (legacy programmatic branding; superseded by `AppLogo` raster assets).
 struct OZCMonogramMark: View {
     var size: CGFloat = 72
-    var cornerRadius: CGFloat = DesignTokens.cornerRadius
+    var cornerRadius: CGFloat = MonitorTheme.radius
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
