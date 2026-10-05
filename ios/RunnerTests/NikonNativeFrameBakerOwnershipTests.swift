@@ -1,6 +1,7 @@
 import CoreImage
 import Metal
 import OpenCineApple
+import OpenZCineCore
 import XCTest
 import UIKit
 

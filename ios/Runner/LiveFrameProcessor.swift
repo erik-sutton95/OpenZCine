@@ -319,7 +319,7 @@ extension NativeAppModel {
 
     /// Publishes scope bins/points and derived traffic-light readings in one assignment.
     /// Heavy derivation runs off the main actor; only the final `scopeAssist` assignment is main-bound.
-    func publishScopeAssist(samples: ScopeSamples) async {
+    func publishScopeAssist(samples: OpenZCineCore.ScopeSamples) async {
         let trafficLightsCrushClip = assistConfiguration.scopes.crushClipCompensation
         let mapping = exposureSignalMapping
         let vectorscopeCube = vectorscopeMonitorCube(
@@ -350,7 +350,7 @@ extension NativeAppModel {
         let includePoints =
             full || ScopeAssistSampling.needsPointSamples(visible: visible)
         let stride = ScopeAssistSampling.pointStride
-        let samples = ScopeSampler.sample(
+        let samples = OpenZCineCore.ScopeSampler.sample(
             rgba: buffer.data, width: buffer.width, height: buffer.height,
             bytesPerRow: buffer.bytesPerRow, stride: stride, includePoints: includePoints)
         await publishScopeAssist(samples: samples)
