@@ -1,6 +1,7 @@
 import AVFoundation
 import OSLog
 import OpenCineApple
+import OpenCineMedia
 import OpenZCineCore
 
 private let playbackAudioLogger = Logger(subsystem: "OpenZCine", category: "media-playback-audio")
@@ -46,7 +47,7 @@ final class PlaybackScopeController {
     func startPolling(
         effectsBox: MediaLUT.PlaybackEffectsBox,
         isActive: @escaping @MainActor () -> Bool,
-        onSamples: @escaping @MainActor (ScopeSamples) async -> Void
+        onSamples: @escaping @MainActor (OpenCineMedia.ScopeSamples) async -> Void
     ) {
         sampleTask?.cancel()
         lastPublishedRevision = nil

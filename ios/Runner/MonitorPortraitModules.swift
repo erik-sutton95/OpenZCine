@@ -1,3 +1,4 @@
+import MonitorUI
 import SwiftUI
 import OpenZCineCore
 
@@ -6,7 +7,7 @@ import OpenZCineCore
 /// filling an equal vertical share of the zone. No tap-to-swap — what's enabled is what shows.
 ///
 /// Reuses the exact plots the landscape floating panels use (`ScopeMini` for
-/// waveform/parade/histogram, `TrafficLightsMeterMini` for traffic lights) and the same sample
+/// waveform/parade/histogram, shared `MonitorTrafficLightsMeter` for traffic lights) and the same sample
 /// sources (`model.scopeAssist`). Because the shown kinds are exactly
 /// the enabled `liveViewVisibleAssistTools`, the frame-loop sampler already meters them via
 /// `visibleAssistTools(for: .liveView)` — no `portraitScopesFrameTool` seam needed.
@@ -57,7 +58,7 @@ struct PortraitScopesStack: View {
                 mapping: model.exposureSignalMapping)
         default:
             // `.trafficLights` — the portrait stack is full-width, so spread + widen the bars.
-            TrafficLightsMeterMini(reading: model.scopeAssist.trafficLights, fillsWidth: true)
+            MonitorTrafficLightsMeter(reading: model.scopeAssist.traffic, fillsWidth: true)
         }
     }
 }

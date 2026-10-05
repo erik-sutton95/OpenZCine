@@ -319,7 +319,7 @@ extension NativeAppModel {
 
     /// Publishes scope bins/points and derived traffic-light readings in one assignment.
     /// Heavy derivation runs off the main actor; only the final `scopeAssist` assignment is main-bound.
-    func publishScopeAssist(samples: OpenZCineCore.ScopeSamples) async {
+    func publishScopeAssist(samples: OpenCineMedia.ScopeSamples) async {
         let trafficLightsCrushClip = assistConfiguration.scopes.crushClipCompensation
         let mapping = exposureSignalMapping
         let vectorscopeCube = vectorscopeMonitorCube(
@@ -334,11 +334,11 @@ extension NativeAppModel {
                 vectorscopeCube: vectorscopeCube,
                 previous: previous)
         }.value
-        scopeAssist = bundle
+        publishLiveScopeBundle(bundle)
     }
 
     func clearScopeAssist() {
-        scopeAssist = .empty
+        publishLiveScopeBundle(.empty)
     }
 
     /// Demo / mock-feed path: sample a `UIImage` (no live JPEG loop). `full` forces scatter points
@@ -350,9 +350,10 @@ extension NativeAppModel {
         let includePoints =
             full || ScopeAssistSampling.needsPointSamples(visible: visible)
         let stride = ScopeAssistSampling.pointStride
-        let samples = OpenZCineCore.ScopeSampler.sample(
-            rgba: buffer.data, width: buffer.width, height: buffer.height,
-            bytesPerRow: buffer.bytesPerRow, stride: stride, includePoints: includePoints)
+        let samples = OpenCineMedia.ScopeSampler.sampleRaw(
+            bytes: buffer.data, width: buffer.width, height: buffer.height,
+            bytesPerRow: buffer.bytesPerRow, transfer: .rec709, includePoints: includePoints,
+            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true)
         await publishScopeAssist(samples: samples)
     }
 }

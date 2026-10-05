@@ -6,6 +6,7 @@ import Foundation
 import UIKit
 import os
 import OpenCineApple
+import OpenCineMedia
 import OpenZCineCore
 
 /// LUT baking for media playback preview and export. Builds the same `CIColorCube` pipeline the live
@@ -92,12 +93,12 @@ enum MediaLUT {
     final class PlaybackEffectsBox: @unchecked Sendable {
         struct ScopeSnapshot: Sendable {
             let revision: UInt64
-            let samples: ScopeSamples
+            let samples: OpenCineMedia.ScopeSamples
         }
 
         private struct ScopeState: Sendable {
             var revision: UInt64 = 0
-            var samples: ScopeSamples = .empty
+            var samples: OpenCineMedia.ScopeSamples = .empty
             var isActive = false
             var activationGeneration: UInt64 = 0
             var compositionGeneration: UInt64 = 0
@@ -211,10 +212,11 @@ enum MediaLUT {
                 let buffer = FrameSampling.rgbaBuffer(
                     from: UIImage(cgImage: cgImage), maxWidth: 200)
             else { return }
-            let samples = ScopeSampler.sample(
-                rgba: buffer.data, width: buffer.width, height: buffer.height,
-                bytesPerRow: buffer.bytesPerRow,
-                stride: ScopeAssistSampling.pointStride, includePoints: true)
+            let samples = OpenCineMedia.ScopeSampler.sampleRaw(
+                bytes: buffer.data, width: buffer.width, height: buffer.height,
+                bytesPerRow: buffer.bytesPerRow, transfer: .rec709, includePoints: true,
+                layout: .rgba, stride: ScopeAssistSampling.pointStride,
+                includeSampleCoordinates: true, requireCompleteRows: true)
             scopeState.withLock { state in
                 guard state.isActive,
                     state.activationGeneration == ticket.activationGeneration,

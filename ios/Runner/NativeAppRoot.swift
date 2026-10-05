@@ -2183,10 +2183,13 @@ final class NativeAppModel {
     var displayedFeedRotation: PTPLiveViewRotation {
         liveFeedRotation.displayed(autoRotateEnabled: preferences.autoRotateFeedEnabled)
     }
-    /// Latest scope sample plus derived traffic-light readings — one publish per throttle tick.
-    var scopeAssist: ScopeAssistBundle = .empty
-    /// Convenience accessor for scope panels that only need bins / points.
-    var scopeSamples: OpenZCineCore.ScopeSamples { scopeAssist.samples }
+    /// Latest scope bundle, published per throttle tick on the shared sample bus of the
+    /// current picture source. A replaced or retired source clears it.
+    var scopeAssist: ScopeAssistBundle { nativePictureBus.bundle }
+    /// Publishes one bundle for the current picture source; a stale source is rejected.
+    func publishLiveScopeBundle(_ bundle: ScopeAssistBundle) {
+        nativePictureBus.publish(nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
+    }
     /// Operator-dragged centres for the movable scopes / false-colour reference, keyed by panel id
     /// (in the live-canvas coordinate space). Session cache; persisted copy lives in
     /// `movablePanelPositions`. Absent in both = the default corner.
@@ -7905,7 +7908,7 @@ final class NativeAppModel {
     /// `image` must be the clean decoded camera frame — never the assist-baked display frame.
     private func sampleLiveScopeAssist(
         image: UIImage, visibleScopes: Set<MonitorAssistTool>, thermalTier: ThermalTier
-    ) async -> OpenZCineCore.ScopeSamples {
+    ) async -> OpenCineMedia.ScopeSamples {
         // ONE sampler for every surface — the same 200px/stride-2 CPU pipeline playback uses;
         // binning the full-resolution frame reads subtly differently from the shared downsampled
         // tap. [1:1 live/playback invariant]

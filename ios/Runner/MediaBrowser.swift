@@ -1984,7 +1984,7 @@ private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
     let mapping: ExposureSignalMapping
     let vectorscopeCube: CubeLUT?
 
-    func bundle(samples: OpenZCineCore.ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
+    func bundle(samples: OpenCineMedia.ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
         ScopeAssistSampling.bundle(
             samples: samples,
             trafficLightsCrushClip: trafficLightsCrushClip,

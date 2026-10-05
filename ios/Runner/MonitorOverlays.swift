@@ -1,4 +1,7 @@
 import CoreMotion
+import MonitorPresentation
+import MonitorUI
+import OpenCineMedia
 import SwiftUI
 import OpenZCineCore
 
@@ -121,8 +124,8 @@ struct FeedAssistOverlayModule: View {
                                 baseSize: base,
                                 onChange: { model.assistConfiguration.trafficLights.scale = $0 })
                         ) {
-                            TrafficLightsMeterMini(
-                                reading: model.scopeAssist.trafficLights)
+                            MonitorTrafficLightsMeter(
+                                reading: model.scopeAssist.traffic)
                         }
                     }
                     if visible.contains(.falseColor)
@@ -434,7 +437,7 @@ struct PlaybackAssistOverlayModule: View {
                             baseSize: base,
                             onChange: { model.assistConfiguration.trafficLights.scale = $0 })
                     ) {
-                        TrafficLightsMeterMini(reading: scopeAssist.trafficLights)
+                        MonitorTrafficLightsMeter(reading: scopeAssist.traffic)
                     }
                 }
                 if visible.contains(.falseColor)
@@ -1586,169 +1589,7 @@ struct FalseColorReference: View {
 
 /// RED-style RGB goal-post meter — slim vertical columns, centre-anchored single-sided level fill,
 /// clip/crush dots at the highlight and shadow edges.
-struct TrafficLightsMeterMini: View {
-    let reading: TrafficLightsReading
-    /// Portrait fit-mode stacks the scope full-width, so the 74:168 aspect-locked meter floats
-    /// centred with dead horizontal space. When true, the three bars spread across the full width
-    /// and grow wider to use it. Default false keeps the landscape floating panel (exact 74-box)
-    /// pixel-identical.
-    var fillsWidth: Bool = false
-
-    private static let baseSize = CGSize(width: 74, height: 168)
-
-    var body: some View {
-        GeometryReader { proxy in
-            let uiScale = min(
-                proxy.size.width / Self.baseSize.width,
-                proxy.size.height / Self.baseSize.height)
-            // Fill mode: widen each bar off the available width (three bars sharing the row with a
-            // gap each), capped so they don't get comically fat on very wide zones; else the
-            // aspect-locked 11pt track.
-            let columnWidth =
-                fillsWidth
-                ? min(44, max(11 * uiScale, (proxy.size.width - 16 * uiScale) / 6))
-                : 11 * uiScale
-            VStack(spacing: 6 * uiScale) {
-                Text("TL")
-                    .font(.system(size: 8.5 * uiScale, weight: .bold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.58))
-                    .lineLimit(1)
-                HStack(alignment: .bottom, spacing: 6 * uiScale) {
-                    goalPost(
-                        color: ScopePalette.rgba(255, 92, 82, 1), channel: reading.red,
-                        uiScale: uiScale, columnWidth: columnWidth)
-                    goalPost(
-                        color: ScopePalette.rgba(86, 235, 132, 1), channel: reading.green,
-                        uiScale: uiScale, columnWidth: columnWidth)
-                    goalPost(
-                        color: ScopePalette.rgba(96, 158, 255, 1), channel: reading.blue,
-                        uiScale: uiScale, columnWidth: columnWidth)
-                }
-                .frame(maxWidth: fillsWidth ? .infinity : nil)
-            }
-            .padding(.horizontal, 8 * uiScale)
-            .padding(.vertical, 8 * uiScale)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        }
-        .background(Color(red: 0.025, green: 0.036, blue: 0.03).opacity(0.72))
-        .clipShape(RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.34), radius: 16, x: 0, y: 12)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Traffic Lights")
-        .accessibilityValue(trafficLightsAccessibilityValue)
-    }
-
-    private var trafficLightsAccessibilityValue: String {
-        func channel(_ name: String, _ ch: TrafficLightsChannelReading) -> String {
-            let display = TrafficLightsMeter.channelDisplay(for: ch)
-            let lean =
-                switch display.side {
-                case .neutral: "balanced"
-                case .over: "over"
-                case .under: "under"
-                }
-            let flags = [ch.clip ? "clip" : nil, ch.crush ? "crush" : nil].compactMap { $0 }
-            let flagSuffix = flags.isEmpty ? "" : " (\(flags.joined(separator: ", ")))"
-            return "\(name) \(lean)\(flagSuffix)"
-        }
-        return [
-            channel("red", reading.red), channel("green", reading.green),
-            channel("blue", reading.blue),
-        ]
-        .joined(separator: ", ")
-    }
-
-    private func goalPost(
-        color: Color, channel: TrafficLightsChannelReading, uiScale: CGFloat, columnWidth: CGFloat
-    ) -> some View {
-        let columnHeight = 108 * uiScale
-        let indicatorSize = 8 * uiScale
-        let display = TrafficLightsMeter.channelDisplay(for: channel)
-        return VStack(spacing: 4 * uiScale) {
-            trafficIndicator(
-                color: color, active: channel.clip, size: indicatorSize, uiScale: uiScale)
-            GeometryReader { proxy in
-                let height = proxy.size.height
-                let centerLineHeight = max(1, uiScale * 0.85)
-                let halfHeight = (height - centerLineHeight) / 2
-                let barHeight = halfHeight * CGFloat(display.barFill)
-                let track = RoundedRectangle(cornerRadius: 2 * uiScale, style: .continuous)
-                    .fill(LiveDesign.text.opacity(0.08))
-                VStack(spacing: 0) {
-                    ZStack(alignment: .bottom) {
-                        track
-                        if display.side == .over, barHeight > 0 {
-                            goalPostFill(
-                                color: color, height: max(1.5 * uiScale, barHeight),
-                                uiScale: uiScale, towardClip: true)
-                        }
-                    }
-                    .frame(height: halfHeight)
-                    .clipped()
-                    Rectangle()
-                        .fill(LiveDesign.text.opacity(0.14))
-                        .frame(height: centerLineHeight)
-                    ZStack(alignment: .top) {
-                        track
-                        if display.side == .under, barHeight > 0 {
-                            goalPostFill(
-                                color: color, height: max(1.5 * uiScale, barHeight),
-                                uiScale: uiScale, towardClip: false)
-                        }
-                    }
-                    .frame(height: halfHeight)
-                    .clipped()
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 2 * uiScale, style: .continuous))
-                .animation(.easeOut(duration: 0.12), value: display.barFill)
-                .animation(.easeOut(duration: 0.12), value: display.side)
-            }
-            .frame(width: columnWidth, height: columnHeight)
-            trafficIndicator(
-                color: color, active: channel.crush, size: indicatorSize, uiScale: uiScale)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    /// Single-sided level bar anchored at the centre line and growing toward clip or crush.
-    private func goalPostFill(
-        color: Color, height: CGFloat, uiScale: CGFloat, towardClip: Bool
-    ) -> some View {
-        RoundedRectangle(cornerRadius: 2 * uiScale, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        color.opacity(0.35),
-                        color.opacity(0.92),
-                    ],
-                    startPoint: towardClip ? .bottom : .top,
-                    endPoint: towardClip ? .top : .bottom
-                )
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-    }
-
-    private func trafficIndicator(color: Color, active: Bool, size: CGFloat, uiScale: CGFloat)
-        -> some View
-    {
-        Circle()
-            .fill(active ? color : Color.clear)
-            .frame(width: size, height: size)
-            .overlay(
-                Circle()
-                    .strokeBorder(
-                        color.opacity(active ? 1 : 0.75), lineWidth: max(1, 1.5 * uiScale))
-            )
-            .shadow(color: active ? color.opacity(0.45) : .clear, radius: active ? 4 * uiScale : 0)
-            .animation(.easeOut(duration: 0.15), value: active)
-    }
-}
-
+/// Floating scope chrome around the shared MonitorUI plots, drawn on this camera's exposure axis.
 struct ScopeMini: View {
     enum Style {
         case waveform
@@ -1767,7 +1608,7 @@ struct ScopeMini: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            scopePlot
+            GeometryReader { proxy in scopePlot(size: proxy.size) }
             HStack(spacing: 4) {
                 Text(title.uppercased())
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))
@@ -1784,7 +1625,7 @@ struct ScopeMini: View {
             .padding(.horizontal, 8)
             .padding(.top, 4)
         }
-        .background(Color(red: 0.025, green: 0.036, blue: 0.03).opacity(0.72))
+        .background(MonitorScopePalette.panelFill)
         .clipShape(RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
@@ -1803,772 +1644,41 @@ struct ScopeMini: View {
         }
     }
 
-    @ViewBuilder private var scopePlot: some View {
+    @ViewBuilder private func scopePlot(size: CGSize) -> some View {
         switch style {
         case .waveform:
-            if ScopeTraceMetal.isAvailable {
-                ZStack {
-                    ScopeTraceMetalView(
-                        samples: assist.samples, trail: assist.trailSamples,
-                        mode: .waveform(scopes.waveformMode),
-                        brightness: scopes.waveformBrightness, mapping: mapping)
-                    ScopeGuideOverlay(guides: scopes.waveformGuides, mapping: mapping)
-                }
-            } else {
-                WaveformScopePlot(
-                    samples: assist.samples, trail: assist.trailSamples,
-                    mode: scopes.waveformMode, guides: scopes.waveformGuides,
-                    brightness: scopes.waveformBrightness, mapping: mapping
-                )
-                .equatable()
-            }
-        case .parade:
-            if ScopeTraceMetal.isAvailable {
-                ZStack {
-                    ScopeTraceMetalView(
-                        samples: assist.samples, trail: assist.trailSamples,
-                        mode: .parade(scopes.paradeMode),
-                        brightness: scopes.paradeBrightness, mapping: mapping)
-                    ScopeGuideOverlay(guides: scopes.paradeGuides, mapping: mapping)
-                }
-            } else {
-                ParadeScopePlot(
-                    samples: assist.samples, trail: assist.trailSamples,
-                    mode: scopes.paradeMode, guides: scopes.paradeGuides,
-                    brightness: scopes.paradeBrightness, mapping: mapping
-                )
-                .equatable()
-            }
-        case .histogram:
-            HistogramScopePlot(
+            MonitorWaveformScopePlot(
                 samples: assist.samples, trail: assist.trailSamples,
-                trafficLights: scopes.histogramTrafficLights,
-                crushClipCompensation: scopes.crushClipCompensation, mapping: mapping
-            )
-            // Skip the four-channel remap + smoothing redraw when the bins are unchanged —
-            // the same guard the waveform/parade plots already carry.
-            .equatable()
+                mode: .waveform(MonitorWaveformMode(rawValue: scopes.waveformMode.rawValue) ?? .luma),
+                axis: mapping.scopeLevelAxis, revision: assist.revision,
+                intensity: AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(
+                    scopes.waveformBrightness),
+                guides: Self.guides(scopes.waveformGuides), size: size)
+        case .parade:
+            MonitorWaveformScopePlot(
+                samples: assist.samples, trail: assist.trailSamples,
+                mode: .parade(MonitorParadeMode(rawValue: scopes.paradeMode.rawValue) ?? .rgb),
+                axis: mapping.scopeLevelAxis, revision: assist.revision,
+                intensity: AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(
+                    scopes.paradeBrightness),
+                guides: Self.guides(scopes.paradeGuides), size: size)
+        case .histogram:
+            MonitorHistogramScopePlot(
+                display: assist.histogramDisplay, traffic: assist.traffic,
+                showTrafficLights: scopes.histogramTrafficLights)
         case .vectorscope:
-            if ScopeTraceMetal.isAvailable {
-                ZStack {
-                    Canvas { context, size in
-                        let plot = scopePlotRect(size, top: 26)
-                        let side = min(plot.width, plot.height)
-                        let rect = CGRect(
-                            x: plot.midX - side / 2, y: plot.midY - side / 2,
-                            width: side, height: side)
-                        drawVectorscopeGraticule(in: context, rect: rect)
-                    }
-                    VectorscopeMetalView(
-                        points: assist.vectorscopePoints,
-                        trailPoints: assist.trailVectorscopePoints,
-                        zoom: scopes.vectorscopeZoom,
-                        brightness: scopes.vectorscopeBrightness)
-                }
-            } else {
-                VectorscopePlot(
-                    points: assist.vectorscopePoints,
-                    trailPoints: assist.trailVectorscopePoints,
-                    zoom: scopes.vectorscopeZoom,
-                    brightness: scopes.vectorscopeBrightness
-                )
-                .equatable()
-            }
-        }
-    }
-}
-
-/// Additive data opacity (`brightness × dataOpacityBase`) and the waveform/parade trace colours.
-/// Each colour bakes in its own alpha; the canvas multiplies by `dataOpacity(brightness:)` and
-/// composites with `.plusLighter`. Trace cores are fully opaque (occupied signal reads at 100% at
-/// default brightness); the low-alpha ghost keeps the soft scope-tube halo.
-enum ScopePalette {
-    static let dataOpacityBase = 1.0
-    static func dataOpacity(brightness: Int) -> Double {
-        dataOpacityBase
-            * AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(brightness)
-    }
-
-    /// One trace colour consumed by BOTH renderers: the SwiftUI Canvas reference plots and the
-    /// Metal rasterizer derive their output from the same component values, so the palettes can
-    /// never drift apart. [pinned-look invariant]
-    struct TraceColor {
-        let red: Double
-        let green: Double
-        let blue: Double
-        let alpha: Double
-
-        var color: Color {
-            Color(red: red / 255, green: green / 255, blue: blue / 255, opacity: alpha)
-        }
-
-        /// Premultiplied RGBA for additive Metal blending — `plusLighter` over a transparent
-        /// layer adds `rgb·alpha` per fill, so the fragment colour carries exactly that.
-        func premultiplied(opacity: Double) -> SIMD4<Float> {
-            let scale = Float(alpha * opacity)
-            return SIMD4(
-                Float(red / 255) * scale, Float(green / 255) * scale,
-                Float(blue / 255) * scale, scale)
+            MonitorVectorscopeScopePlot(
+                points: assist.vectorscopePoints, trail: assist.trailVectorscopePoints,
+                zoom: MonitorVectorscopeZoom(rawValue: scopes.vectorscopeZoom.rawValue) ?? .x1,
+                brightness: scopes.vectorscopeBrightness, revision: assist.revision)
         }
     }
 
-    static func rgba(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> Color {
-        Color(red: r / 255, green: g / 255, blue: b / 255, opacity: a)
-    }
-    static func trace(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> TraceColor {
-        TraceColor(red: r, green: g, blue: b, alpha: a)
-    }
-    // Waveform
-    static let lumaGhost = trace(182, 190, 186, 0.08)
-    static let luma = trace(222, 230, 224, 1.0)
-    static let lumaHot = trace(255, 255, 255, 1.0)
-    // Parade (separate lanes — no cross-channel overlap, so full opacity reads best)
-    static let paradeRed = trace(255, 86, 78, 1.0)
-    static let paradeGreen = trace(102, 232, 132, 1.0)
-    static let paradeBlue = trace(92, 156, 255, 1.0)
-    // RGB overlay waveform: the channels share one plot, so mid alpha keeps single-channel
-    // excursions saturated while coincident (neutral) signal adds up toward white — full-alpha
-    // channels would white-out everywhere on near-neutral log footage and read exactly like Luma.
-    static let overlayRed = trace(255, 64, 54, 0.55)
-    static let overlayGreen = trace(70, 240, 110, 0.55)
-    static let overlayBlue = trace(72, 148, 255, 0.62)
-    // Scope guides — boundary lines at 0/100 IRE; clip/crush safe borders inset from the edges.
-    static let boundary = rgba(220, 235, 225, 0.8)
-    static let clip = rgba(255, 150, 142, 0.8)
-    static let middle = rgba(246, 241, 226, 0.8)
-    // Histogram — lower fill alpha than the prototype so `.plusLighter` overlaps stay coloured.
-    static let histogramRedFill = rgba(255, 48, 44, 0.17)
-    static let histogramGreenFill = rgba(0, 238, 70, 0.15)
-    static let histogramBlueFill = rgba(45, 76, 255, 0.19)
-}
-
-/// Reference-IRE level (0…1) to a y inside `rect`, with the prototype's 4% top/bottom buffer.
-func scopeLevelY(_ level: Double, _ rect: CGRect) -> CGFloat {
-    let buffered = 0.04 + level * (1 - 0.08)
-    return rect.maxY - CGFloat(buffered) * rect.height
-}
-
-/// A signal code value (0…255) to its y in `rect` on the reference-IRE exposure axis.
-func scopeValueY(
-    _ value: Double, _ rect: CGRect, mapping: ExposureSignalMapping
-) -> CGFloat {
-    scopeLevelY(ScopeDisplayScale.waveformLevel(signalNative: value, mapping: mapping), rect)
-}
-
-func scopePlotRect(_ size: CGSize, top: CGFloat) -> CGRect {
-    CGRect(x: 6, y: top, width: size.width - 12, height: size.height - top - 8)
-}
-
-/// Min/max native-code axis bounds (code 0 bottom, code 255 top) — always on for waveform/parade.
-private func drawScopeBoundaryLines(in context: GraphicsContext, rect: CGRect) {
-    let style = StrokeStyle(lineWidth: 1.25)
-    for level in [0.0, 1.0] {
-        let y = scopeLevelY(level, rect)
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: y))
-        path.addLine(to: CGPoint(x: rect.maxX, y: y))
-        context.stroke(path, with: .color(ScopePalette.boundary), style: style)
+    private static func guides(_ lines: AssistConfiguration.Scopes.GuideLines) -> MonitorScopeGuides {
+        MonitorScopeGuides(clip: lines.clip, crush: lines.crush, middle: lines.middle)
     }
 }
 
-/// Fixed safe-border lines — clip 5% from the top, crush 5% from the bottom (the signal is
-/// stretched so its clip-warning and log-black codes land exactly on them) — plus the mid-grey
-/// guide, which rides the same mapping as the trace.
-private func drawScopeGuides(
-    in context: GraphicsContext, rect: CGRect, guides: AssistConfiguration.Scopes.GuideLines,
-    mapping: ExposureSignalMapping
-) {
-    let dashed = StrokeStyle(lineWidth: 1, dash: [4, 4])
-    let solid = StrokeStyle(lineWidth: 1)
-
-    func line(_ y: CGFloat, _ color: Color, _ style: StrokeStyle) {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: y))
-        path.addLine(to: CGPoint(x: rect.maxX, y: y))
-        context.stroke(path, with: .color(color), style: style)
-    }
-
-    if guides.clip {
-        line(scopeLevelY(ScopeDisplayScale.clipLineLevel, rect), ScopePalette.clip, dashed)
-    }
-    if guides.middle {
-        line(
-            scopeLevelY(ScopeDisplayScale.middleGrayLevel(mapping: mapping), rect),
-            ScopePalette.middle, solid)
-    }
-    if guides.crush {
-        line(scopeLevelY(ScopeDisplayScale.crushLineLevel, rect), ScopePalette.clip, dashed)
-    }
-}
-
-/// Reference grid and safe-border guides composited above waveform/parade traces.
-private struct ScopeGuideOverlay: View {
-    var guides: AssistConfiguration.Scopes.GuideLines
-    var mapping: ExposureSignalMapping
-
-    var body: some View {
-        Canvas { context, size in
-            let rect = scopePlotRect(size, top: 26)
-            drawScopeBoundaryLines(in: context, rect: rect)
-            drawScopeGuides(in: context, rect: rect, guides: guides, mapping: mapping)
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-/// Luma waveform: one additive mark per sampled pixel — a 2px ghost, a 1px main dot, and a brighter
-/// 1px highlight on every 4th sample — built up with `.plusLighter`, matching the prototype's
-/// `drawTraditionalWaveformDensity`.
-struct WaveformScopePlot: View, Equatable {
-    let samples: ScopeSamples
-    /// Previous tick, drawn first at decayed opacity — phosphor persistence between low-rate ticks.
-    var trail: ScopeSamples = .empty
-    var mode: AssistConfiguration.Scopes.WaveformMode = .luma
-    var guides = AssistConfiguration.Scopes.GuideLines()
-    var brightness: Int = AssistConfiguration.Scopes.defaultBrightness
-    var mapping = ExposureSignalMapping(curve: .redLog3G10)
-
-    /// Opacity multiplier for the trail pass — low enough to read as decay, high enough to bridge.
-    /// `nonisolated` because `ScopeTraceRenderer` reads it while building geometry off the main
-    /// thread; a `View`'s statics are main-actor by default, and this is a plain constant.
-    nonisolated static let trailDecay = 0.35
-
-    nonisolated static func == (lhs: WaveformScopePlot, rhs: WaveformScopePlot) -> Bool {
-        lhs.samples == rhs.samples && lhs.trail == rhs.trail && lhs.mode == rhs.mode
-            && lhs.guides == rhs.guides
-            && lhs.brightness == rhs.brightness
-            && lhs.mapping == rhs.mapping
-    }
-
-    var body: some View {
-        ZStack {
-            Canvas { context, size in
-                let rect = scopePlotRect(size, top: 26)
-                let opacity = ScopePalette.dataOpacity(brightness: brightness)
-                drawTrace(
-                    trail.points, rect: rect, context: context, opacity: opacity * Self.trailDecay)
-                drawTrace(samples.points, rect: rect, context: context, opacity: opacity)
-            }
-            ScopeGuideOverlay(guides: guides, mapping: mapping)
-        }
-    }
-
-    private func drawTrace(
-        _ points: [ScopePoint], rect: CGRect, context: GraphicsContext, opacity: Double
-    ) {
-        guard !points.isEmpty else { return }
-        var ctx = context
-        ctx.opacity = opacity
-        ctx.blendMode = .plusLighter
-        switch mode {
-        case .luma:
-            for (index, point) in points.enumerated() {
-                let x = rect.minX + CGFloat(point.xRatio) * rect.width
-                let y = scopeValueY(Double(point.luma), rect, mapping: mapping)
-                ctx.fill(
-                    Path(CGRect(x: x, y: y, width: 2, height: 2)),
-                    with: .color(ScopePalette.lumaGhost.color)
-                )
-                ctx.fill(
-                    Path(CGRect(x: x, y: y, width: 1, height: 1)),
-                    with: .color(ScopePalette.luma.color))
-                if index % 4 == 0 {
-                    ctx.fill(
-                        Path(CGRect(x: x, y: y, width: 1, height: 1)),
-                        with: .color(ScopePalette.lumaHot.color))
-                }
-            }
-        case .rgb:
-            // Per-channel waveform: the three channels share the full-width plot (additive),
-            // reading the same R/G/B the parade lanes use.
-            let channels: [(Color, (ScopePoint) -> UInt8)] = [
-                (ScopePalette.overlayRed.color, { $0.red }),
-                (ScopePalette.overlayGreen.color, { $0.green }),
-                (ScopePalette.overlayBlue.color, { $0.blue }),
-            ]
-            for point in points {
-                let x = rect.minX + CGFloat(point.xRatio) * rect.width
-                for channel in channels {
-                    let y = scopeValueY(
-                        Double(channel.1(point)), rect, mapping: mapping)
-                    ctx.fill(
-                        Path(CGRect(x: x, y: y, width: 1, height: 1)),
-                        with: .color(channel.0))
-                }
-            }
-        }
-    }
-}
-
-/// RGB parade: three additive lanes, each plotting one channel by reference-IRE level — the
-/// prototype's `drawParadeDensity`.
-struct ParadeScopePlot: View, Equatable {
-    let samples: ScopeSamples
-    /// Previous tick, drawn first at decayed opacity — phosphor persistence between low-rate ticks.
-    var trail: ScopeSamples = .empty
-    var mode: AssistConfiguration.Scopes.ParadeMode = .rgb
-    var guides = AssistConfiguration.Scopes.GuideLines()
-    var brightness: Int = AssistConfiguration.Scopes.defaultBrightness
-    var mapping = ExposureSignalMapping(curve: .redLog3G10)
-
-    nonisolated static func == (lhs: ParadeScopePlot, rhs: ParadeScopePlot) -> Bool {
-        lhs.samples == rhs.samples && lhs.trail == rhs.trail && lhs.mode == rhs.mode
-            && lhs.guides == rhs.guides
-            && lhs.brightness == rhs.brightness
-            && lhs.mapping == rhs.mapping
-    }
-
-    var body: some View {
-        ZStack {
-            Canvas { context, size in
-                let rect = scopePlotRect(size, top: 26)
-                let opacity = ScopePalette.dataOpacity(brightness: brightness)
-                drawLanes(
-                    trail.points, rect: rect, context: context,
-                    opacity: opacity * WaveformScopePlot.trailDecay)
-                drawLanes(samples.points, rect: rect, context: context, opacity: opacity)
-            }
-            ScopeGuideOverlay(guides: guides, mapping: mapping)
-        }
-    }
-
-    private func drawLanes(
-        _ points: [ScopePoint], rect: CGRect, context: GraphicsContext, opacity: Double
-    ) {
-        guard !points.isEmpty else { return }
-        // YRGB prepends a luma lane to the three colour lanes; lane width follows the count.
-        let lumaLane: [(Color, (ScopePoint) -> UInt8)] =
-            mode == .yrgb ? [(ScopePalette.luma.color, { $0.luma })] : []
-        let lanes: [(Color, (ScopePoint) -> UInt8)] =
-            lumaLane + [
-                (ScopePalette.paradeRed.color, { $0.red }),
-                (ScopePalette.paradeGreen.color, { $0.green }),
-                (ScopePalette.paradeBlue.color, { $0.blue }),
-            ]
-        let laneWidth = rect.width / CGFloat(lanes.count)
-        var ctx = context
-        ctx.opacity = opacity
-        ctx.blendMode = .plusLighter
-        for (index, lane) in lanes.enumerated() {
-            let originX = rect.minX + CGFloat(index) * laneWidth
-            for point in points {
-                let x = originX + CGFloat(point.xRatio) * (laneWidth - 1)
-                let y = scopeValueY(Double(lane.1(point)), rect, mapping: mapping)
-                ctx.fill(
-                    Path(CGRect(x: x, y: y, width: 1, height: 1)), with: .color(lane.0))
-            }
-        }
-    }
-}
-
-/// Vectorscope: BT.709 CbCr chroma density plot with an industry-standard graticule — outer ring,
-/// centre crosshair, the six 75% primary/secondary targets, and the I-phase skin-tone line at 123°.
-/// `points` are monitor-domain (the clean samples through the operator's active look) — log codes
-/// carry too little chroma spread to read; `zoom` magnifies only the trace, never the graticule.
-/// The density image draws with a soft blur so the trace reads as smooth blobs, not pixels.
-struct VectorscopePlot: View, Equatable {
-    let points: [ScopePoint]
-    /// Previous tick's monitor points — drawn at decayed opacity for phosphor persistence.
-    var trailPoints: [ScopePoint] = []
-    var zoom: AssistConfiguration.Scopes.VectorscopeZoom = .x1
-    var brightness: Int = AssistConfiguration.Scopes.defaultBrightness
-
-    nonisolated static func == (lhs: VectorscopePlot, rhs: VectorscopePlot) -> Bool {
-        lhs.points == rhs.points && lhs.trailPoints == rhs.trailPoints && lhs.zoom == rhs.zoom
-            && lhs.brightness == rhs.brightness
-    }
-
-    /// 128 bins per chroma axis — plenty for a ≤250pt panel (task-standard density resolution).
-    private static let binCount = 128
-
-    var body: some View {
-        Canvas { context, size in
-            let plot = scopePlotRect(size, top: 26)
-            let side = min(plot.width, plot.height)
-            let rect = CGRect(
-                x: plot.midX - side / 2, y: plot.midY - side / 2, width: side, height: side)
-            drawVectorscopeGraticule(in: context, rect: rect)
-            if !trailPoints.isEmpty {
-                let trailBins = VectorscopeSampler.accumulate(
-                    points: trailPoints, binCount: Self.binCount, gain: zoom.gain)
-                if let image = Self.densityImage(bins: trailBins, brightness: brightness) {
-                    var ghost = context
-                    ghost.blendMode = .plusLighter
-                    ghost.opacity = WaveformScopePlot.trailDecay
-                    ghost.addFilter(.blur(radius: side / CGFloat(Self.binCount) * 1.1))
-                    ghost.draw(Image(decorative: image, scale: 1), in: rect)
-                }
-            }
-            let bins = VectorscopeSampler.accumulate(
-                points: points, binCount: Self.binCount, gain: zoom.gain)
-            if let image = Self.densityImage(bins: bins, brightness: brightness) {
-                // Soft blob rendering: a blur of roughly one bin width melts isolated pixels into
-                // the smooth density clouds broadcast vectorscopes draw; a second unblurred pass
-                // at low opacity keeps a crisp core so small saturated features stay locatable.
-                var ctx = context
-                ctx.blendMode = .plusLighter
-                ctx.addFilter(.blur(radius: side / CGFloat(Self.binCount) * 1.1))
-                ctx.draw(Image(decorative: image, scale: 1), in: rect)
-                var crisp = context
-                crisp.blendMode = .plusLighter
-                crisp.opacity = 0.35
-                crisp.draw(Image(decorative: image, scale: 1), in: rect)
-            }
-        }
-    }
-
-    /// Bins → a small premultiplied-RGBA `CGImage`; density drives alpha while each occupied bin
-    /// retains the average sampled hue. 128×128 RGBA (64 KB) per scope tick — cheaper than
-    /// per-point Canvas fills.
-    private static func densityImage(bins: VectorscopeBins, brightness: Int) -> CGImage? {
-        let n = bins.binCount
-        guard
-            let pixels = VectorscopeDensityRasterizer.premultipliedRGBA(
-                bins: bins, brightness: brightness)
-        else { return nil }
-        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
-        return CGImage(
-            width: n, height: n, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: n * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
-    }
-}
-
-/// Pure bins-to-pixels stage kept separate from SwiftUI/CGImage so channel order, premultiplication,
-/// brightness, and the +Cr vertical flip can be tested directly.
-enum VectorscopeDensityRasterizer {
-    static func premultipliedRGBA(
-        bins: VectorscopeBins, brightness: Int
-    ) -> [UInt8]? {
-        let n = bins.binCount
-        guard n > 0, bins.peak > 0 else { return nil }
-        let gain = AssistConfiguration.Scopes.brightnessMultiplier(brightness)
-        let peak = Double(bins.peak)
-        var pixels = [UInt8](repeating: 0, count: n * n * 4)
-        for index in 0..<bins.counts.count {
-            let count = bins.counts[index]
-            guard count > 0 else { continue }
-            // Logarithmic density ramp (phosphor-style): a peak-relative sqrt lets one hot neutral
-            // bin crush sparse chroma excursions to near-invisibility; log keeps single-pixel
-            // chroma readable while dense regions still glow.
-            let density = log(1 + Double(count)) / log(1 + peak)
-            let alpha = min(1, max(0, (0.4 + 0.6 * density) * gain))
-            let tint = bins.averageColor(at: index).traceTint
-            // Flip rows so +Cr renders upward (bins store row 0 at the most negative Cr).
-            let row = n - 1 - index / n
-            let column = index % n
-            let offset = (row * n + column) * 4
-            pixels[offset] = UInt8(255 * tint.red * alpha)
-            pixels[offset + 1] = UInt8(255 * tint.green * alpha)
-            pixels[offset + 2] = UInt8(255 * tint.blue * alpha)
-            pixels[offset + 3] = UInt8(255 * alpha)
-        }
-        return pixels
-    }
-}
-
-/// Vectorscope graticule: outer ring at maximum chroma magnitude, centre crosshair, 75% colour-bar
-/// targets, and the dashed skin-tone line. Target positions come from `VectorscopeSampler.chroma`
-/// on the 75% bar code values, so trace and graticule can never disagree about the matrix.
-func drawVectorscopeGraticule(in context: GraphicsContext, rect: CGRect) {
-    let centre = CGPoint(x: rect.midX, y: rect.midY)
-    let radius = rect.width / 2
-    let faint = ScopePalette.rgba(220, 235, 225, 0.30)
-
-    context.stroke(
-        Path(ellipseIn: rect), with: .color(ScopePalette.rgba(220, 235, 225, 0.55)),
-        lineWidth: 1.25)
-
-    var cross = Path()
-    cross.move(to: CGPoint(x: centre.x - 8, y: centre.y))
-    cross.addLine(to: CGPoint(x: centre.x + 8, y: centre.y))
-    cross.move(to: CGPoint(x: centre.x, y: centre.y - 8))
-    cross.addLine(to: CGPoint(x: centre.x, y: centre.y + 8))
-    context.stroke(cross, with: .color(faint), lineWidth: 1)
-
-    // Skin-tone (I-phase) line at 123° from the +Cb axis, toward the Yl–R sector.
-    let skinAngle = 123.0 * Double.pi / 180
-    var skin = Path()
-    skin.move(to: centre)
-    skin.addLine(
-        to: CGPoint(
-            x: centre.x + CGFloat(cos(skinAngle)) * radius * 0.92,
-            y: centre.y - CGFloat(sin(skinAngle)) * radius * 0.92))
-    context.stroke(
-        skin, with: .color(ScopePalette.middle), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-
-    // 75% primary/secondary targets (191 = 0.75 × 255).
-    let targets: [(label: String, red: UInt8, green: UInt8, blue: UInt8)] = [
-        ("R", 191, 0, 0), ("Mg", 191, 0, 191), ("B", 0, 0, 191),
-        ("Cy", 0, 191, 191), ("G", 0, 191, 0), ("Yl", 191, 191, 0),
-    ]
-    for target in targets {
-        let (cb, cr) = VectorscopeSampler.chroma(
-            red: target.red, green: target.green, blue: target.blue)
-        let point = CGPoint(
-            x: centre.x + CGFloat(cb) * rect.width,
-            y: centre.y - CGFloat(cr) * rect.height)
-        let boxSide: CGFloat = 7
-        let box = CGRect(
-            x: point.x - boxSide / 2, y: point.y - boxSide / 2, width: boxSide, height: boxSide)
-        context.stroke(
-            Path(box), with: .color(ScopePalette.rgba(220, 235, 225, 0.6)), lineWidth: 1)
-        // Label pushed away from centre so it clears the box on any panel size.
-        let dx = point.x - centre.x
-        let dy = point.y - centre.y
-        let length = max(1, (dx * dx + dy * dy).squareRoot())
-        context.draw(
-            Text(target.label)
-                .font(.system(size: 6.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(ScopePalette.rgba(220, 235, 225, 0.55)),
-            at: CGPoint(x: point.x + dx / length * 10, y: point.y + dy / length * 10))
-    }
-}
-
-/// RGB + luma histogram: smooth additive R/G/B fills on the reference-IRE axis, stroked channel
-/// traces, then a dim luma outline only (no luma fill — that caused the mid-tone white slab).
-struct HistogramScopePlot: View, Equatable {
-    let samples: ScopeSamples
-    /// Previous tick, blended into the display bins — temporal smoothing between low-rate ticks.
-    var trail: ScopeSamples = .empty
-    var trafficLights: Bool = true
-    var crushClipCompensation: AssistConfiguration.CrushClipCompensation = .one
-    var mapping = ExposureSignalMapping(curve: .redLog3G10)
-
-    nonisolated static func == (lhs: HistogramScopePlot, rhs: HistogramScopePlot) -> Bool {
-        lhs.samples == rhs.samples && lhs.trail == rhs.trail
-            && lhs.trafficLights == rhs.trafficLights
-            && lhs.crushClipCompensation == rhs.crushClipCompensation
-            && lhs.mapping == rhs.mapping
-    }
-
-    /// `0.65·current + 0.35·previous` — one-tap temporal blend on the display bins.
-    private func blended(_ current: [Double], _ previous: [Double]) -> [Double] {
-        guard previous.count == current.count, !trail.histogramLuma.isEmpty else { return current }
-        var out = current
-        for index in out.indices {
-            out[index] = out[index] * 0.65 + previous[index] * 0.35
-        }
-        return out
-    }
-
-    var body: some View {
-        let threshold = crushClipCompensation.pixelFractionThreshold
-        let lights: HistogramTrafficLights? =
-            trafficLights
-            ? ScopeSampler.trafficLights(
-                red: samples.histogramRed, green: samples.histogramGreen,
-                blue: samples.histogramBlue, mapping: mapping, threshold: threshold)
-            : nil
-        ZStack {
-            Canvas { context, size in
-                // Inset the curves so they clear the traffic-light columns on each side.
-                let rect = CGRect(
-                    x: 26, y: 22, width: size.width - 52, height: size.height - 30)
-                let red = blended(
-                    ScopeDisplayScale.remapHistogram(samples.histogramRed, mapping: mapping),
-                    ScopeDisplayScale.remapHistogram(trail.histogramRed, mapping: mapping))
-                let green = blended(
-                    ScopeDisplayScale.remapHistogram(samples.histogramGreen, mapping: mapping),
-                    ScopeDisplayScale.remapHistogram(trail.histogramGreen, mapping: mapping))
-                let blue = blended(
-                    ScopeDisplayScale.remapHistogram(samples.histogramBlue, mapping: mapping),
-                    ScopeDisplayScale.remapHistogram(trail.histogramBlue, mapping: mapping))
-                let luma = blended(
-                    ScopeDisplayScale.remapHistogram(samples.histogramLuma, mapping: mapping),
-                    ScopeDisplayScale.remapHistogram(trail.histogramLuma, mapping: mapping))
-                let peak = max(
-                    red.max() ?? 0, green.max() ?? 0, blue.max() ?? 0, luma.max() ?? 0, 1)
-
-                drawHistogramReferenceGrid(in: context, rect: rect)
-                drawHistogramClipZone(in: context, rect: rect, lights: lights)
-                drawHistogramBoundaries(in: context, rect: rect)
-
-                let displayRed = smoothHistogramBinsForDisplay(red)
-                let displayGreen = smoothHistogramBinsForDisplay(green)
-                let displayBlue = smoothHistogramBinsForDisplay(blue)
-                let displayLuma = smoothHistogramBinsForDisplay(luma)
-
-                var additive = context
-                additive.opacity = 0.92
-                additive.blendMode = .plusLighter
-                drawHistogramChannel(
-                    in: additive, bins: displayRed, rect: rect, peak: peak,
-                    fill: ScopePalette.histogramRedFill,
-                    stroke: ScopePalette.rgba(255, 48, 44, 0.96))
-                drawHistogramChannel(
-                    in: additive, bins: displayGreen, rect: rect, peak: peak,
-                    fill: ScopePalette.histogramGreenFill,
-                    stroke: ScopePalette.rgba(0, 238, 70, 0.92))
-                drawHistogramChannel(
-                    in: additive, bins: displayBlue, rect: rect, peak: peak,
-                    fill: ScopePalette.histogramBlueFill,
-                    stroke: ScopePalette.rgba(45, 76, 255, 0.94))
-
-                var lumaContext = context
-                lumaContext.opacity = 0.58
-                drawHistogramLumaStroke(
-                    in: lumaContext, bins: displayLuma, rect: rect, peak: peak,
-                    stroke: ScopePalette.rgba(245, 242, 232, 0.58))
-            }
-            // Traffic lights: crushed channels on the left, clipped channels on the right.
-            if let lights {
-                HStack {
-                    trafficColumn(
-                        red: lights.crushRed, green: lights.crushGreen, blue: lights.crushBlue)
-                    Spacer()
-                    trafficColumn(
-                        red: lights.clipRed, green: lights.clipGreen, blue: lights.clipBlue)
-                }
-                .padding(.horizontal, 11)
-                // Sit the columns just below the HISTO / RGBL title row (nudged up to hug it).
-                .padding(.top, 12)
-            }
-        }
-    }
-
-    private func trafficColumn(red: Bool, green: Bool, blue: Bool) -> some View {
-        VStack(spacing: 3) {
-            trafficBlock(ScopePalette.rgba(255, 92, 82, 1), hot: red)
-            trafficBlock(ScopePalette.rgba(86, 235, 132, 1), hot: green)
-            trafficBlock(ScopePalette.rgba(96, 158, 255, 1), hot: blue)
-        }
-    }
-
-    private func trafficBlock(_ color: Color, hot: Bool) -> some View {
-        // Normal: a hollow outline in the channel colour. Clipped/crushed: the block fills in and
-        // glows so a blown channel reads at a glance.
-        RoundedRectangle(cornerRadius: 2, style: .continuous)
-            .fill(hot ? color : Color.clear)
-            .frame(width: 7.5, height: 15)
-            .overlay(
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .strokeBorder(color.opacity(hot ? 1 : 0.8), lineWidth: 1.5)
-            )
-            .shadow(color: hot ? color.opacity(0.45) : .clear, radius: hot ? 5 : 0)
-            .animation(.easeOut(duration: 0.15), value: hot)
-    }
-}
-
-/// Faint horizontal quarter-lines behind the histogram (prototype `drawHistogramReferenceGrid`).
-private func drawHistogramReferenceGrid(in context: GraphicsContext, rect: CGRect) {
-    for step in 1..<4 {
-        let y = rect.minY + rect.height * CGFloat(step) / 4
-        var line = Path()
-        line.move(to: CGPoint(x: rect.minX, y: y))
-        line.addLine(to: CGPoint(x: rect.maxX, y: y))
-        context.stroke(line, with: .color(ScopePalette.rgba(220, 235, 225, 0.06)), lineWidth: 1)
-    }
-}
-
-/// Reference IRE (0…100) to an x inside the histogram plot rect.
-private func histogramReferenceX(_ referenceIRE: Double, _ rect: CGRect) -> CGFloat {
-    let ire = min(100, max(0, referenceIRE))
-    return rect.minX + CGFloat(ire / 100) * rect.width
-}
-
-/// Narrow clip band on the right only when a traffic light trips.
-private func drawHistogramClipZone(
-    in context: GraphicsContext, rect: CGRect, lights: HistogramTrafficLights?
-) {
-    guard let lights, lights.clipRed || lights.clipGreen || lights.clipBlue else { return }
-    let clipStart = histogramReferenceX(95, rect)
-    var clip = Path()
-    clip.addRect(
-        CGRect(x: clipStart, y: rect.minY, width: rect.maxX - clipStart, height: rect.height))
-    context.fill(clip, with: .color(ScopePalette.clip.opacity(0.14)))
-}
-
-/// The histogram's min (left / 0 IRE) and max (right / 100 IRE) boundary lines.
-private func drawHistogramBoundaries(in context: GraphicsContext, rect: CGRect) {
-    let color = ScopePalette.rgba(220, 235, 225, 0.8)
-    for x in [rect.minX, rect.maxX] {
-        var line = Path()
-        line.move(to: CGPoint(x: x, y: rect.minY))
-        line.addLine(to: CGPoint(x: x, y: rect.maxY))
-        context.stroke(line, with: .color(color), lineWidth: 1.25)
-    }
-}
-
-/// Light 3-tap box blur so remapped bins read as a continuous curve instead of a comb.
-private func smoothHistogramBinsForDisplay(_ bins: [Double], radius: Int = 2) -> [Double] {
-    guard bins.count == 256, radius > 0 else { return bins }
-    var smoothed = bins
-    for index in 0..<256 {
-        let lower = max(0, index - radius)
-        let upper = min(255, index + radius)
-        let span = upper - lower + 1
-        var sum = 0.0
-        for sample in lower...upper { sum += bins[sample] }
-        smoothed[index] = sum / Double(span)
-    }
-    return smoothed
-}
-
-/// Closed fill and open stroke paths along a smoothed histogram contour (quadratic midpoints).
-private func histogramPaths(bins: [Double], rect: CGRect, peak: Double) -> (
-    fill: Path, stroke: Path
-) {
-    guard bins.count == 256, peak > 0 else { return (Path(), Path()) }
-
-    func point(at index: Int) -> CGPoint {
-        let x = rect.minX + CGFloat(index) / 255 * rect.width
-        let height = CGFloat(bins[index] / peak) * rect.height
-        return CGPoint(x: x, y: rect.maxY - height)
-    }
-
-    var fill = Path()
-    fill.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-    fill.addLine(to: point(at: 0))
-
-    var stroke = Path()
-    stroke.move(to: point(at: 0))
-
-    for index in 1..<256 {
-        let previous = point(at: index - 1)
-        let current = point(at: index)
-        let midpoint = CGPoint(x: (previous.x + current.x) / 2, y: (previous.y + current.y) / 2)
-        fill.addQuadCurve(to: midpoint, control: previous)
-        stroke.addQuadCurve(to: midpoint, control: previous)
-    }
-
-    let last = point(at: 255)
-    let penultimate = point(at: 254)
-    fill.addQuadCurve(to: last, control: penultimate)
-    stroke.addQuadCurve(to: last, control: penultimate)
-
-    fill.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-    fill.closeSubpath()
-    return (fill, stroke)
-}
-
-/// Fills and strokes one RGB histogram channel with a smooth Lightroom-style contour.
-private func drawHistogramChannel(
-    in context: GraphicsContext, bins: [Double], rect: CGRect, peak: Double, fill: Color,
-    stroke: Color
-) {
-    let paths = histogramPaths(bins: bins, rect: rect, peak: peak)
-    context.fill(paths.fill, with: .color(fill))
-    context.stroke(
-        paths.stroke, with: .color(stroke),
-        style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
-}
-
-/// Luma outline only — no area fill, which previously washed mid-tones to white.
-private func drawHistogramLumaStroke(
-    in context: GraphicsContext, bins: [Double], rect: CGRect, peak: Double, stroke: Color
-) {
-    let paths = histogramPaths(bins: bins, rect: rect, peak: peak)
-    context.stroke(
-        paths.stroke, with: .color(stroke),
-        style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
-}
-
-/// Compact broadcast-style stereo meters: two vertical bars with green→yellow→red zones (yellow
-/// from −18 dBFS, red from −6), a peak-hold tick per channel, and the camera sensitivity beneath.
-/// Playback feeds it from the player item's audio tap; live view from the camera's own sound
-/// indicator in the LiveViewObject header (bytes 824–827, already peak-held by the body).
 struct AudioMetersPanelMini: View {
     /// Slim on purpose: two readable tracks without competing with the picture or the
     /// camera-control rails in the ~400 pt landscape monitor.
@@ -2635,9 +1745,9 @@ struct AudioMetersPanelMini: View {
     }
 
     private func zoneColor(_ db: Double) -> Color {
-        if db >= Self.redFromDB { return ScopePalette.rgba(255, 92, 82, 0.95) }
-        if db >= Self.yellowFromDB { return ScopePalette.rgba(245, 208, 82, 0.95) }
-        return ScopePalette.rgba(86, 235, 132, 0.9)
+        if db >= Self.redFromDB { return MonitorScopePalette.rgba(255, 92, 82, 0.95) }
+        if db >= Self.yellowFromDB { return MonitorScopePalette.rgba(245, 208, 82, 0.95) }
+        return MonitorScopePalette.rgba(86, 235, 132, 0.9)
     }
 
     private func drawMeters(in context: GraphicsContext, size: CGSize) {
@@ -2659,7 +1769,7 @@ struct AudioMetersPanelMini: View {
             line.move(to: CGPoint(x: barsRect.minX, y: tickY))
             line.addLine(to: CGPoint(x: barsRect.maxX, y: tickY))
             context.stroke(
-                line, with: .color(ScopePalette.rgba(220, 235, 225, 0.10)), lineWidth: 1)
+                line, with: .color(MonitorScopePalette.rgba(220, 235, 225, 0.10)), lineWidth: 1)
         }
 
         let gap: CGFloat = 2

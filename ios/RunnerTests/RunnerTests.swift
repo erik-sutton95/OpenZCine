@@ -5,6 +5,7 @@ import MonitorUI
 import Network
 import OpenCineApple
 import OpenCineCore
+import OpenCineMedia
 import Observation
 import SwiftUI
 import Testing
@@ -1267,9 +1268,11 @@ final class RunnerTests: XCTestCase {
         // Path A — live view: straight UIKit decode into the untagged sampling context.
         let live = try XCTUnwrap(
             FrameSampling.rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: 256))
-        let liveSamples = ScopeSampler.sample(
-            rgba: live.data, width: live.width, height: live.height,
-            bytesPerRow: live.bytesPerRow, stride: ScopeAssistSampling.pointStride)
+        let liveSamples = OpenCineMedia.ScopeSampler.sampleRaw(
+            bytes: live.data, width: live.width, height: live.height,
+            bytesPerRow: live.bytesPerRow, transfer: .rec709, includePoints: true, layout: .rgba,
+            stride: ScopeAssistSampling.pointStride, includeSampleCoordinates: true,
+            requireCompleteRows: true)
 
         // Path B — playback: through the composition render context (working sRGB) with the
         // BT.709 output space, exactly like the player's scope tap.
@@ -1280,9 +1283,11 @@ final class RunnerTests: XCTestCase {
                 colorSpace: FrameSampling.cameraFileColorSpace))
         let playback = try XCTUnwrap(
             FrameSampling.rgbaBuffer(from: UIImage(cgImage: rendered), maxWidth: 256))
-        let playbackSamples = ScopeSampler.sample(
-            rgba: playback.data, width: playback.width, height: playback.height,
-            bytesPerRow: playback.bytesPerRow, stride: ScopeAssistSampling.pointStride)
+        let playbackSamples = OpenCineMedia.ScopeSampler.sampleRaw(
+            bytes: playback.data, width: playback.width, height: playback.height,
+            bytesPerRow: playback.bytesPerRow, transfer: .rec709, includePoints: true,
+            layout: .rgba, stride: ScopeAssistSampling.pointStride,
+            includeSampleCoordinates: true, requireCompleteRows: true)
 
         XCTAssertEqual(
             liveSamples.histogramLuma.reduce(0, +), playbackSamples.histogramLuma.reduce(0, +),
@@ -1308,49 +1313,43 @@ final class RunnerTests: XCTestCase {
     }
 
     func testScopeBundleKeepsRawSamples() {
-        let point = ScopePoint(xRatio: 0.5, red: 112, green: 68, blue: 62, luma: 82)
-        let samples = ScopeSamples(
-            histogramLuma: Array(repeating: 0, count: 256),
+        let point = OpenCineMedia.ScopePoint(
+            xRatio: 0.5, yRatio: 0, red: 112, green: 68, blue: 62, luma: 82)
+        var luma = Array(repeating: 0, count: 256)
+        luma[82] = 1
+        let samples = OpenCineMedia.ScopeSamples(
+            histogramLuma: luma,
             histogramRed: Array(repeating: 0, count: 256),
             histogramGreen: Array(repeating: 0, count: 256),
             histogramBlue: Array(repeating: 0, count: 256),
             points: [point])
+        let mapping = ExposureSignalMapping(curve: .redLog3G10)
 
         let bundle = ScopeAssistSampling.bundle(
             samples: samples,
             trafficLightsCrushClip: .quarter,
-            mapping: ExposureSignalMapping(curve: .redLog3G10))
+            mapping: mapping)
         // Every scope — vectorscope included — reads the untouched source/log points.
         XCTAssertEqual(bundle.samples, samples)
+        XCTAssertEqual(bundle.revision, 1)
+        // The shared histogram is drawn on this camera's axis, not a shared transfer curve.
+        XCTAssertEqual(
+            bundle.histogramDisplay,
+            OpenCineMedia.ScopeSampler.histogramDisplay(
+                samples: samples, previous: .empty, axis: mapping.scopeLevelAxis))
+        let next = ScopeAssistSampling.bundle(
+            samples: samples, trafficLightsCrushClip: .quarter, mapping: mapping,
+            previous: bundle)
+        XCTAssertEqual(next.revision, 2)
+        XCTAssertEqual(next.trailSamples, samples)
     }
 
     func testWaveformAndParadePaletteUsesCalibratedBrightness() {
-        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 0), 0)
-        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 100), 0.25)
-        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 200), 0.5)
-    }
-
-    func testVectorscopeDensityRasterUsesRGBAAndFlipsPositiveCrUp() {
-        let bins = VectorscopeBins(
-            binCount: 2,
-            counts: [1, 0, 0, 1],
-            redSums: [255, 0, 0, 0],
-            greenSums: [0, 0, 0, 0],
-            blueSums: [0, 0, 0, 255])
-        XCTAssertEqual(
-            VectorscopeDensityRasterizer.premultipliedRGBA(bins: bins, brightness: 100),
-            [
-                0, 0, 0, 0, 0, 0, 255, 255,
-                255, 0, 0, 255, 0, 0, 0, 0,
-            ])
-
-        let neutral = VectorscopeBins(
-            binCount: 1, counts: [1], redSums: [128], greenSums: [128], blueSums: [128])
-        XCTAssertEqual(
-            VectorscopeDensityRasterizer.premultipliedRGBA(bins: neutral, brightness: 50),
-            [127, 127, 127, 127])
-        XCTAssertNil(
-            VectorscopeDensityRasterizer.premultipliedRGBA(bins: .empty, brightness: 100))
+        // The intensity ScopeMini hands the shared plots.
+        typealias Scopes = AssistConfiguration.Scopes
+        XCTAssertEqual(Scopes.waveformParadeBrightnessMultiplier(0), 0)
+        XCTAssertEqual(Scopes.waveformParadeBrightnessMultiplier(100), 0.25)
+        XCTAssertEqual(Scopes.waveformParadeBrightnessMultiplier(200), 0.5)
     }
 
     @MainActor

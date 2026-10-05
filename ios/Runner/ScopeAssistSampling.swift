@@ -1,22 +1,6 @@
 import Foundation
+import OpenCineMedia
 import OpenZCineCore
-
-/// Bundled scope sample plus derived assist readings — published once per throttle tick so SwiftUI
-/// invalidates one property instead of separate histogram / traffic-light updates.
-struct ScopeAssistBundle: Equatable, Sendable {
-    var samples: ScopeSamples = .empty
-    /// Monitor-domain points for the vectorscope — the clean samples pushed through the
-    /// operator's active look (LUT, or the built-in display tone map). Empty when hidden.
-    var vectorscopePoints: [ScopePoint] = []
-    /// The previous tick's samples/points — the plots draw these at decayed opacity underneath
-    /// the current tick (phosphor-style persistence), so a low sampling rate still reads as a
-    /// smoothly evolving trace instead of a hard step every tick.
-    var trailSamples: ScopeSamples = .empty
-    var trailVectorscopePoints: [ScopePoint] = []
-    var trafficLights: TrafficLightsReading = .empty
-
-    static let empty = ScopeAssistBundle()
-}
 
 /// Throttle, stride, and publish policy for scope-based view assists.
 ///
@@ -31,14 +15,11 @@ struct ScopeAssistBundle: Equatable, Sendable {
 /// - **LUT / false colour / peaking / zebra** — Core Image on GPU; default `UIImageView` path does a
 ///   GPU→CPU `createCGImage` readback each displayed frame (`LiveFrameProcessor`). Opt-in
 ///   `ZC_METAL_FEED=1` avoids readback by presenting straight to a `CAMetalLayer`.
-/// - **Waveform / parade** — CPU `ScopeSampler` scatter points, rasterized by the Metal trace
-///   renderer (`ScopeTraceMetalView`) from the same points/axis/palette on every surface; the
-///   Canvas plots remain as the pixel reference (`ZC_DEMO_CANVAS_SCOPES=1`) and failure fallback.
-/// - **Vectorscope** — CPU points binned by CbCr with per-bin colour; SwiftUI draws the density.
-/// - **Histogram / traffic lights** — the same shared CPU grid per throttle tick; SwiftUI `Canvas`
-///   draws the histogram; traffic lights read the same bins. There is deliberately ONE sampler and
-///   ONE live renderer per scope on every surface — live-vs-playback parity is a product
-///   requirement, so any renderer change must hold the Canvas-reference pixel diff.
+/// - **Waveform / parade / vectorscope / histogram**: one shared CPU tap per throttle tick
+///   (OpenCineMedia `ScopeSampler`), drawn by the shared MonitorUI plots on this camera's
+///   `ExposureSignalMapping.scopeLevelAxis`; traffic lights read the same bins. There is
+///   deliberately ONE sampler and ONE renderer per scope on every surface (live-vs-playback
+///   parity is a product requirement).
 ///
 /// - **Guides / grid / crosshair / level / grain** — SwiftUI `Canvas` / shapes on the feed overlay;
 ///   level also reads PTP virtual-horizon angles (~10 Hz). Grain is rasterized once via
@@ -105,35 +86,47 @@ enum ScopeAssistSampling {
         activeScopeCount(visible: visible) > 0
     }
 
-    /// Derives traffic-light readings from one `ScopeSamples` value.
+    /// Derives traffic-light readings from one tap, on this camera's mapping.
     static func trafficLightsReading(
-        from samples: ScopeSamples,
+        from samples: OpenCineMedia.ScopeSamples,
         trafficLightsCrushClip: AssistConfiguration.CrushClipCompensation,
         mapping: ExposureSignalMapping = ExposureSignalMapping(curve: .redLog3G10)
-    ) -> TrafficLightsReading {
-        TrafficLightsMeter.measure(
-            samples: samples,
+    ) -> ScopeTrafficLightsReading {
+        let reading = TrafficLightsMeter.measure(
+            samples: OpenZCineCore.ScopeSampler.sourceSamples(samples),
             noiseFloorCompensation: trafficLightsCrushClip,
             mapping: mapping)
+        func light(_ channel: TrafficLightsChannelReading) -> ScopeChannelLight {
+            ScopeChannelLight(clip: channel.clip, crush: channel.crush, level: channel.level)
+        }
+        return ScopeTrafficLightsReading(
+            red: light(reading.red), green: light(reading.green), blue: light(reading.blue))
     }
 
+    /// One shared bundle per tick: the tap, its monitor-domain vector points, the previous tick
+    /// as phosphor trail, traffic lights and the histogram display on the camera's axis.
     static func bundle(
-        samples: ScopeSamples,
+        samples: OpenCineMedia.ScopeSamples,
         trafficLightsCrushClip: AssistConfiguration.CrushClipCompensation,
         mapping: ExposureSignalMapping = ExposureSignalMapping(curve: .redLog3G10),
         vectorscopeCube: CubeLUT? = nil,
         previous: ScopeAssistBundle = .empty
     ) -> ScopeAssistBundle {
         ScopeAssistBundle(
+            revision: previous.revision &+ 1,
             samples: samples,
             vectorscopePoints: vectorscopeCube.map {
-                VectorscopeSampler.monitorPoints(samples.points, through: $0)
+                OpenCineMedia.ScopeSampler.monitorPoints(samples.points, look: $0)
             } ?? [],
             trailSamples: previous.samples,
             trailVectorscopePoints: previous.vectorscopePoints,
-            trafficLights: trafficLightsReading(
+            traffic: trafficLightsReading(
                 from: samples,
                 trafficLightsCrushClip: trafficLightsCrushClip,
-                mapping: mapping))
+                mapping: mapping),
+            histogramDisplay: OpenCineMedia.ScopeSampler.histogramDisplay(
+                samples: samples, previous: previous.histogramDisplay,
+                axis: mapping.scopeLevelAxis),
+            clipByte: Int(mapping.clipNative.rounded()))
     }
 }
