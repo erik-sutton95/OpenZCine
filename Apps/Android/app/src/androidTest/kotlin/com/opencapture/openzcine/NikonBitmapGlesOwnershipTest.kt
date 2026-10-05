@@ -32,7 +32,9 @@ class NikonBitmapGlesOwnershipTest {
         try { check(raster.compress(Bitmap.CompressFormat.JPEG, 95, encoded)) }
         finally { raster.recycle() }
         val bytes = encoded.toByteArray()
-        return requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)).also {
+        // Mutable decode: the gates below set exact pixels on the real decoded raster.
+        val options = BitmapFactory.Options().apply { inMutable = true }
+        return requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)).also {
             assertEquals(13, it.width)
             assertEquals(7, it.height)
             assertEquals(LiveFeedColorMode.SDR, decodedLiveFeedColorMode(it))
