@@ -22,7 +22,7 @@ import com.opencapture.monitorui.MonitorMediaHitTarget
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.framing
 import com.opencapture.openzcine.performOperatorHaptic
-import com.opencapture.openzcine.LocalOperatorHaptics
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory

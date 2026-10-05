@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.offset
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
 // MonitorControls.swift + MonitorExperience.swift). Layout frames come from the

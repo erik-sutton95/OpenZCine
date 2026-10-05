@@ -64,6 +64,7 @@ import com.opencapture.openzcine.settings.LocalLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.nikonAssistSection
 import kotlinx.coroutines.launch
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
 
 /** A palette chip: a shared assist, or PLAY (photography's instant review, this camera's own). */
 internal sealed interface NikonAssistChip {

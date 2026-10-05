@@ -165,6 +165,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.opencine.appkit.rememberOperatorHaptics
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
 
 /** A consented Frame.io network hop exclusively owns disconnect/reconnect until it settles. */
 private fun FrameioInternetHopState.allowsMonitorSessionRecovery(): Boolean =
