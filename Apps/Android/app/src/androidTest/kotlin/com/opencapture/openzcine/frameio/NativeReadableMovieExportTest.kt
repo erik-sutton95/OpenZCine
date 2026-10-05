@@ -82,7 +82,8 @@ class NativeReadableMovieExportTest {
                         Files.newOutputStream(evidence.resolve("${container.extension}-decoded.png")).use { decoded.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     } finally { decoded.recycle() }
                     Files.copy(prepared.share.file, evidence.resolve("output.${container.extension}"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                    Files.writeString(evidence.resolve("${container.extension}-progress.json"), "{\"label\":\"SIMULATED actual native movie export\",\"samples\":${progress.toList()},\"bytes\":${prepared.byteCount}}")
+                    // ART's java.nio.file.Files has no writeString.
+                    Files.write(evidence.resolve("${container.extension}-progress.json"), "{\"label\":\"SIMULATED actual native movie export\",\"samples\":${progress.toList()},\"bytes\":${prepared.byteCount}}".toByteArray())
                     assertArrayEquals(original, Files.readAllBytes(source))
                 } finally { preparer.release(prepared) }
                 assertFalse(Files.exists(prepared.share.file))
@@ -106,6 +107,8 @@ class NativeReadableMovieExportTest {
             reader.setDataSource(path.toString())
             val track = (0 until reader.trackCount).firstOrNull { reader.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true } ?: return false
             reader.selectTrack(track)
+            // The AAC priming sample before the edit list's media start reads at a negative time; start at the first presented one.
+            reader.seekTo(0, MediaExtractor.SEEK_TO_NEXT_SYNC)
             return reader.sampleTime >= 0 && reader.readSampleData(ByteBuffer.allocate(64 * 1024), 0) > 0
         } finally { reader.release() }
     }
