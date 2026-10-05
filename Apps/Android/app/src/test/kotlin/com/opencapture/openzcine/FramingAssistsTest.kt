@@ -1,10 +1,12 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
-import com.opencapture.openzcine.settings.LocalDesqueezeRatio
-import com.opencapture.openzcine.settings.LocalFramingAspectRatio
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.opencine.media.MonitorDesqueezeDirection
+import com.opencapture.opencine.media.MonitorDesqueezePreset
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import com.opencapture.openzcine.settings.LocalFramingGuideFamily
+import com.opencapture.openzcine.settings.LocalLevelStyle
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,22 +17,22 @@ import kotlin.test.assertTrue
 class FramingAssistsTest {
 
     @Test
-    fun `horizontal and vertical desqueeze remain centered inside the exact visible feed`() {
+    fun `narrowing and widening desqueeze remain centered inside the exact visible feed`() {
         val feed = FramingAssistRect(left = 10f, top = 20f, width = 1_000f, height = 500f)
 
         val horizontal =
             localDesqueezePresentationRect(
                 feed = feed,
                 enabled = true,
-                factor = LocalDesqueezeRatio.X200.factor,
-                orientation = LocalDesqueezeOrientation.HORIZONTAL,
+                factor = 2f,
+                direction = MonitorDesqueezeDirection.VERTICAL,
             )
         val vertical =
             localDesqueezePresentationRect(
                 feed = feed,
                 enabled = true,
-                factor = LocalDesqueezeRatio.X200.factor,
-                orientation = LocalDesqueezeOrientation.VERTICAL,
+                factor = 2f,
+                direction = MonitorDesqueezeDirection.HORIZONTAL,
             )
 
         assertEquals(260f, horizontal.left)
@@ -53,14 +55,14 @@ class FramingAssistsTest {
                         guidesVisible = true,
                         selectedGuideRatios =
                             setOf(
-                                LocalFramingAspectRatio.RATIO_239,
-                                LocalFramingAspectRatio.RATIO_9_16,
+                                MonitorGuideAspect.CINEMA,
+                                MonitorGuideAspect.VERTICAL,
                             ),
                     ),
             )
 
         assertEquals(
-            listOf(LocalFramingAspectRatio.RATIO_9_16, LocalFramingAspectRatio.RATIO_239),
+            listOf(MonitorGuideAspect.VERTICAL, MonitorGuideAspect.CINEMA),
             plan.guideFrames.map { it.ratio },
         )
         assertEquals(696.25f, plan.guideFrames.first().rect.left)
@@ -73,7 +75,7 @@ class FramingAssistsTest {
 
     @Test
     fun `inverse guide mask follows the union only when visible guide frames exist`() {
-        val selected = setOf(LocalFramingAspectRatio.RATIO_239, LocalFramingAspectRatio.RATIO_16_9)
+        val selected = setOf(MonitorGuideAspect.CINEMA, MonitorGuideAspect.HD)
         val visible =
             localFramingRenderPlan(
                 1_920f,
@@ -103,36 +105,23 @@ class FramingAssistsTest {
 
     @Test
     fun `grid patterns are independent and clean view draws only the pinned tools`() {
-        val configuration =
-            framingConfiguration(
-                guidesVisible = true,
-                selectedGuideRatios = setOf(LocalFramingAspectRatio.RATIO_239),
-                guideMaskEnabled = true,
-                gridVisible = true,
-                thirds = true,
-                phi = true,
-                diagonal = true,
-                crosshair = true,
-                desqueezeEnabled = true,
-                desqueezeRatio = LocalDesqueezeRatio.X133,
-                desqueezeOrientation = LocalDesqueezeOrientation.VERTICAL,
-            )
+        val state = MonitorAssistState(pinnedNames = setOf("GUIDES", "DESQ"))
+        state.syncVisible(
+            setOf(MonitorAssistTool.GUIDES, MonitorAssistTool.GRID, MonitorAssistTool.CROSS, MonitorAssistTool.DESQ),
+        )
+        state.selectedGuides = setOf(MonitorGuideAspect.CINEMA)
+        state.guideMask = true
+        state.setGridOption(thirds = true, phi = true, diagonal = true)
+        state.selectDesqueezePreset(MonitorDesqueezePreset.X133)
+        state.updateDesqueezeDirection(MonitorDesqueezeDirection.HORIZONTAL)
+        fun configuration(mode: MonitorDisplayMode) =
+            state.framing({ state.rendersLive(it, mode, photography = false) }, LocalLevelStyle.HORIZON)
 
-        // The render plan no longer decides DISP policy: the caller hands it a configuration
-        // already filtered by `renderedFramingAssists`. Clean with only GUIDES pinned keeps the
+        // The render plan does not decide DISP policy: the caller hands it a configuration
+        // already filtered by `rendersLive`. Clean with only GUIDES pinned keeps the
         // delivery frame and its mask and drops the grid and crosshair (#256).
-        val live = localFramingRenderPlan(1_920f, 1_080f, configuration)
-        val clean =
-            localFramingRenderPlan(
-                1_920f,
-                1_080f,
-                renderedFramingAssists(
-                    configuration,
-                    MonitorDisplayMode.CLEAN,
-                    setOf(AssistTool.GUIDES, AssistTool.DESQ),
-                    photography = false,
-                ),
-            )
+        val live = localFramingRenderPlan(1_920f, 1_080f, configuration(MonitorDisplayMode.LIVE))
+        val clean = localFramingRenderPlan(1_920f, 1_080f, configuration(MonitorDisplayMode.CLEAN))
 
         assertTrue(live.drawsRuleOfThirds)
         assertTrue(live.drawsPhiGrid)
@@ -157,13 +146,13 @@ class FramingAssistsTest {
                 configuration =
                     framingConfiguration(
                         guidesVisible = true,
-                        selectedGuideRatios = setOf(LocalFramingAspectRatio.RATIO_239),
+                        selectedGuideRatios = setOf(MonitorGuideAspect.CINEMA),
                         guideMaskEnabled = true,
                         gridVisible = true,
                         thirds = true,
                         crosshair = true,
                         desqueezeEnabled = true,
-                        desqueezeRatio = LocalDesqueezeRatio.X200,
+                        desqueezeFactor = 2f,
                     ),
             )
 
@@ -178,7 +167,7 @@ class FramingAssistsTest {
 
     private fun framingConfiguration(
         guidesVisible: Boolean = false,
-        selectedGuideRatios: Set<LocalFramingAspectRatio> = emptySet(),
+        selectedGuideRatios: Set<MonitorGuideAspect> = emptySet(),
         guideMaskEnabled: Boolean = false,
         gridVisible: Boolean = false,
         thirds: Boolean = false,
@@ -186,12 +175,12 @@ class FramingAssistsTest {
         diagonal: Boolean = false,
         crosshair: Boolean = false,
         desqueezeEnabled: Boolean = false,
-        desqueezeRatio: LocalDesqueezeRatio = LocalDesqueezeRatio.X100,
-        desqueezeOrientation: LocalDesqueezeOrientation = LocalDesqueezeOrientation.HORIZONTAL,
+        desqueezeFactor: Float = 1f,
+        // The pre-shared default: Nikon narrowed the picture (a pillarbox).
+        desqueezeDirection: MonitorDesqueezeDirection = MonitorDesqueezeDirection.VERTICAL,
     ): LocalFramingAssistConfiguration =
         LocalFramingAssistConfiguration(
             guidesVisible = guidesVisible,
-            guideFamily = LocalFramingGuideFamily.FILM,
             selectedGuideRatios = selectedGuideRatios,
             guideMaskEnabled = guideMaskEnabled,
             gridVisible = gridVisible,
@@ -200,7 +189,7 @@ class FramingAssistsTest {
             diagonalGridEnabled = diagonal,
             centerCrosshairEnabled = crosshair,
             desqueezeEnabled = desqueezeEnabled,
-            desqueezeRatio = desqueezeRatio,
-            desqueezeOrientation = desqueezeOrientation,
+            desqueezeFactor = desqueezeFactor,
+            desqueezeDirection = desqueezeDirection,
         )
 }

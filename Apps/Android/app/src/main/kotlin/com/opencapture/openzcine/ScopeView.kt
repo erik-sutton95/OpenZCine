@@ -43,16 +43,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.opencapture.monitorui.MonitorHistogramScopePlot
 import com.opencapture.monitorui.MonitorMaterial
-import com.opencapture.monitorui.MonitorParadeMode
 import com.opencapture.monitorui.MonitorParadeScopePlot
-import com.opencapture.monitorui.MonitorScopeGuides
+import com.opencapture.monitorui.MonitorScopePanelMath
 import com.opencapture.monitorui.MonitorTrafficLightsGeometry
 import com.opencapture.monitorui.MonitorTrafficLightsMeter
 import com.opencapture.monitorui.MonitorVectorscopeScopePlot
-import com.opencapture.monitorui.MonitorVectorscopeZoom
-import com.opencapture.monitorui.MonitorWaveformMode
 import com.opencapture.monitorui.MonitorWaveformScopePlot
 import com.opencapture.monitorui.monitorMaterial
+import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.MonitorTransfer
 import com.opencapture.opencine.media.ScopeAssistBundle
@@ -70,8 +68,6 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutSelection
-import com.opencapture.openzcine.settings.ScopeAssistConfiguration
-import com.opencapture.openzcine.settings.ScopeGuideLines
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
@@ -251,19 +247,15 @@ internal fun scopePanelBaseSize(kind: ScopeKind): Pair<Float, Float> =
 /** One floating panel's current requested physical size. */
 fun scopePanelSize(
     kind: ScopeKind,
-    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
+    assist: MonitorAssistState = MonitorAssistState(),
 ): Pair<Float, Float> {
     val (width, height) = scopePanelBaseSize(kind)
-    val scale =
-        when (kind) {
-            ScopeKind.WAVEFORM -> configuration.waveformScale
-            ScopeKind.PARADE -> configuration.paradeScale
-            ScopeKind.HISTOGRAM -> configuration.histogramScale
-            ScopeKind.VECTORSCOPE -> configuration.vectorscopeScale
-            ScopeKind.TRAFFIC_LIGHTS -> configuration.trafficLightsScale
-        }
+    val scale = assist.scaleFor(kind)
     return width * scale to height * scale
 }
+
+/** The shared panel scale range. */
+internal fun clampScopeScale(value: Float): Float = MonitorScopePanelMath.clampedScale(value.toDouble()).toFloat()
 
 /** Uniform layout-only scale cap; applying it never rewrites the operator's stored scale. */
 internal fun scopePresentationScale(
@@ -282,32 +274,20 @@ private fun scopePresentationScale(
     bounds: ZoneFrame,
 ): Float =
     minOf(
-        ScopeAssistConfiguration.clampScale(requestedScale),
+        clampScopeScale(requestedScale),
         bounds.width / baseWidth,
         bounds.height / baseHeight,
     ).coerceAtLeast(0f)
 
 /** Current persisted scale for one scope kind. */
-internal fun ScopeAssistConfiguration.scaleFor(kind: ScopeKind): Float =
+internal fun MonitorAssistState.scaleFor(kind: ScopeKind): Float =
     when (kind) {
-        ScopeKind.WAVEFORM -> waveformScale
+        ScopeKind.WAVEFORM -> waveScale
         ScopeKind.PARADE -> paradeScale
-        ScopeKind.HISTOGRAM -> histogramScale
-        ScopeKind.VECTORSCOPE -> vectorscopeScale
-        ScopeKind.TRAFFIC_LIGHTS -> trafficLightsScale
-    }
-
-/** Copies one monitor resize gesture into its matching persisted field. */
-internal fun ScopeAssistConfiguration.withScale(kind: ScopeKind, scale: Float): ScopeAssistConfiguration {
-    val normalized = ScopeAssistConfiguration.clampScale(scale)
-    return when (kind) {
-        ScopeKind.WAVEFORM -> copy(waveformScale = normalized)
-        ScopeKind.PARADE -> copy(paradeScale = normalized)
-        ScopeKind.HISTOGRAM -> copy(histogramScale = normalized)
-        ScopeKind.VECTORSCOPE -> copy(vectorscopeScale = normalized)
-        ScopeKind.TRAFFIC_LIGHTS -> copy(trafficLightsScale = normalized)
-    }
-}
+        ScopeKind.HISTOGRAM -> histoScale
+        ScopeKind.VECTORSCOPE -> vectorScale
+        ScopeKind.TRAFFIC_LIGHTS -> lightsScale
+    }.toFloat()
 
 /**
  * Default landscape frame for a floating panel. The anchors mirror iOS's
@@ -321,9 +301,9 @@ fun floatingScopeFrame(
     feed: ZoneFrame,
     infoBar: ZoneFrame,
     viewport: ZoneFrame = feed,
-    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
+    assist: MonitorAssistState = MonitorAssistState(),
 ): ZoneFrame {
-    val (width, height) = scopePanelSize(kind, configuration)
+    val (width, height) = scopePanelSize(kind, assist)
     return floatingScopeFrame(kind, feed, infoBar, viewport, width, height)
 }
 
@@ -480,13 +460,10 @@ private fun rememberScopeVectorLut(
 internal fun ScopePanels(
     selectedScopes: Set<ScopeKind>,
     portraitScopes: List<ScopeKind>,
-    crushClipCompensationRaw: Int,
-    histogramTrafficLightsEnabled: Boolean,
-    configuration: ScopeAssistConfiguration,
+    assist: MonitorAssistState,
     cameraInput: ExposureAssistCameraInput,
     lutSelection: FeedLutSelection?,
     lutLibrary: AndroidLutLibrary?,
-    onScaleChange: (ScopeKind, Float) -> Unit,
     thermalTier: AndroidThermalTier,
     source: LiveFrameSource,
     isPortrait: Boolean,
@@ -522,8 +499,8 @@ internal fun ScopePanels(
     val inputs =
         ScopeTickInputs(
             selected = ScopeKind.canonical.filter(displayed::contains).toSet(),
-            histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
-            crushClipCompensationRaw = crushClipCompensationRaw,
+            histogramTrafficLightsEnabled = assist.histoTrafficLights,
+            crushClipCompensationRaw = assist.crushClipCompensation.raw,
             curveOrdinal = mapping.curveOrdinal,
             clipNative = mapping.clipNative,
             axis = axis,
@@ -541,8 +518,7 @@ internal fun ScopePanels(
             requireNotNull(scopeZone),
             axis,
             bundle,
-            histogramTrafficLightsEnabled,
-            configuration,
+            assist,
         )
     } else {
         FloatingScopePanels(
@@ -552,9 +528,7 @@ internal fun ScopePanels(
             requireNotNull(panelLayout),
             axis,
             bundle,
-            histogramTrafficLightsEnabled,
-            configuration,
-            onScaleChange,
+            assist,
             placementStore = placementStore,
             placementRevision = placementRevision,
             hapticsEnabled = hapticsEnabled,
@@ -574,13 +548,10 @@ internal fun ScopePanels(
 @Composable
 internal fun PlaybackScopePanels(
     selectedScopes: Set<ScopeKind>,
-    crushClipCompensationRaw: Int,
-    histogramTrafficLightsEnabled: Boolean,
-    configuration: ScopeAssistConfiguration,
+    assist: MonitorAssistState,
     cameraInput: ExposureAssistCameraInput,
     lutSelection: FeedLutSelection?,
     lutLibrary: AndroidLutLibrary?,
-    onScaleChange: (ScopeKind, Float) -> Unit,
     thermalTier: AndroidThermalTier,
     textureView: TextureView,
     currentFrameKey: () -> Long,
@@ -603,8 +574,8 @@ internal fun PlaybackScopePanels(
     val inputs =
         ScopeTickInputs(
             selected = displayed.toSet(),
-            histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
-            crushClipCompensationRaw = crushClipCompensationRaw,
+            histogramTrafficLightsEnabled = assist.histoTrafficLights,
+            crushClipCompensationRaw = assist.crushClipCompensation.raw,
             curveOrdinal = mapping.curveOrdinal,
             clipNative = mapping.clipNative,
             axis = axis,
@@ -630,9 +601,7 @@ internal fun PlaybackScopePanels(
         panelLayout = MonitorAnalysisPanelLayout(viewport = viewport, safeBounds = viewport),
         axis = axis,
         bundle = bus.publications.collectAsState().value.bundle,
-        histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
-        configuration = configuration,
-        onScaleChange = onScaleChange,
+        assist = assist,
         placementStoreName = PLAYBACK_SCOPE_PLACEMENT_STORE,
     )
 }
@@ -657,8 +626,7 @@ private fun PortraitScopePanels(
     zone: ZoneFrame,
     axis: ScopeLevelAxis,
     bundle: ScopeAssistBundle,
-    histogramTrafficLightsEnabled: Boolean,
-    configuration: ScopeAssistConfiguration,
+    assist: MonitorAssistState,
 ) {
     val spacing = 8f
     val panelHeight = max(0f, (zone.height - spacing * (displayed.size - 1)) / displayed.size)
@@ -668,8 +636,7 @@ private fun PortraitScopePanels(
                 kind = kind,
                 axis = axis,
                 bundle = bundle,
-                histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
-                configuration = configuration,
+                assist = assist,
                 // iOS portrait fit gives each enabled scope an equal full-width
                 // share and deliberately ignores landscape footprint scale.
                 modifier =
@@ -695,9 +662,7 @@ private fun FloatingScopePanels(
     panelLayout: MonitorAnalysisPanelLayout,
     axis: ScopeLevelAxis,
     bundle: ScopeAssistBundle,
-    histogramTrafficLightsEnabled: Boolean,
-    configuration: ScopeAssistConfiguration,
-    onScaleChange: (ScopeKind, Float) -> Unit,
+    assist: MonitorAssistState,
     placementStoreName: String = "scopePanelPlacement",
     placementStore: MonitorAnalysisPanelPlacementStore? = null,
     placementRevision: Int = 0,
@@ -724,14 +689,14 @@ private fun FloatingScopePanels(
                         feed = feed,
                         infoBar = infoBar,
                         layout = scopeLayout,
-                        configuration = configuration,
+                        assist = assist,
                     )
                 val baseSize = scopePanelBaseSize(kind)
                 FloatingScopePanel(
                     kind = kind,
                     default = default,
                     panelLayout = scopeLayout,
-                    scale = configuration.scaleFor(kind),
+                    scale = assist.scaleFor(kind),
                     baseWidth = baseSize.first,
                     baseHeight = baseSize.second,
                     placementStore = placementStore,
@@ -739,14 +704,13 @@ private fun FloatingScopePanels(
                     placementRevision = placementRevision,
                     hapticsEnabled = hapticsEnabled,
                     onPanelFrameChanged = onPanelFrameChanged,
-                    onScaleChange = { onScaleChange(kind, it) },
+                    onScaleChange = { assist.setScale(kind.assistTool, it.toDouble()) },
                 ) { modifier ->
                     ScopePanel(
                         kind = kind,
                         axis = axis,
                         bundle = bundle,
-                        histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
-                        configuration = configuration,
+                        assist = assist,
                         modifier = modifier,
                     )
                 }
@@ -761,13 +725,13 @@ internal fun controlSafeScopeDefaultFrame(
     feed: ZoneFrame,
     infoBar: ZoneFrame,
     layout: MonitorAnalysisPanelLayout,
-    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
+    assist: MonitorAssistState = MonitorAssistState(),
 ): ZoneFrame =
     scopePanelBaseSize(kind).let { (baseWidth, baseHeight) ->
         val presentationScale =
             scopePresentationScale(
                 kind = kind,
-                requestedScale = configuration.scaleFor(kind),
+                requestedScale = assist.scaleFor(kind),
                 bounds = layout.safeBounds,
             )
         clampScopeFrame(
@@ -1008,7 +972,7 @@ internal fun FloatingScopePanel(
                         change.consume()
                         accumulated += (dragAmount.x + dragAmount.y) / density.density
                         val requested =
-                            ScopeAssistConfiguration.clampScale(
+                            clampScopeScale(
                                 startScale + accumulated / (baseWidth + baseHeight),
                             )
                         val fitted =
@@ -1056,8 +1020,7 @@ private fun ScopePanel(
     kind: ScopeKind,
     axis: ScopeLevelAxis,
     bundle: ScopeAssistBundle,
-    histogramTrafficLightsEnabled: Boolean,
-    configuration: ScopeAssistConfiguration,
+    assist: MonitorAssistState,
     modifier: Modifier = Modifier,
 ) {
     if (kind == ScopeKind.TRAFFIC_LIGHTS) {
@@ -1068,32 +1031,25 @@ private fun ScopePanel(
         when (kind) {
             ScopeKind.WAVEFORM ->
                 MonitorWaveformScopePlot(
-                    bundle, axis, MonitorWaveformMode.valueOf(configuration.waveformMode.name),
-                    ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(
-                        configuration.waveformBrightness).toDouble(),
-                    configuration.waveformGuides.monitor(),
+                    bundle, axis, assist.waveMode, waveformParadeIntensity(assist.waveBrightness),
+                    assist.waveGuides,
                 )
             ScopeKind.PARADE ->
                 MonitorParadeScopePlot(
-                    bundle, axis, MonitorParadeMode.valueOf(configuration.paradeMode.name),
-                    ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(
-                        configuration.paradeBrightness).toDouble(),
-                    configuration.paradeGuides.monitor(),
+                    bundle, axis, assist.paradeMode, waveformParadeIntensity(assist.paradeBrightness),
+                    assist.paradeGuides,
                 )
             ScopeKind.HISTOGRAM ->
                 MonitorHistogramScopePlot(
-                    bundle.histogramDisplay, bundle.traffic, histogramTrafficLightsEnabled)
+                    bundle.histogramDisplay, bundle.traffic, assist.histoTrafficLights)
             ScopeKind.VECTORSCOPE ->
                 MonitorVectorscopeScopePlot(
-                    bundle, MonitorVectorscopeZoom.valueOf(configuration.vectorscopeZoom.name),
-                    configuration.vectorscopeBrightness,
+                    bundle, assist.vectorZoom, assist.vectorBrightness,
                 )
             ScopeKind.TRAFFIC_LIGHTS -> Unit
         }
     }
 }
-
-private fun ScopeGuideLines.monitor() = MonitorScopeGuides(clip, crush, middle)
 
 /** The shared RGB goal-post meter with the camera's spoken per-channel state. */
 @Composable

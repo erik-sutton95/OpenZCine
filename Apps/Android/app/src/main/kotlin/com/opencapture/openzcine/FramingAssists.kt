@@ -29,9 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
-import com.opencapture.openzcine.settings.LocalDesqueezeRatio
-import com.opencapture.openzcine.settings.LocalFramingAspectRatio
+import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import kotlin.math.roundToInt
@@ -51,7 +50,7 @@ internal data class FramingAssistRect(
 
 /** One labelled aspect guide resolved inside the visible de-squeezed feed. */
 internal data class LocalFramingGuideFrame(
-    val ratio: LocalFramingAspectRatio,
+    val ratio: MonitorGuideAspect,
     val rect: FramingAssistRect,
 )
 
@@ -86,12 +85,12 @@ internal fun localFramingRenderPlan(
             feed = feed,
             enabled = configuration.desqueezeEnabled,
             factor = configuration.desqueezeFactor,
-            orientation = configuration.desqueezeOrientation,
+            direction = configuration.desqueezeDirection,
         )
     val guideFrames =
         if (configuration.drawsGuides) {
             configuration.selectedGuideRatios
-                .sortedBy(LocalFramingAspectRatio::aspectRatio)
+                .sortedBy(MonitorGuideAspect::ratio)
                 .map { ratio ->
                     LocalFramingGuideFrame(
                         ratio = ratio,
@@ -103,7 +102,7 @@ internal fun localFramingRenderPlan(
         }
     val drawsGrid = configuration.drawsGrid
     // DISP-mode policy is NOT applied here: the caller passes a configuration already filtered by
-    // `renderedFramingAssists`, so clean view draws exactly the tools the operator pinned (#256).
+    // `rendersLive`, so clean view draws exactly the tools the operator pinned (#256).
     return LocalFramingRenderPlan(
         presentationRect = presentationRect,
         guideFrames = guideFrames,
@@ -129,20 +128,19 @@ internal fun localFramingRenderPlan(
 /**
  * Returns the visible presentation rectangle after local de-squeeze.
  *
- * Horizontal de-squeeze produces a centred pillarbox; vertical de-squeeze
- * produces a centred letterbox. Neither changes the camera, the encoded frame,
- * or any media file.
+ * Vertical (narrowing) produces a centred pillarbox; horizontal (widening) produces a centred
+ * letterbox. Neither changes the camera, the encoded frame, or any media file.
  */
 internal fun localDesqueezePresentationRect(
     feed: FramingAssistRect,
     enabled: Boolean,
     factor: Float,
-    orientation: LocalDesqueezeOrientation,
+    direction: MonitorDesqueezeDirection,
 ): FramingAssistRect {
     val squeeze = factor.coerceAtLeast(1f)
     if (!enabled || squeeze <= 1f || feed.width <= 0f || feed.height <= 0f) return feed
-    return when (orientation) {
-        LocalDesqueezeOrientation.HORIZONTAL -> {
+    return when (direction) {
+        MonitorDesqueezeDirection.VERTICAL -> {
             val width = feed.width / squeeze
             FramingAssistRect(
                 left = feed.centerX - width / 2f,
@@ -151,7 +149,7 @@ internal fun localDesqueezePresentationRect(
                 height = feed.height,
             )
         }
-        LocalDesqueezeOrientation.VERTICAL -> {
+        MonitorDesqueezeDirection.HORIZONTAL -> {
             val height = feed.height / squeeze
             FramingAssistRect(
                 left = feed.left,
@@ -166,12 +164,12 @@ internal fun localDesqueezePresentationRect(
 /** Returns a centred delivery-frame guide within [feed]. */
 internal fun centeredGuideRect(
     feed: FramingAssistRect,
-    ratio: LocalFramingAspectRatio,
+    ratio: MonitorGuideAspect,
 ): FramingAssistRect {
     if (feed.width <= 0f || feed.height <= 0f) return FramingAssistRect(feed.left, feed.top, 0f, 0f)
     val feedAspectRatio = feed.width / feed.height
-    return if (feedAspectRatio > ratio.aspectRatio) {
-        val width = feed.height * ratio.aspectRatio
+    return if (feedAspectRatio > ratio.ratio) {
+        val width = feed.height * ratio.ratio
         FramingAssistRect(
             left = feed.left + (feed.width - width) / 2f,
             top = feed.top,
@@ -179,7 +177,7 @@ internal fun centeredGuideRect(
             height = feed.height,
         )
     } else {
-        val height = feed.width / ratio.aspectRatio
+        val height = feed.width / ratio.ratio
         FramingAssistRect(
             left = feed.left,
             top = feed.top + (feed.height - height) / 2f,
@@ -338,25 +336,14 @@ private fun localFramingAssistAccessibilitySummary(
         if (configuration.desqueezeEnabled) {
             val orientation =
                 stringResource(
-                    if (configuration.desqueezeOrientation == LocalDesqueezeOrientation.HORIZONTAL) {
+                    if (configuration.desqueezeDirection == MonitorDesqueezeDirection.HORIZONTAL) {
                         R.string.orientation_horizontal
                     } else {
                         R.string.orientation_vertical
                     },
                 )
-            val ratio =
-                stringResource(
-                    when (LocalDesqueezeRatio.matching(configuration.desqueezeFactor)
-                        ?: configuration.desqueezeRatio) {
-                        LocalDesqueezeRatio.X100 -> R.string.desqueeze_1
-                        LocalDesqueezeRatio.X133 -> R.string.desqueeze_133
-                        LocalDesqueezeRatio.X150 -> R.string.desqueeze_15
-                        LocalDesqueezeRatio.X160 -> R.string.desqueeze_16
-                        LocalDesqueezeRatio.X165 -> R.string.desqueeze_165
-                        LocalDesqueezeRatio.X180 -> R.string.desqueeze_18
-                        LocalDesqueezeRatio.X200 -> R.string.desqueeze_2
-                    },
-                )
+            // "2x", "1.33x": the factor without trailing zeros.
+            val ratio = "%.2f".format(java.util.Locale.US, configuration.desqueezeFactor).trimEnd('0').trimEnd('.') + "x"
             stringResource(R.string.framing_accessibility_desqueeze_on, orientation, ratio)
         } else {
             stringResource(R.string.framing_accessibility_desqueeze_off)
@@ -416,25 +403,7 @@ private fun FramingGuideLabel(frame: LocalFramingGuideFrame) {
     val density = LocalDensity.current
     val inset = with(density) { 8.dp.roundToPx() }
     Text(
-        text =
-            stringResource(
-                when (frame.ratio) {
-                    LocalFramingAspectRatio.RATIO_276 -> R.string.framing_ratio_276
-                    LocalFramingAspectRatio.RATIO_239 -> R.string.framing_ratio_239
-                    LocalFramingAspectRatio.RATIO_235 -> R.string.framing_ratio_235
-                    LocalFramingAspectRatio.RATIO_200 -> R.string.framing_ratio_200
-                    LocalFramingAspectRatio.RATIO_185 -> R.string.framing_ratio_185
-                    LocalFramingAspectRatio.RATIO_16_9 -> R.string.framing_ratio_16_9
-                    LocalFramingAspectRatio.RATIO_166 -> R.string.framing_ratio_166
-                    LocalFramingAspectRatio.RATIO_143 -> R.string.framing_ratio_143
-                    LocalFramingAspectRatio.RATIO_4_3 -> R.string.framing_ratio_4_3
-                    LocalFramingAspectRatio.RATIO_9_16 -> R.string.framing_ratio_9_16
-                    LocalFramingAspectRatio.RATIO_4_5 -> R.string.framing_ratio_4_5
-                    LocalFramingAspectRatio.RATIO_1_1 -> R.string.framing_ratio_1_1
-                    LocalFramingAspectRatio.RATIO_2_3 -> R.string.framing_ratio_2_3
-                    LocalFramingAspectRatio.RATIO_191 -> R.string.framing_ratio_191
-                },
-            ),
+        text = frame.ratio.label,
         style = chromeStyle(10f, FontWeight.Bold, mono = true).copy(letterSpacing = 1.2.sp),
         color = LiveDesign.accent,
         modifier =

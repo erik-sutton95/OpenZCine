@@ -1,10 +1,18 @@
 @file:androidx.media3.common.util.UnstableApi
 
 package com.opencapture.openzcine.media
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.openzcine.NikonAssistChip
+import com.opencapture.openzcine.NikonAssistInspector
+import com.opencapture.openzcine.NikonAssistPalette
+import com.opencapture.openzcine.NikonAssists
+import com.opencapture.openzcine.feedEffects
+import com.opencapture.openzcine.feedEffectsConfiguration
+import com.opencapture.openzcine.framing
+import com.opencapture.openzcine.nikonHasOptions
+import com.opencapture.openzcine.nikonPlaybackAssistTools
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.monitorui.MonitorPlaybackZoomBoundary
-import com.opencapture.monitorui.MonitorPlaybackActionChip
-import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorPlaybackActions
 import com.opencapture.monitorui.MonitorPlaybackPresentation
 import com.opencapture.monitorui.MonitorPlaybackScreen
@@ -20,7 +28,6 @@ import com.opencapture.opencine.appkit.MonitorMediaRecord
 import com.opencapture.opencine.media.MonitorPlaybackEvent
 import com.opencapture.opencine.media.MonitorPlaybackMetadata
 import com.opencapture.opencine.media.MonitorPlaybackItemToken
-
 import android.net.Uri
 import android.os.Build
 import android.view.HapticFeedbackConstants
@@ -64,12 +71,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -96,9 +100,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
-import com.opencapture.openzcine.AssistTool
-import com.opencapture.openzcine.AssistState
-import com.opencapture.openzcine.AssistToolbar
 import com.opencapture.openzcine.AudioMetersOverlay
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FalseColorReferenceOverlay
@@ -126,9 +127,9 @@ import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.rememberAndroidThermalTier
 import com.opencapture.openzcine.resolveFalseColorReference
+import com.opencapture.openzcine.scopesShown
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.OperatorSettings
-import com.opencapture.openzcine.withScale
 import java.nio.file.Files
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -174,10 +175,8 @@ internal fun MediaPlaybackScreen(
     /** Native connection owner every camera call is addressed to; null reaches no camera. */
     connectionOwner: Long?,
     favoriteIDs: Set<String>,
-    framingConfiguration: LocalFramingAssistConfiguration,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
-    playbackAssistState: PlaybackAssistState,
-    sharedAssistState: AssistState,
+    assists: NikonAssists,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
@@ -236,10 +235,8 @@ internal fun MediaPlaybackScreen(
             favorite = favorite,
             previous = previous,
             next = next,
-            framingConfiguration = framingConfiguration,
             galleryFailureInjection = galleryFailureInjection,
-            playbackAssistState = playbackAssistState,
-            sharedAssistState = sharedAssistState,
+            assists = assists,
             exposureAssistCameraInput = exposureAssistCameraInput,
             operatorSettings = operatorSettings,
             lutLibrary = lutLibrary,
@@ -269,10 +266,8 @@ private fun PlaybackClipSession(
     favorite: Boolean,
     previous: MonitorMediaRecord<NikonLibraryClip>?,
     next: MonitorMediaRecord<NikonLibraryClip>?,
-    framingConfiguration: LocalFramingAssistConfiguration,
     galleryFailureInjection: MediaGalleryFailureInjection,
-    playbackAssistState: PlaybackAssistState,
-    sharedAssistState: AssistState,
+    assists: NikonAssists,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
@@ -403,7 +398,7 @@ private fun PlaybackClipSession(
             }
         }
     }
-    val deliveryLut = sharedAssistState.selectedLut
+    val deliveryLut = assists.lut
     val deliveryLutLabel =
         when (deliveryLut) {
             is FeedLutSelection.BuiltIn -> deliveryLut.value.label
@@ -609,9 +604,7 @@ private fun PlaybackClipSession(
                     playback = playback,
                     native = native,
                     itemToken = itemToken,
-                    framingConfiguration = framingConfiguration,
-                    playbackAssistState = playbackAssistState,
-                    sharedAssistState = sharedAssistState,
+                    assists = assists,
                     exposureAssistCameraInput = exposureAssistCameraInput,
                     operatorSettings = operatorSettings,
                     lutLibrary = lutLibrary,
@@ -687,8 +680,7 @@ private fun NikonPlaybackPage(
     onBack: () -> Unit, backEnabled: Boolean, onAdjacent: (Int) -> Unit, onFavorite: () -> Unit,
     session: NikonPlaybackSession, playback: MonitorMediaPlaybackModel<NikonLibraryClip, Unit>,
     native: NikonPlaybackNativePort, itemToken: MonitorPlaybackItemToken,
-    framingConfiguration: LocalFramingAssistConfiguration,
-    playbackAssistState: PlaybackAssistState, sharedAssistState: AssistState,
+    assists: NikonAssists,
     exposureAssistCameraInput: ExposureAssistCameraInput, operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?, ratingShadeOpen: Boolean, onRatingShadeOpenChanged: (Boolean) -> Unit,
     onPlayerChanged: (Player?) -> Unit, shareReady: Boolean, deliveryInProgress: Boolean, coverPresented: Boolean,
@@ -697,8 +689,8 @@ private fun NikonPlaybackPage(
     val logical by playback.state.collectAsState()
     val hapticView = LocalView.current
     val content = entry?.let {
-        rememberNikonNativePlayback(session, playback, native, itemToken, it, framingConfiguration,
-            playbackAssistState, sharedAssistState, exposureAssistCameraInput, operatorSettings,
+        rememberNikonNativePlayback(session, playback, native, itemToken, it,
+            assists, exposureAssistCameraInput, operatorSettings,
             lutLibrary, onPlayerChanged)
     }
     val presentedPosition = if (logical.scrubbing) logical.scrubPosition else logical.position
@@ -777,9 +769,7 @@ private fun rememberNikonNativePlayback(
     native: NikonPlaybackNativePort,
     itemToken: MonitorPlaybackItemToken,
     entry: MediaCacheEntry,
-    framingConfiguration: LocalFramingAssistConfiguration,
-    playbackAssistState: PlaybackAssistState,
-    sharedAssistState: AssistState,
+    assists: NikonAssists,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
@@ -818,8 +808,9 @@ private fun rememberNikonNativePlayback(
             }
         }
     val playbackAudioLevels by audioMeterCoordinator.levels.collectAsState()
-    LaunchedEffect(audioMeterCoordinator, playbackAssistState.assists.audioMetersEnabled) {
-        if (playbackAssistState.assists.audioMetersEnabled) audioMeterCoordinator.poll()
+    val audioMetersVisible = assists.shared.isPlaybackVisible(MonitorAssistTool.AUDIO)
+    LaunchedEffect(audioMeterCoordinator, audioMetersVisible) {
+        if (audioMetersVisible) audioMeterCoordinator.poll()
     }
     val playerView =
         remember(context) {
@@ -873,10 +864,8 @@ private fun rememberNikonNativePlayback(
         remember(entry, player) {
             mutableStateOf(selectedPlaybackVideoColorMode(player.currentTracks))
         }
-    var assistOptionsTool by remember(entry) { mutableStateOf<AssistTool?>(null) }
-    var assistToolbarBounds by remember(entry) { mutableStateOf<Rect?>(null) }
     val playbackFramingConfiguration =
-        playbackAssistState.framingConfiguration(framingConfiguration)
+        assists.shared.framing(assists.shared::isPlaybackVisible, operatorSettings.levelStyle)
     val framingAssistsVisible = playbackFramingConfiguration.hasPlaybackFramingOverlay
 
     DisposableEffect(player, attachment) {
@@ -953,8 +942,9 @@ private fun rememberNikonNativePlayback(
         }
     }
 
-    val effects = playbackAssistState.assists.effects
-    val effectsConfiguration = operatorSettings.feedEffectsConfiguration
+    val effects = assists.feedEffects(assists.shared::isPlaybackVisible)
+    val effectsConfiguration = assists.shared.feedEffectsConfiguration
+    val playbackScopes = scopesShown(assists.shared::isPlaybackVisible)
     val cameraInput = exposureAssistCameraInput
     val effectsPresentationState = remember { LiveFeedEffectsPresentationState() }
     val playbackEffectDisplaySize = remember(entry) { PlaybackEffectDisplaySize() }
@@ -1006,7 +996,7 @@ private fun rememberNikonNativePlayback(
         Build.VERSION.SDK_INT in 29..32 &&
             videoColorMode == PlaybackVideoColorMode.SDR &&
             playbackFeedEffect != null
-    val scopesVisible = playbackAssistState.assists.selectedScopes.isNotEmpty()
+    val scopesVisible = playbackScopes.isNotEmpty()
     LaunchedEffect(
         player,
         playbackFeedEffect,
@@ -1117,21 +1107,15 @@ private fun rememberNikonNativePlayback(
         if (
             textureView != null &&
                 SwiftCore.isAvailable &&
-                playbackAssistState.assists.selectedScopes.isNotEmpty() &&
+                playbackScopes.isNotEmpty() &&
                 geometry.canvasWidth > 0
         ) {
             PlaybackScopePanels(
-                selectedScopes = playbackAssistState.assists.selectedScopes,
-                crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
-                histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
-                configuration = operatorSettings.scopeAssistConfiguration,
+                selectedScopes = playbackScopes,
+                assist = assists.shared,
                 cameraInput = cameraInput,
-                lutSelection = playbackAssistState.assists.effects.lut,
+                lutSelection = effects.lut,
                 lutLibrary = lutLibrary,
-                onScaleChange = { kind, scale ->
-                    operatorSettings.scopeAssistConfiguration =
-                        operatorSettings.scopeAssistConfiguration.withScale(kind, scale)
-                },
                 thermalTier = thermalTier,
                 textureView = textureView,
                 currentFrameKey = { player.currentPosition },
@@ -1153,7 +1137,7 @@ private fun rememberNikonNativePlayback(
             // footprint on short landscape displays; the panel remains movable.
             defaultHorizontalFraction = 0.72f,
         )
-        if (playbackAssistState.assists.audioMetersEnabled) {
+        if (audioMetersVisible) {
             AudioMetersOverlay(
                 levels = playbackAudioLevels,
                 sensitivity = null,
@@ -1171,46 +1155,28 @@ private fun rememberNikonNativePlayback(
 
         },
         tools = { context ->
-            Row(Modifier.offset(x = context.frame.x.dp, y = context.frame.y.dp)
-                .width(context.frame.width.dp).height(58.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (context.expanded) {
-                    AssistToolbar(
-                        state = playbackAssistState.assists,
-                        modifier = Modifier.weight(1f).height(58.dp)
-                            .onGloballyPositioned { assistToolbarBounds = it.boundsInRoot() },
-                        visibleTools = playbackAssistToolbarTools(operatorSettings.visibleAssistToolbarTools),
-                        imageEffectsAvailable = imageEffectsAvailable,
-                        framingConfiguration = playbackFramingConfiguration,
-                        onToggleFramingTool = playbackAssistState::toggle,
-                        hapticsEnabled = operatorSettings.hapticsEnabled.value,
-                        onLongPressToolAnchored = { tool, bounds ->
-                            assistToolbarBounds = bounds; assistOptionsTool = tool
-                        })
-                }
-                MonitorPlaybackActionChip(MonitorIcon.SLIDERS_HORIZONTAL,
-                    if (context.expanded) "Hide playback assist toolbar" else "Show playback assist toolbar",
-                    onClick = {
-                        assistOptionsTool = null
-                        context.onExpandedChanged(!context.expanded)
-                    }, active = context.expanded || playbackAssistState.hasAnyVisibleAssist)
+            if (assists.shared.configureTool == null) {
+                NikonAssistPalette(
+                    nikonPlaybackAssistTools(imageEffectsAvailable).map(NikonAssistChip::Tool), assists,
+                    playback = true, portrait = context.portrait, locked = false,
+                    modifier = Modifier.offset(x = context.frame.x.dp, y = context.frame.y.dp)
+                        .size(context.frame.width.dp, context.frame.height.dp),
+                    requestExpand = context.expanded, onExpansionHandled = context.onExpansionHandled,
+                )
             }
         },
-        inspector = { _ ->
-        assistOptionsTool?.let { tool ->
-            PlaybackAssistOptionsOverlay(
-                tool = tool,
-                toolbarBounds = assistToolbarBounds,
-                playbackState = playbackAssistState,
-                sharedAssistState = sharedAssistState,
-                settings = operatorSettings,
-                cameraInput = cameraInput,
-                lutLibrary = lutLibrary,
-                onDismiss = { assistOptionsTool = null },
-            )
-        }
+        inspector = { chrome ->
+            assists.shared.configureTool?.let { tool ->
+                NikonAssistInspector(
+                    tool, nikonPlaybackAssistTools(imageEffectsAvailable).filter { it.nikonHasOptions }, assists,
+                    operatorSettings, cameraInput, lutLibrary, chrome.width, chrome.height,
+                    safeLeading = chrome.leading, safeTop = chrome.top, safeBottom = chrome.bottom,
+                    safeTrailing = chrome.trailing, onDismiss = { assists.shared.configureTool = null },
+                )
+            }
         },
         dismissInspector = {
-            if (assistOptionsTool != null) { assistOptionsTool = null; true } else false
+            if (assists.shared.configureTool != null) { assists.shared.configureTool = null; true } else false
         })
 }
 

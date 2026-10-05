@@ -76,7 +76,7 @@ class RecordCameraFlowComposeTest {
                     commonSession = common,
                     commonControl = control,
                     frameSource = null,
-                    assist = AssistState(FeedEffects.NONE, null),
+                    assists = idleNikonAssists(),
                     operatorSettings = operatorSettings,
                     liveViewEnabled = false,
                     glassTierOverride = GLASS_TIER_FLAT,

@@ -4,7 +4,8 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
-import com.opencapture.openzcine.settings.ScopeAssistConfiguration
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -194,17 +195,16 @@ class ScopeLayoutTest {
 
     @Test
     fun `operator scale changes the physical landscape footprint`() {
-        val configuration =
-            ScopeAssistConfiguration(
-                waveformScale = 1.6f,
-                histogramScale = 0.6f,
-            )
+        val configuration = MonitorAssistState().apply {
+            setScale(MonitorAssistTool.WAVE, 1.6)
+            setScale(MonitorAssistTool.HISTO, 0.6)
+        }
 
         assertEquals(400f to 244.8f, scopePanelSize(ScopeKind.WAVEFORM, configuration))
         assertEquals(150f to 46.2f, scopePanelSize(ScopeKind.HISTOGRAM, configuration))
         assertEquals(
             1.6f,
-            ScopeAssistConfiguration().withScale(ScopeKind.VECTORSCOPE, 2f).vectorscopeScale,
+            MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.scaleFor(ScopeKind.VECTORSCOPE),
         )
         assertEquals(
             ZoneFrame(60f, 100f, 190f, 190f),

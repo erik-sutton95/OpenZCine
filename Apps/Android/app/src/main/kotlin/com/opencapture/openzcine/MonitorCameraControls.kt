@@ -1,7 +1,7 @@
 package com.opencapture.openzcine
 
+import androidx.compose.ui.graphics.StrokeJoin
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
-
 import androidx.activity.compose.BackHandler
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.MonitorCaptureField
@@ -2613,6 +2613,35 @@ private fun DrumSideStepButton(
                     else -> LiveDesign.faint
                 },
             maxLines = 1,
+        )
+    }
+}
+
+/** Gold edge chevron hinting at off-screen tools (iOS `scrollChevron`). */
+@Composable
+internal fun ScrollChevron(leading: Boolean, visible: Boolean, modifier: Modifier = Modifier) {
+    Canvas(
+        modifier
+            .padding(horizontal = 5.dp)
+            .size(8.dp, 12.dp)
+            .alpha(if (visible) 1f else 0f),
+    ) {
+        val path =
+            Path().apply {
+                if (leading) {
+                    moveTo(size.width, 0f)
+                    lineTo(0f, size.height / 2)
+                    lineTo(size.width, size.height)
+                } else {
+                    moveTo(0f, 0f)
+                    lineTo(size.width, size.height / 2)
+                    lineTo(0f, size.height)
+                }
+            }
+        drawPath(
+            path,
+            LiveDesign.accent,
+            style = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
     }
 }

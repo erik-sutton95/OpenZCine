@@ -3,7 +3,9 @@ package com.opencapture.openzcine
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.bridge.ZoneStyle
-import com.opencapture.openzcine.settings.ScopeAssistConfiguration
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorScopePanelMath
+import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -313,8 +315,8 @@ class MonitorAnalysisPanelPlacementTest {
         layouts.forEach { (feed, infoBar, layout) ->
             ScopeKind.entries.forEach { kind ->
                 listOf(
-                    ScopeAssistConfiguration.MIN_SCALE,
-                    ScopeAssistConfiguration.MAX_SCALE,
+                    MonitorScopePanelMath.SCALE_MIN.toFloat(),
+                    MonitorScopePanelMath.SCALE_MAX.toFloat(),
                 ).forEach { requestedScale ->
                     val configuration = configurationAtScale(requestedScale)
                     val frame =
@@ -323,7 +325,7 @@ class MonitorAnalysisPanelPlacementTest {
                             feed = feed,
                             infoBar = infoBar,
                             layout = layout,
-                            configuration = configuration,
+                            assist = configuration,
                         )
                     val (baseWidth, baseHeight) = scopePanelBaseSize(kind)
                     val expectedScale =
@@ -343,7 +345,7 @@ class MonitorAnalysisPanelPlacementTest {
                             feed = feed,
                             infoBar = infoBar,
                             layout = roomy,
-                            configuration = configuration,
+                            assist = configuration,
                         )
                     assertEquals(baseWidth * requestedScale, restored.width, 0.001f)
                     assertEquals(baseHeight * requestedScale, restored.height, 0.001f)
@@ -712,14 +714,10 @@ class MonitorAnalysisPanelPlacementTest {
             controlsGrid = null,
         )
 
-    private fun configurationAtScale(scale: Float): ScopeAssistConfiguration =
-        ScopeAssistConfiguration(
-            waveformScale = scale,
-            paradeScale = scale,
-            vectorscopeScale = scale,
-            histogramScale = scale,
-            trafficLightsScale = scale,
-        )
+    private fun configurationAtScale(scale: Float): MonitorAssistState =
+        MonitorAssistState().apply {
+            ScopeKind.entries.forEach { setScale(it.assistTool, scale.toDouble()) }
+        }
 
     private fun testLayout(): MonitorAnalysisPanelLayout =
         MonitorAnalysisPanelLayout(

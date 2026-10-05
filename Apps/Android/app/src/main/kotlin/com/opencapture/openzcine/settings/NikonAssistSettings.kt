@@ -4,31 +4,36 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.ui.res.stringResource
+import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
 import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
 import com.opencapture.monitorui.MonitorFalseColorReferenceValues
+import com.opencapture.monitorui.MonitorFalseColorSelection
+import com.opencapture.monitorui.MonitorParadeMode
 import com.opencapture.monitorui.MonitorScopeGuides
 import com.opencapture.monitorui.MonitorVectorscopeZoom
+import com.opencapture.monitorui.MonitorWaveformMode
 import com.opencapture.monitorui.MonitorZebraNumberEntry
 import com.opencapture.monitorui.MonitorZebraNumberZone
+import com.opencapture.monitorui.MonitorZebraUnit
 import com.opencapture.monitorui.settings.MonitorSettingsColorDot
 import com.opencapture.monitorui.settings.MonitorAssistSettingsSection
 import com.opencapture.monitorui.settings.MonitorViewAssistSettings
 import android.os.Build
+import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.media.MonitorCrushClipCompensation
 import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
 import com.opencapture.opencine.media.MonitorZebraPaint
-import com.opencapture.openzcine.AssistState
-import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.ExposureCurveOrdinals
 import com.opencapture.openzcine.FeedFalseColorScale
-import com.opencapture.openzcine.FeedPeakingColor
-import com.opencapture.openzcine.FeedPeakingSensitivity
-import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
+import com.opencapture.openzcine.feedScale
+import com.opencapture.openzcine.nikonFalseColorScales
 import com.opencapture.openzcine.resolveFalseColorReference
 import com.opencapture.openzcine.zebraEditorValue
 import com.opencapture.openzcine.zebraMonitorPercent
@@ -36,44 +41,117 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-/** Actual stores/actions supply finite tool inputs; the common owner assembles all cards. */
+/** Whether this phone can render the image assists (API 33 settings floor and the Swift core). */
+internal val nikonImageProcessingAvailable: Boolean
+    get() = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
+
+/** The settings cards: the shared cards over the shared state, with this camera's calibration. */
 @Composable
-internal fun NikonViewAssistSettings(settings: OperatorSettings, assistState: AssistState,
-    cameraInput: ExposureAssistCameraInput, onAssistToggle: (AssistTool) -> Unit, onInteraction: () -> Unit) {
-    val processingAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
-    MonitorViewAssistSettings(listOfNotNull(
-        if (processingAvailable) NikonFalseColorSettings(settings, assistState, cameraInput, onAssistToggle, onInteraction)
-        else MonitorAssistSettingsSection.Unavailable(com.opencapture.monitorui.MonitorAssistTool.FALSE,
-            androidx.compose.ui.res.stringResource(com.opencapture.openzcine.R.string.settings_image_processing_unavailable)),
-        if (processingAvailable) NikonZebraSettings(settings, cameraInput, onInteraction) else null,
-        NikonScopeTraceSettings(settings, parade = false, onInteraction),
-        NikonScopeTraceSettings(settings, parade = true, onInteraction),
-        NikonHistogramSettings(settings, onInteraction),
-        NikonVectorscopeSettings(settings, onInteraction),
-        if (processingAvailable) NikonPeakingSettings(settings, onInteraction) else null,
-        NikonCrushClipSettings(settings, onInteraction),
-    ))
+internal fun NikonViewAssistSettings(
+    state: MonitorAssistState,
+    cameraInput: ExposureAssistCameraInput,
+    onInteraction: () -> Unit,
+) {
+    val unavailable = stringResource(R.string.settings_image_processing_unavailable)
+    MonitorViewAssistSettings(
+        listOf(MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA, MonitorAssistTool.WAVE, MonitorAssistTool.PARADE,
+            MonitorAssistTool.HISTO, MonitorAssistTool.VECTOR, MonitorAssistTool.PEAK, MonitorAssistTool.LIGHTS)
+            .mapNotNull { tool ->
+                if (tool == MonitorAssistTool.FALSE && !nikonImageProcessingAvailable) {
+                    MonitorAssistSettingsSection.Unavailable(tool, unavailable)
+                } else {
+                    nikonAssistSection(tool, state, cameraInput, onInteraction)
+                }
+            },
+    )
 }
 
-/** Settings keep their existing stores; common menus receive only current values and actions. */
+/**
+ * One shared settings card for [tool], or null when this phone cannot render it or the shared
+ * catalog has no card. The inspector draws the same card's menu, so settings and inspector agree.
+ */
 @Composable
-internal fun NikonFalseColorSettings(settings: OperatorSettings, assistState: AssistState,
-    cameraInput: ExposureAssistCameraInput, onAssistToggle: (AssistTool) -> Unit, onInteraction: () -> Unit): MonitorAssistSettingsSection {
-    val scale = assistState.selectedFalseColorScale
+internal fun nikonAssistSection(
+    tool: MonitorAssistTool,
+    state: MonitorAssistState,
+    cameraInput: ExposureAssistCameraInput,
+    onInteraction: () -> Unit,
+): MonitorAssistSettingsSection? {
+    return when (tool) {
+        MonitorAssistTool.FALSE -> if (nikonImageProcessingAvailable) falseColor(state, cameraInput, onInteraction) else null
+        MonitorAssistTool.ZEBRA -> if (nikonImageProcessingAvailable) zebra(state, cameraInput, onInteraction) else null
+        MonitorAssistTool.PEAK -> if (!nikonImageProcessingAvailable) null else MonitorAssistSettingsSection.Peaking(
+            state.peakingSensitivity, state.peakingColor, commonColors(SettingsPalette.peaking),
+            "Higher sensitivity catches finer edges but can get noisy on detailed scenes.",
+            "Choose the edge color that stays readable over your typical scene.",
+            onSensitivity = { state.setPeaking(sense = it); onInteraction() }, onColor = { state.setPeaking(color = it); onInteraction() },
+            reset = { state.resetNikonAssist(tool); onInteraction() })
+        MonitorAssistTool.WAVE -> MonitorAssistSettingsSection.Trace.waveform(
+            MonitorWaveformMode.entries, state.waveMode, { state.setWaveform(mode = it); onInteraction() }, { it.label },
+            state.waveBrightness, { state.setWaveform(brightness = it); onInteraction() }, state.waveGuides,
+            { state.setWaveform(guides = it); onInteraction() },
+            reset = { state.resetNikonAssist(tool); onInteraction() })
+        MonitorAssistTool.PARADE -> MonitorAssistSettingsSection.Trace.parade(
+            MonitorParadeMode.entries, state.paradeMode, { state.setParade(mode = it); onInteraction() }, { it.label },
+            state.paradeBrightness, { state.setParade(brightness = it); onInteraction() }, state.paradeGuides,
+            { state.setParade(guides = it); onInteraction() },
+            reset = { state.resetNikonAssist(tool); onInteraction() })
+        MonitorAssistTool.HISTO -> MonitorAssistSettingsSection.Histogram(
+            state.histoTrafficLights, { state.setHistogram(traffic = !state.histoTrafficLights); onInteraction() },
+            state.crushClipCompensation, { state.setHistogram(compensation = it); onInteraction() },
+            "Show small RGB edge blocks for crushed and clipped channels.",
+            "Stops of crush/clip tolerance before a traffic light glows. Shared with the goal-post meter.",
+            reset = { state.resetNikonAssist(tool); onInteraction() })
+        MonitorAssistTool.VECTOR -> MonitorAssistSettingsSection.Vectorscope(
+            state.vectorZoom, { state.setVectorscope(zoom = it); onInteraction() },
+            state.vectorBrightness, { state.setVectorscope(brightness = it); onInteraction() },
+            reset = { state.resetNikonAssist(tool); onInteraction() })
+        MonitorAssistTool.LIGHTS -> MonitorAssistSettingsSection.TrafficLights(
+            state.crushClipCompensation, { state.setCompensation(it); onInteraction() },
+            "Stops of crush/clip tolerance before a channel indicator glows. Shared with histogram traffic lights.",
+            reset = { state.resetNikonAssist(tool); onInteraction() })
+        else -> null
+    }
+}
+
+/** A card's reset: the shared Pocket/Insta defaults, leaving panel sizes where the operator put them. */
+internal fun MonitorAssistState.resetNikonAssist(tool: MonitorAssistTool) {
+    when (tool) {
+        MonitorAssistTool.PEAK -> setPeaking(MonitorPeakingColor.RED, MonitorPeakingSense.MED)
+        MonitorAssistTool.FALSE -> setFalseColor(MonitorFalseColorSelection.SCENE_STOPS, true)
+        MonitorAssistTool.ZEBRA -> {
+            updateZebraUnit(MonitorZebraUnit.IRE)
+            setZebraHighlight(true, 99.0, MonitorZebraPaint.WHITE)
+            setZebraMidtone(true, 55.0, MonitorZebraPaint.AMBER)
+        }
+        MonitorAssistTool.WAVE -> setWaveform(MonitorWaveformMode.RGB, 100, MonitorScopeGuides())
+        MonitorAssistTool.PARADE -> setParade(MonitorParadeMode.RGB, 100, MonitorScopeGuides())
+        MonitorAssistTool.HISTO -> setHistogram(true, MonitorCrushClipCompensation.ZERO)
+        MonitorAssistTool.VECTOR -> setVectorscope(MonitorVectorscopeZoom.X1, 100)
+        MonitorAssistTool.LIGHTS -> setCompensation(MonitorCrushClipCompensation.ZERO)
+        else -> Unit
+    }
+}
+
+/** This camera's scale names: its stops scale is its own scene-referred table. */
+private val MonitorFalseColorSelection.nikonLabel: String
+    get() = if (this == MonitorFalseColorSelection.IRE || this == MonitorFalseColorSelection.LIMITS) menuLabel else "ZC Stops"
+
+@Composable
+private fun falseColor(state: MonitorAssistState, cameraInput: ExposureAssistCameraInput,
+    onInteraction: () -> Unit): MonitorAssistSettingsSection {
+    val scale = state.falseColorScale.feedScale
     val reference by produceState<MonitorFalseColorReferenceValues?>(null, scale, cameraInput) {
         value = null
         value = withContext(Dispatchers.Default) { nikonFalseColorReference(scale, cameraInput) }
     }
-    return MonitorAssistSettingsSection.FalseColor(scales = FeedFalseColorScale.entries, scale = scale,
-        onScale = { assistState.selectFalseColorScale(it); onInteraction() }, title = { it.label },
-        readChoice = null, reference = reference,
-        referenceEnabled = settings.feedEffectsConfiguration.falseColorReferenceEnabled,
-        onReferenceEnabled = {
-            settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(falseColorReferenceEnabled = it)
-            if (it && !assistState.isOn(AssistTool.FALSE)) onAssistToggle(AssistTool.FALSE) else onInteraction()
-        }, scaleHelp = "The camera signal supplies the curve and reference calibration.", readHelp = "",
+    return MonitorAssistSettingsSection.FalseColor(nikonFalseColorScales, state.falseColorScale,
+        { state.setFalseColor(scale = it); onInteraction() }, { it.nikonLabel },
+        readChoice = null, reference = reference, referenceEnabled = state.falseColorReference,
+        onReferenceEnabled = { state.setFalseColor(reference = it); onInteraction() },
+        scaleHelp = "The camera signal supplies the curve and reference calibration.", readHelp = "",
         referenceHelp = "Show a compact color key over live view while False Color is active.",
-        reset = { assistState.resetFalseColorSelection(); settings.resetFalseColorConfiguration(); onInteraction() })
+        reset = { state.resetNikonAssist(MonitorAssistTool.FALSE); onInteraction() })
 }
 
 internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
@@ -103,140 +181,46 @@ internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
 }
 
 @Composable
-internal fun NikonPeakingSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
-    val configuration = settings.feedEffectsConfiguration
-    return MonitorAssistSettingsSection.Peaking(sensitivity = when (configuration.peakingSensitivity) {
-        FeedPeakingSensitivity.LOW -> MonitorPeakingSense.LOW
-        FeedPeakingSensitivity.MEDIUM -> MonitorPeakingSense.MED
-        FeedPeakingSensitivity.HIGH -> MonitorPeakingSense.HIGH
-    }, color = MonitorPeakingColor.valueOf(configuration.peakingColor.name),
-        colors = commonColors(SettingsPalette.peaking),
-        sensitivityHelp = "Higher sensitivity catches finer edges but can get noisy on detailed scenes.",
-        colorHelp = "Choose the edge color that stays readable over your typical scene.",
-        onSensitivity = {
-            val sense = when (it) {
-                MonitorPeakingSense.LOW -> FeedPeakingSensitivity.LOW
-                MonitorPeakingSense.MED -> FeedPeakingSensitivity.MEDIUM
-                MonitorPeakingSense.HIGH -> FeedPeakingSensitivity.HIGH
-            }
-            settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(peakingSensitivity = sense)
-            onInteraction()
-        }, onColor = {
-            settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(peakingColor = FeedPeakingColor.valueOf(it.name))
-            onInteraction()
-        }, reset = { settings.resetPeakingConfiguration(); onInteraction() })
-}
-
-@Composable
-internal fun NikonZebraSettings(settings: OperatorSettings, cameraInput: ExposureAssistCameraInput,
-    onInteraction: () -> Unit): MonitorAssistSettingsSection {
-    val unit = settings.feedEffectsConfiguration.zebraUnit
-    return MonitorAssistSettingsSection.ZebraNumbers(units = FeedZebraUnit.entries, unit = unit, title = { it.label },
-        onUnit = {
-            settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(zebraUnit = it); onInteraction()
-        }, unitsHelp = "Switch between native 0-255 codes and the normalized 0-100 monitoring IRE scale.",
+private fun zebra(state: MonitorAssistState, cameraInput: ExposureAssistCameraInput,
+    onInteraction: () -> Unit): MonitorAssistSettingsSection =
+    MonitorAssistSettingsSection.ZebraNumbers(MonitorZebraUnit.entries, state.zebraUnit, { it.editorLabel },
+        onUnit = { state.updateZebraUnit(it); onInteraction() },
+        unitsHelp = "Switch between native 0-255 codes and the normalized 0-100 monitoring IRE scale.",
         highlightHelp = "High zebra warns when bright detail approaches clipping after curve compensation.",
         midtoneHelp = "Midtone zebra marks the chosen monitoring level after curve compensation.",
-        highlight = zebraNumberZone(settings, cameraInput, highlight = true, onInteraction),
-        midtone = zebraNumberZone(settings, cameraInput, highlight = false, onInteraction),
-        reset = { settings.resetZebraConfiguration(); onInteraction() })
-}
+        highlight = zebraZone(state, cameraInput, highlight = true, onInteraction),
+        midtone = zebraZone(state, cameraInput, highlight = false, onInteraction),
+        reset = { state.resetNikonAssist(MonitorAssistTool.ZEBRA); onInteraction() })
 
+/** Direct entry in this camera's codes: the Swift core converts against its curve and ISO. */
 @Composable
-private fun zebraNumberZone(settings: OperatorSettings, input: ExposureAssistCameraInput,
+private fun zebraZone(state: MonitorAssistState, input: ExposureAssistCameraInput,
     highlight: Boolean, onInteraction: () -> Unit): MonitorZebraNumberZone {
-    val configuration = settings.feedEffectsConfiguration
-    val unit = configuration.zebraUnit
-    val percent = if (highlight) configuration.zebraHighlightIre else configuration.zebraMidtoneIre
+    val unit = FeedZebraUnit.valueOf(state.zebraUnit.name)
+    val percent = (if (highlight) state.zebraHighlightIRE else state.zebraMidtoneIRE).toFloat()
     val editorValue = remember(input, unit, percent) { zebraEditorValue(input, unit, percent) }
     val maximum = if (unit == FeedZebraUnit.NATIVE) 255 else 100
     val entry = editorValue?.let {
         MonitorZebraNumberEntry(it.roundToInt().coerceIn(0, maximum), maximum, onChange = { value ->
             // A retired unit must not reinterpret an entry captured under another calibration.
-            if (settings.feedEffectsConfiguration.zebraUnit == unit) zebraMonitorPercent(input, unit, value.toFloat())?.let { converted ->
-                val current = settings.feedEffectsConfiguration
-                settings.feedEffectsConfiguration = if (highlight) current.copy(zebraHighlightIre = converted)
-                    else current.copy(zebraMidtoneIre = converted)
+            if (state.zebraUnit.name == unit.name) zebraMonitorPercent(input, unit, value.toFloat())?.let { converted ->
+                if (highlight) state.setZebraHighlight(ire = converted.toDouble())
+                else state.setZebraMidtone(ire = converted.toDouble())
                 onInteraction()
             }
         }, identifier = "settings.zebra.threshold.${if (highlight) "Highlight" else "Midtone"}")
     }
-    val color = if (highlight) configuration.zebraHighlightColor else configuration.zebraMidtoneColor
-    return MonitorZebraNumberZone(enabled = if (highlight) configuration.zebraHighlightEnabled else configuration.zebraMidtoneEnabled,
-        entry = entry, paint = MonitorZebraPaint.valueOf(color.name),
+    return MonitorZebraNumberZone(enabled = if (highlight) state.zebraHighlight else state.zebraMidtone,
+        entry = entry, paint = if (highlight) state.zebraHighlightColor else state.zebraMidtoneColor,
         colors = commonColors(if (highlight) SettingsPalette.highlight else SettingsPalette.midtone),
         onEnabled = {
-            val current = settings.feedEffectsConfiguration
-            settings.feedEffectsConfiguration = if (highlight) current.copy(zebraHighlightEnabled = !current.zebraHighlightEnabled)
-                else current.copy(zebraMidtoneEnabled = !current.zebraMidtoneEnabled)
+            if (highlight) state.setZebraHighlight(enabled = !state.zebraHighlight)
+            else state.setZebraMidtone(enabled = !state.zebraMidtone)
             onInteraction()
         }, onPaint = {
-            val current = settings.feedEffectsConfiguration
-            val paint = FeedZebraStripeColor.valueOf(it.name)
-            settings.feedEffectsConfiguration = if (highlight) current.copy(zebraHighlightColor = paint)
-                else current.copy(zebraMidtoneColor = paint)
+            if (highlight) state.setZebraHighlight(color = it) else state.setZebraMidtone(color = it)
             onInteraction()
         })
-}
-
-@Composable
-internal fun NikonScopeTraceSettings(settings: OperatorSettings, parade: Boolean, onInteraction: () -> Unit): MonitorAssistSettingsSection {
-    val configuration = settings.scopeAssistConfiguration
-    val guides = if (parade) configuration.paradeGuides else configuration.waveformGuides
-    val brightness = if (parade) configuration.paradeBrightness else configuration.waveformBrightness
-    val onBrightness: (Int) -> Unit = {
-        val current = settings.scopeAssistConfiguration
-        settings.scopeAssistConfiguration = if (parade) current.copy(paradeBrightness = it) else current.copy(waveformBrightness = it)
-        onInteraction()
-    }
-    val onGuides: (MonitorScopeGuides) -> Unit = {
-        val current = settings.scopeAssistConfiguration
-        val updated = ScopeGuideLines(it.clip, it.crush, it.middle)
-        settings.scopeAssistConfiguration = if (parade) current.copy(paradeGuides = updated) else current.copy(waveformGuides = updated)
-        onInteraction()
-    }
-    val commonGuides = MonitorScopeGuides(guides.clip, guides.crush, guides.middle)
-    return if (parade) {
-        MonitorAssistSettingsSection.Trace.parade(ScopeParadeMode.entries, configuration.paradeMode, onMode = {
-            settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(paradeMode = it); onInteraction()
-        }, title = { it.label }, brightness = brightness, onBrightness = onBrightness, guides = commonGuides, onGuides = onGuides,
-            reset = { settings.resetParadeConfiguration(); onInteraction() })
-    } else {
-        MonitorAssistSettingsSection.Trace.waveform(ScopeWaveformMode.entries, configuration.waveformMode, onMode = {
-            settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(waveformMode = it); onInteraction()
-        }, title = { it.label }, brightness = brightness, onBrightness = onBrightness, guides = commonGuides, onGuides = onGuides,
-            reset = { settings.resetWaveformConfiguration(); onInteraction() })
-    }
-}
-
-@Composable
-internal fun NikonVectorscopeSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
-    val configuration = settings.scopeAssistConfiguration
-    return MonitorAssistSettingsSection.Vectorscope(MonitorVectorscopeZoom.valueOf(configuration.vectorscopeZoom.name), onZoom = {
-        settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(vectorscopeZoom = ScopeVectorscopeZoom.valueOf(it.name))
-        onInteraction()
-    }, brightness = configuration.vectorscopeBrightness, onBrightness = {
-        settings.scopeAssistConfiguration = settings.scopeAssistConfiguration.copy(vectorscopeBrightness = it); onInteraction()
-    }, reset = { settings.resetVectorscopeConfiguration(); onInteraction() })
-}
-
-@Composable
-internal fun NikonHistogramSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
-    return MonitorAssistSettingsSection.Histogram(trafficLights = settings.histogramTrafficLightsEnabled.value,
-        onTrafficLights = { settings.histogramTrafficLightsEnabled.toggle(); onInteraction() },
-        compensation = MonitorCrushClipCompensation.valueOf(settings.scopeCrushClipCompensation.name),
-        onCompensation = { settings.scopeCrushClipCompensation = ScopeCrushClipCompensation.valueOf(it.name); onInteraction() },
-        trafficHelp = "Show small RGB edge blocks for crushed and clipped channels.",
-        compensationHelp = "Stops of crush/clip tolerance before a traffic light glows. Shared with the goal-post meter.",
-        reset = { settings.resetHistogramConfiguration(); onInteraction() })
-}
-
-@Composable
-internal fun NikonCrushClipSettings(settings: OperatorSettings, onInteraction: () -> Unit): MonitorAssistSettingsSection {
-    return MonitorAssistSettingsSection.TrafficLights(MonitorCrushClipCompensation.valueOf(settings.scopeCrushClipCompensation.name),
-        onCompensation = { settings.scopeCrushClipCompensation = ScopeCrushClipCompensation.valueOf(it.name); onInteraction() },
-        help = "Stops of crush/clip tolerance before a channel indicator glows. Shared with histogram traffic lights.",
-        reset = { settings.resetTrafficLightsConfiguration(); onInteraction() })
 }
 
 private fun commonColors(colors: List<SettingsColorDot>): List<MonitorSettingsColorDot> =

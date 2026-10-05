@@ -238,10 +238,6 @@ class MainActivity : ComponentActivity() {
         val operatorSettings =
             OperatorSettings(applicationContext).also { settings ->
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
-                debugSplitComparison?.let {
-                    settings.splitComparisonOrientation = it
-                    settings.splitComparisonEnabled.value = true
-                }
             }
         // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
         DemoHarness.chromeEditMode(intent)?.let(operatorSettings::beginChromeEditing)
@@ -801,12 +797,7 @@ class MainActivity : ComponentActivity() {
                     }
                     val watchAssist =
                         remember(watching) {
-                            AssistState.restore(
-                                applicationContext,
-                                intentEffects = null,
-                                intentScope = null,
-                                availableStoredLut = lutLibrary::contains,
-                            )
+                            restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
                         }
                     val leaveWatch: () -> Unit = {
                         val leaving = watching
@@ -830,7 +821,7 @@ class MainActivity : ComponentActivity() {
                             commonSession = watchCommon,
                             commonControl = watchControl,
                             frameSource = watching.frameSource,
-                            assist = watchAssist,
+                            assists = watchAssist,
                             operatorSettings = operatorSettings,
                             lutLibrary = lutLibrary,
                             // Same stand-down as the connected monitor: the full-screen
@@ -867,7 +858,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             OperatorSettingsScreen(
                                 session = watching.session,
-                                assistState = watchAssist,
+                                assists = watchAssist,
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
@@ -900,12 +891,7 @@ class MainActivity : ComponentActivity() {
                     val primary = offlineBuckets.firstOrNull()
                     val offlineAssist =
                         remember(primary?.cameraID, offlineBuckets.size) {
-                            AssistState.restore(
-                                applicationContext,
-                                intentEffects = null,
-                                intentScope = null,
-                                availableStoredLut = lutLibrary::contains,
-                            )
+                            restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
                         }
                     MediaBrowseScreen(
                         catalogIndex = mediaLibraryIndex,
@@ -922,13 +908,12 @@ class MainActivity : ComponentActivity() {
                                 else -> "All cameras"
                             },
                         offlineCameraIDs = offlineBuckets.map { it.cameraID },
-                        liveAssistState = offlineAssist,
+                        assists = offlineAssist,
                         exposureAssistCameraInput = ExposureAssistCameraInput(),
                         operatorSettings = operatorSettings,
                         lutLibrary = lutLibrary,
                         frameioController = frameioController,
                         mediaDeliveryCoordinator = mediaDeliveryCoordinator,
-                        selectedLut = offlineAssist.selectedLut,
                         onRatingDiagnostic = diagnostics::record,
                         onClose = { offlineMediaBuckets = null },
                     )
@@ -1185,16 +1170,11 @@ class MainActivity : ComponentActivity() {
                         if (standaloneSettingsPresented) {
                             val standaloneAssist =
                                 remember {
-                                    AssistState.restore(
-                                        applicationContext,
-                                        intentEffects = null,
-                                        intentScope = null,
-                                        availableStoredLut = lutLibrary::contains,
-                                    )
+                                    restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
                                 }
                             OperatorSettingsScreen(
                                 session = null,
-                                assistState = standaloneAssist,
+                                assists = standaloneAssist,
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
@@ -1257,13 +1237,11 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         val assist = remember(active) {
-                            AssistState.restore(
-                                applicationContext,
-                                debugAssistEffects,
-                                debugScopes?.firstOrNull(),
-                                intentScopes = debugScopes,
-                                availableStoredLut = lutLibrary::contains,
-                            )
+                            restoreNikonAssists(applicationContext, debugAssistEffects, debugScopes, lutLibrary::contains).also { assists ->
+                                debugSplitComparison?.let {
+                                    assists.shared.setSplitComparison(true, vertical = it == FeedSplitOrientation.VERTICAL)
+                                }
+                            }
                         }
                         val currentSessionState by active.state.collectAsState()
                         val currentCameraProperties by active.cameraProperties.collectAsState()
@@ -1412,7 +1390,7 @@ class MainActivity : ComponentActivity() {
                                 commonSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
                                 commonControl = shell.control,
                                 frameSource = demo?.second ?: uvcSource,
-                                assist = assist,
+                                assists = assist,
                                 operatorSettings = operatorSettings,
                                 lutLibrary = lutLibrary,
                                 frameioController = frameioController,
@@ -1538,7 +1516,7 @@ class MainActivity : ComponentActivity() {
                                 MonitorOverlay.SETTINGS ->
                                     OperatorSettingsScreen(
                                         session = active,
-                                        assistState = assist,
+                                        assists = assist,
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
@@ -1639,13 +1617,12 @@ class MainActivity : ComponentActivity() {
                                             } else {
                                                 MediaLibraryCategory.VIDEOS
                                             },
-                                        liveAssistState = assist,
+                                        assists = assist,
                                         exposureAssistCameraInput = playbackExposureAssistCameraInput,
                                         operatorSettings = operatorSettings,
                                         lutLibrary = lutLibrary,
                                         frameioController = frameioController,
                                         mediaDeliveryCoordinator = mediaDeliveryCoordinator,
-                                        selectedLut = assist.selectedLut,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         galleryFailureInjection =
                                             DemoHarness.galleryFailureInjection(intent),

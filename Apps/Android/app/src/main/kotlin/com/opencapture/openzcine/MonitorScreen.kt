@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import android.os.Build
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -7,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import com.opencapture.monitorui.MonitorAssistTool
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -154,8 +156,6 @@ import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.openzcine.relay.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import com.opencapture.openzcine.media.LiveAssistOptionsOverlay
-import com.opencapture.openzcine.media.retainLiveAssistOptions
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
@@ -181,13 +181,6 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
-
-/** One measured live-toolbar tool and the orientation in which its anchor is valid. */
-private data class LiveAssistOptionsRequest(
-    val tool: AssistTool,
-    val anchorBounds: Rect,
-    val portrait: Boolean,
-)
 
 /** Gives the live quick-settings panel first refusal on the system Back action. */
 @Composable
@@ -363,7 +356,7 @@ internal fun MonitorScreen(
     commonSession: NikonOpenCineSession,
     commonControl: MonitorControlModel,
     frameSource: LiveFrameSource?,
-    assist: AssistState,
+    assists: NikonAssists,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary? = null,
     /**
@@ -573,8 +566,6 @@ internal fun MonitorScreen(
     val effectiveDisplayMode =
         displayMode.takeIf(displayModeOrder::contains) ?: displayModeOrder.first()
     var locked by remember { mutableStateOf(false) }
-    // Photography's lock-side vertical assist rail (iOS `photoRailExpanded`).
-    var photoRailExpanded by remember { mutableStateOf(true) }
     var focusPointLocked by remember(session) { mutableStateOf(false) }
     var focusLockHolding by remember(session) { mutableStateOf(false) }
     var focusMoveRequestsInFlight by remember(session) { mutableStateOf(0) }
@@ -683,7 +674,6 @@ internal fun MonitorScreen(
     }
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
     var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
-    var activeAssistOptions by remember { mutableStateOf<LiveAssistOptionsRequest?>(null) }
     // iOS `isRedDownloadPresented` — full-screen RED IPP2 download cover.
     var redDownloadPresented by remember { mutableStateOf(false) }
     // iOS pendingShutterLockState: optimistic lock UI until poll matches the write.
@@ -692,7 +682,7 @@ internal fun MonitorScreen(
         if (liveViewGuideVisible) {
             activeCommandControl = null
             activeMonitorPickerKind = null
-            activeAssistOptions = null
+            assists.shared.configureTool = null
         }
     }
     var commonEditor by remember { mutableStateOf<MonitorControlModel.Editor?>(null) }
@@ -717,7 +707,7 @@ internal fun MonitorScreen(
         if (previous != null && cameraProperties.captureSelector != previous) {
             activeCommandControl = null
             activeMonitorPickerKind = null
-            activeAssistOptions = null
+            assists.shared.configureTool = null
             // Photography has no command dashboard — flipping to photo while
             // it is up snaps back to live (iOS flip handler).
             if (
@@ -744,8 +734,8 @@ internal fun MonitorScreen(
                 Unit
             }
         }
-    LiveAssistOptionsBackHandler(visible = activeAssistOptions != null) {
-        activeAssistOptions = null
+    LiveAssistOptionsBackHandler(visible = assists.shared.configureTool != null) {
+        assists.shared.configureTool = null
     }
     /**
      * Latest desired label per control while an apply is in flight (iOS write-queue
@@ -892,7 +882,7 @@ internal fun MonitorScreen(
      * strip has no cell for (audio, tone, grid) still take the drum.
      */
     val openCommandControl: (CommandControlRequest) -> Unit = { request ->
-        activeAssistOptions = null
+        assists.shared.configureTool = null
         // Same picker source the portrait live grid resolves against, so a stills body never
         // matches a cinema request against the movie strip.
         val pickerSource = if (isPhotographyMode) photographySettings else captureSettings
@@ -909,7 +899,7 @@ internal fun MonitorScreen(
      */
     val cycleDisplayMode: () -> Unit = {
         if (!locked) {
-            activeAssistOptions = null
+            assists.shared.configureTool = null
             displayMode = nextDisplayModeInOrder(displayModeOrder, effectiveDisplayMode)
         }
     }
@@ -1193,11 +1183,11 @@ internal fun MonitorScreen(
     // Arm the instant-review diff with the card's current handles the moment
     // PLAY is on in photo mode (iOS seedInstantReviewBaseline call sites);
     // leaving photo mode or losing the session drops any presented review.
-    LaunchedEffect(sessionState, isPhotographyMode, assist.instantReviewEnabled) {
+    LaunchedEffect(sessionState, isPhotographyMode, assists.instantReview) {
         if (
             sessionState is CameraSessionState.Connected &&
             isPhotographyMode &&
-            assist.instantReviewEnabled
+            assists.instantReview
         ) {
             instantReview.seedBaseline(this)
         } else {
@@ -1248,7 +1238,7 @@ internal fun MonitorScreen(
             val action =
                 bodyCaptureSyncAction(
                     isPhotography = prefersPhotographyChrome(snapshot),
-                    instantReviewEnabled = assist.instantReviewEnabled,
+                    instantReviewEnabled = assists.instantReview,
                     appReleaseInFlight = stillCapture.isCapturing.value,
                 )
             if (action == BodyCaptureSync.IGNORE) return@collect
@@ -1272,7 +1262,7 @@ internal fun MonitorScreen(
     stillCapture.onRunCompleted = {
         instantReview.onCaptureRunCompleted(
             recordScope,
-            enabled = isPhotographyMode && assist.instantReviewEnabled,
+            enabled = isPhotographyMode && assists.instantReview,
             compression = cameraProperties.compression,
             infoLine = photographyReviewInfoLine(cameraProperties),
         )
@@ -1568,7 +1558,6 @@ internal fun MonitorScreen(
         // One authoritative mode filter, mirroring core `MonitorChromePolicy`: clean (DISP 2) is a
         // bare image unless the operator pinned a tool to it, and it strips the deck/rails/bands
         // as well (#256).
-        val cleanViewPins = operatorSettings.cleanViewPinnedTools
         // Chrome is per DISP mode (iOS `OperatorPreferences.chrome(for:)`) — read this mode's set,
         // never the global one, or DISP 2's bare image leaks back into DISP 1.
         // …and per capture side: a cinema rig and a stills body keep separate layouts (iOS
@@ -1600,38 +1589,33 @@ internal fun MonitorScreen(
             // Editing a mode means looking at it.
             chromeEditorMode?.let { displayMode = it }
         }
-        val visibleAssistTools = operatorSettings.visibleAssistToolbarTools
-        val openAssistOptions: (AssistTool, Rect) -> Unit = { tool, anchor ->
-            // Clean view defers transient pop-ups (#256) — the toolbar that opens them is hidden
-            // there anyway, so this only catches a stray remote/hardware route.
-            if (!locked && monitorAllowsPopups(effectiveDisplayMode)) {
+        val liveAssistChips =
+            nikonLiveAssistChips(
+                photography = isPhotographyMode,
+                imageEffects = liveFeedEffectsPlatformAvailable(Build.VERSION.SDK_INT, SwiftCore.isAvailable),
+            )
+        val liveAssistTools = liveAssistChips.mapNotNull { (it as? NikonAssistChip.Tool)?.tool }
+        val configureTool = assists.shared.configureTool
+        LaunchedEffect(configureTool) {
+            // The inspector takes over from any open camera picker.
+            if (configureTool != null) {
                 activeMonitorPickerKind = null
                 activeCommandControl = null
                 commandControlFeedback = null
-                activeAssistOptions = LiveAssistOptionsRequest(tool, anchor, isPortrait)
             }
         }
-        LaunchedEffect(
-            activeAssistOptions,
-            isPortrait,
-            isClean,
-            isCommand,
-            locked,
-            lifecycleState,
-            visibleAssistTools,
-            assistToolbarVisible,
-        ) {
-            val request = activeAssistOptions ?: return@LaunchedEffect
-            val retained =
-                request.portrait == isPortrait &&
-                    retainLiveAssistOptions(
-                        tool = request.tool,
-                        visibleTools = visibleAssistTools,
-                        liveMode = !isClean && !isCommand && assistToolbarVisible,
-                        locked = locked,
-                        resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
-                    )
-            if (!retained) activeAssistOptions = null
+        LaunchedEffect(configureTool, isClean, isCommand, locked, lifecycleState, liveAssistTools, assistToolbarVisible) {
+            if (
+                !retainLiveAssistOptions(
+                    tool = configureTool,
+                    tools = liveAssistTools,
+                    liveMode = !isClean && !isCommand && assistToolbarVisible,
+                    locked = locked,
+                    resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+                )
+            ) {
+                assists.shared.configureTool = null
+            }
         }
         LaunchedEffect(
             effectiveDisplayMode,
@@ -1675,7 +1659,7 @@ internal fun MonitorScreen(
                 // histogram) — a band sized to the full set opens a dead gap
                 // between feed and toolbar (iOS
                 // `displayedFitScopes.filter(appliesToPhotography)`).
-                assist.displayedPortraitScopes.let { scopes ->
+                assists.shared.portraitScopes(scopesShown(assists.shared::isOn)).let { scopes ->
                     if (isPhotographyMode) scopes.filter { it.appliesToPhotography } else scopes
                 }
             } else {
@@ -1725,13 +1709,13 @@ internal fun MonitorScreen(
         // Local framing is deliberately read from the operator store rather
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
-        val localFraming = operatorSettings.localFramingAssistConfiguration
+        val localFraming = assists.shared.framing(assists.shared::isOn, operatorSettings.levelStyle)
         // What the feed overlays actually draw: the operator's framing config with the tools this
         // DISP mode suppresses switched off. The stored config is untouched, so leaving clean
         // restores the previous set exactly.
         val renderedFraming =
-            renderedFramingAssists(
-                localFraming, effectiveDisplayMode, cleanViewPins, isPhotographyMode)
+            assists.shared.framing({ assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) },
+                operatorSettings.levelStyle)
         // While the EV meter tool is on, the session interleaves fast needle
         // reads between regular property polls (dropped again on dispose so a
         // dismissed monitor can't keep the extra camera traffic alive).
@@ -1945,7 +1929,6 @@ internal fun MonitorScreen(
         // The drawn picture inside that zone (letterboxed when the feed's aspect differs),
         // which is what bounds the zoom pan. Filled in where the content rect is resolved.
         var feedPictureSize by remember(monitorFrameSource) { mutableStateOf(0f to 0f) }
-        val audioMetersEnabled = assist.audioMetersEnabled
         // Mode-filtered render inputs (#256): the operator's stored on/off state is untouched, so
         // leaving clean restores everything exactly.
         // The 50/50 comparison is an operator preference rather than a toolbar toggle, so it joins
@@ -1957,8 +1940,8 @@ internal fun MonitorScreen(
         var splitComparisonMuted by remember { mutableStateOf(false) }
         // Arming the comparison from the LUT popup clears the mute, so the split is showing when
         // the operator comes back to the image.
-        LaunchedEffect(operatorSettings.splitComparisonEnabled.value) {
-            if (operatorSettings.splitComparisonEnabled.value) splitComparisonMuted = false
+        LaunchedEffect(assists.shared.splitComparison) {
+            if (assists.shared.splitComparison) splitComparisonMuted = false
         }
         // The zoom is session-only: it is a focus check, not a setting, and a monitor that reopens
         // already magnified is a monitor that lies about the framing.
@@ -2002,19 +1985,10 @@ internal fun MonitorScreen(
                 }
         }
         val renderedEffects =
-            renderedFeedEffects(
-                assist.effects.copy(
-                    splitComparison =
-                        operatorSettings.activeSplitComparison?.takeUnless { splitComparisonMuted },
-                ),
-                effectiveDisplayMode,
-                cleanViewPins,
-                isPhotographyMode,
-            )
+            assists.feedEffects { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }
+                .let { if (splitComparisonMuted) it.copy(splitComparison = null) else it }
         val renderedAudioMeters =
-            audioMetersEnabled &&
-                assistToolRendersInMode(
-                    AssistTool.AUDIO, effectiveDisplayMode, cleanViewPins, isPhotographyMode)
+            assists.shared.rendersLive(MonitorAssistTool.AUDIO, effectiveDisplayMode, isPhotographyMode)
         var liveAudioLevels by
             remember(monitorFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
         LaunchedEffect(monitorFrameSource, renderedAudioMeters) {
@@ -2319,7 +2293,7 @@ internal fun MonitorScreen(
                 Modifier
             }
         val openSharedPicker: (MonitorPickerKind) -> Unit = { kind ->
-            activeAssistOptions = null
+            assists.shared.configureTool = null
             activeCommandControl = null
             activeMonitorPickerKind = nextMonitorPicker(activeMonitorPickerKind, kind,
                 commandControlsEnabled && pendingCommandControl == null)
@@ -2357,7 +2331,7 @@ internal fun MonitorScreen(
                 captureMounted = cameraValuesVisible && !isCommand,
                 captureInteractive = activeMonitorPicker == null,
                 locked = locked, popupInteractive = !editingThisMode,
-                capturePresented = activeMonitorPicker != null || activeAssistOptions != null,
+                capturePresented = activeMonitorPicker != null || assists.shared.configureTool != null,
                 recovering = (recoveryStateOverride ?: sessionRecoveryState) != MonitorRecoveryState.Idle),
             modifier = Modifier.fillMaxSize().then(sceneLayer),
             picture = {
@@ -2517,7 +2491,7 @@ internal fun MonitorScreen(
                         presentationState = liveFeedPresentation,
                         collectFrames = monitorFrameSource != null,
                         effects = renderedEffects,
-                        configuration = operatorSettings.feedEffectsConfiguration,
+                        configuration = assists.shared.feedEffectsConfiguration,
                         cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
                         effectsPresentationState = liveFeedEffectsPresentation,
@@ -2736,13 +2710,10 @@ internal fun MonitorScreen(
                                 pendingCommandControl, openCommandControl, Modifier.weight(.85f).fillMaxHeight())
                         }
                     }
-                } else if (assistToolbarVisible) {
-                    PortraitFillAssistRail(assist, photoRailExpanded, { photoRailExpanded = it },
-                        modifier = Modifier.zone(fieldLayout.assists.zone()),
-                        visibleTools = frontPinnedAssistTools(operatorSettings.visibleAssistToolbarTools.filter { !isPhotographyMode || it.appliesToPhotography }, photography = isPhotographyMode),
-                        framingConfiguration = localFraming, onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
-                        hapticsEnabled = operatorSettings.hapticsEnabled.value, enabled = accepts && !locked,
-                        onLongPressToolAnchored = openAssistOptions)
+                } else if (assistToolbarVisible && configureTool == null) {
+                    NikonAssistPalette(liveAssistChips, assists, playback = false, portrait = isPortrait,
+                        locked = locked || !accepts,
+                        modifier = Modifier.zone(fieldLayout.assists.zone()))
                 }
                 // Focus-by-wire scrub strip: on the live view just left of the right system rail
                 // in an AF focus mode. The camera refuses a remote drive in MF (Invalid_Status) —
@@ -2772,7 +2743,7 @@ internal fun MonitorScreen(
                     // … && activePanel == nil`).
                     activeCommandControl == null &&
                     activeMonitorPickerKind == null &&
-                    activeAssistOptions == null
+                    assists.shared.configureTool == null
                 ) {
                     val rightRailLeading =
                         minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)
@@ -2801,15 +2772,12 @@ internal fun MonitorScreen(
         // Landscape and portrait fill float every selection; portrait fit
         // mounts only its recency-selected ≤2 stack in the shared zone.
         val renderedScopeSet =
-            renderedScopes(
-                assist.selectedScopes, effectiveDisplayMode, cleanViewPins, isPhotographyMode)
+            scopesShown { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }
         if (renderedScopeSet.isNotEmpty() && monitorFrameSource != null) {
             ScopePanels(
                 selectedScopes = renderedScopeSet,
                 portraitScopes = portraitScopes,
-                crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
-                histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
-                configuration = operatorSettings.scopeAssistConfiguration,
+                assist = assists.shared,
                 cameraInput = exposureAssistCameraInput,
                 // The mode-filtered look, not the stored one: the vectorscope reads the MONITOR
                 // image, so it must push its samples through the LUT actually baked into the frame
@@ -2817,10 +2785,6 @@ internal fun MonitorScreen(
                 // iOS passing `renderedLiveAssistTools` to `vectorscopeMonitorCube`.
                 lutSelection = renderedEffects.lut,
                 lutLibrary = lutLibrary,
-                onScaleChange = { kind, scale ->
-                    operatorSettings.scopeAssistConfiguration =
-                        operatorSettings.scopeAssistConfiguration.withScale(kind, scale)
-                },
                 thermalTier = thermalTier,
                 source = monitorFrameSource,
                 isPortrait = isPortrait,
@@ -2988,7 +2952,7 @@ internal fun MonitorScreen(
         // LUT's own visibility, so clean view carries it exactly where the operator pinned the
         // tool. Same rule as `LUTResolution.showsSplitComparisonKey` on iOS.
         if (renderedEffects.lut != null &&
-            operatorSettings.splitComparisonEnabled.value &&
+            assists.shared.splitComparison &&
             !locked &&
             chromeEditorMode == null
         ) {
@@ -3140,7 +3104,7 @@ internal fun MonitorScreen(
                 review = review,
                 onDismiss = instantReview::dismiss,
                 onToggleStar = { starred -> instantReview.setStarred(recordScope, starred) },
-                desqueeze = operatorSettings.localFramingAssistConfiguration,
+                desqueeze = localFraming,
             )
         }
 
@@ -3172,8 +3136,7 @@ internal fun MonitorScreen(
                                 // iOS importCustomLUT: select + enable the LUT immediately —
                                 // the graded feed is the confirmation the operator sees.
                                 if (library.prepare(result.entry.selection)) {
-                                    assist.selectStoredLut(result.entry.selection)
-                                    if (!assist.isOn(AssistTool.LUT)) assist.toggle(AssistTool.LUT)
+                                    assists.selectLut(FeedLutSelection.Stored(result.entry.selection))
                                 }
                                 Toast.makeText(
                                     appContext,
@@ -3188,16 +3151,16 @@ internal fun MonitorScreen(
                     }
                 }
             }
-        activeAssistOptions?.let { request ->
+        configureTool?.let { tool ->
             CompositionLocalProvider(LocalMonitorGlass provides glass) {
-                LiveAssistOptionsOverlay(
-                    tool = request.tool,
-                    anchorBounds = request.anchorBounds,
-                    assistState = assist,
-                    settings = operatorSettings,
-                    cameraInput = exposureAssistCameraInput,
-                    lutLibrary = lutLibrary,
-                    onOpenRedDownload = { redDownloadPresented = true },
+                NikonAssistInspector(
+                    tool, liveAssistTools.filter { it.nikonHasOptions }, assists, operatorSettings,
+                    exposureAssistCameraInput, lutLibrary, viewportWidth, viewportHeight,
+                    safeLeading = safeLeading, safeTop = safeTop, safeBottom = safeBottom, safeTrailing = safeTrailing,
+                    onOpenRedDownload = {
+                        assists.shared.configureTool = null
+                        redDownloadPresented = true
+                    },
                     onRequestLutImport =
                         lutLibrary?.let {
                             {
@@ -3205,7 +3168,7 @@ internal fun MonitorScreen(
                                     arrayOf("*/*", "application/octet-stream"))
                             }
                         },
-                    onDismiss = { activeAssistOptions = null },
+                    onDismiss = { assists.shared.configureTool = null },
                 )
             }
         }
@@ -3215,9 +3178,7 @@ internal fun MonitorScreen(
                 frameioController = frameioController,
                 onClose = { redDownloadPresented = false },
                 onImported = { count ->
-                    if (count > 0 && !assist.isOn(AssistTool.LUT)) {
-                        assist.toggle(AssistTool.LUT)
-                    }
+                    if (count > 0) assists.shared.armLut()
                 },
             )
         }

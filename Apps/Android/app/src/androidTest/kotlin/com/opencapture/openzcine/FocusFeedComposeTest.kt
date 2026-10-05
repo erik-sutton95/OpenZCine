@@ -36,9 +36,10 @@ import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
-import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
-import com.opencapture.openzcine.settings.LocalDesqueezeRatio
-import com.opencapture.openzcine.settings.LocalFramingAspectRatio
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.opencine.media.MonitorDesqueezeDirection
+import com.opencapture.opencine.media.MonitorDesqueezePreset
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import java.io.ByteArrayOutputStream
@@ -217,28 +218,27 @@ class FocusFeedComposeTest {
         setDeviceRotation(ROTATION_PORTRAIT)
         try {
             val session = FocusSession()
+            val assists = idleNikonAssists()
             val settings =
                 setMonitor(
                     session,
                     FocusFrameSource(testJpeg()),
                     "focus-feed-ope91-portrait-fill-test",
+                    assists,
                 )
             settings.portraitFeedAspect = PortraitFeedAspect.FILL
-            LocalFramingAspectRatio.entries
-                .filter { it != LocalFramingAspectRatio.RATIO_239 && it in settings.selectedGuideRatios }
-                .forEach(settings::toggleGuideRatioConfiguration)
-            if (LocalFramingAspectRatio.RATIO_239 !in settings.selectedGuideRatios) {
-                settings.toggleGuideRatioConfiguration(LocalFramingAspectRatio.RATIO_239)
+            composeRule.runOnIdle {
+                assists.shared.apply {
+                    selectedGuides = setOf(MonitorGuideAspect.CINEMA)
+                    syncVisible(
+                        setOf(MonitorAssistTool.GUIDES, MonitorAssistTool.GRID, MonitorAssistTool.CROSS, MonitorAssistTool.DESQ),
+                    )
+                    guideMask = true
+                    setGridOption(thirds = true)
+                    selectDesqueezePreset(MonitorDesqueezePreset.X200)
+                    updateDesqueezeDirection(MonitorDesqueezeDirection.HORIZONTAL)
+                }
             }
-            settings.guidesVisible.value = true
-            settings.guideMaskEnabled.value = true
-            settings.localGridVisible.value = true
-            settings.ruleOfThirdsEnabled.value = true
-            settings.centerCrosshairEnabled.value = true
-            settings.desqueezeEnabled.value = true
-            settings.desqueezeRatio = LocalDesqueezeRatio.X200
-            settings.desqueezeOrientation = LocalDesqueezeOrientation.HORIZONTAL
-            settings.levelAssistEnabled.value = false
 
             composeRule.waitUntil(5_000) {
                 composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
@@ -264,6 +264,7 @@ class FocusFeedComposeTest {
         session: CameraSession,
         source: LiveFrameSource,
         preferencesName: String,
+        assists: NikonAssists = idleNikonAssists(),
     ): OperatorSettings {
         check(SwiftCore.isAvailable) { "The device UI pass requires the staged Swift core." }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -281,7 +282,7 @@ class FocusFeedComposeTest {
                     commonSession = common,
                     commonControl = control,
                     frameSource = source,
-                    assist = AssistState(FeedEffects.NONE, null),
+                    assists = assists,
                     operatorSettings = settings,
                     glassTierOverride = "flat",
                 )

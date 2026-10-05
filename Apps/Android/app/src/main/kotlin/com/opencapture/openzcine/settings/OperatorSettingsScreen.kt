@@ -4,12 +4,11 @@ import com.opencapture.monitorui.settings.MonitorSettingsInlineRow
 import com.opencapture.monitorui.settings.MonitorSettingsValueText
 import com.opencapture.monitorui.settings.MonitorSettingsSegmented
 import com.opencapture.monitorui.settings.MonitorSettingsChoices
-
 import com.opencapture.monitorui.settings.MonitorSettingsActionPill
 import com.opencapture.monitorui.settings.MonitorConnectionSettings
 import com.opencapture.monitorui.settings.MonitorSupportAction
 import com.opencapture.monitorui.settings.MonitorSupportSettings
-
+import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
 import com.opencapture.monitorui.settings.MonitorOperatorSafetySettings
@@ -21,10 +20,8 @@ import com.opencapture.monitorui.settings.MonitorSettingsPage
 import com.opencapture.monitorui.settings.MonitorSettingsRowCard
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
 import com.opencapture.monitorui.settings.MonitorSettingsTab
-
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.net.Uri
 import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
@@ -59,7 +56,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
@@ -74,8 +70,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.R
-import com.opencapture.openzcine.AssistState
-import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.LiveViewGuideController
@@ -129,7 +123,7 @@ internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolea
  * The full-screen Operator Settings surface — a 1:1 structural port of the
  * iOS `OperatorSettingsPanel` (ios/Runner/MonitorPanels.swift): floating close
  * button, eyebrow/title header with the live tile, vertical tab rail, and a
- * rounded content pane per tab. [assistState] is the monitor toolbar's state,
+ * rounded content pane per tab. [assists] is the monitor's assist state,
  * so view-assist changes apply immediately and persist through one seam.
  *
  * [session] is null for standalone startup settings. That state never creates
@@ -140,7 +134,7 @@ internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolea
 @Composable
 internal fun OperatorSettingsScreen(
     session: CameraSession?,
-    assistState: AssistState,
+    assists: NikonAssists,
     settings: OperatorSettings,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
@@ -165,8 +159,6 @@ internal fun OperatorSettingsScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scopeLimitMessage = stringResource(R.string.settings_scope_limit)
-    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
     val cameraInput =
         remember(
@@ -195,20 +187,6 @@ internal fun OperatorSettingsScreen(
         val hapticsWereEnabled = settings.hapticsEnabled.value
         toggle.toggle()
         if (hapticsWereEnabled) {
-            feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
-        }
-    }
-    val toggleAssist: (AssistTool) -> Unit = { tool ->
-        val hapticsEnabled = settings.hapticsEnabled.value
-        val maximumScopes = if (session != null && isPortrait) 2 else null
-        val changed = assistState.toggle(tool, maximumActiveScopes = maximumScopes)
-        if (!changed) {
-            Toast.makeText(
-                context,
-                scopeLimitMessage,
-                Toast.LENGTH_SHORT,
-            ).show()
-        } else if (hapticsEnabled) {
             feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
@@ -304,12 +282,10 @@ internal fun OperatorSettingsScreen(
                         session, settings, linkHealth, liveViewSource, activeTransportLabel,
                         relayWatchUi, onDisconnect, onReconnect, emitHaptic,
                     )
-                    OperatorSettingsTab.ASSIST -> NikonViewAssistSettings(
-                        settings, assistState, cameraInput, toggleAssist, emitHaptic,
-                    )
+                    OperatorSettingsTab.ASSIST -> NikonViewAssistSettings(assists.shared, cameraInput, emitHaptic)
                     OperatorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic)
                     OperatorSettingsTab.DISPLAY -> NikonDisplaySettings(
-                        settings, compact, toggleSetting, emitHaptic,
+                        settings, assists.shared, compact, toggleSetting, emitHaptic,
                         checkNotNull(scroll).scrollState, scroll.viewportBounds,
                         liveCaptureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties)) {
                             CaptureLayoutMode.PHOTO
@@ -723,10 +699,6 @@ private fun LinkRows(
         }
     }
 }
-
-/** Image processing controls use source availability rather than a settings-page default. */
-private val imageEffectTools: Set<AssistTool> =
-    setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
 
 /** Digits-only direct entry with the same closed-range clamp as iOS. */
 internal fun normalizedZebraEntry(raw: String, maximum: Int): Int? =
