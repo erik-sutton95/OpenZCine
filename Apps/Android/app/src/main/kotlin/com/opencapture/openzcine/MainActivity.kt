@@ -164,12 +164,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonNative
 
-private enum class MonitorOverlay {
-    NONE,
-    SETTINGS,
-    MEDIA,
-}
-
 private enum class StartupSurface {
     SAVED_CAMERAS,
     PAIRING,
@@ -1217,23 +1211,13 @@ class MainActivity : ComponentActivity() {
                         // The real shell needs the shared core's zone map. An APK
                         // built without `just android-core` (plain CI android-check)
                         // has no native library, so it keeps the placeholder.
-                        // Settings and Media render as mutually-exclusive,
-                        // full-screen surfaces over the monitor so the shell keeps
-                        // its state while either surface owns interaction.
-                        var overlay by rememberSaveable {
-                            mutableStateOf(
-                                if (DemoHarness.opensMedia(intent)) {
-                                    MonitorOverlay.MEDIA
-                                } else {
-                                    MonitorOverlay.NONE
-                                },
-                            )
-                        }
-                        LaunchedEffect(overlay) {
-                            when (overlay) {
-                                MonitorOverlay.NONE -> shell.dismissCover()
-                                MonitorOverlay.SETTINGS -> shell.open(ShellModel.Cover.SETTINGS)
-                                MonitorOverlay.MEDIA -> shell.open(ShellModel.Cover.MEDIA)
+                        // Settings and Media are the shell's covers: mutually-exclusive,
+                        // full-screen surfaces over the monitor so it keeps its state while
+                        // either surface owns interaction.
+                        val overlay = shellState.cover
+                        LaunchedEffect(shellState.monitor?.id) {
+                            if (shellState.monitor != null && DemoHarness.opensMedia(intent)) {
+                                shell.open(ShellModel.Cover.MEDIA)
                             }
                         }
                         val assist = remember(active) {
@@ -1400,10 +1384,10 @@ class MainActivity : ComponentActivity() {
                                 // while Operator Setup is on top — otherwise
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
-                                liveViewEnabled = overlay == MonitorOverlay.NONE,
+                                liveViewEnabled = overlay == null,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
-                                isMonitorFront = overlay == MonitorOverlay.NONE,
+                                isMonitorFront = overlay == null,
                                 sessionRecoveryEnabled =
                                     monitorSessionRecoveryEnabled &&
                                         frameioController.internetHopState
@@ -1415,11 +1399,11 @@ class MainActivity : ComponentActivity() {
                                 liveViewGuideController = liveViewGuide,
                                 onOpenSettings = {
                                     mediaRemoteShutter.disarm()
-                                    overlay = MonitorOverlay.SETTINGS
+                                    shell.open(ShellModel.Cover.SETTINGS)
                                 },
                                 onOpenMedia = {
                                     mediaRemoteShutter.disarm()
-                                    overlay = MonitorOverlay.MEDIA
+                                    shell.open(ShellModel.Cover.MEDIA)
                                 },
                                 // Recovery affordance's "Operator menu": the same explicit exit
                                 // Operator Settings offers, so a late reconnect can never
@@ -1512,8 +1496,8 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             when (overlay) {
-                                MonitorOverlay.NONE -> Unit
-                                MonitorOverlay.SETTINGS ->
+                                null -> Unit
+                                ShellModel.Cover.SETTINGS ->
                                     OperatorSettingsScreen(
                                         session = active,
                                         assists = assist,
@@ -1584,19 +1568,19 @@ class MainActivity : ComponentActivity() {
                                         liveViewGuideController = liveViewGuide,
                                         onShowGuideNow = {
                                             liveViewGuide.replayNow()
-                                            overlay = MonitorOverlay.NONE
+                                            shell.dismissCover()
                                         },
                                         onShowGuideOnNextRealFrame = {
                                             liveViewGuide.replayOnNextRealFrame()
-                                            overlay = MonitorOverlay.NONE
+                                            shell.dismissCover()
                                         },
                                         onCompletedMediaCacheCleared = {
                                             mediaLibraryIndex.clearCameraCatalogs()
                                             mediaCacheRevision += 1
                                         },
-                                        onClose = { overlay = MonitorOverlay.NONE },
+                                        onClose = { shell.dismissCover() },
                                     )
-                                MonitorOverlay.MEDIA ->
+                                ShellModel.Cover.MEDIA ->
                                     MediaBrowseScreen(
                                         catalogIndex = mediaLibraryIndex,
                                         cameraID = cameraID,
@@ -1627,13 +1611,13 @@ class MainActivity : ComponentActivity() {
                                         galleryFailureInjection =
                                             DemoHarness.galleryFailureInjection(intent),
                                         onRatingDiagnostic = diagnostics::record,
-                                        onClose = { overlay = MonitorOverlay.NONE },
+                                        onClose = { shell.dismissCover() },
                                     )
                             }
                         }
                         }
-                        BackHandler(enabled = overlay == MonitorOverlay.SETTINGS) {
-                            overlay = MonitorOverlay.NONE
+                        BackHandler(enabled = overlay == ShellModel.Cover.SETTINGS) {
+                            shell.dismissCover()
                         }
                     } else {
                         MonitorShell(
