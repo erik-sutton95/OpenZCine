@@ -29,11 +29,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -49,6 +45,7 @@ import android.graphics.Paint as AndroidPaint
 import android.graphics.Rect as AndroidRect
 import android.graphics.Typeface
 import kotlin.math.roundToInt
+import com.opencapture.monitorui.MonitorIcon
 
 /**
  * iOS `WhiteBalanceTintPad` — 1:1 geometry and interaction:
@@ -249,9 +246,11 @@ internal fun WhiteBalanceTintPad(
     }
 }
 
-private enum class ChevronDirection { LEFT, RIGHT, UP, DOWN }
+private enum class ChevronDirection(val icon: MonitorIcon) {
+    LEFT(MonitorIcon.CHEVRON_LEFT), RIGHT(MonitorIcon.CHEVRON_RIGHT), UP(MonitorIcon.CHEVRON_UP), DOWN(MonitorIcon.CHEVRON_DOWN),
+}
 
-/** 28dp glass-bright circle with a 13pt bold chevron — iOS SF Symbol look. */
+/** 28dp glass-bright circle with the shared chevron glyph. */
 @Composable
 private fun TintChevronArrow(
     direction: ChevronDirection,
@@ -267,42 +266,7 @@ private fun TintChevronArrow(
             .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(13.dp)) {
-            val stroke =
-                Stroke(
-                    width = 2.2.dp.toPx(),
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round,
-                )
-            val w = size.width
-            val h = size.height
-            val path =
-                Path().apply {
-                    when (direction) {
-                        ChevronDirection.LEFT -> {
-                            moveTo(w * 0.62f, h * 0.18f)
-                            lineTo(w * 0.32f, h * 0.5f)
-                            lineTo(w * 0.62f, h * 0.82f)
-                        }
-                        ChevronDirection.RIGHT -> {
-                            moveTo(w * 0.38f, h * 0.18f)
-                            lineTo(w * 0.68f, h * 0.5f)
-                            lineTo(w * 0.38f, h * 0.82f)
-                        }
-                        ChevronDirection.UP -> {
-                            moveTo(w * 0.18f, h * 0.62f)
-                            lineTo(w * 0.5f, h * 0.32f)
-                            lineTo(w * 0.82f, h * 0.62f)
-                        }
-                        ChevronDirection.DOWN -> {
-                            moveTo(w * 0.18f, h * 0.38f)
-                            lineTo(w * 0.5f, h * 0.68f)
-                            lineTo(w * 0.82f, h * 0.38f)
-                        }
-                    }
-                }
-            drawPath(path, LiveDesign.text, style = stroke)
-        }
+        MonitorIcon(direction.icon, null, Modifier.size(18.dp), LiveDesign.text)
     }
 }
 

@@ -10,7 +10,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,7 +34,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -83,7 +81,7 @@ internal const val MIN_TAP_TARGET_DP = 44f
 /**
  * Grows a control's touch area to [MIN_TAP_TARGET_DP] without moving anything drawn — the Compose
  * transcription of the positive-then-negative padding iOS uses (`MinTapTargetModifier`,
- * ios/Runner/DesignShared.swift:114-137). It lives inside [chromeClickable] / [chromePressable] so
+ * ios/Runner/DesignShared.swift:114-137). It lives inside [chromeClickable] so
  * every chrome control inherits the floor from one place, the way iOS inherits it from one button
  * style instead of from its 131 call sites.
  *
@@ -163,47 +161,6 @@ fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier {
                 onClick()
             },
         )
-    }
-}
-
-/**
- * iOS `.zcTapTarget` press feedback: while pressed the control drops to 60%
- * opacity and scales to 0.97 — chrome buttons read as buttons without a
- * Material ripple. Same [MIN_TAP_TARGET_DP] hit floor as [chromeClickable]; the press transform
- * rides the expanded box, which is concentric with the drawn one, so the scale reads identically.
- */
-@Composable
-fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
-    val haptics = LocalOperatorHaptics.current
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val alpha by
-        androidx.compose.animation.core.animateFloatAsState(
-            if (pressed) 0.6f else 1f,
-            androidx.compose.animation.core.tween(durationMillis = 120),
-            label = "chrome press alpha",
-        )
-    val scale by
-        androidx.compose.animation.core.animateFloatAsState(
-            if (pressed) 0.97f else 1f,
-            androidx.compose.animation.core.tween(durationMillis = 120),
-            label = "chrome press scale",
-        )
-    return tapTargetFloor {
-        graphicsLayer {
-            this.alpha = alpha
-            scaleX = scale
-            scaleY = scale
-        }
-            .clickable(
-                enabled = true,
-                interactionSource = interaction,
-                indication = null,
-                onClick = {
-                    haptics.selection()
-                    onClick()
-                },
-            )
     }
 }
 

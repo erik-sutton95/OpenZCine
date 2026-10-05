@@ -31,11 +31,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeClickable
-import com.opencapture.openzcine.chromePressable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
 import java.util.Locale
 import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
+import com.opencapture.monitorui.monitorChromeClickable
 
 /**
  * Camera-card deletion policy and the star-rating chrome shared by the still
@@ -244,6 +245,7 @@ internal fun StarRatingRow(
     modifier: Modifier = Modifier,
     onSelect: (Int) -> Unit,
 ) {
+    val haptics = LocalOperatorHaptics.current
     Row(
         modifier
             // CircleShape renders as a capsule on a wide row, like iOS's Capsule.
@@ -261,7 +263,9 @@ internal fun StarRatingRow(
             Box(
                 Modifier.size(44.dp)
                     .semantics { role = Role.Button }
-                    .chromePressable { onSelect(if (star == stars) 0 else star) },
+                    .monitorChromeClickable(onClickFeedback = haptics::selection) {
+                        onSelect(if (star == stars) 0 else star)
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(

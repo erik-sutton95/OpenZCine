@@ -27,7 +27,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -91,10 +90,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -143,6 +140,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.openzcine.settings.PanelCloseButton
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
 internal sealed interface BrowseState {
@@ -1186,9 +1184,9 @@ internal fun MediaBrowseScreen(
             }
         }
 
-        CloseCircleButton(
-            Modifier.padding(start = 16.dp, top = maxOf(topPad, 22f).dp),
+        PanelCloseButton(
             onClick = { closeRequested = true },
+            modifier = Modifier.padding(start = 16.dp, top = maxOf(topPad, 22f).dp),
         )
 
         shareMessage?.let { message ->
@@ -2568,33 +2566,6 @@ private fun MediaStatusMessage(message: String, modifier: Modifier = Modifier) {
         maxLines = 3,
         overflow = TextOverflow.Ellipsis,
     )
-}
-
-/** Round glass close button with an X glyph (iOS `CloseButton`, 37pt). */
-@Composable
-private fun CloseCircleButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier.size(37.dp).glass(CircleShape).chromeClickable(onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.size(11.dp)) {
-            val stroke = 1.8.dp.toPx()
-            drawLine(
-                LiveDesign.text,
-                Offset(0f, 0f),
-                Offset(size.width, size.height),
-                stroke,
-                StrokeCap.Round,
-            )
-            drawLine(
-                LiveDesign.text,
-                Offset(size.width, 0f),
-                Offset(0f, size.height),
-                stroke,
-                StrokeCap.Round,
-            )
-        }
-    }
 }
 
 private fun MediaLibraryCategory.titleForHeader(): String =
