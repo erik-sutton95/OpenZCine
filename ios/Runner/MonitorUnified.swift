@@ -268,12 +268,18 @@ private struct NikonMonitorStatus: View {
         } color: {
             EmptyView()
         } mode: {
-            EmptyView()
+            // The shared bar shows `link` only in portrait; Nikon main keeps the FPS readout in the
+            // landscape bar too, behind the same Display toggle.
+            fpsReadout
         } link: {
-            if model.chromeSectionMounts(.fpsReadout) {
-                FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
-                    .chromeEditable(.fpsReadout, editing: model.chromeEditorMode)
-            }
+            fpsReadout
+        }
+    }
+
+    @ViewBuilder private var fpsReadout: some View {
+        if model.chromeSectionMounts(.fpsReadout) {
+            FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
+                .chromeEditable(.fpsReadout, editing: model.chromeEditorMode)
         }
     }
 

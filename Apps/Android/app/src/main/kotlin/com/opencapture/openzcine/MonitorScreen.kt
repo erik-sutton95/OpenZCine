@@ -2496,6 +2496,10 @@ internal fun MonitorScreen(
             }
             },
             status = { accepts ->
+                val fpsReadout: @Composable () -> Unit = {
+                    if (mounts(ChromeSection.FPS_READOUT)) FpsChip(actualLinkHealth.presentation.signalBars,
+                        fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState))
+                }
                 MonitorStatusChrome(fieldLayout, commonStatus,
                     showsRecording = !isPhotographyMode && mounts(ChromeSection.REC_READOUT),
                     showsTimecode = !isPhotographyMode && mounts(ChromeSection.TIMECODE_READOUT),
@@ -2529,8 +2533,9 @@ internal fun MonitorScreen(
                             }
                         }
                     },
-                    link = { if (mounts(ChromeSection.FPS_READOUT)) FpsChip(actualLinkHealth.presentation.signalBars,
-                        fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState)) })
+                    // The shared bar shows `link` only in portrait; Nikon main keeps the FPS readout in
+                    // the landscape bar too, behind the same Display toggle.
+                    mode = fpsReadout, link = fpsReadout)
             },
             power = { _ ->
                 BatteryRowStack(phoneBatteryReadout.percent, cameraReadouts.batteryPercent,
