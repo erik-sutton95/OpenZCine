@@ -34,7 +34,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.Icons
@@ -42,7 +41,6 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
@@ -1260,19 +1258,9 @@ internal fun MonitorScreen(
             shutterLockedOverride = effectiveShutterLocked,
         )
     }
-    var pendingRecordTarget by remember { mutableStateOf<Boolean?>(null) }
-    val sendRecordCommand: (Boolean) -> Unit = { target -> commonControl.record(target) }
-    val requestRecordToggle: () -> Unit = {
-        if (recordControlEnabled) {
-            val target = !recording
-            if (operatorSettings.recordConfirmationEnabled.value) {
-                pendingRecordTarget = target
-                mediaRemoteShutter?.disarm()
-            } else {
-                sendRecordCommand(target)
-            }
-        }
-    }
+    // The shared record button owns its confirmation; while it is open the watch and the media
+    // remote shutter stay off, as they did behind the old Nikon dialog.
+    var recordConfirmationOpen by remember { mutableStateOf(false) }
     // Match the iOS watch's intentional confirmation bypass only after all
     // Android monitor/session/pending-command safety gates still hold. A watch
     // never owns a camera path; this reaches the same CameraSession seam as
@@ -1286,7 +1274,7 @@ internal fun MonitorScreen(
                         applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                         cameraConnected = sessionState is CameraSessionState.Connected,
                         recordCommandPending = recordCommandPending,
-                        recordConfirmationPending = pendingRecordTarget != null,
+                        recordConfirmationPending = recordConfirmationOpen,
                         cameraControlPending = pendingCommandControl != null,
                     )
                 executeWearRecordCommand(safety, recording) { target ->
@@ -1328,7 +1316,7 @@ internal fun MonitorScreen(
             cameraConnected = sessionState is CameraSessionState.Connected,
             recordCommandPending = recordCommandPending,
             applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
-            recordConfirmationPending = pendingRecordTarget != null,
+            recordConfirmationPending = recordConfirmationOpen,
             cameraControlPending = pendingCommandControl != null,
         )
     val latestRemoteShutterAction =
@@ -1992,7 +1980,7 @@ internal fun MonitorScreen(
                 capture = captureLayoutMode,
                 interfaceLocked = locked,
                 recordingOrPending =
-                    recording || recordCommandPending || pendingRecordTarget != null,
+                    recording || recordCommandPending || recordConfirmationOpen,
             )
         val railMounts: (ChromeSection) -> Boolean = { section ->
             // Availability outranks the rail plan's self-restore guarantees: a watcher without
@@ -2659,7 +2647,8 @@ internal fun MonitorScreen(
                             onPressed = photoShutterPressed, onReleased = photoShutterReleased)
                         else MonitorCaptureButton(commonControl, fieldLayout.record.width, enabled && recordControlEnabled,
                             confirm = operatorSettings.recordConfirmationEnabled.value,
-                            confirmationPolicy = MonitorControlModel.RecordConfirmationPolicy.EXPLICIT_TARGET)
+                            confirmationPolicy = MonitorControlModel.RecordConfirmationPolicy.EXPLICIT_TARGET,
+                            onConfirmingChange = { recordConfirmationOpen = it })
                     },
                     display = { enabled -> DispButton(displayModeOrder.indexOf(effectiveDisplayMode), displayModeOrder.size,
                         effectiveDisplayMode == MonitorDisplayMode.LIVE, onClick = { if (enabled) cycleDisplayMode() }) })
@@ -3212,42 +3201,6 @@ internal fun MonitorScreen(
                 },
             )
         }
-    }
-    pendingRecordTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { pendingRecordTarget = null },
-            title = {
-                Text(
-                    stringResource(
-                        if (target) R.string.record_start_title else R.string.record_stop_title,
-                    ),
-                )
-            },
-            text = {
-                Text(
-                    stringResource(
-                        if (target) R.string.record_start_message else R.string.record_stop_message,
-                    ),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingRecordTarget = null
-                        if (recordControlEnabled && target != recording) {
-                            sendRecordCommand(target)
-                        }
-                    },
-                ) {
-                    Text(stringResource(if (target) R.string.action_start else R.string.action_stop))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingRecordTarget = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
     }
     activeCommandControl?.let { request ->
         CompositionLocalProvider(LocalMonitorGlass provides glass) {
