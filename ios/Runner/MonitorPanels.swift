@@ -933,37 +933,52 @@ struct PickerPanel: View {
                     )
                     .id(selectedMode)
                 } else {
-                    AccentDrumWheel(
-                        options: currentOptions,
-                        selection: $selection,
-                        markedValues: markedValues,
-                        isInteractive: !isDrumInteractionLocked,
-                        // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
-                        // reuses the pair for the bit depths a body advertises for that codec.
-                        sideAdjust: !isKelvinMode
-                            ? codecDepthAdjust
-                            : DrumSideAdjust(
-                                minusEnabled: !isDrumInteractionLocked
-                                    && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                        from: selection,
-                                        delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
-                                plusEnabled: !isDrumInteractionLocked
-                                    && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                        from: selection,
-                                        delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
-                                onMinus: {
-                                    applyKelvinSideStep(
-                                        delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
-                                },
-                                onPlus: {
-                                    applyKelvinSideStep(
-                                        delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
-                                }
-                            )
-                    )
-                    // Fresh wheel per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
-                    // *and* the centred value at once, which `.scrollPosition` alone doesn't follow
-                    // reliably; re-identifying re-runs onAppear to land centred on the new value.
+                    // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
+                    // reuses the pair for the bit depths a body advertises for that codec.
+                    let sideAdjust =
+                        !isKelvinMode
+                        ? codecDepthAdjust
+                        : DrumSideAdjust(
+                            minusEnabled: !isDrumInteractionLocked
+                                && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                    from: selection,
+                                    delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
+                            plusEnabled: !isDrumInteractionLocked
+                                && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                    from: selection,
+                                    delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
+                            onMinus: {
+                                applyKelvinSideStep(
+                                    delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
+                            },
+                            onPlus: {
+                                applyKelvinSideStep(
+                                    delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
+                            }
+                        )
+                    HStack(spacing: 8) {
+                        if let sideAdjust {
+                            DrumSideAdjustButton(
+                                title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
+                                selected: sideAdjust.minusSelected,
+                                label: sideAdjust.minusAccessibilityLabel,
+                                action: sideAdjust.onMinus)
+                        }
+                        MonitorValueDrum(
+                            options: currentOptions, selection: $selection,
+                            markedValues: markedValues, isInteractive: !isDrumInteractionLocked,
+                            haptics: model.preferences.hapticsEnabled)
+                        if let sideAdjust {
+                            DrumSideAdjustButton(
+                                title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
+                                selected: sideAdjust.plusSelected,
+                                label: sideAdjust.plusAccessibilityLabel,
+                                action: sideAdjust.onPlus)
+                        }
+                    }
+                    .accessibilityHint(sideAdjust?.hint ?? "")
+                    // Fresh drum per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
+                    // and the centred value at once.
                     .id(selectedMode)
                 }
                 if picker == .stillDrive, selectedMode == 1 || selectedMode == 2 {
@@ -1414,7 +1429,7 @@ struct PickerPanel: View {
 
 /// Stabilization picker (movie VR + electronic VR) for the command monitor's VR tile. Unlike the
 /// other settings, VR and e-VR are two independent on/off-style toggles rather than one value wheel,
-/// so this renders its own row-of-buttons layout instead of `PickerPanel`'s `AccentDrumWheel`.
+/// so this renders its own row-of-buttons layout instead of `PickerPanel`'s value drum.
 struct StabilizationPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
     /// Bumped when the operator taps the disabled e-VR row, to flash the "unavailable in RAW" toast.
@@ -1553,13 +1568,15 @@ struct QualityPickerPanel: View {
                 }
                 HStack(alignment: .top, spacing: 16) {
                     column(caption: "RAW") {
-                        AccentDrumWheel(
-                            options: Self.rawOptions, selection: $rawSelection, wheelHeight: 112)
+                        MonitorValueDrum(
+                            options: Self.rawOptions, selection: $rawSelection,
+                            haptics: model.preferences.hapticsEnabled)
                         nefRows
                     }
                     column(caption: "JPEG · HEIF") {
-                        AccentDrumWheel(
-                            options: Self.tierOptions, selection: $tierSelection, wheelHeight: 112)
+                        MonitorValueDrum(
+                            options: Self.tierOptions, selection: $tierSelection,
+                            haptics: model.preferences.hapticsEnabled)
                         starToggle
                     }
                 }
@@ -1681,20 +1698,16 @@ struct QualityPickerPanel: View {
     }
 }
 
+/// The vertical LUT wheel (Pocket and Insta keep the same wheel as `LUTDrumWheel`).
 struct AccentDrumWheel: View {
     let options: [String]
     @Binding var selection: String
-    /// Options to flag with small stars (e.g. native base ISO values).
+    /// Options to flag with small stars (the recommended RED LUT).
     var markedValues: Set<String> = []
-    /// When false the wheel is dimmed and non-scrollable (camera control lock engaged).
-    var isInteractive: Bool = true
-
     /// Overall wheel height; callers can shrink it (e.g. the LUT picker, to leave room for tabs).
     var wheelHeight: CGFloat = 176
     /// Optional native long-press action for removable values. Omit it for protected wheels.
     var onDeleteOption: ((String) -> Void)? = nil
-    /// −10 / +10 on either side of the selected row (Kelvin). Nil hides the controls.
-    var sideAdjust: DrumSideAdjust? = nil
 
     /// Row pitch — a good bit taller than the glyphs so there's clear spacing between options.
     private let rowHeight: CGFloat = 52
@@ -1714,8 +1727,6 @@ struct AccentDrumWheel: View {
             .scrollPosition(
                 id: Binding(get: { selection }, set: { if let value = $0 { selection = value } })
             )
-            .scrollDisabled(!isInteractive)
-            .opacity(isInteractive ? 1 : 0.55)
             // Symmetric margins let the first/last option reach the centre, so the snapped row sits
             // between the hairlines.
             .contentMargins(.vertical, (wheelHeight - rowHeight) / 2, for: .scrollContent)
@@ -1740,64 +1751,13 @@ struct AccentDrumWheel: View {
                 Rectangle().fill(LiveDesign.hairlineStrong).frame(height: 1)
                     .offset(y: rowHeight / 2)
             }
-            .overlay {
-                if let sideAdjust {
-                    HStack {
-                        sideAdjustButton(
-                            title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
-                            selected: sideAdjust.minusSelected,
-                            label: sideAdjust.minusAccessibilityLabel, action: sideAdjust.onMinus)
-                        Spacer(minLength: 0)
-                        sideAdjustButton(
-                            title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
-                            selected: sideAdjust.plusSelected,
-                            label: sideAdjust.plusAccessibilityLabel, action: sideAdjust.onPlus)
-                    }
-                    .padding(.horizontal, 4)
-                    .frame(height: rowHeight)
-                }
-            }
             // `scrollPosition` only reacts to *changes*, not the initial value, so place the wheel on
             // the current selection explicitly once the rows have laid out. (Switching tabs makes a
             // fresh wheel, so its own onAppear lands it on that tab's look.)
             .onAppear {
                 DispatchQueue.main.async { proxy.scrollTo(selection, anchor: .center) }
             }
-            .accessibilityHint(sideAdjust?.hint ?? "")
         }
-    }
-
-    /// One flanking button. `selected` fills it solid — the CODEC pair shows which bit depth the
-    /// body is on; Kelvin's relative steps never set it.
-    private func sideAdjustButton(
-        title: String, enabled: Bool, selected: Bool = false, label: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(
-                    selected
-                        ? LiveDesign.background : (enabled ? LiveDesign.accent : LiveDesign.faint)
-                )
-                .frame(width: 56, height: 40)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(selected ? LiveDesign.accent : LiveDesign.accentDim)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(
-                            enabled ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
-                )
-        }
-        // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
-        // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
-        .buttonStyle(.monitorTapTarget)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.35)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     @ViewBuilder private func optionRow(_ option: String, isCentered: Bool) -> some View {
@@ -1839,6 +1799,44 @@ struct AccentDrumWheel: View {
         } else {
             row
         }
+    }
+}
+
+/// One button flanking a picker drum. `selected` fills it solid: the CODEC pair shows which bit
+/// depth the body is on; Kelvin's relative steps never set it.
+struct DrumSideAdjustButton: View {
+    let title: String
+    let enabled: Bool
+    var selected = false
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(
+                    selected
+                        ? LiveDesign.background : (enabled ? LiveDesign.accent : LiveDesign.faint)
+                )
+                .frame(width: 56, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(selected ? LiveDesign.accent : LiveDesign.accentDim)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(
+                            enabled ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
+                )
+        }
+        // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
+        // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
+        .buttonStyle(.monitorTapTarget)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 
