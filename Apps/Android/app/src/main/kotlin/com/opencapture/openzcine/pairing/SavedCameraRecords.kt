@@ -2,9 +2,9 @@ package com.opencapture.openzcine.pairing
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.opencapture.opencine.nikon.NikonLocalInterface
 import com.opencapture.openzcine.settings.LiveViewQualityBias
 import com.opencapture.openzcine.transport.CameraDiscovery
-import com.opencapture.openzcine.transport.LocalIPv4Interface
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import java.util.Locale
 import org.json.JSONArray
@@ -413,7 +413,7 @@ public object SavedCameraRecords {
      * Wi-Fi only. USB and Bluetooth tethering are left out because a camera cannot join those —
      * a hotspot setup means the body associated with this phone's SoftAP.
      */
-    public fun phoneHotspotSubnetBases(interfaces: List<LocalIPv4Interface>): Set<String> =
+    public fun phoneHotspotSubnetBases(interfaces: List<NikonLocalInterface>): Set<String> =
         interfaces
             .filter { isHotspotInterfaceName(it.name) }
             .mapNotNull { CameraDiscovery.subnetBase(it.address) }
