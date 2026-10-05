@@ -244,10 +244,19 @@ final class MediaTimecodeTests: XCTestCase {
         }
         writer.startSession(atSourceTime: .zero)
 
+        // Supply the known timecode before video fills writer backpressure: a writer that holds
+        // video back to interleave it with the still-empty timecode track never becomes ready.
+        try await waitUntilReady(timecodeInput, of: writer, "timecode")
+        let sample = try makeTimecodeSample(
+            formatDescription: formatDescription,
+            duration: CMTime(value: CMTimeValue(frameCount), timescale: fps))
+        guard timecodeInput.append(sample) else {
+            throw writer.error ?? NSError(domain: "MediaTimecodeTests", code: -3)
+        }
+        timecodeInput.markAsFinished()
+
         for frame in 0..<frameCount {
-            while !videoInput.isReadyForMoreMediaData {
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            try await waitUntilReady(videoInput, of: writer, "video frame \(frame)")
             let buffer = try makePixelBuffer(from: adaptor)
             guard
                 adaptor.append(
@@ -259,20 +268,29 @@ final class MediaTimecodeTests: XCTestCase {
         }
         videoInput.markAsFinished()
 
-        while !timecodeInput.isReadyForMoreMediaData {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let sample = try makeTimecodeSample(
-            formatDescription: formatDescription,
-            duration: CMTime(value: CMTimeValue(frameCount), timescale: fps))
-        guard timecodeInput.append(sample) else {
-            throw writer.error ?? NSError(domain: "MediaTimecodeTests", code: -3)
-        }
-        timecodeInput.markAsFinished()
-
         await writer.finishWriting()
         guard writer.status == .completed else {
             throw writer.error ?? NSError(domain: "MediaTimecodeTests", code: -4)
+        }
+    }
+
+    /// Fails the fixture with a message instead of hanging the async test when the writer
+    /// never asks for more media.
+    private static func waitUntilReady(
+        _ input: AVAssetWriterInput, of writer: AVAssetWriter, _ label: String
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while !input.isReadyForMoreMediaData {
+            guard writer.status == .writing, ContinuousClock.now < deadline else {
+                throw writer.error
+                    ?? NSError(
+                        domain: "MediaTimecodeTests", code: -7,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "fixture writer never became ready for \(label) (status \(writer.status.rawValue))"
+                        ])
+            }
+            try await Task.sleep(for: .milliseconds(10))
         }
     }
 
