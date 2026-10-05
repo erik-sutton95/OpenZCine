@@ -67,17 +67,6 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         self == .instantReview || self == .evMeter
     }
 
-    /// Exposure-analysis tools on the bottom assist toolbar (Display ▸ Exposure Tools).
-    public static let exposureBarTools: [MonitorAssistTool] = [
-        .peaking, .falseColor, .zebra, .waveform, .parade, .histogram, .vectorscope,
-        .trafficLights, .audioMeters,
-    ]
-
-    /// Framing aids on the bottom assist toolbar (Display ▸ Frame & Composition Tools).
-    public static let framingBarTools: [MonitorAssistTool] = [
-        .guides, .grid, .crosshair, .level, .desqueeze, .mirror,
-    ]
-
     /// Scope-type tools: rendered as panels (floating in landscape/portrait-fill, stacked in
     /// portrait-fit) and subject to the portrait-fit 2-scope display cap.
     public static let scopeTools: [MonitorAssistTool] = [
@@ -433,9 +422,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         dispOrder: [DispMode],
         enabledDispModes: Set<DispMode>,
         displayChrome: DisplayChromeVisibility,
-        assistToolbarOrder: [MonitorAssistTool],
-        exposureBarVisibleControls: Set<MonitorAssistTool>,
-        framingBarVisibleControls: Set<MonitorAssistTool>,
         recordConfirmationEnabled: Bool,
         bluetoothShutterEnabled: Bool = true,
         hapticsEnabled: Bool,
@@ -457,11 +443,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.dispOrder = dispOrder
         self.enabledDispModes = Self.normalizedEnabledDispModes(enabledDispModes)
         self.displayChrome = displayChrome
-        self.assistToolbarOrder = assistToolbarOrder
-        self.exposureBarVisibleControls = Self.normalizedBarControls(
-            exposureBarVisibleControls, allowed: MonitorAssistTool.exposureBarTools)
-        self.framingBarVisibleControls = Self.normalizedBarControls(
-            framingBarVisibleControls, allowed: MonitorAssistTool.framingBarTools)
         self.recordConfirmationEnabled = recordConfirmationEnabled
         self.bluetoothShutterEnabled = bluetoothShutterEnabled
         self.hapticsEnabled = hapticsEnabled
@@ -492,11 +473,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// DISP 1's chrome. Predates the per-mode split, so it keeps its original key and an older
     /// saved blob loads straight into it — see ``chrome(for:)``.
     public var displayChrome: DisplayChromeVisibility
-    public var assistToolbarOrder: [MonitorAssistTool]
-    /// Exposure-analysis buttons shown on the bottom assist toolbar (independent of on/off state).
-    public var exposureBarVisibleControls: Set<MonitorAssistTool>
-    /// Framing-aid buttons shown on the bottom assist toolbar (independent of on/off state).
-    public var framingBarVisibleControls: Set<MonitorAssistTool>
     public var recordConfirmationEnabled: Bool
     /// A Bluetooth HID shutter remote's volume press toggles recording while the live monitor is
     /// up. On by default; the off toggle exists because the mechanism takes over the hardware
@@ -599,8 +575,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case dispOrder, enabledDispModes, displayChrome, assistToolbarOrder
-        case exposureBarVisibleControls, framingBarVisibleControls
+        // The assist toolbar order and bar visibility keys an older build wrote are ignored: the
+        // shared palette ranks tools by use.
+        case dispOrder, enabledDispModes, displayChrome
         case recordConfirmationEnabled, recordHoldEnabled, bluetoothShutterEnabled, hapticsEnabled,
             keepScreenAwake, autoRotateFeedEnabled, streamPreset, qualityBias, portraitFeedAspect,
             scopeActivationOrder
@@ -622,18 +599,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             try container.decodeIfPresent(Set<DispMode>.self, forKey: .enabledDispModes)
                 ?? Set(DispMode.allCases))
         displayChrome = try container.decode(DisplayChromeVisibility.self, forKey: .displayChrome)
-        assistToolbarOrder = try Self.decodeAssistToolArray(
-            from: container, forKey: .assistToolbarOrder)
-        exposureBarVisibleControls = Self.normalizedBarControls(
-            try Self.decodeAssistToolSet(
-                from: container, forKey: .exposureBarVisibleControls,
-                default: Set(MonitorAssistTool.exposureBarTools)),
-            allowed: MonitorAssistTool.exposureBarTools)
-        framingBarVisibleControls = Self.normalizedBarControls(
-            try Self.decodeAssistToolSet(
-                from: container, forKey: .framingBarVisibleControls,
-                default: Set(MonitorAssistTool.framingBarTools)),
-            allowed: MonitorAssistTool.framingBarTools)
         if let confirmation = try container.decodeIfPresent(
             Bool.self, forKey: .recordConfirmationEnabled)
         {
@@ -707,9 +672,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(dispOrder, forKey: .dispOrder)
         try container.encode(enabledDispModes, forKey: .enabledDispModes)
         try container.encode(displayChrome, forKey: .displayChrome)
-        try container.encode(assistToolbarOrder, forKey: .assistToolbarOrder)
-        try container.encode(exposureBarVisibleControls, forKey: .exposureBarVisibleControls)
-        try container.encode(framingBarVisibleControls, forKey: .framingBarVisibleControls)
         try container.encode(recordConfirmationEnabled, forKey: .recordConfirmationEnabled)
         try container.encode(bluetoothShutterEnabled, forKey: .bluetoothShutterEnabled)
         try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
@@ -733,9 +695,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         dispOrder: [.live, .clean, .command],
         enabledDispModes: Set(DispMode.allCases),
         displayChrome: DisplayChromeVisibility(),
-        assistToolbarOrder: MonitorAssistTool.activeCases,
-        exposureBarVisibleControls: Set(MonitorAssistTool.exposureBarTools),
-        framingBarVisibleControls: Set(MonitorAssistTool.framingBarTools),
         recordConfirmationEnabled: true,
         hapticsEnabled: true,
         keepScreenAwake: true,
@@ -754,61 +713,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         photoCommandChrome: DisplayChromeVisibility()
     )
 
-    /// Whether `tool` should appear on the bottom assist toolbar (LUT is always shown).
-    public func isAssistToolbarButtonVisible(_ tool: MonitorAssistTool) -> Bool {
-        // Retired from the bar: zoom is a pinch on the feed now, not a tool to arm. The case
-        // survives so stored payloads keep decoding.
-        if tool == .magnification { return false }
-        if MonitorAssistTool.exposureBarTools.contains(tool) {
-            return exposureBarVisibleControls.contains(tool)
-        }
-        if MonitorAssistTool.framingBarTools.contains(tool) {
-            return framingBarVisibleControls.contains(tool)
-        }
-        return true
-    }
-
-    public mutating func toggleExposureBarControl(_ tool: MonitorAssistTool) {
-        guard MonitorAssistTool.exposureBarTools.contains(tool) else { return }
-        if exposureBarVisibleControls.contains(tool) {
-            exposureBarVisibleControls.remove(tool)
-        } else {
-            exposureBarVisibleControls.insert(tool)
-        }
-    }
-
-    public mutating func toggleFramingBarControl(_ tool: MonitorAssistTool) {
-        guard MonitorAssistTool.framingBarTools.contains(tool) else { return }
-        if framingBarVisibleControls.contains(tool) {
-            framingBarVisibleControls.remove(tool)
-        } else {
-            framingBarVisibleControls.insert(tool)
-        }
-    }
-
-    private static func normalizedBarControls(
-        _ controls: Set<MonitorAssistTool>, allowed: [MonitorAssistTool]
-    ) -> Set<MonitorAssistTool> {
-        let allowedSet = Set(allowed)
-        return controls.intersection(allowedSet)
-    }
-
-    /// Drops unknown assist tool IDs when loading older preference blobs.
-    private static func decodeAssistToolArray<K: CodingKey>(
-        from container: KeyedDecodingContainer<K>, forKey key: K
-    ) throws -> [MonitorAssistTool] {
-        let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.activeCases)
-        let decoded = raw.compactMap(MonitorAssistTool.init(rawValue:)).filter {
-            valid.contains($0)
-        }
-        // Tools introduced after the order was first persisted append at the end — without
-        // this, a saved order simply never shows a new tool.
-        return decoded + MonitorAssistTool.activeCases.filter { !decoded.contains($0) }
-    }
-
-    /// Same as ``decodeAssistToolArray`` but tolerates an absent key (returns `nil` instead of
-    /// throwing), for preferences added after the key was already being persisted.
+    /// Drops unknown and retired assist tool IDs; `nil` when the key is absent.
     private static func decodeAssistToolArrayIfPresent<K: CodingKey>(
         from container: KeyedDecodingContainer<K>, forKey key: K
     ) throws -> [MonitorAssistTool]? {
@@ -816,25 +721,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         let raw = try container.decode([String].self, forKey: key)
         let valid = Set(MonitorAssistTool.activeCases)
         return raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) }
-    }
-
-    private static func decodeAssistToolSet<K: CodingKey>(
-        from container: KeyedDecodingContainer<K>, forKey key: K,
-        default defaultValue: Set<MonitorAssistTool>
-    ) throws -> Set<MonitorAssistTool> {
-        if let value = try decodeAssistToolSetIfPresent(from: container, forKey: key) {
-            return value
-        }
-        return defaultValue
-    }
-
-    private static func decodeAssistToolSetIfPresent<K: CodingKey>(
-        from container: KeyedDecodingContainer<K>, forKey key: K
-    ) throws -> Set<MonitorAssistTool>? {
-        guard container.contains(key) else { return nil }
-        let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.activeCases)
-        return Set(raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) })
     }
 
     /// Enabled DISP modes in persisted order — used by the monitor DISP key and its segment dots.
@@ -875,25 +761,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     private static func normalizedEnabledDispModes(_ modes: Set<DispMode>) -> Set<DispMode> {
         let valid = modes.intersection(Set(DispMode.allCases))
         return valid.isEmpty ? Set(DispMode.allCases) : valid
-    }
-
-    /// Reconciles the persisted toolbar order with the current tool set: inserts any tools added in
-    /// a newer build at their canonical position so they always surface on the bar (a persisted
-    /// order from an older build would otherwise omit them). A tool the persisted blob has never
-    /// seen also starts visible on its bar — new tools must surface for the operator to decide on,
-    /// rather than inherit absence from a set saved before they existed. Tools the operator hid
-    /// (present in the order, absent from the visible set) stay hidden.
-    public mutating func reconcileAssistTools() {
-        let present = Set(assistToolbarOrder)
-        for (index, tool) in MonitorAssistTool.activeCases.enumerated()
-        where !present.contains(tool) {
-            assistToolbarOrder.insert(tool, at: min(index, assistToolbarOrder.count))
-            if MonitorAssistTool.exposureBarTools.contains(tool) {
-                exposureBarVisibleControls.insert(tool)
-            } else if MonitorAssistTool.framingBarTools.contains(tool) {
-                framingBarVisibleControls.insert(tool)
-            }
-        }
     }
 
     /// Reconciles the persisted DISP order with the current mode set: inserts any modes added in
@@ -1338,38 +1205,6 @@ public enum DispOrder {
         result.remove(at: from)
         let clamped = min(max(index, 0), result.count)
         result.insert(mode, at: clamped)
-        return result
-    }
-}
-
-/// Pure helpers for the persisted assist-toolbar order.
-public enum AssistToolbarOrder {
-    /// Every tool in its canonical position.
-    public static let `default` = MonitorAssistTool.activeCases
-
-    /// Reconciles a persisted order with the current tool set (same rules as ``CommandGridOrder``).
-    /// Retired tools drop out here too, so an order persisted before a retirement stops
-    /// resurfacing the dead tool's row.
-    public static func reconciled(_ order: [MonitorAssistTool]) -> [MonitorAssistTool] {
-        var seen = Set<MonitorAssistTool>()
-        var result = order.filter { !$0.isRetired && seen.insert($0).inserted }
-        for tool in MonitorAssistTool.activeCases where !seen.contains(tool) {
-            result.append(tool)
-            seen.insert(tool)
-        }
-        return result.isEmpty ? `default` : result
-    }
-
-    /// Returns `order` with `tool` moved to `index` (clamped). A no-op if `tool` isn't present or
-    /// is already at `index`.
-    public static func moving(
-        _ tool: MonitorAssistTool, to index: Int, in order: [MonitorAssistTool]
-    ) -> [MonitorAssistTool] {
-        guard let from = order.firstIndex(of: tool) else { return order }
-        var result = order
-        result.remove(at: from)
-        let clamped = min(max(index, 0), result.count)
-        result.insert(tool, at: clamped)
         return result
     }
 }

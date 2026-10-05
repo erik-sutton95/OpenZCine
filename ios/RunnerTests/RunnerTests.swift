@@ -2576,34 +2576,6 @@ extension RunnerTests {
 
     // MARK: - Controls that must be able to act
 
-    /// The eye in Display ▸ assist-toolbar order may only render where the model can actually flip
-    /// something. Only the two bar sets are stored, so a tool outside both — LUT, and the
-    /// photography tools — would have shown a lit eye that did nothing when tapped.
-    @MainActor
-    func testAssistToolbarEyeOnlyOffersToolsTheToggleCanReach() {
-        let model = NativeAppModel()
-        // The model seeds `preferences` from the device's persisted set and writes back on every
-        // change, so pin it — and put it back, or the flip below leaves zebra hidden for good.
-        model.preferences = OperatorPreferences.defaults
-        defer { model.preferences = OperatorPreferences.defaults }
-        for tool in MonitorAssistTool.activeCases {
-            let inABarSet =
-                MonitorAssistTool.exposureBarTools.contains(tool)
-                || MonitorAssistTool.framingBarTools.contains(tool)
-            XCTAssertEqual(
-                model.canToggleAssistToolbarVisibility(tool), inABarSet,
-                "\(tool.rawValue)'s eye disagrees with what the toggle can reach")
-        }
-        // The three the audit found: an eye on any of these was inert.
-        for tool: OpenZCineCore.MonitorAssistTool in [.lut, .evMeter, .instantReview] {
-            XCTAssertFalse(model.canToggleAssistToolbarVisibility(tool))
-        }
-        // And a flip actually flips for one that does offer the eye.
-        XCTAssertTrue(model.preferences.isAssistToolbarButtonVisible(.zebra))
-        model.toggleAssistToolbarVisibility(.zebra)
-        XCTAssertFalse(model.preferences.isAssistToolbarButtonVisible(.zebra))
-    }
-
     /// The photography strip's WB tile reads the STILLS white balance. `WhiteBalance` (0x5005) and
     /// `MovWhiteBalance` are different camera settings sharing one decode table, so reading the
     /// movie one put a value the still never uses on the stills strip.
@@ -3038,7 +3010,9 @@ struct NikonSettingsScrollTests {
         let original = model.preferences
         model.preferences = OperatorPreferences.defaults
         defer { model.preferences = original }
-        model.beginChromeEditing(.live)
+        // DISP 2 returns to its section with the clean-view pin list open, a page tall enough for
+        // these offsets now that DISP 1 has no toolbar order list.
+        model.beginChromeEditing(.clean)
         model.endChromeEditing()
         model.operatorSettingsScrollOffsets = ["Display": 180]
         let host = UIHostingController(

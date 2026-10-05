@@ -586,7 +586,16 @@ struct PanelHost: View {
                     bottomPickerBody(picker)
                 }
             case .assist(let tool):
-                bottomAssistBody(tool)
+                GeometryReader { proxy in
+                    NikonAssistInspector(
+                        tool: tool, tools: model.liveAssistPaletteTools, viewport: proxy.size,
+                        safeArea: EdgeInsets(
+                            top: feedSafeArea.top, leading: feedSafeArea.leading,
+                            bottom: feedSafeArea.bottom, trailing: feedSafeArea.trailing),
+                        onSelect: { model.activePanel = .assist($0) },
+                        onDismiss: { model.dismissActivePanel() })
+                }
+                .ignoresSafeArea()
             case .media:
                 MediaBrowserView(safeArea: feedSafeArea)
                     .environment(model)
@@ -608,42 +617,6 @@ struct PanelHost: View {
                     pickerHeight = newHeight
                 }
         }
-    }
-
-    /// The assist options panel: right edge aligned to the view-assist toolbar, rising up from just
-    /// below the screen edge on the left side — sharing `panelRevealed`.
-    private func bottomAssistBody(_ tool: MonitorAssistTool) -> some View {
-        GeometryReader { proxy in
-            let host = proxy.frame(in: .global)
-            let anchor = AssistOptionsPopupAnchor(
-                host: host,
-                toolbar: model.assistToolbarFrame,
-                topSafeArea: feedSafeArea.top,
-                leadingSafeArea: feedSafeArea.leading,
-                preferredPanelWidth: assistPanelWidth(for: tool),
-                chromeInsets: chromeInsets,
-                panelHeight: pickerHeight,
-                fallbackBottomClearance: chromeInsets.bottom + LiveDesign.controlHeight + 16,
-                isPortrait: isPortrait,
-                portraitBottomLift: portraitPopupBottomLift
-            )
-            AssistPanel(tool: tool)
-                .environment(model)
-                .id(tool)
-                .transition(.opacity)
-                .frame(width: anchor.panelWidth)
-                .background(panelHeightReader)
-                .offset(y: model.panelRevealed ? 0 : anchor.slide)
-                .opacity(model.panelRevealed ? 1 : 0)
-                .frame(
-                    width: anchor.boxWidth, height: anchor.boxHeight, alignment: anchor.boxAlignment
-                )
-                .padding(.leading, anchor.leadingPadding)
-                .padding(.top, anchor.topInset)
-                .clipped()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .ignoresSafeArea()
     }
 
     /// The bottom-bar exposure picker: anchored to the capture bar's measured frame, rising up from
@@ -2132,354 +2105,6 @@ struct AccentDrumWheel: View {
     }
 }
 
-struct AssistQuickSettingsContent: View {
-    @Environment(NativeAppModel.self) private var model
-    let tool: MonitorAssistTool
-    /// Narrow two-column operator-setup cards pass `true` so segmented controls share column width.
-    var compact: Bool = false
-
-    var body: some View {
-        let menus = NikonAssistMenuAdapter(model: model, compact: compact)
-        switch tool {
-        case .falseColor:
-            menus.falseColor
-        case .zebra:
-            menus.zebra
-        case .waveform:
-            menus.waveform
-        case .parade:
-            menus.parade
-        case .histogram:
-            menus.histogram
-        case .vectorscope:
-            menus.vectorscope
-        case .trafficLights:
-            menus.trafficLights
-        case .peaking:
-            menus.peaking
-        case .instantReview:
-            instantReviewRows
-        default:
-            EmptyView()
-        }
-    }
-
-    private var instantReviewRows: some View {
-        Group {
-            MonitorSettingsInlineRow(
-                title: "Review Duration",
-                help:
-                    "How long the captured frame stays up after a release. ∞ keeps it until tapped. A held burst reviews its last frame once the run ends.",
-                showTopDivider: false,
-                stacked: compact
-            ) {
-                NikonSettingsChoices(
-                    options: ["3s", "5s", "7s", "∞"],
-                    selected: instantReviewDurationLabel,
-                    compact: compact,
-                    stacked: compact
-                ) {
-                    model.assistConfiguration.instantReviewSeconds = Self.reviewSeconds(for: $0)
-                }
-            }
-            NikonSettingsSwitch(
-                title: "Focus Point",
-                help: "Overlay the AF box the shot focused with on the review.",
-                stacked: compact,
-                isOn: model.assistConfiguration.instantReviewShowsFocusPoint
-            ) {
-                model.assistConfiguration.instantReviewShowsFocusPoint.toggle()
-            }
-            NikonSettingsSwitch(
-                title: "Capture Info",
-                help: "Show the shot's ISO, shutter, iris, and quality under the review.",
-                stacked: compact,
-                isOn: model.assistConfiguration.instantReviewShowsCaptureInfo
-            ) {
-                model.assistConfiguration.instantReviewShowsCaptureInfo.toggle()
-            }
-        }
-    }
-
-    private var instantReviewDurationLabel: String {
-        let seconds = model.assistConfiguration.instantReviewSeconds
-        return seconds > 0 ? "\(seconds)s" : "∞"
-    }
-
-    private static func reviewSeconds(for label: String) -> Int {
-        label == "∞" ? 0 : Int(label.dropLast()) ?? 5
-    }
-
-
-}
-
-/// Popup width for long-press assist options — matches LUT / grid / level popups (guides is wider).
-func assistPanelWidth(for tool: MonitorAssistTool) -> CGFloat {
-    tool == .guides ? 472 : 400
-}
-
-struct AssistPanel: View {
-    @Environment(NativeAppModel.self) private var model
-    let tool: MonitorAssistTool
-    /// When set, the header close control calls this instead of the default panel dismiss path.
-    var onClose: (() -> Void)? = nil
-
-    var body: some View {
-        GlassPanel(
-            padding: EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16)
-        ) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Label {
-                        Text(tool.title)
-                    } icon: {
-                        AssistToolIcon(tool: tool, size: 15)
-                    }
-                    .font(.system(size: 15, weight: .bold, design: .default))
-                    .kerning(1.2)
-                    .textCase(.uppercase)
-                    .foregroundStyle(LiveDesign.text)
-                    Spacer()
-                    CloseButton(action: onClose)
-                }
-
-                switch tool {
-                case .magnification:
-                    // Retired: zoom is direct manipulation now (pinch the feed). The case stays
-                    // only because the enum case does — stored payloads still decode it.
-                    EmptyView()
-                case .guides:
-                    MonitorGuidesMenu(
-                        family: model.assist.binding(\.guideFamily),
-                        selected: model.assist.selectedGuides,
-                        mask: model.assist.binding(\.guideMask), feedback: selectionFeedback,
-                        onToggle: { model.assist.toggleGuide($0) })
-                case .grid:
-                    MonitorGridMenu(
-                        selected: model.assist.gridOptions, feedback: selectionFeedback,
-                        onToggle: { model.assist.toggleGrid($0) })
-                case .level:
-                    SegmentedButtons(
-                        items: AssistConfiguration.Level.Style.allCases.map(\.rawValue),
-                        selected: model.assistConfiguration.level.style.rawValue
-                    ) { value in
-                        if let style = AssistConfiguration.Level.Style(rawValue: value) {
-                            model.assistConfiguration.level.style = style
-                        }
-                    }
-                case .desqueeze:
-                    // On/off is the assist-bar DESQ chip; this panel only configures factor/axis.
-                    MonitorDesqueezeMenu(
-                        selected: model.assist.desqueezeCustom
-                            ? nil : MonitorDesqueezePreset.matching(model.assist.desqueezeFactor),
-                        custom: model.assist.desqueezeCustom,
-                        factor: Binding(
-                            get: { model.assist.desqueezeFactor },
-                            set: { model.assist.updateDesqueezeCustom($0) }),
-                        horizontal: model.assist.binding(\.desqueezeHorizontal),
-                        help:
-                            "Corrects an anamorphic squeeze on this monitor only. The recording and the scopes are never de-squeezed.",
-                        selectionFeedback: selectionFeedback,
-                        onSelect: {
-                            if let preset = $0 {
-                                model.assist.selectDesqueezePreset(preset)
-                            } else {
-                                model.assist.selectDesqueezeCustom()
-                            }
-                        }, onFinish: { model.assist.persist() })
-                case .lut:
-                    LUTPickerContent()
-                case .falseColor, .zebra, .waveform, .parade, .histogram, .vectorscope,
-                    .trafficLights,
-                    .peaking, .instantReview:
-                    ScrollView {
-                        AssistQuickSettingsContent(tool: tool)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: tool == .falseColor ? 110 : 360)
-                case .crosshair:
-                    Text("Tap the toolbar button to show or hide the centre crosshair.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(LiveDesign.muted)
-                case .audioMeters:
-                    // Unreachable via long-press (`hasConfiguration == false`); kept for
-                    // exhaustiveness and the Display settings strips.
-                    Text("Meters the playing clip's audio. Available during media playback.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(LiveDesign.muted)
-                case .evMeter:
-                    // Unreachable via long-press (`hasConfiguration == false`); kept for
-                    // exhaustiveness and the Display settings strips.
-                    Text("The camera's own exposure indicator, read live from the body.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(LiveDesign.muted)
-                case .mirror:
-                    // Unreachable via long-press (`hasConfiguration == false`); kept for
-                    // exhaustiveness and the Display settings strips.
-                    Text(
-                        "Flips the monitor left-to-right, for a camera pointed back at you. "
-                            + "The recording and the scopes are never mirrored."
-                    )
-                    .font(.system(size: 13))
-                    .foregroundStyle(LiveDesign.muted)
-                }
-            }
-        }
-        // Swallow bare taps on panel chrome so they don't fall through to the backdrop dismiss
-        // catcher. Must be simultaneous — a exclusive `onTapGesture` competes with Slider thumb
-        // drags and makes the custom desqueeze factor unusable.
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded {})
-    }
-
-    private func selectionFeedback() {
-        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-    }
-}
-
-/// Anchor box for slide-up assist option popups — trailing edge pinned to the view-assist toolbar's
-/// maxX on the left side, with leading clearance for the notch / Dynamic Island. Shared by live
-/// monitor and playback.
-private struct AssistOptionsPopupAnchor {
-    let boxWidth: CGFloat
-    let boxHeight: CGFloat
-    let slide: CGFloat
-    let topInset: CGFloat
-    let leadingPadding: CGFloat
-    let panelWidth: CGFloat
-    let boxAlignment: Alignment
-
-    init(
-        host: CGRect,
-        toolbar: CGRect,
-        topSafeArea: CGFloat,
-        leadingSafeArea: CGFloat,
-        preferredPanelWidth: CGFloat,
-        chromeInsets: MonitorEdgeInsets,
-        panelHeight: CGFloat,
-        fallbackBottomClearance: CGFloat,
-        leadingClearance: CGFloat = 4,
-        isPortrait: Bool = false,
-        portraitBottomLift: CGFloat = 0
-    ) {
-        // Belt-and-suspenders alongside the onDisappear reset on assistToolbarFrame: the toolbar
-        // frame only means anything in landscape (portrait never mounts that module). Defaults to
-        // false so the media-playback call site — which owns its own toolbar frame lifecycle — is
-        // unaffected.
-        let hasToolbar = !isPortrait && toolbar.width > 1
-        let gap: CGFloat = 10
-
-        // Minimum global-X for the popup's leading edge — `chromeInsets` is a fixed margin that
-        // ignores cutouts, so prefer the real safe-area leading inset when it is larger.
-        let minLeadingX = host.minX + max(chromeInsets.leading, leadingSafeArea + leadingClearance)
-
-        if hasToolbar {
-            topInset = topSafeArea + 4
-            // Right edge tracks the toolbar, but never so tightly that the panel drops below its
-            // preferred width — the photography band hands most of the row to the capture strip,
-            // leaving an assist scroller far narrower than any panel, and a toolbar-capped box
-            // would crush the panel with it. When the toolbar can't host the panel, grow the
-            // trailing edge over the feed instead (still inside the chrome margin).
-            let preferredTrailing = minLeadingX + preferredPanelWidth
-            let chromeTrailingLimit = host.maxX - chromeInsets.trailing
-            let trailingX = min(
-                max(toolbar.maxX, preferredTrailing), max(toolbar.maxX, chromeTrailingLimit))
-            // Box spans host leading → toolbar trailing; `.bottomTrailing` parks the popup there.
-            boxWidth = max(0, trailingX - host.minX)
-            let maxPanelWidth = max(0, trailingX - minLeadingX)
-            panelWidth = min(preferredPanelWidth, maxPanelWidth)
-            boxAlignment = .bottomTrailing
-            leadingPadding = 0
-            let rawBoxHeight = max(0, toolbar.minY - gap - host.minY)
-            boxHeight = max(0, rawBoxHeight - topInset)
-        } else if isPortrait {
-            // Portrait: no toolbar to anchor to — a full-width bottom sheet (12pt margin per side),
-            // lifted `portraitBottomLift` off the physical bottom edge so its lowest content (and
-            // any toast) clears the home indicator.
-            leadingPadding = 0
-            topInset = 0
-            boxWidth = host.width
-            panelWidth = max(0, host.width - 24)
-            boxAlignment = .bottom
-            boxHeight = max(0, host.height - portraitBottomLift)
-        } else {
-            topInset = topSafeArea + 4
-            // Toolbar not measured yet — fall back to a left-anchored band above the bottom chrome.
-            leadingPadding = max(0, minLeadingX - host.minX)
-            boxWidth = max(0, host.width - leadingPadding - chromeInsets.trailing)
-            panelWidth = min(preferredPanelWidth, max(0, boxWidth))
-            boxAlignment = .bottomLeading
-            let rawBoxHeight = max(0, host.height - fallbackBottomClearance)
-            boxHeight = max(0, rawBoxHeight - topInset)
-        }
-        slide = (host.height - boxHeight - topInset) + panelHeight + 20
-    }
-}
-
-/// Slide-up assist options popup anchored above the view-assist toolbar — mirrors
-/// `PanelHost.bottomAssistBody` for media playback (backdrop tap + identical width, padding, and reveal).
-struct PlaybackAssistOptionsOverlay: View {
-    @Environment(NativeAppModel.self) private var model
-    let tool: MonitorAssistTool
-    let anchorToolbarFrame: CGRect
-    let isRevealed: Bool
-    let onBackdropTap: () -> Void
-    var onClose: (() -> Void)? = nil
-    var fallbackBottomClearance: CGFloat = 70
-    @State private var panelHeight: CGFloat = 280
-
-    var body: some View {
-        GeometryReader { proxy in
-            let host = proxy.frame(in: .global)
-            let anchor = AssistOptionsPopupAnchor(
-                host: host,
-                toolbar: anchorToolbarFrame,
-                topSafeArea: proxy.safeAreaInsets.top,
-                leadingSafeArea: proxy.safeAreaInsets.leading,
-                preferredPanelWidth: assistPanelWidth(for: tool),
-                chromeInsets: .zero,
-                panelHeight: panelHeight,
-                fallbackBottomClearance: fallbackBottomClearance
-            )
-
-            ZStack(alignment: .topLeading) {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .ignoresSafeArea()
-                    .onTapGesture { onBackdropTap() }
-
-                AssistPanel(tool: tool, onClose: onClose)
-                    .environment(model)
-                    .id(tool)
-                    .transition(.opacity)
-                    .frame(width: anchor.panelWidth)
-                    .background(panelHeightReader)
-                    .offset(y: isRevealed ? 0 : anchor.slide)
-                    .opacity(isRevealed ? 1 : 0)
-                    .frame(
-                        width: anchor.boxWidth, height: anchor.boxHeight,
-                        alignment: anchor.boxAlignment
-                    )
-                    .padding(.leading, anchor.leadingPadding)
-                    .padding(.top, anchor.topInset)
-                    .clipped()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-        }
-        .ignoresSafeArea()
-    }
-
-    private var panelHeightReader: some View {
-        GeometryReader { panelProxy in
-            Color.clear
-                .onAppear { panelHeight = panelProxy.size.height }
-                .onChange(of: panelProxy.size.height) { _, newHeight in
-                    panelHeight = newHeight
-                }
-        }
-    }
-}
-
 /// Tabbed LUT picker in the assist panel: category tabs over a drum of that category's looks.
 struct LUTPickerContent: View {
     private struct PendingLUTDeletion: Identifiable {
@@ -3564,8 +3189,7 @@ struct OperatorSettingsPanel: View {
                         : "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor.",
                     visibility: chromeToggles(for: mode, capture: capture),
                     pinsTitle: "View assists that stay on in clean view",
-                    pins: mode == .clean ? cleanPins : [],
-                    tools: mode == .live ? assistOrder : nil
+                    pins: mode == .clean ? cleanPins : []
                 )
             },
             order: displayOrder
@@ -3592,29 +3216,6 @@ struct OperatorSettingsPanel: View {
                 model.toggleCleanViewPin(tool)
             }
         }
-    }
-
-    private var assistOrder: MonitorDisplayOrderGroup {
-        MonitorDisplayOrderGroup(
-            title: "Tool bar buttons",
-            caption: "Tool bar buttons: drag to reorder, tap the eye to show or hide",
-            items: model.preferences.assistToolbarOrder.map { tool in
-                MonitorDisplayOrderItem(
-                    id: tool.rawValue, title: tool.displaySettingsTitle,
-                    isOn: model.preferences.isAssistToolbarButtonVisible(tool),
-                    supplement: tool.rawValue,
-                    visibilityLabel: "Show \(tool.displaySettingsTitle) on the monitor bar",
-                    toggle: model.canToggleAssistToolbarVisibility(tool)
-                        ? { model.toggleAssistToolbarVisibility(tool) } : nil)
-            },
-            move: { id, target in
-                let current = model.preferences.assistToolbarOrder
-                guard let source = current.firstIndex(where: { $0.rawValue == id }),
-                    current.indices.contains(target), source != target
-                else { return }
-                model.moveAssistToolbar(
-                    from: IndexSet(integer: source), to: source < target ? target + 1 : target)
-            })
     }
 
     private var displayOrder: MonitorDisplayOrderGroup {

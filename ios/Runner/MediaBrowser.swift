@@ -2117,8 +2117,6 @@ struct MediaPlayerView: View {
 
     @State private var assistOptionsTool: MonitorAssistTool?
     @State private var playbackBarFrame: CGRect = .zero
-    @State private var playbackAssistToolbarFrame: CGRect = .zero
-    @State private var playbackAssistPanelRevealed = false
 
     @State private var isFavorite = false
     @State private var exportState: ExportStatus = .none
@@ -2223,22 +2221,19 @@ struct MediaPlayerView: View {
             })
     }
 
+    /// The shared assist palette in the playback slot, over the playback flags.
     private func playbackTools(_ context: MonitorPlaybackToolsContext) -> some View {
-        VStack {
-            Spacer()
-            HStack {
-                if context.expanded.wrappedValue { playbackAssistToolbar }
-                Button {
-                    context.expanded.wrappedValue.toggle()
-                } label: {
-                    MonitorIcon.slidersHorizontal.frame(width: 18, height: 18)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel(context.expanded.wrappedValue
-                    ? "Hide playback assist toolbar" : "Show playback assist toolbar")
-            }
-            .padding(.horizontal, 16).padding(.bottom, max(context.safeTop, 14))
-        }
+        let tools = model.playbackAssistPaletteTools
+        let (metrics, frame) = MonitorAssistPaletteLayout.fieldMonitor(
+            context.presentation, toolCount: tools.count, safeTop: context.safeTop)
+        return NikonAssistPalette(
+            tools: tools, context: .playback, layout: metrics, expanded: context.expanded,
+            onOptions: { assistOptionsTool = $0 }
+        )
+        .position(x: frame.midX, y: frame.midY)
+        .frame(
+            width: context.presentation.viewport.width,
+            height: context.presentation.viewport.height, alignment: .topLeading)
     }
 
     private var currentClipIndex: Int? {
@@ -2294,9 +2289,7 @@ struct MediaPlayerView: View {
                             }
                         })
                     },
-                    onShareButtonFrame: { shareButtonFrame = $0 },
-                    onChromeVisibilityChanged: { if !$0 { dismissPlaybackAssistOptions() } },
-                    onAssistExpansionChanged: { if !$0 { dismissPlaybackAssistOptions() } }),
+                    onShareButtonFrame: { shareButtonFrame = $0 }),
                 picture: {
                     PlayerLayerView(player: player)
                         .scaleEffect(desqueezeScale(model.playbackDesqueeze), anchor: .center)
@@ -2343,8 +2336,15 @@ struct MediaPlayerView: View {
             }
 
             if let tool = assistOptionsTool {
-                playbackAssistOptionsOverlay(tool: tool)
-                    .zIndex(4)
+                GeometryReader { proxy in
+                    NikonAssistInspector(
+                        tool: tool, tools: model.playbackAssistPaletteTools, viewport: proxy.size,
+                        safeArea: proxy.safeAreaInsets, onSelect: { assistOptionsTool = $0 },
+                        onDismiss: { assistOptionsTool = nil })
+                }
+                .ignoresSafeArea()
+                .environment(model)
+                .zIndex(4)
             }
         }
         .task(id: activeClip.id) {
@@ -2382,39 +2382,6 @@ struct MediaPlayerView: View {
             restartPlaybackScopeSampling()
         }
         .mediaDeliveryShareSheet(onDismiss: resumePlaybackIfNeeded)
-    }
-
-    /// Mirrors live-monitor `PanelHost.bottomAssistBody` — glass popup anchored above the playback bar.
-    private func playbackAssistOptionsOverlay(tool: MonitorAssistTool) -> some View {
-        PlaybackAssistOptionsOverlay(
-            tool: tool,
-            anchorToolbarFrame: playbackAssistToolbarFrame,
-            isRevealed: playbackAssistPanelRevealed,
-            onBackdropTap: dismissPlaybackAssistOptions,
-            onClose: dismissPlaybackAssistOptions
-        )
-        .environment(model)
-    }
-
-    private func presentPlaybackAssistOptions(_ tool: MonitorAssistTool) {
-        playbackAssistPanelRevealed = false
-        assistOptionsTool = tool
-        schedulePlaybackAssistReveal()
-    }
-
-    private func dismissPlaybackAssistOptions() {
-        assistOptionsTool = nil
-    }
-
-    /// Same slide-up curve as live-monitor assist popups (`NativeAppModel.panelRevealCurve`).
-    private func schedulePlaybackAssistReveal() {
-        Task { @MainActor in
-            await Task.yield()
-            guard assistOptionsTool != nil else { return }
-            withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.20)) {
-                playbackAssistPanelRevealed = true
-            }
-        }
     }
 
     private func startDelivery(_ request: MediaDeliveryBeginRequest) {
@@ -2507,49 +2474,6 @@ struct MediaPlayerView: View {
                 + actionButtonSize.width * CGFloat(actionCount)
             let gaps = transportRowSpacing * CGFloat(transportCount + actionCount - 1)
             return buttons + gaps + barPaddingH * 2 + minimumSpacer
-        }
-    }
-
-    /// Playback drops the live-only tools. The horizon needs a camera to read, and magnification is
-    /// driven by an on-feed key playback does not mount — offering it here would be a switch with
-    /// nothing behind it.
-    private var visiblePlaybackToolbarTools: [MonitorAssistTool] {
-        model.preferences.assistToolbarOrder.filter {
-            $0 != .level && $0 != .magnification
-                && model.preferences.isAssistToolbarButtonVisible($0)
-        }
-    }
-
-    /// Same assist toolbar row as the live monitor: tap toggles, long-press opens options.
-    private var playbackAssistToolbar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(
-                    Array(visiblePlaybackToolbarTools.enumerated()),
-                    id: \.element.id
-                ) { index, tool in
-                    if index > 0 && index.isMultiple(of: 3) {
-                        Rectangle()
-                            .fill(LiveDesign.hairlineStrong)
-                            .frame(width: 1, height: 22)
-                            .padding(.horizontal, 3)
-                    }
-                    AssistToolButtonRow(tool: tool, context: .playback) { tool in
-                        presentPlaybackAssistOptions(tool)
-                    }
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { playbackAssistToolbarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        playbackAssistToolbarFrame = frame
-                    }
-            }
         }
     }
 

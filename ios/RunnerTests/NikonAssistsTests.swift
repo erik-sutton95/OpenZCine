@@ -228,6 +228,22 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertTrue(model.preferences.scopeActivationOrder.isEmpty)
     }
 
+    // MARK: - Palette
+
+    func testPhotographyLeadsWithInstantPlaybackThenTheEVMeter() {
+        let photo = MonitorAssistTool.activeCases.filter(\.appliesToPhotography).map(\.rawValue)
+        let ranked = MonitorToolUsage().rankedIDs(in: photo, seed: nikonAssistUsageSeed)
+        XCTAssertEqual(Array(ranked.prefix(2)), ["PLAY", "EV"])
+    }
+
+    func testPlaybackOffersNoCameraFedTool() {
+        let tools = NativeAppModel(assist: .restore(storage: defaults)).playbackAssistPaletteTools
+        for tool in [MonitorAssistTool.level, .evMeter, .instantReview, .magnification] {
+            XCTAssertFalse(tools.contains(tool), "\(tool) needs a camera")
+        }
+        XCTAssertTrue(tools.contains(.waveform))
+    }
+
     // MARK: - Migration from the Nikon blobs
 
     func testMigrationReadsTheLegacySingleContextToolKey() throws {

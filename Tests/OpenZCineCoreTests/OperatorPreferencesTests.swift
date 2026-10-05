@@ -116,9 +116,6 @@ import Testing
     #expect(preferences.displayChrome.sideRailsVisible)
     #expect(preferences.displayChrome.assistToolbarVisible)
     #expect(preferences.displayChrome.cameraValuesVisible)
-    #expect(preferences.assistToolbarOrder.first == .lut)
-    #expect(preferences.assistToolbarOrder.contains(.peaking))
-    #expect(preferences.assistToolbarOrder.contains(.desqueeze))
     // Which assists are on is the shared assist state's; the app's tests pin its fresh defaults.
 }
 
@@ -129,24 +126,6 @@ import Testing
     let data = try JSONEncoder().encode(prefs)
     let decoded = try JSONDecoder().decode(OperatorPreferences.self, from: data)
     #expect(decoded.portraitFeedAspect == .fill)
-}
-
-@Test func reconcileAssistToolsSurfacesToolsMissingFromAPersistedOrder() {
-    var preferences = OperatorPreferences.defaults
-    // A toolbar order persisted before `.lut` existed.
-    preferences.assistToolbarOrder = MonitorAssistTool.allCases.filter { $0 != .lut }
-    #expect(!preferences.assistToolbarOrder.contains(.lut))
-
-    preferences.reconcileAssistTools()
-
-    #expect(preferences.assistToolbarOrder.contains(.lut))
-    #expect(preferences.assistToolbarOrder.first == .lut)
-    #expect(preferences.assistToolbarOrder.count == MonitorAssistTool.allCases.count)
-
-    // Idempotent: a second pass changes nothing.
-    let reconciled = preferences.assistToolbarOrder
-    preferences.reconcileAssistTools()
-    #expect(preferences.assistToolbarOrder == reconciled)
 }
 
 @Test func reconcileDispOrderSurfacesModesMissingFromAPersistedOrder() {
@@ -733,79 +712,23 @@ import Testing
     #expect(AssistConfiguration.Scopes.brightnessMultiplier(100) == 1)
 }
 
-@Test func operatorPreferencesDefaultBarVisibilityIncludesAllTools() {
-    let preferences = OperatorPreferences.defaults
-    #expect(
-        preferences.exposureBarVisibleControls == Set(MonitorAssistTool.exposureBarTools))
-    #expect(
-        preferences.framingBarVisibleControls == Set(MonitorAssistTool.framingBarTools))
-    for tool in MonitorAssistTool.exposureBarTools {
-        #expect(preferences.isAssistToolbarButtonVisible(tool))
-    }
-    for tool in MonitorAssistTool.framingBarTools {
-        #expect(preferences.isAssistToolbarButtonVisible(tool))
-    }
-    #expect(preferences.isAssistToolbarButtonVisible(.lut))
-}
-
-@Test func reconcileSurfacesNewToolsOnTheirBars() {
-    var preferences = OperatorPreferences.defaults
-    // Simulate a blob saved before the vectorscope/audio tools existed: the persisted order and
-    // visible sets lack them — and the operator has deliberately hidden the parade button.
-    preferences.assistToolbarOrder.removeAll { $0 == .vectorscope || $0 == .audioMeters }
-    preferences.exposureBarVisibleControls.remove(.vectorscope)
-    preferences.exposureBarVisibleControls.remove(.audioMeters)
-    preferences.exposureBarVisibleControls.remove(.parade)
-
-    preferences.reconcileAssistTools()
-
-    #expect(preferences.assistToolbarOrder.contains(.vectorscope))
-    #expect(preferences.assistToolbarOrder.contains(.audioMeters))
-    #expect(preferences.exposureBarVisibleControls.contains(.vectorscope))
-    #expect(preferences.exposureBarVisibleControls.contains(.audioMeters))
-    // A deliberately hidden tool stays hidden — reconcile only surfaces never-seen tools.
-    #expect(!preferences.exposureBarVisibleControls.contains(.parade))
-}
-
-@Test func operatorPreferencesBarVisibilityRoundTrips() throws {
-    var preferences = OperatorPreferences.defaults
-    preferences.exposureBarVisibleControls = [.peaking, .zebra]
-    preferences.framingBarVisibleControls = [.guides, .desqueeze]
-    let decoded = try JSONDecoder().decode(
-        OperatorPreferences.self, from: try JSONEncoder().encode(preferences))
-    #expect(decoded.exposureBarVisibleControls == [.peaking, .zebra])
-    #expect(decoded.framingBarVisibleControls == [.guides, .desqueeze])
-}
-
-@Test func operatorPreferencesDecodesOlderJSONWithoutBarVisibilityKeys() throws {
+@Test func operatorPreferencesIgnoreAStoredToolbarOrderAndBarVisibility() throws {
+    // The shared palette ranks tools by use, so the order and bar visibility an older build saved
+    // decode to nothing and leave the blob on its next save.
     let data = try JSONEncoder().encode(OperatorPreferences.defaults)
     var dict = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    dict.removeValue(forKey: "exposureBarVisibleControls")
-    dict.removeValue(forKey: "framingBarVisibleControls")
+    dict["assistToolbarOrder"] = ["HISTO", "LUT", "MAG", "NOPE"]
+    dict["exposureBarVisibleControls"] = ["PEAK"]
+    dict["framingBarVisibleControls"] = []
     let decoded = try JSONDecoder().decode(
-        OperatorPreferences.self,
-        from: try JSONSerialization.data(withJSONObject: dict))
-    #expect(
-        decoded.exposureBarVisibleControls == Set(MonitorAssistTool.exposureBarTools))
-    #expect(
-        decoded.framingBarVisibleControls == Set(MonitorAssistTool.framingBarTools))
-}
+        OperatorPreferences.self, from: try JSONSerialization.data(withJSONObject: dict))
+    #expect(decoded == OperatorPreferences.defaults)
 
-@Test func operatorPreferencesToggleBarControls() {
-    var preferences = OperatorPreferences.defaults
-    preferences.toggleExposureBarControl(.peaking)
-    #expect(!preferences.exposureBarVisibleControls.contains(.peaking))
-    preferences.toggleExposureBarControl(.peaking)
-    #expect(preferences.exposureBarVisibleControls.contains(.peaking))
-    preferences.toggleFramingBarControl(.grid)
-    #expect(!preferences.framingBarVisibleControls.contains(.grid))
-}
-
-@Test func assistToolbarOrderMovingReordersWithoutDuplicates() {
-    let order = MonitorAssistTool.allCases
-    let moved = AssistToolbarOrder.moving(.histogram, to: 0, in: order)
-    #expect(moved.first == .histogram)
-    #expect(Set(moved).count == order.count)
+    let saved = try #require(
+        try JSONSerialization.jsonObject(with: try JSONEncoder().encode(decoded)) as? [String: Any])
+    #expect(saved["assistToolbarOrder"] == nil)
+    #expect(saved["exposureBarVisibleControls"] == nil)
+    #expect(saved["framingBarVisibleControls"] == nil)
 }
 
 @Test func scopeScaleClampsToRangeOnInitAndDecode() throws {

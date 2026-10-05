@@ -104,7 +104,7 @@ The live-view monitor is a single view tree, `MonitorShell(context:)`
 there are no separate landscape/portrait shell structs and no feature flag selecting between them.
 `MonitorShell` computes a `MonitorZoneMap` once per layout pass via
 `MonitorZoneLayout.map(...)` (`Sources/OpenZCineCore/MonitorZoneLayout.swift`) and mounts each
-unified module (`MonitorInfoBar`, `MonitorCaptureStrip`, `MonitorAssistStrip`,
+unified module (`MonitorInfoBar`, `MonitorCaptureStrip`, the shared assist palette,
 `MonitorSystemCluster`, `MonitorScopes`, plus the shared feed/command/panel views) at the frame
 and style hint the map returns for that zone; a `nil` zone stays unmounted.
 
@@ -144,14 +144,11 @@ lives in the shared `MonitorAssistState`):
 
 - **Fit** stacks `OperatorPreferences.displayedFitScopes` — the 2 *most recently activated* scope
   tools (re-sorted into canonical order for display), capped regardless of how many are actually
-  active. Below the scopes zone, fit mounts a live-only, chrome-gated horizontal assist toolbar
-  (`MonitorAssistStrip(axis: .horizontal)`, zone `assistStrip`) that sits between the scopes and
-  the tile grid and slides down as the scopes region grows — the toolbar is dormant (zero height)
-  outside `.live` or when `displayChrome.assistToolbarVisible` is off. With ≥2 scopes displayed,
-  `NativeAppModel.scopeCapActive` refuses further scope activations in fit: the blocked toolbar
-  buttons render at ~0.35 opacity (still tappable) and a tap fires a self-dissolving
-  `MonitorToast` ("2 scopes max in fit view — close one or pinch to fill"). Scopes beyond the 2
-  displayed stay active-but-hidden rather than being dropped.
+  active. The assist palette is the shared `MonitorAssistPalette` in the Field Monitor assists
+  slot (`NikonAssistPalette`), chrome-gated by `displayChrome.assistToolbarVisible`. With ≥2
+  scopes displayed, `NativeAppModel.scopeCapActive` refuses further scope activations in fit: a
+  tap on a third scope fires a self-dissolving `MonitorToast` (`scopeCapNoticeText`). Scopes
+  beyond the 2 displayed stay active-but-hidden rather than being dropped.
 - **Fill** mounts the landscape-identical floating `MonitorScopes(.scopesFloating)` panels —
   draggable, resizable, uncapped — over the visible (post-crop) feed region; every active scope
   tool floats, including ones fit was hiding. Pinching between fit and fill destroys no state:

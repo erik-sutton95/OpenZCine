@@ -177,7 +177,6 @@ enum PreferencesStore {
         guard let data = UserDefaults.standard.data(forKey: preferencesKey),
             var decoded = try? JSONDecoder().decode(OperatorPreferences.self, from: data)
         else { return .defaults }
-        decoded.reconcileAssistTools()
         decoded.reconcileDispOrder()
         return decoded
     }
@@ -210,6 +209,9 @@ enum PreferencesStore {
         guard let data = try? JSONEncoder().encode(commandGridOrder) else { return }
         UserDefaults.standard.set(data, forKey: commandGridOrderKey)
     }
+
+    static let assistToolUsage = MonitorToolUsagePreferences(
+        storage: .standard, key: "assistToolUsage.v1")
 
     private static let commandGridOrderKey = "commandGridOrder.v1"
     private static let mediaSortOrderKey = "mediaSortOrder.v1"
@@ -2326,9 +2328,6 @@ final class NativeAppModel {
     /// Global frame of the bottom capture-settings bar. The exposure picker right-aligns to this
     /// bar's right edge and rises just above it, mirroring the mockup's `.pk-card` placement.
     var captureBarFrame: CGRect = .zero
-    /// Global frame of the view-assist toolbar (LUT, peaking, waveform, …). Assist quick-settings
-    /// popups right-align to this bar's trailing edge and rise just above it on the left side.
-    var assistToolbarFrame: CGRect = .zero
     /// Global frame of each capture-setting readout, keyed by its label, so a tap landing on a
     /// different setting while a picker is open can blend straight to that setting's picker.
     var captureSettingFrames: [String: CGRect] = [:]
@@ -2399,6 +2398,10 @@ final class NativeAppModel {
     /// The shared Pocket / Insta assist state: which tools are on (live and playback), the clean
     /// view pins and every shared option. Persists itself.
     let assist: NikonAssistState
+    /// How often each palette tool is used: the shared ranking that orders live and playback.
+    var assistToolUsage = PreferencesStore.assistToolUsage.value {
+        didSet { PreferencesStore.assistToolUsage.value = assistToolUsage }
+    }
     /// The Nikon-only assist settings (LUT catalog pick, level style, zebra units, instant review,
     /// scope panels), also persisted.
     var assistConfiguration = PreferencesStore.loadAssistConfiguration() {
@@ -9248,13 +9251,6 @@ final class NativeAppModel {
         if next != commandGridOrder { commandGridOrder = next }
     }
 
-    /// Reorders assist-toolbar tools (drag-to-reorder in Operator Setup). Persisted via `didSet`.
-    func moveAssistToolbar(from source: IndexSet, to destination: Int) {
-        var order = preferences.assistToolbarOrder
-        order.move(fromOffsets: source, toOffset: destination)
-        preferences.assistToolbarOrder = order
-    }
-
     /// Reorders DISP modes (drag-to-reorder in Operator Setup). Persisted via `didSet`.
     func moveDispOrder(from source: IndexSet, to destination: Int) {
         var order = preferences.dispOrder
@@ -9271,36 +9267,6 @@ final class NativeAppModel {
         preferences.dispOrder = OperatorPreferences.defaults.dispOrder
         preferences.enabledDispModes = OperatorPreferences.defaults.enabledDispModes
         reconcileDisplayModeAfterDispPreferenceChange()
-    }
-
-    func toggleExposureBarVisibility(_ tool: MonitorAssistTool) {
-        preferences.toggleExposureBarControl(tool)
-    }
-
-    func toggleFramingBarVisibility(_ tool: MonitorAssistTool) {
-        preferences.toggleFramingBarControl(tool)
-    }
-
-    /// Toggles monitor-bar visibility for exposure and framing assist tools (Display settings).
-    func toggleAssistToolbarVisibility(_ tool: MonitorAssistTool) {
-        if MonitorAssistTool.exposureBarTools.contains(tool) {
-            toggleExposureBarVisibility(tool)
-        } else if MonitorAssistTool.framingBarTools.contains(tool) {
-            toggleFramingBarVisibility(tool)
-        }
-    }
-
-    /// Whether `toggleAssistToolbarVisibility` can act on `tool` — Display settings renders the eye
-    /// only where it can.
-    ///
-    /// The exposure and framing sets are the whole of what the preferences store. LUT is
-    /// deliberately permanent, and the photography tools (EV meter, instant review) belong to
-    /// neither set, so the toggle above falls through both branches while
-    /// `isAssistToolbarButtonVisible` still answers a flat `true`: the eye was drawn lit and did
-    /// nothing when tapped.
-    func canToggleAssistToolbarVisibility(_ tool: MonitorAssistTool) -> Bool {
-        MonitorAssistTool.exposureBarTools.contains(tool)
-            || MonitorAssistTool.framingBarTools.contains(tool)
     }
 
     /// Toggles whether a tool keeps rendering in clean view (DISP 2).
@@ -9335,23 +9301,6 @@ final class NativeAppModel {
         reconcileDisplayModeAfterDispPreferenceChange()
         operatorSettingsTab = .display
         activePanel = .settings
-    }
-
-    func resetExposureBarVisibility() {
-        preferences.exposureBarVisibleControls =
-            OperatorPreferences.defaults.exposureBarVisibleControls
-    }
-
-    func resetFramingBarVisibility() {
-        preferences.framingBarVisibleControls =
-            OperatorPreferences.defaults.framingBarVisibleControls
-    }
-
-    /// Restores assist-toolbar order and per-button visibility to defaults (Display settings).
-    func resetAssistToolbarPreferences() {
-        preferences.assistToolbarOrder = OperatorPreferences.defaults.assistToolbarOrder
-        resetExposureBarVisibility()
-        resetFramingBarVisibility()
     }
 
     private func reconcileDisplayModeAfterDispPreferenceChange() {
@@ -13312,31 +13261,6 @@ struct PickerMode: Equatable, Sendable {
 }
 
 extension MonitorAssistTool {
-    var icon: String {
-        switch self {
-        case .lut: "camera.filters"
-        case .peaking: "mountain.2"
-        case .falseColor: "circle.lefthalf.filled"
-        case .zebra: "line.diagonal"
-        case .waveform: "waveform.path"
-        case .parade: "chart.bar.xaxis"
-        case .histogram: "waveform"
-        case .vectorscope: "circle.grid.cross"
-        case .trafficLights: "light.beacon.max"
-        case .audioMeters: "slider.vertical.3"
-        case .guides: "rectangle.dashed"
-        case .grid: "grid"
-        case .crosshair: "plus"
-        case .level: "gyroscope"
-        case .evMeter: "plusminus"
-        case .desqueeze: "arrow.left.and.right"
-        // The system's own mirror glyph, and the one every camera app uses for this.
-        case .mirror: "arrow.left.and.right.righttriangle.left.righttriangle.right"
-        case .magnification: "plus.magnifyingglass"
-        case .instantReview: "photo.badge.checkmark"
-        }
-    }
-
     var title: String {
         switch self {
         case .lut: "LUT"

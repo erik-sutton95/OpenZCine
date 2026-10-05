@@ -185,13 +185,16 @@ flowchart TD
 ### MONITOR-06 — Assist toolbar
 
 - **Status:** shipped
-- **Screen:** Horizontally scrollable bottom-left bar: LUT, PEAK, FALSE, ZEBRA, WAVE, PARADE,
-  HISTO, LIGHTS, GUIDES, GRID, CROSS, LEVEL, DE-SQ (operator-reorderable in Settings). Tap
-  toggles; long-press opens options drawer when `hasConfiguration`.
-- **Code:** `BottomAssistToolsModule`, `AssistToolButtonRow`, `NativeAppRoot.toggleAssist`,
-  `presentAssistOptions`, `Sources/OpenZCineCore/OperatorPreferences.swift` (`MonitorAssistTool`).
-- **Detail:** Visibility persisted per context (live vs playback). Groups of three separated by
-  vertical dividers. Scroll edge chevrons on iOS 18+.
+- **Screen:** The shared assist palette (Pocket/Insta `MonitorAssistPalette`) in the Field
+  Monitor assists slot, live and in playback: the most used tools stay out, the chevron reveals
+  the rest. Tools are ranked by use (`MonitorToolUsage`, seeded with PLAY then EV for the photo
+  toolset); there is no manual order. Tap toggles; long-press opens the shared inspector
+  (`MonitorInspector`) when `hasConfiguration`.
+- **Code:** `ios/Runner/NikonAssistInspector.swift` (`NikonAssistPalette`, `NikonAssistInspector`),
+  `NativeAppRoot.toggleAssist`, `presentAssistOptions`, `ios/Runner/NikonAssists.swift`
+  (`NikonAssistState`).
+- **Detail:** On/off persisted per context (live vs playback) in the shared assist state. The
+  photo toolset swaps in PLAY and the camera EV meter; playback drops the camera-fed tools.
 - 📝 Notes:
 
 ### MONITOR-07 — Floating scopes
