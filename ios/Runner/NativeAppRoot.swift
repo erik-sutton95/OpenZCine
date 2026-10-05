@@ -11,6 +11,7 @@ import SwiftUI
 import UIKit
 import ZIPFoundation
 import os
+import struct MonitorPresentation.MonitorEdgeInsets
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
