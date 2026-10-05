@@ -2522,18 +2522,14 @@ enum SettingsPalette {
     ]
 }
 
-/// Operator Setup rail tabs — selection and per-tab scroll offsets live in `NativeAppModel` so
-/// they survive dismissing the panel back to live view.
-typealias OperatorSettingsTab = MonitorSettingsTab
-
 extension MonitorSettingsTab {
     /// Screenshot affordance (link/assist/controls/display/storage/system) picking the initial
     /// rail tab. Defaults to Link in normal launches.
-    static var demoLaunchTab: OperatorSettingsTab {
+    static var demoLaunchTab: MonitorSettingsTab {
         demoLaunchTab(DemoHarness.panelTab)
     }
 
-    static func demoLaunchTab(_ rawValue: String?) -> OperatorSettingsTab {
+    static func demoLaunchTab(_ rawValue: String?) -> MonitorSettingsTab {
         switch rawValue {
         case "sharing": .sharing
         case "assist": .assist
@@ -2653,7 +2649,7 @@ struct OperatorSettingsPanel: View {
     /// Camera-backed setup uses the root-owned presentation instead, which survives an AP hop.
     @State private var standaloneBugReportPresented = false
 
-    private var selectedTab: OperatorSettingsTab {
+    private var selectedTab: MonitorSettingsTab {
         get { model.operatorSettingsTab }
         nonmutating set { model.operatorSettingsTab = newValue }
     }

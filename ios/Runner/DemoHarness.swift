@@ -710,7 +710,7 @@ enum DemoHarness {
                 if env["ZC_DEMO_PANEL"] == "settings" {
                     // Demo/screenshot affordance: open Operator Setup on launch (tab via
                     // ZC_DEMO_PANEL_TAB).
-                    model.operatorSettingsTab = OperatorSettingsTab.demoLaunchTab
+                    model.operatorSettingsTab = MonitorSettingsTab.demoLaunchTab
                     model.activePanel = .settings
                 }
                 if let step = LiveViewGuideStep.demoValue(liveGuideStep) {
@@ -755,7 +755,7 @@ enum DemoHarness {
                 // home's Settings button would, optionally selecting ZC_DEMO_PANEL_TAB.
                 model.openStandaloneSettings()
                 if let rawTab = env["ZC_DEMO_PANEL_TAB"] {
-                    model.operatorSettingsTab = OperatorSettingsTab.demoLaunchTab(rawTab)
+                    model.operatorSettingsTab = MonitorSettingsTab.demoLaunchTab(rawTab)
                 }
             }
             if openBugReport {

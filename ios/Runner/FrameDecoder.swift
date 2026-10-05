@@ -23,6 +23,3 @@ final class FrameDecoder: Sendable {
         await native.decode(jpeg, source: source, preferHardware: !DemoHarness.forcesCPUJPEGDecode)
     }
 }
-
-// Existing native window assertions keep their exact names and values.
-typealias LiveFeedNoiseFilter = MonitorTemporalNoiseFilter

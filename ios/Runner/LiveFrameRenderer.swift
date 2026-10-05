@@ -11,18 +11,9 @@ actor LiveFrameRenderer {
         processor = LiveFrameProcessor(fileStore: fileStore)
     }
 
-    /// Returns `image` with `effects` baked in, or unchanged when nothing is active.
-    func render(_ image: UIImage, effects: LiveImageEffects) -> sending UIImage {
-        // The opt-in Metal feed bakes assists off-main in `MetalFeedFrameBaker` — never read back to CPU.
-        guard !FeedRenderMode.metalFeedEnabled else {
-            processor.evictRenderCache()
-            return image
-        }
-        return autoreleasepool { processor.render(image, effects: effects) }
-    }
-
     /// Bakes a static/demo frame for the UIImageView fallback even when Metal was selected at
-    /// launch. Unlike ``render(_:effects:)``, this explicit fallback must not return the raw source.
+    /// launch. Unlike ``renderReplacingCache(_:effects:)``, this explicit fallback must not return
+    /// the raw source.
     func renderStaticFrame(_ image: UIImage, effects: LiveImageEffects) -> sending UIImage {
         autoreleasepool { processor.render(image, effects: effects) }
     }

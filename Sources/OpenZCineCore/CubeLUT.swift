@@ -1,12 +1,12 @@
-// The `.cube` parser and the frame-rate sampler live in OpenCineCore's OpenCineMedia product
-// (moved there from this file and FrameRateSampler.swift, MEDIA-01). Scoped re-exports keep
-// every core, facade, Runner and test call site unchanged without importing OpenCineMedia's
-// other names, some of which (`ScopeDisplayScale`, `PortraitFeedAspect`) OpenZCine defines
-// itself.
+// The `.cube` parser, the frame-rate sampler and the persisted portrait feed aspect live in
+// OpenCineCore's OpenCineMedia product (moved there from this file, FrameRateSampler.swift and
+// MonitorPortraitLayout.swift, MEDIA-01). Scoped re-exports keep every core, facade, Runner and
+// test call site unchanged without importing OpenCineMedia's other names, some of which
+// (`ScopeDisplayScale`) OpenZCine defines itself.
 
 @_exported import struct OpenCineMedia.CubeLUT
-@_exported import enum OpenCineMedia.CubeLUTParseError
 @_exported import struct OpenCineMedia.FrameRateSampler
+@_exported import enum OpenCineMedia.PortraitFeedAspect
 
 /// OpenZCine's renderer policy: Core Image's `CIColorCube` and the Android 8×8 slice atlas
 /// both stop at 64, and a 65³ import is shown on the even 33³ lattice (lattice-exact, no

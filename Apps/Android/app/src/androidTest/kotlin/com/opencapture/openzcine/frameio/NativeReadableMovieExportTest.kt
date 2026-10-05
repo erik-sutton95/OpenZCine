@@ -9,6 +9,8 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opencapture.opencine.runtime.MonitorMovieExportContainer
+import com.opencapture.opencine.runtime.MonitorMovieExportLut
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.media.StagedMediaShare
@@ -43,7 +45,7 @@ class NativeReadableMovieExportTest {
             val sourcePixels = decodedFrame(source)
             try { assertTrue("generated source is green", Color.green(sourcePixels.getPixel(sourcePixels.width / 2, sourcePixels.height / 2)) > 120) }
             finally { sourcePixels.recycle() }
-            val lut = FrameioLutPayload("SIMULATED constant red fixture", 2, ByteArray(32) { index ->
+            val lut = MonitorMovieExportLut("SIMULATED constant red fixture", 2, ByteArray(32) { index ->
                 when (index % 4) { 0 -> 230.toByte(); 1 -> 16; 2 -> 32; else -> 255.toByte() }
             })
             val preparer = AndroidFrameioArtifactPreparer(root.resolve("exports"), object : FrameioLutProvider {
@@ -53,7 +55,7 @@ class NativeReadableMovieExportTest {
                 StagedMediaShare(source, "SIMULATED-source.MOV", "video/quicktime"),
                 Files.size(source), FrameioArtifactContext("SIMULATED camera", "20261005T010000", true),
             )
-            for (container in MediaExportContainer.entries) {
+            for (container in MonitorMovieExportContainer.entries) {
                 val progress = Collections.synchronizedList(mutableListOf<Double>())
                 val prepared = preparer.prepare(artifact, FrameioDeliveryOptions(
                     bakeLut = true, exportContainer = container, selectedLut = FeedLutSelection.BuiltIn(FeedLut.MONO),
@@ -71,7 +73,7 @@ class NativeReadableMovieExportTest {
                     val movie = Files.readAllBytes(prepared.share.file)
                     assertArrayEquals(sourceTimecode, timecodeSample(movie))
                     val brand = movie.copyOfRange(8, 12).toString(Charsets.US_ASCII)
-                    if (container == MediaExportContainer.MOV) assertEquals("qt  ", brand) else assertFalse(brand == "qt  ")
+                    if (container == MonitorMovieExportContainer.MOV) assertEquals("qt  ", brand) else assertFalse(brand == "qt  ")
                     assertTrue("actual muxed audio has a sample", hasAudioSample(prepared.share.file))
                     val decoded = decodedFrame(prepared.share.file)
                     try {

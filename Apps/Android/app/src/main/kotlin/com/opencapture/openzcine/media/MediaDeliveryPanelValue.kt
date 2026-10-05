@@ -2,11 +2,11 @@ package com.opencapture.openzcine.media
 
 import com.opencapture.monitorui.MonitorMediaDeliveryProgressValue
 import com.opencapture.monitorui.MonitorMediaDeliveryValue
+import com.opencapture.opencine.runtime.MonitorMovieExportContainer
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioProject
 import com.opencapture.openzcine.frameio.FrameioProjectListing
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
-import com.opencapture.openzcine.frameio.MediaExportContainer
 
 /** Source choices projected into common rendering; no export, cache or route ownership. */
 internal object MediaDeliveryPanelValue {
@@ -25,7 +25,7 @@ internal object MediaDeliveryPanelValue {
         format = MonitorMediaDeliveryValue.Choices(
             title = "Container for baked exports",
             help = "Container applies only when a LUT is baked. Originals are never changed.",
-            options = MediaExportContainer.entries.map { MonitorMediaDeliveryValue.Choice(it.name, it.label) },
+            options = MonitorMovieExportContainer.entries.map { MonitorMediaDeliveryValue.Choice(it.name, it.label) },
             selectedID = configuration.exportContainer.name,
         ),
         includeMetadata = MonitorMediaDeliveryValue.Toggle(

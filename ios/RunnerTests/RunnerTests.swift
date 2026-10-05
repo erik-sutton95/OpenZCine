@@ -607,9 +607,9 @@ final class RunnerTests: XCTestCase {
     }
 
     func testDemoSettingsTabSelection() {
-        XCTAssertEqual(OperatorSettingsTab.demoLaunchTab("assist"), .assist)
-        XCTAssertEqual(OperatorSettingsTab.demoLaunchTab("storage"), .storage)
-        XCTAssertEqual(OperatorSettingsTab.demoLaunchTab("unknown"), .link)
+        XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("assist"), .assist)
+        XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("storage"), .storage)
+        XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("unknown"), .link)
     }
 
     func testMediaClipStoreBuildsContainedURLsForSafeBasenames() throws {
@@ -1252,7 +1252,7 @@ final class RunnerTests: XCTestCase {
                 pixels[i + 3] = 255
             }
         }
-        let space = FrameSampling.cameraFileColorSpace
+        let space = MonitorImageSampling.fileCodeColorSpace
         let data = try XCTUnwrap(CGDataProvider(data: Data(pixels) as CFData))
         let cgImage = try XCTUnwrap(
             CGImage(
@@ -1263,7 +1263,7 @@ final class RunnerTests: XCTestCase {
 
         // Path A — live view: straight UIKit decode into the untagged sampling context.
         let live = try XCTUnwrap(
-            FrameSampling.rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: 256))
+            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: 256))
         let liveSamples = OpenCineMedia.ScopeSampler.sampleRaw(
             bytes: live.data, width: live.width, height: live.height,
             bytesPerRow: live.bytesPerRow, transfer: .rec709, includePoints: true, layout: .rgba,
@@ -1276,9 +1276,9 @@ final class RunnerTests: XCTestCase {
         let rendered = try XCTUnwrap(
             MediaLUT.renderContext.createCGImage(
                 ciImage, from: ciImage.extent, format: .RGBA8,
-                colorSpace: FrameSampling.cameraFileColorSpace))
+                colorSpace: MonitorImageSampling.fileCodeColorSpace))
         let playback = try XCTUnwrap(
-            FrameSampling.rgbaBuffer(from: UIImage(cgImage: rendered), maxWidth: 256))
+            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: rendered), maxWidth: 256))
         let playbackSamples = OpenCineMedia.ScopeSampler.sampleRaw(
             bytes: playback.data, width: playback.width, height: playback.height,
             bytesPerRow: playback.bytesPerRow, transfer: .rec709, includePoints: true,
@@ -2103,7 +2103,7 @@ extension RunnerTests {
     /// A 16:9 feed on a 2.17:1 panel bakes the WHOLE source at source resolution: fit, never
     /// crop (#115) — the present letterboxes, so no source pixel is ever discarded here.
     func testFeedBakeKeepsSourceResolutionAndItsOwnAspect() {
-        let size = MetalFeedFrameBaker.bakeSize(
+        let size = MonitorFrameBaker.bakeSize(
             source: CGSize(width: 1_024, height: 576),
             drawable: CGSize(width: 2_868, height: 1_320))
 
@@ -2113,7 +2113,7 @@ extension RunnerTests {
     /// A source wider than the drawable downscales uniformly — the SOURCE's aspect survives,
     /// because the present letterboxes rather than the bake cropping (#115).
     func testFeedBakeDownscalesPreservingTheSourceAspect() {
-        let size = MetalFeedFrameBaker.bakeSize(
+        let size = MonitorFrameBaker.bakeSize(
             source: CGSize(width: 1_024, height: 256),
             drawable: CGSize(width: 800, height: 600))
 
@@ -2127,7 +2127,7 @@ extension RunnerTests {
         let drawable = CGSize(width: 1_024, height: 768)
 
         XCTAssertEqual(
-            MetalFeedFrameBaker.bakeSize(
+            MonitorFrameBaker.bakeSize(
                 source: CGSize(width: 4_032, height: 3_024), drawable: drawable),
             drawable)
     }
@@ -2137,9 +2137,9 @@ extension RunnerTests {
         let drawable = CGSize(width: 1_024, height: 768)
 
         XCTAssertEqual(
-            MetalFeedFrameBaker.bakeSize(source: .zero, drawable: drawable), drawable)
+            MonitorFrameBaker.bakeSize(source: .zero, drawable: drawable), drawable)
         XCTAssertEqual(
-            MetalFeedFrameBaker.bakeSize(source: CGRect.infinite.size, drawable: drawable), drawable
+            MonitorFrameBaker.bakeSize(source: CGRect.infinite.size, drawable: drawable), drawable
         )
     }
 
@@ -2266,7 +2266,7 @@ extension RunnerTests {
     /// over the ceiling, which is why it offered no scale factor and the option did nothing. A 6%
     /// shrink clears it and buys a ×2 ML upscale of the result.
     func testSuperResolutionShrinksABakeThatOutsizesTheProcessor() {
-        let input = FeedUpscaler.superResolutionInputSize(
+        let input = MonitorUpscaler.superResolutionInputSize(
             source: (1_024, 576), target: (2_347, 1_320), scale: 0, maximum: (960, 960))
 
         XCTAssertEqual(input.width, 960)
@@ -2279,7 +2279,7 @@ extension RunnerTests {
     /// Never an upscale — a source already inside the limit is handed over untouched, and
     /// enlarging before the model would only give it invented detail to sharpen.
     func testSuperResolutionLeavesASourceInsideTheLimitAlone() {
-        let input = FeedUpscaler.superResolutionInputSize(
+        let input = MonitorUpscaler.superResolutionInputSize(
             source: (640, 480), target: (1_280, 960), scale: 2, maximum: (960, 960))
 
         XCTAssertEqual(input.width, 640)
@@ -2288,7 +2288,7 @@ extension RunnerTests {
 
     /// Height can be the binding limit as easily as width.
     func testSuperResolutionShrinksToWhicheverDimensionBindsFirst() {
-        let input = FeedUpscaler.superResolutionInputSize(
+        let input = MonitorUpscaler.superResolutionInputSize(
             source: (1_000, 2_000), target: (4_000, 8_000), scale: 0, maximum: (1_440, 1_080))
 
         XCTAssertEqual(input.height, 1_080)
@@ -2299,7 +2299,7 @@ extension RunnerTests {
     /// and the drawable queue starved until `nextDrawable` timed out on every frame. The input
     /// has to be sized so the model's OUTPUT lands on the panel, not far past it.
     func testSuperResolutionShrinksTheInputSoAFixedFactorLandsOnThePanel() {
-        let input = FeedUpscaler.superResolutionInputSize(
+        let input = MonitorUpscaler.superResolutionInputSize(
             source: (1_024, 576), target: (2_347, 1_320), scale: 4, maximum: (1_440, 1_080))
 
         // ×4 of this clears the panel with nothing meaningful left over.
@@ -2311,7 +2311,7 @@ extension RunnerTests {
     /// When the factor cannot reach the panel even from the whole source, there is nothing to
     /// give back — the fit enlarges the remainder and the model gets every pixel available.
     func testSuperResolutionKeepsTheWholeSourceWhenTheFactorCannotReachThePanel() {
-        let input = FeedUpscaler.superResolutionInputSize(
+        let input = MonitorUpscaler.superResolutionInputSize(
             source: (960, 540), target: (2_347, 1_320), scale: 2, maximum: (1_440, 1_080))
 
         XCTAssertEqual(input.width, 960)
@@ -2325,26 +2325,26 @@ extension RunnerTests {
     /// enlarge the model's own output by the rest, which is the whole thing being paid for.
     func testSuperResolutionScaleClearsTheRatioSoTheFitOnlyShrinks() {
         XCTAssertEqual(
-            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8), 3)
+            MonitorUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8), 3)
         XCTAssertEqual(
-            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2), 2)
+            MonitorUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2), 2)
     }
 
     /// When nothing on offer clears the ratio the largest gets as close as the processor allows —
     /// a softer last leg beats refusing the model outright.
     func testSuperResolutionScaleFallsToTheLargestOfferedWhenNoneClearsTheRatio() {
-        XCTAssertEqual(FeedUpscaler.superResolutionScale(offered: [1.5, 2], ratio: 2.8), 2)
+        XCTAssertEqual(MonitorUpscaler.superResolutionScale(offered: [1.5, 2], ratio: 2.8), 2)
     }
 
     /// An empty list is the processor saying it does not serve this source size at all.
     func testSuperResolutionScaleIsNilWhenNoFactorsAreOffered() {
-        XCTAssertNil(FeedUpscaler.superResolutionScale(offered: [], ratio: 2.8))
+        XCTAssertNil(MonitorUpscaler.superResolutionScale(offered: [], ratio: 2.8))
     }
 
     /// Order comes from the processor, not from us — an unsorted list must not pick a factor that
     /// happens to be first.
     func testSuperResolutionScaleDoesNotTrustTheOfferedOrder() {
-        XCTAssertEqual(FeedUpscaler.superResolutionScale(offered: [3, 1.5, 2], ratio: 1.6), 2)
+        XCTAssertEqual(MonitorUpscaler.superResolutionScale(offered: [3, 1.5, 2], ratio: 1.6), 2)
     }
 
     /// A layout animation walks the drawable through a dozen sizes — a device log caught the
@@ -2353,16 +2353,16 @@ extension RunnerTests {
     /// kept rather than traded down.
     func testSuperResolutionScaleKeepsARunningFactorThatStillClearsTheRatio() {
         XCTAssertEqual(
-            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 1.3, held: 3), 3)
+            MonitorUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 1.3, held: 3), 3)
         XCTAssertEqual(
-            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2, held: 2), 2)
+            MonitorUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2, held: 2), 2)
     }
 
     /// It is kept, not pinned: once the panel outgrows what the running factor covers, the model
     /// has to be restarted at one that clears it or the fit goes back to enlarging its output.
     func testSuperResolutionScaleReplacesARunningFactorThatNoLongerClearsTheRatio() {
         XCTAssertEqual(
-            FeedUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8, held: 2), 3)
+            MonitorUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2.8, held: 2), 3)
     }
 
     /// The Focus dial is opt-in, and switching the default off must not overrule an operator who

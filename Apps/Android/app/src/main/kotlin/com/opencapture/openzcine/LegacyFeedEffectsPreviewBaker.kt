@@ -11,6 +11,7 @@ import android.opengl.EGLSurface
 import android.opengl.GLES20
 import android.opengl.GLUtils
 import androidx.media3.common.util.GlUtil
+import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -24,7 +25,7 @@ import java.nio.ByteOrder
 internal class LegacyFeedEffectsPreviewBaker(
     context: Context,
     private val plan: FeedEffectsRenderPlan,
-) : LiveFramePreviewBaker, AutoCloseable {
+) : MonitorBitmapPreviewBaker, AutoCloseable {
     private val applicationContext = context.applicationContext
     private val lock = Any()
 

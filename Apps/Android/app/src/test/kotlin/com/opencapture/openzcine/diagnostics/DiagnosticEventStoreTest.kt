@@ -124,7 +124,7 @@ class DiagnosticEventStoreTest {
     fun `closed failure phases become privacy-safe incident codes`() {
         assertEquals(
             AndroidDiagnosticEvent.CONNECTION_FAILED,
-            AndroidDiagnosticEvent.fromFailurePhase("failed"),
+            AndroidDiagnosticEvent.fromPhase("failed"),
         )
         assertEquals(
             AndroidDiagnosticEvent.CONNECTION_USB_FAILED,
@@ -148,13 +148,13 @@ class DiagnosticEventStoreTest {
         )
         assertEquals(
             AndroidDiagnosticEvent.CONNECTION_EVENT_CHANNEL_ENDED,
-            AndroidDiagnosticEvent.fromFailurePhase("eventChannelEnded"),
+            AndroidDiagnosticEvent.fromPhase("eventChannelEnded"),
         )
         assertEquals(
             AndroidDiagnosticEvent.LIVE_VIEW_STALLED,
-            AndroidDiagnosticEvent.fromFailurePhase("liveViewStalled"),
+            AndroidDiagnosticEvent.fromPhase("liveViewStalled"),
         )
-        assertEquals(null, AndroidDiagnosticEvent.fromFailurePhase("Bob's iPhone"))
+        assertEquals(null, AndroidDiagnosticEvent.fromPhase("Bob's iPhone"))
         assertEquals(null, AndroidDiagnosticEvent.fromPhase("ssid=SECRET"))
     }
 

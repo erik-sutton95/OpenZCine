@@ -188,7 +188,7 @@ android-shaders:
 
 # Verify shared Vulkan presentation synchronization; shader compilation is part of android-check.
 check-vulkan-shaders:
-    ./scripts/check-vulkan-shaders.sh
+    ../OpenCine/scripts/android-vulkan-sync-test.sh
 
 # Reject GLSL ES 1.00 reserved words in the GLES2 shaders. Nothing else compiles them before a
 # device does, and the live surface answers a compile failure by rendering the plain feed.

@@ -9,12 +9,10 @@ import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
 import com.opencapture.opencine.media.MonitorZebraMaskPolicy
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 
-typealias LiveFramePreviewBaker = MonitorBitmapPreviewBaker
-
 /** Native primitive adapter; the shared owner holds shader, bitmap bindings and preview target. */
 @RequiresApi(33)
 class FeedEffectsRenderer private constructor(private val native: MonitorBitmapEffects) :
-    LiveFramePreviewBaker, AutoCloseable {
+    MonitorBitmapPreviewBaker, AutoCloseable {
     internal val falseColorReady: Boolean get() = native.falseColorReady
     fun draw(canvas: Canvas, frame: Bitmap, dstLeft: Float, dstTop: Float,
         dstWidth: Float, dstHeight: Float) =
