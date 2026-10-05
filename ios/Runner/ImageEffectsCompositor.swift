@@ -276,8 +276,8 @@ enum ImageEffectsCompositor {
             thresholds: MonitorZebraCodeThresholds(
                 highlight: highlight, midtoneLower: centre.map { $0 - halfWidth },
                 midtoneUpper: centre.map { $0 + halfWidth }),
-            highlightColor: MonitorRGB(zebraRGB(settings.highlightColor)),
-            midtoneColor: MonitorRGB(zebraRGB(settings.midtoneColor)),
+            highlightColor: MonitorRGB(settings.highlightColor.rgb),
+            midtoneColor: MonitorRGB(settings.midtoneColor.rgb),
             maskPolicy: MonitorZebraMaskPolicy(highlightMeasure: .rec709Luma, rampBias: 0))
     }
 
@@ -296,18 +296,6 @@ enum ImageEffectsCompositor {
 
     private static func falseColorCacheKey(_ settings: FalseColorSettings) -> String {
         "false:\(settings.scale.rawValue):\(settings.curve.rawValue):\(settings.mapping.clipNative)"
-    }
-
-    private static func zebraRGB(_ color: AssistConfiguration.Zebra.StripeColor) -> (
-        Double, Double, Double
-    ) {
-        switch color {
-        case .white: (1, 1, 1)
-        case .amber: (1, 0.72, 0.2)
-        case .red: (1, 0.15, 0.15)
-        case .cyan: (0, 0.85, 0.9)
-        case .green: (0.2, 0.9, 0.35)
-        }
     }
 }
 

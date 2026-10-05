@@ -263,7 +263,7 @@ final class RunnerTests: XCTestCase {
 
     @MainActor
     func testActualZebraRowsUseCommonNumberPadClampAndDoneWithNativeConversion() async throws {
-        let model = NativeAppModel()
+        let model = NativeAppModel(assist: .scratch())
         let original = model.preferences
         let originalAssist = model.assistConfiguration
         model.preferences = OperatorPreferences.defaults
@@ -317,7 +317,7 @@ final class RunnerTests: XCTestCase {
         let clampedIRE = try await enterAndFinish("999")
         XCTAssertEqual(clampedIRE, "100")
         XCTAssertEqual(threshold.text, "100")
-        XCTAssertEqual(model.assistConfiguration.zebra.highlightIRE, 100)
+        XCTAssertEqual(model.assist.zebraHighlightIRE, 100)
         model.assistConfiguration.zebra.unit = .native
         for _ in 0..<200 {
             host.view.layoutIfNeeded()
@@ -326,24 +326,24 @@ final class RunnerTests: XCTestCase {
         let clampedNative = try await enterAndFinish("999")
         XCTAssertEqual(clampedNative, "255")
         XCTAssertEqual(
-            model.assistConfiguration.zebra.highlightIRE,
+            model.assist.zebraHighlightIRE,
             model.exposureSignalMapping.monitorPercent(signalNative: 255), accuracy: 0.0001)
         // Codes above the tone curve's clipping point map to the existing normalized maximum.
         // After committing, the real binding displays that converted threshold again.
         XCTAssertEqual(
             threshold.text,
             String(
-                model.assistConfiguration.zebra.displayValue(
-                    for: model.assistConfiguration.zebra.highlightIRE,
+                model.assistConfiguration.zebra.unit.displayValue(
+                    for: model.assist.zebraHighlightIRE,
                     mapping: model.exposureSignalMapping)))
         _ = try await enterAndFinish("128")
         XCTAssertEqual(
-            model.assistConfiguration.zebra.highlightIRE,
+            model.assist.zebraHighlightIRE,
             model.exposureSignalMapping.monitorPercent(signalNative: 128), accuracy: 0.0001)
-        let retained = model.assistConfiguration.zebra.highlightIRE
+        let retained = model.assist.zebraHighlightIRE
         _ = try await enterAndFinish("")
         XCTAssertEqual(threshold.text, "128")
-        XCTAssertEqual(model.assistConfiguration.zebra.highlightIRE, retained)
+        XCTAssertEqual(model.assist.zebraHighlightIRE, retained)
     }
 
     @MainActor
@@ -1070,9 +1070,9 @@ final class RunnerTests: XCTestCase {
 
     @MainActor
     func testFalseColorCurveAlwaysFollowsCodec() {
-        let model = NativeAppModel()
-        model.preferences.liveViewVisibleAssistTools = [.falseColor]
-        model.preferences.playbackVisibleAssistTools = [.falseColor]
+        let model = NativeAppModel(assist: .scratch())
+        model.assist.set(.falseColor, visible: true, context: .liveView)
+        model.assist.set(.falseColor, visible: true, context: .playback)
         let cases: [(codec: String, curve: ExposureToneCurve)] = [
             ("R3D NE", .redLog3G10),
             ("N-RAW", .nikonNLog),
@@ -1354,8 +1354,8 @@ final class RunnerTests: XCTestCase {
 
     @MainActor
     func testVectorscopeAloneActivatesScopeSampling() {
-        let model = NativeAppModel()
-        model.preferences.liveViewVisibleAssistTools = [.vectorscope]
+        let model = NativeAppModel(assist: .scratch())
+        model.assist.set(.vectorscope, visible: true, context: .liveView)
         XCTAssertTrue(model.scopesActive)
     }
 
@@ -2632,12 +2632,12 @@ extension RunnerTests {
             boxes: [PTPLiveViewAFBox(centerX: 750, centerY: 500, width: 100, height: 100)])
         let box = try XCTUnwrap(focus.boxes.first)
         let size = CGSize(width: 800, height: 400)
-        let squeezed = AssistConfiguration.Desqueeze(enabled: true, ratio: .x2)
+        // Nikon's pillarboxing squeeze: the shared vertical direction.
+        let squeezed = NikonDesqueeze(factor: 2, horizontal: false)
 
         let plain = try XCTUnwrap(
             liveFocusBoxRect(
-                box, focus: focus, in: size, desqueeze: AssistConfiguration.Desqueeze(),
-                mirrored: false))
+                box, focus: focus, in: size, desqueeze: .off, mirrored: false))
         XCTAssertEqual(plain.midX, 600, accuracy: 0.01)
         // 2× horizontal: the picture is the middle 400pt, so 75% across it sits at 200 + 300.
         let desqueezed = try XCTUnwrap(

@@ -129,7 +129,7 @@ struct FeedAssistOverlayModule: View {
                         }
                     }
                     if visible.contains(.falseColor)
-                        && model.assistConfiguration.falseColorReferenceEnabled
+                        && model.assist.falseColorReference
                     {
                         let size = FalseColorReference.panelSize
                         MovablePanel(
@@ -140,7 +140,7 @@ struct FeedAssistOverlayModule: View {
                             bounds: screenBounds
                         ) {
                             FalseColorReference(
-                                scale: model.assistConfiguration.falseColorScale,
+                                scale: model.assist.falseColorScale.nikonScale,
                                 mapping: model.exposureSignalMapping)
                         }
                     }
@@ -325,7 +325,7 @@ struct PlaybackAssistOverlayModule: View {
     var audioLevels: AudioMeterLevels?
 
     var body: some View {
-        let visible = model.preferences.playbackVisibleAssistTools
+        let visible = model.assist.playbackTools
         GeometryReader { proxy in
             let screenBounds = CGRect(origin: .zero, size: proxy.size)
             let feedRect = videoRect
@@ -441,7 +441,7 @@ struct PlaybackAssistOverlayModule: View {
                     }
                 }
                 if visible.contains(.falseColor)
-                    && model.assistConfiguration.falseColorReferenceEnabled
+                    && model.assist.falseColorReference
                 {
                     let size = FalseColorReference.panelSize
                     MovablePanel(
@@ -451,7 +451,7 @@ struct PlaybackAssistOverlayModule: View {
                         bounds: screenBounds
                     ) {
                         FalseColorReference(
-                            scale: model.assistConfiguration.falseColorScale,
+                            scale: model.assist.falseColorScale.nikonScale,
                             mapping: model.playbackExposureSignalMapping)
                     }
                 }
@@ -695,32 +695,14 @@ func videoDisplaySize(naturalSize: CGSize, transform: CGAffineTransform) -> CGSi
     return CGSize(width: abs(rect.width), height: abs(rect.height))
 }
 
-/// Fits aspect ratio `R` inside `feed`, centred — the prototype's `rectForRatio`: full width +
-/// letterbox when the guide is wider than the feed, full height + pillarbox when narrower.
-func rectForRatio(_ feed: CGRect, _ ratio: CGFloat) -> CGRect {
-    let width: CGFloat
-    let height: CGFloat
-    if feed.width / feed.height > ratio {
-        height = feed.height
-        width = feed.height * ratio
-    } else {
-        width = feed.width
-        height = feed.width / ratio
-    }
-    return CGRect(
-        x: feed.minX + (feed.width - width) / 2,
-        y: feed.minY + (feed.height - height) / 2,
-        width: width, height: height)
-}
-
 /// The on-screen scale applied to the live image to de-squeeze anamorphic footage: shrink one axis
-/// by the squeeze factor (vertical = letterbox, horizontal = pillarbox), matching the prototype.
-func desqueezeScale(_ desqueeze: AssistConfiguration.Desqueeze) -> CGSize {
-    guard desqueeze.enabled, desqueeze.factor > 1 else { return CGSize(width: 1, height: 1) }
+/// by the squeeze factor (letterbox for the shared horizontal direction, else pillarbox).
+func desqueezeScale(_ desqueeze: NikonDesqueeze) -> CGSize {
+    guard desqueeze.factor > 1 else { return CGSize(width: 1, height: 1) }
     let factor = CGFloat(desqueeze.factor)
-    return desqueeze.orientation == .horizontal
-        ? CGSize(width: 1 / factor, height: 1)
-        : CGSize(width: 1, height: 1 / factor)
+    return desqueeze.horizontal
+        ? CGSize(width: 1, height: 1 / factor)
+        : CGSize(width: 1 / factor, height: 1)
 }
 
 /// A still's presented size once de-squeezed: the source with the chosen axis divided out.
@@ -730,42 +712,33 @@ func desqueezeScale(_ desqueeze: AssistConfiguration.Desqueeze) -> CGSize {
 /// image outside the frame it was just fitted into. De-squeezing the size before the fit keeps the
 /// whole picture on screen and lets everything anchored to the fitted rect — the AF box on instant
 /// review, the zoom transform in the viewer — follow without knowing about anamorphic at all.
-///
-/// Note `orientation` names the axis that is SCALED DOWN (matching ``desqueezeScale``), not the
-/// lens's squeeze axis: vertical letterboxes, horizontal pillarboxes.
-func desqueezedSize(_ size: CGSize, _ desqueeze: AssistConfiguration.Desqueeze) -> CGSize {
-    guard desqueeze.enabled, desqueeze.factor > 1, size.width > 0, size.height > 0 else {
-        return size
-    }
+func desqueezedSize(_ size: CGSize, _ desqueeze: NikonDesqueeze) -> CGSize {
+    guard desqueeze.factor > 1, size.width > 0, size.height > 0 else { return size }
     let factor = CGFloat(desqueeze.factor)
-    return desqueeze.orientation == .horizontal
-        ? CGSize(width: size.width / factor, height: size.height)
-        : CGSize(width: size.width, height: size.height / factor)
+    return desqueeze.horizontal
+        ? CGSize(width: size.width, height: size.height / factor)
+        : CGSize(width: size.width / factor, height: size.height)
 }
 
 /// ``desqueezedSize`` as an aspect ratio, for the SwiftUI fits that take one. `nil` when
 /// de-squeeze is off, which `aspectRatio(_:contentMode:)` reads as "use the image's own".
-func desqueezedAspectRatio(
-    _ size: CGSize, _ desqueeze: AssistConfiguration.Desqueeze
-) -> CGFloat? {
-    guard desqueeze.enabled, desqueeze.factor > 1, size.width > 0, size.height > 0 else {
-        return nil
-    }
+func desqueezedAspectRatio(_ size: CGSize, _ desqueeze: NikonDesqueeze) -> CGFloat? {
+    guard desqueeze.factor > 1, size.width > 0, size.height > 0 else { return nil }
     let presented = desqueezedSize(size, desqueeze)
     return presented.width / presented.height
 }
 
 /// The visible (de-squeezed) image rectangle inside the full feed rect — the same centred sub-rect
 /// the scale above produces, so framing overlays land on the de-squeezed image.
-func desqueezedRect(_ full: CGRect, _ desqueeze: AssistConfiguration.Desqueeze) -> CGRect {
-    guard desqueeze.enabled, desqueeze.factor > 1 else { return full }
+func desqueezedRect(_ full: CGRect, _ desqueeze: NikonDesqueeze) -> CGRect {
+    guard desqueeze.factor > 1 else { return full }
     let factor = CGFloat(desqueeze.factor)
-    if desqueeze.orientation == .horizontal {
-        let width = full.width / factor
-        return CGRect(x: full.midX - width / 2, y: full.minY, width: width, height: full.height)
+    if desqueeze.horizontal {
+        let height = full.height / factor
+        return CGRect(x: full.minX, y: full.midY - height / 2, width: full.width, height: height)
     }
-    let height = full.height / factor
-    return CGRect(x: full.minX, y: full.midY - height / 2, width: full.width, height: height)
+    let width = full.width / factor
+    return CGRect(x: full.midX - width / 2, y: full.minY, width: width, height: full.height)
 }
 
 /// Framing aids that must register pixel-exact with the live image — guides, grid, crosshair, and
@@ -791,18 +764,15 @@ struct FeedAlignedAssists: View {
             let baseFeed = feed ?? CGRect(origin: .zero, size: proxy.size)
             let visible =
                 (usePlaybackContext
-                ? model.preferences.playbackVisibleAssistTools
+                ? model.assist.playbackTools
                 : model.renderedLiveAssistTools).subtracting(excludeTools)
-            let overlayDesqueeze: AssistConfiguration.Desqueeze = {
-                var config = model.assistConfiguration.desqueeze
-                config.enabled = visible.contains(.desqueeze)
-                return config
-            }()
-            let feed = desqueezedRect(baseFeed, overlayDesqueeze)
+            let feed = desqueezedRect(
+                baseFeed, model.assist.desqueeze(visible: visible.contains(.desqueeze)))
             ZStack {
                 if visible.contains(.guides) {
-                    AspectGuideFrameView(
-                        configuration: model.assistConfiguration.guides, feed: feed)
+                    MonitorAspectGuideFrames(
+                        selectedRatios: model.assist.selectedGuides,
+                        maskEnabled: model.assist.guideMask, feed: feed)
                 }
                 if visible.contains(.evMeter),
                     // Photography-only: a persisted visibility set from an older build may
@@ -826,20 +796,25 @@ struct FeedAlignedAssists: View {
                         .allowsHitTesting(false)
                 }
                 if visible.contains(.grid) {
-                    FeedGridView(grid: model.assistConfiguration.grid, feed: feed)
+                    MonitorFeedGrid(
+                        feed: feed, thirds: model.assist.gridThirds, phi: model.assist.gridPhi,
+                        diagonal: model.assist.gridDiagonal)
                 }
                 if visible.contains(.crosshair) {
-                    FeedCrosshairView(feed: feed)
+                    MonitorFeedCrosshair(feed: feed)
                 }
                 // Drawn once over the whole feed like every other framing aid, from the same rect
                 // — so the divider lands exactly on the boundary the grade was split at.
                 if let split = LUTResolution.splitComparison(
-                    visibleTools: visible, preferences: model.preferences,
-                    muted: model.splitComparisonMuted)
+                    visibleTools: visible, enabled: model.assist.splitComparison,
+                    vertical: model.assist.splitVertical, muted: model.splitComparisonMuted)
                 {
-                    FeedSplitComparisonMarks(orientation: split, feed: feed)
+                    MonitorFeedComparisonMarks(
+                        vertical: split == .vertical, feed: feed,
+                        originalLabel: SplitComparison.logLabel,
+                        processedLabel: SplitComparison.lutLabel)
                 }
-                if visible.contains(.level) && model.assistConfiguration.level.enabled {
+                if visible.contains(.level) {
                     FeedLevelView(
                         style: model.assistConfiguration.level.style, feed: feed,
                         visibleBounds: Self.visibleBounds(
@@ -1230,173 +1205,6 @@ private struct LevelAxisGauge: View {
             .offset(
                 x: isHorizontal ? 0 : -42,
                 y: isHorizontal ? -24 : 0)
-    }
-}
-
-/// One selected aspect ratio resolved to its centred frame within the feed rect.
-private struct GuideFrame: Identifiable {
-    let ratio: AssistConfiguration.Guides.AspectRatio
-    let rect: CGRect
-    var id: String { ratio.rawValue }
-}
-
-/// Aspect guide drawn against the real feed rect via `rectForRatio`, with an optional darkening
-/// mask and the corner ratio tag — the prototype's `.guide-frame`.
-struct AspectGuideFrameView: View {
-    let configuration: AssistConfiguration.Guides
-    let feed: CGRect
-
-    var body: some View {
-        // Every selected ratio, narrow→wide for a stable draw order.
-        let frames =
-            configuration.selectedRatios
-            .sorted { $0.value < $1.value }
-            .map { GuideFrame(ratio: $0, rect: rectForRatio(feed, CGFloat($0.value))) }
-        ZStack {
-            // Mask = darken the inverse of the UNION of every selected frame. Fill the feed dark, then
-            // punch each frame out with `.destinationOut` so overlaps clear idempotently — an even-odd
-            // fill would wrongly re-darken regions where two centred frames overlap.
-            if configuration.maskEnabled, !frames.isEmpty {
-                Canvas { context, _ in
-                    context.fill(Path(feed), with: .color(.black.opacity(0.6)))
-                    context.blendMode = .destinationOut
-                    for frame in frames {
-                        context.fill(Path(frame.rect), with: .color(.black))
-                    }
-                }
-            }
-            ForEach(frames) { frame in
-                Rectangle()
-                    .stroke(LiveDesign.accent.opacity(0.85), lineWidth: 1)
-                    .frame(width: frame.rect.width, height: frame.rect.height)
-                    .position(x: frame.rect.midX, y: frame.rect.midY)
-                Text(frame.ratio.rawValue)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .kerning(1.2)
-                    .foregroundStyle(LiveDesign.accent)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 5))
-                    .fixedSize()
-                    .position(x: frame.rect.minX, y: frame.rect.minY)
-                    .offset(x: 34, y: 13)
-            }
-        }
-    }
-}
-
-/// Thirds / phi / diagonal grid lines drawn across the feed rect (prototype stroke
-/// `rgba(255,255,255,.22)`, 1px).
-struct FeedGridView: View {
-    let grid: AssistConfiguration.Grid
-    let feed: CGRect
-
-    var body: some View {
-        Path { path in
-            if grid.thirds { fractions(&path, [1.0 / 3, 2.0 / 3]) }
-            if grid.phi { fractions(&path, [0.382, 0.618]) }
-            if grid.diagonal {
-                path.move(to: CGPoint(x: feed.minX, y: feed.minY))
-                path.addLine(to: CGPoint(x: feed.maxX, y: feed.maxY))
-                path.move(to: CGPoint(x: feed.maxX, y: feed.minY))
-                path.addLine(to: CGPoint(x: feed.minX, y: feed.maxY))
-            }
-        }
-        .stroke(Color.white.opacity(0.22), lineWidth: 1)
-    }
-
-    private func fractions(_ path: inout Path, _ fractions: [CGFloat]) {
-        for fraction in fractions {
-            let x = feed.minX + feed.width * fraction
-            let y = feed.minY + feed.height * fraction
-            path.move(to: CGPoint(x: x, y: feed.minY))
-            path.addLine(to: CGPoint(x: x, y: feed.maxY))
-            path.move(to: CGPoint(x: feed.minX, y: y))
-            path.addLine(to: CGPoint(x: feed.maxX, y: y))
-        }
-    }
-}
-
-/// Centre crosshair: a 46pt ring plus a 34pt cross, centred on the feed (prototype `.cross`).
-struct FeedCrosshairView: View {
-    let feed: CGRect
-
-    var body: some View {
-        ZStack {
-            Rectangle().fill(Color.white.opacity(0.65)).frame(width: 1.4, height: 40)
-            Rectangle().fill(Color.white.opacity(0.65)).frame(width: 40, height: 1.4)
-        }
-        .position(x: feed.midX, y: feed.midY)
-    }
-}
-
-/// The 50/50 Log-vs-LUT comparison's divider and its two half labels.
-///
-/// Presentation only — the grade itself is split in the feed pipeline (`LiveFrameProcessor` /
-/// `ImageEffectsCompositor.splitting`). Both draw at the centre of the same feed rect, so the
-/// hairline sits on the real boundary rather than near it.
-///
-/// The labels hug the divider at one edge instead of sitting in the middle of each half: the
-/// operator is judging the image, and a caption over the subject is exactly what "without
-/// permanently obscuring the image" rules out. They ride the LUT tool's own visibility (see
-/// `LUTResolution.splitComparison`), so clean view carries them only where the operator pinned the
-/// tool in.
-struct FeedSplitComparisonMarks: View {
-    let orientation: SplitComparisonOrientation
-    let feed: CGRect
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(Color.white.opacity(0.5))
-                .frame(
-                    width: orientation == .vertical ? 1 : feed.width,
-                    height: orientation == .vertical ? feed.height : 1
-                )
-                .position(x: feed.midX, y: feed.midY)
-            label(SplitComparison.logLabel)
-                .position(logPosition)
-            label(SplitComparison.lutLabel)
-                .position(lutPosition)
-        }
-        .allowsHitTesting(false)
-    }
-
-    /// Deliberately tiny and unfilled: the split itself already says which half is which, so these
-    /// only confirm it. A drop shadow rather than a capsule fill — the graded half can be far
-    /// darker or far brighter than the log half depending on the look, and a shadow reads over
-    /// both where one fixed fill colour reads over neither.
-    private func label(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 8, weight: .semibold, design: .monospaced))
-            .kerning(0.5)
-            .foregroundStyle(Color.white.opacity(0.85))
-            .shadow(color: .black.opacity(0.8), radius: 1.5, y: 0.5)
-    }
-
-    /// Where the pair sits along the divider, as a fraction of the feed rather than a constant:
-    /// the same number then clears the status deck in landscape (~400pt tall) and in portrait, and
-    /// on a tablet, without knowing which chrome is mounted.
-    private var alongDivider: CGFloat { 0.16 }
-
-    /// Log side: left of a vertical divider, above a horizontal one.
-    private var logPosition: CGPoint {
-        switch orientation {
-        case .vertical:
-            CGPoint(x: feed.midX - 16, y: feed.minY + feed.height * alongDivider)
-        case .horizontal:
-            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY - 10)
-        }
-    }
-
-    /// LUT side: right of a vertical divider, below a horizontal one.
-    private var lutPosition: CGPoint {
-        switch orientation {
-        case .vertical:
-            CGPoint(x: feed.midX + 16, y: feed.minY + feed.height * alongDivider)
-        case .horizontal:
-            CGPoint(x: feed.minX + feed.width * alongDivider, y: feed.midY + 10)
-        }
     }
 }
 

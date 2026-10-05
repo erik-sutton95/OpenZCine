@@ -119,23 +119,7 @@ import Testing
     #expect(preferences.assistToolbarOrder.first == .lut)
     #expect(preferences.assistToolbarOrder.contains(.peaking))
     #expect(preferences.assistToolbarOrder.contains(.desqueeze))
-    // No assist overlays on for a first-time boot; the operator opts in and the choice persists.
-    #expect(preferences.liveViewVisibleAssistTools.isEmpty)
-    #expect(preferences.playbackVisibleAssistTools.isEmpty)
-}
-
-@Test func operatorPreferencesMigrateLegacyVisibleAssistTools() throws {
-    var dict = try #require(
-        try JSONSerialization.jsonObject(
-            with: try JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
-    dict["visibleAssistTools"] = ["PEAK", "WAVE"]
-    dict.removeValue(forKey: "liveViewVisibleAssistTools")
-    dict.removeValue(forKey: "playbackVisibleAssistTools")
-    let decoded = try JSONDecoder().decode(
-        OperatorPreferences.self,
-        from: try JSONSerialization.data(withJSONObject: dict))
-    #expect(decoded.liveViewVisibleAssistTools == [.peaking, .waveform])
-    #expect(decoded.playbackVisibleAssistTools.isEmpty)
+    // Which assists are on is the shared assist state's; the app's tests pin its fresh defaults.
 }
 
 @Test func portraitFeedAspectDefaultsAndRoundTrips() throws {
@@ -145,16 +129,6 @@ import Testing
     let data = try JSONEncoder().encode(prefs)
     let decoded = try JSONDecoder().decode(OperatorPreferences.self, from: data)
     #expect(decoded.portraitFeedAspect == .fill)
-}
-
-@Test func operatorPreferencesRoundTripIndependentAssistContexts() throws {
-    var preferences = OperatorPreferences.defaults
-    preferences.liveViewVisibleAssistTools = [.falseColor, .peaking]
-    preferences.playbackVisibleAssistTools = [.lut, .histogram]
-    let decoded = try JSONDecoder().decode(
-        OperatorPreferences.self, from: try JSONEncoder().encode(preferences))
-    #expect(decoded.liveViewVisibleAssistTools == [.falseColor, .peaking])
-    #expect(decoded.playbackVisibleAssistTools == [.lut, .histogram])
 }
 
 @Test func reconcileAssistToolsSurfacesToolsMissingFromAPersistedOrder() {
@@ -612,78 +586,59 @@ import Testing
 
 @Test func assistConfigurationPersistsThroughJSONRoundTrip() throws {
     var configuration = AssistConfiguration.defaults
-    configuration.grid = AssistConfiguration.Grid(thirds: true, phi: true, diagonal: false)
-    configuration.desqueeze = AssistConfiguration.Desqueeze(
-        // factor is source of truth; ratio chip follows when it matches a preset
-        enabled: true,
-        ratio: .x165,
-        orientation: .vertical
-    )
-    configuration.guides.maskEnabled = true
+    configuration.level.style = .gauge
+    configuration.zebra.unit = .native
+    configuration.magnification.factor = .x4
+    configuration.instantReviewSeconds = 8
+    configuration.instantReviewShowsFocusPoint = false
+    configuration.selectedLUT = .stored(category: .red, fileName: "IPP2_Medium.cube")
 
     let data = try JSONEncoder().encode(configuration)
     let decoded = try JSONDecoder().decode(AssistConfiguration.self, from: data)
 
     #expect(decoded == configuration)
-}
-
-@Test func assistConfigurationCarriesWiredViewAssistSettings() throws {
-    var configuration = AssistConfiguration.defaults
-    configuration.falseColorScale = .limits
-    configuration.zebra.highlightIRE = 88
-    configuration.zebra.midtoneEnabled = false
-    configuration.peakingColor = .green
-    configuration.peakingSensitivity = .high
-    configuration.scopes.crushClipCompensation = .threeQuarter
-
-    let data = try JSONEncoder().encode(configuration)
-    let decoded = try JSONDecoder().decode(AssistConfiguration.self, from: data)
-
-    #expect(decoded.falseColorScale == .limits)
-    #expect(decoded.zebra.highlightIRE == 88)
-    #expect(!decoded.zebra.midtoneEnabled)
-    #expect(decoded.peakingColor == .green)
-    #expect(decoded.peakingSensitivity == .high)
-    #expect(decoded.scopes.crushClipCompensation == .threeQuarter)
-    #expect(decoded == configuration)
-}
-
-@Test func crushClipCompensationClampsLegacyOutOfRangeValues() throws {
-    // The earlier range went to 2.0 stops (raw 15/20). Those persisted values must clamp to the
-    // new 1.0-stop ceiling — a decode throw here would wipe the whole assist configuration.
-    for legacyRaw in [15, 20] {
-        let decoded = try JSONDecoder().decode(
-            AssistConfiguration.CrushClipCompensation.self,
-            from: Data("\(legacyRaw)".utf8)
-        )
-        #expect(decoded == .one)
-    }
-    // Unknown low values fall back to the default rather than throwing.
-    let junk = try JSONDecoder().decode(
-        AssistConfiguration.CrushClipCompensation.self, from: Data("3".utf8))
-    #expect(junk == .zero)
 }
 
 @Test func assistConfigurationDecodesOlderJSONWithoutTheNewKeys() throws {
-    // A config saved before these wired keys existed must still load: dropping them from a current
+    // A config saved before these keys existed must still load: dropping them from a current
     // encoding must decode with their defaults, not fail and wipe the whole config.
-    let data = try JSONEncoder().encode(AssistConfiguration.defaults)
+    var stored = AssistConfiguration.defaults
+    stored.selectedLUT = .builtIn(.nLogRec709)
+    let data = try JSONEncoder().encode(stored)
     var dict = try #require(
         try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    for key in [
-        "falseColorScale", "zebraHighlightIRE", "peakingColor", "peakingSensitivity", "scopes",
-    ] {
+    for key in ["level", "zebra", "scopes", "trafficLights", "instantReviewSeconds"] {
         dict.removeValue(forKey: key)
     }
     let stripped = try JSONSerialization.data(withJSONObject: dict)
 
     let decoded = try JSONDecoder().decode(AssistConfiguration.self, from: stripped)
-    #expect(decoded.falseColorScale == .stops)
-    #expect(decoded.zebra.highlightIRE == 100)
-    #expect(decoded.peakingColor == .red)
-    #expect(decoded.peakingSensitivity == .medium)
+    #expect(decoded.selectedLUT == .builtIn(.nLogRec709))
+    #expect(decoded.level.style == .horizon)
+    #expect(decoded.zebra.unit == .ire)
     #expect(decoded.scopes == AssistConfiguration.Scopes())
-    #expect(decoded.scopes.crushClipCompensation == .quarter)
+    #expect(decoded.instantReviewSeconds == 5)
+}
+
+@Test func assistConfigurationDecodesABlobWrittenBeforeTheSharedStateTookItsFields() throws {
+    // The moved keys (guides, desqueeze, false colour, zebra thresholds, peaking) ride along in an
+    // older blob; they are the app migration's to read, and must not stop the rest decoding.
+    let legacy = #"""
+        {"guides":{"family":"Film","selectedRatios":["2.39:1"],"maskEnabled":false},
+         "grid":{"thirds":true,"phi":false,"diagonal":false},
+         "level":{"enabled":true,"style":"Gauge"},
+         "desqueeze":{"enabled":false,"ratio":"1.33x","factor":1.33,"orientation":"Vertical"},
+         "falseColorReferenceEnabled":true,"falseColorScale":"IRE",
+         "zebra":{"unit":"Native","highlightEnabled":true,"highlightIRE":95,"highlightColor":"Red",
+                  "midtoneEnabled":true,"midtoneIRE":55,"midtoneColor":"Amber"},
+         "peakingColor":"Blue","peakingSensitivity":"High",
+         "selectedLUT":{"builtIn":{"_0":"Log3G10→709"}},"instantReviewSeconds":3}
+        """#
+    let decoded = try JSONDecoder().decode(AssistConfiguration.self, from: Data(legacy.utf8))
+    #expect(decoded.level.style == .gauge)
+    #expect(decoded.zebra.unit == .native)
+    #expect(decoded.selectedLUT == .builtIn(.log3G10Rec709))
+    #expect(decoded.instantReviewSeconds == 3)
 }
 
 @Test func assistConfigurationIgnoresRemovedFalseColorSettings() throws {
@@ -719,7 +674,6 @@ import Testing
     configuration.scopes.paradeBrightness = 80
     configuration.scopes.histogramScale = 0.7
     configuration.scopes.histogramTrafficLights = false
-    configuration.scopes.crushClipCompensation = .half
 
     let decoded = try JSONDecoder().decode(
         AssistConfiguration.self, from: try JSONEncoder().encode(configuration))
@@ -731,7 +685,6 @@ import Testing
     #expect(decoded.scopes.waveformBrightness == 150)
     #expect(decoded.scopes.paradeBrightness == 80)
     #expect(!decoded.scopes.histogramTrafficLights)
-    #expect(decoded.scopes.crushClipCompensation == .half)
 }
 
 @Test func scopeBrightnessClampsToRangeOnInitAndDecode() throws {
@@ -882,84 +835,6 @@ import Testing
     #expect(decoded.waveformMode == .rgb)  // a still-valid key is honoured
 }
 
-@Test func scopeDecodeMigratesLegacyHistogramTrafficSensitivityPercent() throws {
-    // Percent presets 0/5/10 map 1:1 to the current raw values; 15/20 predate the 1.0-stop
-    // ceiling and clamp to `.one`.
-    let legacy = #"{"histogramTrafficSensitivity":15}"#
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(legacy.utf8))
-    #expect(decoded.crushClipCompensation == .one)
-}
-
-/// Builds an `AssistConfiguration` JSON blob whose scopes/trafficLights sub-blobs mimic the
-/// split-compensation era (no shared `crushClipCompensation` key under scopes).
-private func splitEraConfiguration(
-    scopes scopeOverrides: [String: Any], trafficLights: [String: Any]
-) throws -> Data {
-    var dict = try #require(
-        try JSONSerialization.jsonObject(
-            with: try JSONEncoder().encode(AssistConfiguration.defaults)) as? [String: Any])
-    var scopes = try #require(dict["scopes"] as? [String: Any])
-    scopes.removeValue(forKey: "crushClipCompensation")
-    for (key, value) in scopeOverrides { scopes[key] = value }
-    dict["scopes"] = scopes
-    dict["trafficLights"] = trafficLights
-    return try JSONSerialization.data(withJSONObject: dict)
-}
-
-@Test func compensationReunificationHonorsCustomizedHistogramValue() throws {
-    // A split-era customized histogram value (here the pre-ceiling 15 under the even older
-    // key name) wins the shared setting; the traffic-lights copy is ignored beside it.
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.self,
-        from: try splitEraConfiguration(
-            scopes: ["histogramNoiseFloorCompensation": 15],
-            trafficLights: ["scale": 1.2, "crushClipCompensation": 5]))
-    #expect(decoded.scopes.crushClipCompensation == .one)  // 1.5 stops clamps to the 1.0 ceiling
-    #expect(decoded.trafficLights.scale == 1.2)
-}
-
-@Test func compensationReunificationFoldsInCustomizedTrafficLightsValue() throws {
-    // Split-era configs where only the traffic-lights copy was customized (histogram stayed at
-    // the old `.zero` default) keep that customization in the shared setting.
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.self,
-        from: try splitEraConfiguration(
-            scopes: ["histogramCrushClipCompensation": 0],
-            trafficLights: ["scale": 1.0, "crushClipCompensation": 7]))
-    #expect(decoded.scopes.crushClipCompensation == .threeQuarter)
-}
-
-@Test func compensationReunificationUpgradesUntouchedZeroToQuarterDefault() throws {
-    // The split era always encoded both copies, so stored zeros (the old default) are
-    // indistinguishable from "never touched" and adopt the new shared `.quarter` default.
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.self,
-        from: try splitEraConfiguration(
-            scopes: ["histogramCrushClipCompensation": 0],
-            trafficLights: ["scale": 1.0, "crushClipCompensation": 0]))
-    #expect(decoded.scopes.crushClipCompensation == .quarter)
-}
-
-@Test func sharedCompensationExplicitZeroRoundTrips() throws {
-    // Post-unification, `.zero` is a deliberate choice (the default is `.quarter`) and must
-    // survive a round trip rather than being "migrated" back up.
-    var configuration = AssistConfiguration.defaults
-    configuration.scopes.crushClipCompensation = .zero
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.self, from: try JSONEncoder().encode(configuration))
-    #expect(decoded.scopes.crushClipCompensation == .zero)
-}
-
-@Test func assistConfigurationDecodesRenamedHistogramCompensationKey() throws {
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.self,
-        from: try splitEraConfiguration(
-            scopes: ["histogramCrushClipCompensation": 5],
-            trafficLights: ["scale": 1.0]))
-    #expect(decoded.scopes.crushClipCompensation == .half)
-}
-
 @Test func operatorPreferencesBluetoothShutterDefaultsOnAndRoundTrips() throws {
     // On by default — a paired remote should just work; the settings row is the opt-out.
     #expect(OperatorPreferences.defaults.bluetoothShutterEnabled)
@@ -985,92 +860,6 @@ private func splitEraConfiguration(
 }
 
 // MARK: - Clean view (#256)
-
-@Test func cleanViewPinsDefaultToTheStockSetAndToleratePayloadsPredatingThem() throws {
-    // Clean strips chrome, not tools: the grade, the focus aid and the two geometry corrections
-    // are what make DISP 2 the right picture rather than a raw one.
-    #expect(
-        OperatorPreferences.defaults.cleanViewPinnedTools
-            == OperatorPreferences.cleanViewDefaultPinnedTools)
-
-    var dict = try #require(
-        try JSONSerialization.jsonObject(
-            with: try JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
-    dict.removeValue(forKey: "cleanViewPinnedTools")
-    let decoded = try JSONDecoder().decode(
-        OperatorPreferences.self,
-        from: try JSONSerialization.data(withJSONObject: dict))
-    // The key is absent only in a payload written before it existed, i.e. by an operator who
-    // never pinned anything — so it lands on the stock set, not on empty.
-    #expect(decoded.cleanViewPinnedTools == OperatorPreferences.cleanViewDefaultPinnedTools)
-    // The rest of the blob must survive — a missing new key never resets the preferences.
-    #expect(decoded.dispOrder == OperatorPreferences.defaults.dispOrder)
-    #expect(decoded.streamPreset == OperatorPreferences.defaults.streamPreset)
-}
-
-@Test func cleanViewPinsRoundTrip() throws {
-    var prefs = OperatorPreferences.defaults
-    prefs.cleanViewPinnedTools = []
-    prefs.toggleCleanViewPin(.guides)
-    prefs.toggleCleanViewPin(.histogram)
-    prefs.toggleCleanViewPin(.histogram)  // second toggle un-pins
-    let decoded = try JSONDecoder().decode(
-        OperatorPreferences.self, from: try JSONEncoder().encode(prefs))
-    #expect(decoded.cleanViewPinnedTools == [.guides])
-}
-
-@Test func cleanViewShowsTheStockPinsAndHidesEveryOtherToolByDefault() {
-    var prefs = OperatorPreferences.defaults
-    prefs.liveViewVisibleAssistTools = Set(MonitorAssistTool.allCases)
-    let stock = OperatorPreferences.cleanViewDefaultPinnedTools
-
-    for tool in MonitorAssistTool.allCases {
-        #expect(
-            MonitorChromePolicy.isToolVisible(tool, mode: .live, preferences: prefs),
-            "\(tool) must show in live")
-        #expect(
-            MonitorChromePolicy.isToolVisible(tool, mode: .clean, preferences: prefs)
-                == stock.contains(tool),
-            "\(tool) in clean must follow the stock pin set")
-        // Command replaces the feed with the dashboard, so it shows no feed tool at all —
-        // pinned or not.
-        #expect(
-            !MonitorChromePolicy.isToolVisible(tool, mode: .command, preferences: prefs),
-            "\(tool) must be hidden in command")
-    }
-    #expect(MonitorChromePolicy.visibleTools(mode: .clean, preferences: prefs) == stock)
-    #expect(MonitorChromePolicy.visibleTools(mode: .command, preferences: prefs).isEmpty)
-}
-
-@Test func cleanViewShowsExactlyThePinnedToolsAndRestoresOnLeaving() {
-    var prefs = OperatorPreferences.defaults
-    prefs.liveViewVisibleAssistTools = [.histogram, .peaking, .guides]
-    // This is about the pin mechanism, not about what DISP 2 ships with.
-    prefs.cleanViewPinnedTools = []
-    prefs.toggleCleanViewPin(.peaking)
-
-    #expect(MonitorChromePolicy.visibleTools(mode: .clean, preferences: prefs) == [.peaking])
-    // Leaving clean restores the operator's set untouched — the pin only ever filters.
-    #expect(
-        MonitorChromePolicy.visibleTools(mode: .live, preferences: prefs)
-            == [.histogram, .peaking, .guides])
-}
-
-@Test func cleanViewPinCannotResurrectASwitchedOffTool() {
-    var prefs = OperatorPreferences.defaults
-    prefs.liveViewVisibleAssistTools = []
-    prefs.toggleCleanViewPin(.waveform)
-    #expect(!MonitorChromePolicy.isToolVisible(.waveform, mode: .clean, preferences: prefs))
-}
-
-@Test func cleanViewPinsAreLiveViewOnly() {
-    var prefs = OperatorPreferences.defaults
-    prefs.playbackVisibleAssistTools = [.histogram]
-    // Playback has no DISP cycle; callers pass `.live` and see the full playback set.
-    #expect(
-        MonitorChromePolicy.isToolVisible(
-            .histogram, mode: .live, context: .playback, preferences: prefs))
-}
 
 @Test func enteringCleanSweepsInFlightPopups() {
     #expect(!MonitorChromePolicy.dismissesPopupsOnEntry(to: .live))

@@ -434,9 +434,9 @@ enum DemoHarness {
                         case "horizontal": .horizontal
                         default: nil
                         }
-                    model.preferences.splitComparisonEnabled = orientation != nil
+                    model.assist.splitComparison = orientation != nil
                     if let orientation {
-                        model.preferences.splitComparisonOrientation = orientation
+                        model.assist.splitVertical = orientation == .vertical
                     }
                 }
                 if let path = env["ZC_DEMO_RED_ZIP"] {
@@ -516,7 +516,7 @@ enum DemoHarness {
                 }
                 if env["ZC_DEMO_GUIDES_MASK"] == "1" {
                     // Demo/screenshot affordance: darken outside the selected guide frames.
-                    model.assistConfiguration.guides.maskEnabled = true
+                    model.assist.guideMask = true
                 }
                 if env["ZC_DEMO_UI_MODE"] == "1" {
                     // Demo/screenshot affordance: start in demo UI mode (same as pressing ⌘D).
@@ -526,7 +526,12 @@ enum DemoHarness {
                     let scale = FalseColorScale(rawValue: raw)
                 {
                     // Demo/screenshot affordance: stage the Stops, IRE, or Limits false-colour ruler.
-                    model.assistConfiguration.falseColorScale = scale
+                    model.assist.falseColorScale =
+                        switch scale {
+                        case .stops: .sceneStops
+                        case .ire: .ire
+                        case .limits: .limits
+                        }
                 }
                 if let raw = env["ZC_DEMO_PANEL_POS"] {
                     // Demo/screenshot affordance: place floating assist panels at normalized
@@ -547,7 +552,7 @@ enum DemoHarness {
                     // with exactly one tool kept.
                     for value in raw.split(separator: ",") {
                         if let tool = MonitorAssistTool(rawValue: String(value)) {
-                            model.preferences.cleanViewPinnedTools.insert(tool)
+                            model.assist.cleanViewPinnedTools.insert(tool.selection)
                         }
                     }
                 }
@@ -595,22 +600,20 @@ enum DemoHarness {
                     for value in raw.split(separator: ",") {
                         if let tool = MonitorAssistTool(rawValue: String(value)) {
                             model.setAssist(tool, visible: true)
-                            // Level and de-squeeze also gate on their own enable flag.
-                            if tool == .level { model.assistConfiguration.level.enabled = true }
                             if tool == .desqueeze {
-                                model.assistConfiguration.desqueeze.enabled = true
-                                model.assistConfiguration.desqueeze.ratio = .x2
+                                model.assist.desqueezeFactor = 2
+                                model.assist.desqueezeCustom = false
                             }
                         }
                     }
-                    if model.preferences.visibleAssistTools(for: .liveView).contains(.audioMeters) {
+                    if model.assist.liveTools.contains(.audioMeters) {
                         model.demoSeedAudioMonitor()
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
                     // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
                     // view capture with a pinned scope still gets samples.
                     let scopesOn = MonitorAssistTool.scopeTools.contains {
-                        model.preferences.visibleAssistTools(for: .liveView).contains($0)
+                        model.assist.liveTools.contains($0)
                     }
                     if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
@@ -639,9 +642,9 @@ enum DemoHarness {
                 if let raw = env["ZC_DEMO_PLAYBACK_ASSIST_ON"] {
                     // Demo/screenshot affordance: seed playback view-assist tools (comma-separated
                     // raw values, e.g. "WAVE,PARADE") so clip-player scopes can be captured headless.
-                    model.preferences.playbackVisibleAssistTools.formUnion(
+                    model.assist.playbackVisibleTools.formUnion(
                         raw.split(separator: ",").compactMap {
-                            MonitorAssistTool(rawValue: String($0))
+                            MonitorAssistTool(rawValue: String($0))?.selection
                         })
                 }
                 if env["ZC_DEMO_OPEN_MEDIA"] != nil {

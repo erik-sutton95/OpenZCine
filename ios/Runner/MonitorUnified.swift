@@ -179,7 +179,7 @@ struct NikonMonitorShell: View {
                 }.position(x: layout.focusReset.midX, y: layout.focusReset.midY)
             }
             if LUTResolution.showsSplitComparisonKey(
-                visibleTools: model.renderedLiveAssistTools, preferences: model.preferences),
+                visibleTools: model.renderedLiveAssistTools, enabled: model.assist.splitComparison),
                 !model.interfaceLocked, model.chromeEditorMode == nil
             {
                 SplitComparisonKey().position(

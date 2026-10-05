@@ -9,8 +9,8 @@ import OpenZCineCore
 /// Reuses the exact plots the landscape floating panels use (`ScopeMini` for
 /// waveform/parade/histogram, shared `MonitorTrafficLightsMeter` for traffic lights) and the same sample
 /// sources (`model.scopeAssist`). Because the shown kinds are exactly
-/// the enabled `liveViewVisibleAssistTools`, the frame-loop sampler already meters them via
-/// `visibleAssistTools(for: .liveView)` — no `portraitScopesFrameTool` seam needed.
+/// the live tools switched on in the shared assist state, the frame-loop sampler already meters
+/// them, so no `portraitScopesFrameTool` seam is needed.
 struct PortraitScopesStack: View {
     @Environment(NativeAppModel.self) private var model
 

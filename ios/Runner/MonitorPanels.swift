@@ -587,11 +587,6 @@ struct PanelHost: View {
                 }
             case .assist(let tool):
                 bottomAssistBody(tool)
-            case .assistLibrary:
-                AssistLibraryPanel()
-                    .environment(model)
-                    .frame(width: 520)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             case .media:
                 MediaBrowserView(safeArea: feedSafeArea)
                     .environment(model)
@@ -1886,18 +1881,17 @@ struct AccentDrumWheel: View {
     let model: NativeAppModel
     var compact: Bool = false
 
-    var falseColor: MonitorFalseColorMenu<FalseColorScale> {
+    /// Nikon renders three ramps; the shared CineStop ramp has no Nikon counterpart.
+    static let falseColorScales: [MonitorFalseColorSelection] = [.sceneStops, .ire, .limits]
+
+    var falseColor: MonitorFalseColorMenu<MonitorFalseColorSelection> {
         MonitorFalseColorMenu(
-            scales: FalseColorScale.allCases,
-            scale: Binding(
-                get: { model.assistConfiguration.falseColorScale },
-                set: { model.assistConfiguration.falseColorScale = $0 }),
-            referenceEnabled: Binding(
-                get: { model.assistConfiguration.falseColorReferenceEnabled },
-                set: { model.assistConfiguration.falseColorReferenceEnabled = $0 }),
+            scales: Self.falseColorScales,
+            scale: model.assist.binding(\.falseColorScale),
+            referenceEnabled: model.assist.binding(\.falseColorReference),
             optionalReference: falseColorReference,
             title: { scale in
-                switch scale {
+                switch scale.nikonScale {
                 case .stops: "ZC Stops"
                 case .ire: "IRE"
                 case .limits: "Limits"
@@ -1913,7 +1907,7 @@ struct AccentDrumWheel: View {
     }
 
     private var falseColorReference: MonitorFalseColorReferenceValues {
-        let scale = model.assistConfiguration.falseColorScale
+        let scale = model.assist.falseColorScale.nikonScale
         let mapping = model.exposureSignalMapping
         let subtitle: String
         switch mapping.curve {
@@ -1943,7 +1937,7 @@ struct AccentDrumWheel: View {
                 } : [], axisLabels: axes)
     }
 
-    var zebra: MonitorZebraMenu<AssistConfiguration.Zebra.Unit, AssistConfiguration.Zebra.StripeColor> {
+    var zebra: MonitorZebraMenu<AssistConfiguration.Zebra.Unit, MonitorZebraPaint> {
         MonitorZebraMenu(
             units: AssistConfiguration.Zebra.Unit.allCases,
             unit: Binding(
@@ -1962,63 +1956,43 @@ struct AccentDrumWheel: View {
     }
 
     private func zebraZone(highlight: Bool) -> MonitorZebraNumberZone<
-        AssistConfiguration.Zebra.StripeColor
+        MonitorZebraPaint
     > {
-        let enabled = Binding(
-            get: {
-                highlight
-                    ? model.assistConfiguration.zebra.highlightEnabled
-                    : model.assistConfiguration.zebra.midtoneEnabled
-            },
-            set: {
-                if highlight {
-                    model.assistConfiguration.zebra.highlightEnabled = $0
-                } else {
-                    model.assistConfiguration.zebra.midtoneEnabled = $0
-                }
-            })
+        let assist = model.assist
+        let unit = model.assistConfiguration.zebra.unit
+        let level: ReferenceWritableKeyPath<NikonAssistState, Double> =
+            highlight ? \.zebraHighlightIRE : \.zebraMidtoneIRE
         let threshold = Binding(
             get: {
-                let zebra = model.assistConfiguration.zebra
-                return zebra.displayValue(
-                    for: highlight ? zebra.highlightIRE : zebra.midtoneIRE,
-                    mapping: model.exposureSignalMapping)
+                unit.displayValue(for: assist[keyPath: level], mapping: model.exposureSignalMapping)
             },
             set: {
+                let ire = unit.monitorPercent(fromDisplay: $0, mapping: model.exposureSignalMapping)
+                // In place, so observers hear it even when the level is unchanged (a plain set
+                // skips equal values): a native code past the curve's clip then redraws as the
+                // threshold it maps to.
+                func write(_ stored: inout Double) { stored = ire }
                 if highlight {
-                    model.assistConfiguration.zebra.setHighlight(
-                        fromDisplay: $0, mapping: model.exposureSignalMapping)
+                    write(&assist.zebraHighlightIRE)
                 } else {
-                    model.assistConfiguration.zebra.setMidtone(
-                        fromDisplay: $0, mapping: model.exposureSignalMapping)
+                    write(&assist.zebraMidtoneIRE)
                 }
+                assist.persist()
             })
         let colors = (highlight ? SettingsPalette.highlight : SettingsPalette.midtone).compactMap {
             dot in
-            AssistConfiguration.Zebra.StripeColor(rawValue: dot.name).map {
+            MonitorZebraPaint(rawValue: dot.name).map {
                 MonitorSettingsColorDot(value: $0, title: dot.name, color: dot.color)
             }
         }
         return MonitorZebraNumberZone(
-            enabled: enabled,
+            enabled: assist.binding(highlight ? \.zebraHighlight : \.zebraMidtone),
             entry: MonitorZebraNumberEntry(
                 value: threshold,
-                maximum: model.assistConfiguration.zebra.unit == .native ? 255 : 100,
+                maximum: unit == .native ? 255 : 100,
                 identifier: "settings.zebra.threshold.\(highlight ? "Highlight" : "Midtone")"),
             colors: colors,
-            paint: Binding(
-                get: {
-                    highlight
-                        ? model.assistConfiguration.zebra.highlightColor
-                        : model.assistConfiguration.zebra.midtoneColor
-                },
-                set: {
-                    if highlight {
-                        model.assistConfiguration.zebra.highlightColor = $0
-                    } else {
-                        model.assistConfiguration.zebra.midtoneColor = $0
-                    }
-                }))
+            paint: assist.binding(highlight ? \.zebraHighlightColor : \.zebraMidtoneColor))
     }
 
     var waveform: MonitorScopeTraceMenu<AssistConfiguration.Scopes.WaveformMode> {
@@ -2106,21 +2080,7 @@ struct AccentDrumWheel: View {
     }
 
     private var compensation: Binding<MonitorCrushClipCompensation> {
-        Binding(
-            get: {
-                switch model.assistConfiguration.scopes.crushClipCompensation {
-                case .zero: .zero
-                case .quarter: .quarter
-                case .half: .half
-                case .threeQuarter: .threeQuarter
-                case .one: .one
-                }
-            },
-            set: {
-                if let value = AssistConfiguration.CrushClipCompensation(rawValue: $0.rawValue) {
-                    model.assistConfiguration.scopes.crushClipCompensation = value
-                }
-            })
+        model.assist.binding(\.crushClipCompensation)
     }
 
     var histogram: MonitorHistogramMenu {
@@ -2147,28 +2107,14 @@ struct AccentDrumWheel: View {
         MonitorPeakingMenu(
             options: Binding(
                 get: {
-                    let color: MonitorPeakingColor
-                    switch model.assistConfiguration.peakingColor {
-                    case .white: color = .white
-                    case .blue: color = .blue
-                    case .red: color = .red
-                    case .green: color = .green
-                    }
-                    let sense: MonitorPeakingSense
-                    switch model.assistConfiguration.peakingSensitivity {
-                    case .low: sense = .low
-                    case .medium: sense = .medium
-                    case .high: sense = .high
-                    }
-                    return MonitorPeakingOptions(color: color, sensitivity: sense)
+                    MonitorPeakingOptions(
+                        color: model.assist.peakingColor,
+                        sensitivity: model.assist.peakingSensitivity)
                 },
                 set: {
-                    if let color = Peaking.Color(rawValue: $0.color.rawValue),
-                        let sensitivity = Peaking.Sensitivity(rawValue: $0.sensitivity.rawValue)
-                    {
-                        model.assistConfiguration.peakingColor = color
-                        model.assistConfiguration.peakingSensitivity = sensitivity
-                    }
+                    model.assist.peakingColor = $0.color
+                    model.assist.peakingSensitivity = $0.sensitivity
+                    model.assist.persist()
                 }),
             colors: SettingsPalette.peaking.compactMap { dot in
                 MonitorPeakingColor(rawValue: dot.name).map {
@@ -2277,9 +2223,6 @@ struct AssistPanel: View {
     let tool: MonitorAssistTool
     /// When set, the header close control calls this instead of the default panel dismiss path.
     var onClose: (() -> Void)? = nil
-    /// Local continuous factor while dragging the desqueeze custom slider (avoids thrashing
-    /// `assistConfiguration` / UserDefaults on every tick and keeps the thumb under the finger).
-    @State private var desqueezeSliderFactor: Double = 1.0
 
     var body: some View {
         GlassPanel(
@@ -2306,61 +2249,15 @@ struct AssistPanel: View {
                     // only because the enum case does — stored payloads still decode it.
                     EmptyView()
                 case .guides:
-                    SegmentedButtons(
-                        items: AssistConfiguration.Guides.Family.allCases.map(\.rawValue),
-                        selected: model.assistConfiguration.guides.family.rawValue
-                    ) { value in
-                        if let family = AssistConfiguration.Guides.Family(rawValue: value) {
-                            model.assistConfiguration.guides.family = family
-                        }
-                    }
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 10
-                    ) {
-                        // The active tab's ratios. Tapping toggles each in/out of the shared
-                        // selection — several can be active at once, and the mask darkens the inverse
-                        // of their union.
-                        ForEach(
-                            AssistConfiguration.Guides.AspectRatio.ratios(
-                                for: model.assistConfiguration.guides.family)
-                        ) { ratio in
-                            Button {
-                                model.assistConfiguration.guides.toggle(ratio)
-                                model.setAssist(
-                                    .guides,
-                                    visible: !model.assistConfiguration.guides.selectedRatios
-                                        .isEmpty)
-                            } label: {
-                                GlassChoice(
-                                    title: ratio.rawValue,
-                                    isSelected: model.assistConfiguration.guides.isSelected(ratio)
-                                )
-                            }
-                            .buttonStyle(.zcTapTarget)
-                        }
-                    }
-                    Button {
-                        model.assistConfiguration.guides.maskEnabled.toggle()
-                    } label: {
-                        ToggleRow(
-                            title: "Mask outside frame",
-                            isOn: model.assistConfiguration.guides.maskEnabled
-                        )
-                    }
-                    .buttonStyle(.zcTapTarget)
+                    MonitorGuidesMenu(
+                        family: model.assist.binding(\.guideFamily),
+                        selected: model.assist.selectedGuides,
+                        mask: model.assist.binding(\.guideMask), feedback: selectionFeedback,
+                        onToggle: { model.assist.toggleGuide($0) })
                 case .grid:
-                    HStack(spacing: 8) {
-                        GridToggle(title: "Thirds", isOn: model.assistConfiguration.grid.thirds) {
-                            model.assistConfiguration.grid.thirds.toggle()
-                        }
-                        GridToggle(title: "Phi Grid", isOn: model.assistConfiguration.grid.phi) {
-                            model.assistConfiguration.grid.phi.toggle()
-                        }
-                        GridToggle(title: "Diagonal", isOn: model.assistConfiguration.grid.diagonal)
-                        {
-                            model.assistConfiguration.grid.diagonal.toggle()
-                        }
-                    }
+                    MonitorGridMenu(
+                        selected: model.assist.gridOptions, feedback: selectionFeedback,
+                        onToggle: { model.assist.toggleGrid($0) })
                 case .level:
                     SegmentedButtons(
                         items: AssistConfiguration.Level.Style.allCases.map(\.rawValue),
@@ -2372,62 +2269,24 @@ struct AssistPanel: View {
                     }
                 case .desqueeze:
                     // On/off is the assist-bar DESQ chip; this panel only configures factor/axis.
-                    SegmentedButtons(
-                        items: AssistConfiguration.Desqueeze.Ratio.allCases.map(\.rawValue),
-                        selected:
-                            AssistConfiguration.Desqueeze.Ratio.matching(
-                                factor: desqueezeSliderFactor
-                            )?.rawValue ?? ""
-                    ) { value in
-                        if let ratio = AssistConfiguration.Desqueeze.Ratio(rawValue: value) {
-                            desqueezeSliderFactor = ratio.factor
-                            model.assistConfiguration.desqueeze.select(ratio: ratio)
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Custom")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(LiveDesign.muted)
-                            Spacer()
-                            Text(String(format: "%.2f×", desqueezeSliderFactor))
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(LiveDesign.text)
-                        }
-                        Slider(
-                            value: $desqueezeSliderFactor,
-                            in: AssistConfiguration.Desqueeze.factorRange,
-                            step: AssistConfiguration.Desqueeze.factorStep
-                        ) { editing in
-                            // Commit on release so the thumb tracks smoothly while dragging.
-                            if !editing {
-                                model.assistConfiguration.desqueeze.select(
-                                    factor: desqueezeSliderFactor)
+                    MonitorDesqueezeMenu(
+                        selected: model.assist.desqueezeCustom
+                            ? nil : MonitorDesqueezePreset.matching(model.assist.desqueezeFactor),
+                        custom: model.assist.desqueezeCustom,
+                        factor: Binding(
+                            get: { model.assist.desqueezeFactor },
+                            set: { model.assist.updateDesqueezeCustom($0) }),
+                        horizontal: model.assist.binding(\.desqueezeHorizontal),
+                        help:
+                            "Corrects an anamorphic squeeze on this monitor only. The recording and the scopes are never de-squeezed.",
+                        selectionFeedback: selectionFeedback,
+                        onSelect: {
+                            if let preset = $0 {
+                                model.assist.selectDesqueezePreset(preset)
+                            } else {
+                                model.assist.selectDesqueezeCustom()
                             }
-                        }
-                        .tint(LiveDesign.accent)
-                        .onChange(of: desqueezeSliderFactor) { _, newValue in
-                            // Live preview while dragging without round-tripping every tick
-                            // through the persisted model binding.
-                            var next = model.assistConfiguration.desqueeze
-                            next.select(factor: newValue)
-                            if next.factor != model.assistConfiguration.desqueeze.factor
-                                || next.ratio != model.assistConfiguration.desqueeze.ratio
-                            {
-                                model.assistConfiguration.desqueeze = next
-                            }
-                        }
-                    }
-                    SegmentedButtons(
-                        items: AssistConfiguration.Desqueeze.Orientation.allCases.map(\.rawValue),
-                        selected: model.assistConfiguration.desqueeze.orientation.rawValue
-                    ) { value in
-                        if let orientation = AssistConfiguration.Desqueeze.Orientation(
-                            rawValue: value)
-                        {
-                            model.assistConfiguration.desqueeze.orientation = orientation
-                        }
-                    }
+                        }, onFinish: { model.assist.persist() })
                 case .lut:
                     LUTPickerContent()
                 case .falseColor, .zebra, .waveform, .parade, .histogram, .vectorscope,
@@ -2471,17 +2330,10 @@ struct AssistPanel: View {
         // drags and makes the custom desqueeze factor unusable.
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded {})
-        .onAppear {
-            desqueezeSliderFactor = model.assistConfiguration.desqueeze.factor
-        }
-        .onChange(of: model.assistConfiguration.desqueeze.factor) { _, newValue in
-            if abs(newValue - desqueezeSliderFactor) > 0.001 {
-                desqueezeSliderFactor = newValue
-            }
-        }
-        .onChange(of: tool) { _, _ in
-            desqueezeSliderFactor = model.assistConfiguration.desqueeze.factor
-        }
+    }
+
+    private func selectionFeedback() {
+        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
 }
 
@@ -2743,23 +2595,24 @@ struct LUTPickerContent: View {
     @ViewBuilder private var splitComparisonControls: some View {
         HStack(spacing: 10) {
             Button {
-                model.preferences.splitComparisonEnabled.toggle()
+                model.assist.splitComparison.toggle()
+                model.assist.persist()
                 OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
                 // Comparison is meaningless with the grade off, so switching it on switches the
                 // tool on — the same rule the category tabs follow. Arming also clears the on-feed
                 // key's mute, so the split is showing when the operator comes back to the image.
-                if model.preferences.splitComparisonEnabled {
+                if model.assist.splitComparison {
                     model.splitComparisonMuted = false
                     model.setAssist(.lut, visible: true)
                 }
             } label: {
                 HStack(spacing: 8) {
                     Image(
-                        systemName: model.preferences.splitComparisonEnabled
+                        systemName: model.assist.splitComparison
                             ? "checkmark.circle.fill" : "circle"
                     )
                     .foregroundStyle(
-                        model.preferences.splitComparisonEnabled
+                        model.assist.splitComparison
                             ? LiveDesign.accent : LiveDesign.muted)
                     Text("50/50")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -2768,18 +2621,20 @@ struct LUTPickerContent: View {
                 .padding(.vertical, 8)
                 .padding(.horizontal, 12)
                 .background(
-                    model.preferences.splitComparisonEnabled
+                    model.assist.splitComparison
                         ? LiveDesign.accentDim : LiveDesign.glassBright,
                     in: Capsule())
             }
             .buttonStyle(.zcTapTarget)
-            if model.preferences.splitComparisonEnabled {
+            if model.assist.splitComparison {
                 SegmentedButtons(
                     items: SplitComparisonOrientation.allCases.map(\.rawValue),
-                    selected: model.preferences.splitComparisonOrientation.rawValue
+                    selected: (model.assist.splitVertical
+                        ? SplitComparisonOrientation.vertical : .horizontal).rawValue
                 ) { raw in
                     guard let next = SplitComparisonOrientation(rawValue: raw) else { return }
-                    model.preferences.splitComparisonOrientation = next
+                    model.assist.splitVertical = next == .vertical
+                    model.assist.persist()
                     OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
                 }
             } else {
@@ -3094,79 +2949,6 @@ struct LUTPickerContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-
-struct AssistLibraryPanel: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Label("View Assist", systemImage: "rectangle.3.group")
-                        .font(.system(size: 20, weight: .semibold, design: .default))
-                        .foregroundStyle(LiveDesign.text)
-                    Spacer()
-                    CloseButton()
-                }
-
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    ForEach(model.preferences.assistToolbarOrder) { tool in
-                        Button {
-                            model.toggleAssist(tool)
-                            if tool.hasConfiguration {
-                                model.showAssist(tool)
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                AssistToolIcon(tool: tool, size: 17)
-                                    .frame(width: 24)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(tool.title)
-                                        .font(
-                                            .system(size: 15, weight: .semibold, design: .rounded))
-                                    Text(tool.rawValue)
-                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(
-                                    systemName: model.preferences.visibleAssistTools.contains(tool)
-                                        ? "checkmark.circle.fill" : "circle"
-                                )
-                                .foregroundStyle(
-                                    model.preferences.visibleAssistTools.contains(tool)
-                                        ? .blue : .secondary
-                                )
-                            }
-                            .padding(12)
-                            .background(
-                                model.preferences.visibleAssistTools.contains(tool)
-                                    ? LiveDesign.accentDim : LiveDesign.glassBright,
-                                in: RoundedRectangle(
-                                    cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                            )
-                            .overlay {
-                                RoundedRectangle(
-                                    cornerRadius: LiveDesign.cornerRadius, style: .continuous
-                                )
-                                .stroke(
-                                    model.preferences.visibleAssistTools.contains(tool)
-                                        ? LiveDesign.accentDim : LiveDesign.hairline,
-                                    lineWidth: 1
-                                )
-                            }
-                        }
-                        .buttonStyle(.zcTapTarget)
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Presentation-only mirror of the mockup's local assist/display state for controls the core model
-/// does not persist yet. ponytail: lift these into OperatorPreferences/AssistConfiguration when the
-/// live-view processor grows real support; for now they match the prototype's in-memory behaviour.
 
 enum SettingsPalette {
     struct Dot {
@@ -3801,10 +3583,10 @@ struct OperatorSettingsPanel: View {
     }
 
     private var cleanPins: [MonitorDisplayToggle] {
-        MonitorAssistTool.activeCases.map { tool in
+        MonitorAssistTool.activeCases.filter { $0 != .evMeter }.map { tool in
             MonitorDisplayToggle(
                 id: tool.rawValue, title: tool.displaySettingsTitle,
-                isOn: model.preferences.cleanViewPinnedTools.contains(tool),
+                isOn: model.assist.cleanViewPinnedTools.contains(tool.selection),
                 accessibilityLabel: "Keep \(tool.displaySettingsTitle) in clean view"
             ) {
                 model.toggleCleanViewPin(tool)
@@ -5118,12 +4900,11 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetFalseColor() {
-        let defaults = AssistConfiguration.defaults
-        model.assistConfiguration.falseColorScale = defaults.falseColorScale
-        model.assistConfiguration.falseColorReferenceEnabled = defaults.falseColorReferenceEnabled
+        model.assist.resetOptions(.falseColor)
     }
 
     private func resetZebra() {
+        model.assist.resetOptions(.zebra)
         model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
     }
 
@@ -5144,19 +4925,16 @@ struct NikonViewAssistSettings: View {
     private func resetHistogram() {
         let defaults = AssistConfiguration.defaults.scopes
         model.assistConfiguration.scopes.histogramTrafficLights = defaults.histogramTrafficLights
-        model.assistConfiguration.scopes.crushClipCompensation = defaults.crushClipCompensation
+        model.assist.resetOptions(.histogram)
     }
 
     private func resetTrafficLights() {
         model.assistConfiguration.trafficLights = AssistConfiguration.defaults.trafficLights
-        model.assistConfiguration.scopes.crushClipCompensation =
-            AssistConfiguration.defaults.scopes.crushClipCompensation
+        model.assist.resetOptions(.trafficLights)
     }
 
     private func resetPeaking() {
-        let defaults = AssistConfiguration.defaults
-        model.assistConfiguration.peakingSensitivity = defaults.peakingSensitivity
-        model.assistConfiguration.peakingColor = defaults.peakingColor
+        model.assist.resetOptions(.peaking)
     }
 
     private func resetVectorscope() {

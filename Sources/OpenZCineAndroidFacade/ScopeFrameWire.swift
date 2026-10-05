@@ -6,6 +6,7 @@
 // every platform so `just native-check` exercises it on macOS.
 
 import Foundation
+import enum OpenCineMedia.MonitorCrushClipCompensation
 import OpenZCineCore
 
 public enum ScopeFrameWire {
@@ -41,9 +42,8 @@ public enum ScopeFrameWire {
     /// malformed values clamp low.
     private static func crushClipCompensation(
         rawValue: Int
-    ) -> AssistConfiguration.CrushClipCompensation {
-        AssistConfiguration.CrushClipCompensation(rawValue: rawValue)
-            ?? (rawValue > AssistConfiguration.CrushClipCompensation.one.rawValue ? .one : .zero)
+    ) -> MonitorCrushClipCompensation {
+        MonitorCrushClipCompensation.fromRaw(rawValue)
     }
 
     /// The shared scopes' level axis for this camera: `[256 code-to-IRE
@@ -61,11 +61,11 @@ public enum ScopeFrameWire {
     /// frame.
     ///
     /// - Parameter crushClipCompensationRaw: Raw value for the persisted
-    ///   shared-core `CrushClipCompensation` selector. It defaults to iOS's
-    ///   `.quarter` migration default for direct Swift callers.
+    ///   shared `MonitorCrushClipCompensation` selector. It defaults to
+    ///   `.quarter` for direct Swift callers; Android always passes its stored value.
     public static func trafficLights(
         histograms: [Int], curveOrdinal: Int, clipNative: Double? = nil,
-        crushClipCompensationRaw: Int = AssistConfiguration.CrushClipCompensation.quarter.rawValue
+        crushClipCompensationRaw: Int = MonitorCrushClipCompensation.quarter.rawValue
     ) -> [Float] {
         let samples: ScopeSamples
         if histograms.count == 4 * histogramBins {

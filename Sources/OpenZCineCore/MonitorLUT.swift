@@ -239,20 +239,19 @@ public enum LUTResolution {
     /// Resolved once, here, for the same reason ``active(visibleTools:selected:)`` is: a shell that
     /// tested the preference on its own would eventually show the divider and the half labels over
     /// a frame with no LUT in it, or keep the split alive in a DISP mode that dropped the tool.
-    /// `visibleTools` is already the mode-filtered set (`MonitorChromePolicy.visibleTools`), so
+    /// `visibleTools` is already the mode-filtered set (the shared assist state's clean filter), so
     /// clean view carries the comparison exactly when the operator pinned the LUT into it.
     /// - Parameter muted: the on-feed quick key's session state — see
-    ///   ``showsSplitComparisonKey(visibleTools:preferences:)``. Not a preference: an A/B while
+    ///   ``showsSplitComparisonKey(visibleTools:enabled:)``. Not a preference: an A/B while
     ///   judging a look should not survive the take.
     public static func splitComparison(
         visibleTools: Set<MonitorAssistTool>,
-        preferences: OperatorPreferences,
+        enabled: Bool,
+        vertical: Bool,
         muted: Bool = false
     ) -> SplitComparisonOrientation? {
-        guard preferences.splitComparisonEnabled, !muted, visibleTools.contains(.lut) else {
-            return nil
-        }
-        return preferences.splitComparisonOrientation
+        guard enabled, !muted, visibleTools.contains(.lut) else { return nil }
+        return vertical ? .vertical : .horizontal
     }
 
     /// Whether the on-feed 50/50 quick key mounts.
@@ -263,10 +262,9 @@ public enum LUTResolution {
     /// that undoes it. Like the divider and the labels it rides the LUT tool's own visibility, so
     /// clean view carries it exactly where the operator pinned the tool.
     public static func showsSplitComparisonKey(
-        visibleTools: Set<MonitorAssistTool>,
-        preferences: OperatorPreferences
+        visibleTools: Set<MonitorAssistTool>, enabled: Bool
     ) -> Bool {
-        preferences.splitComparisonEnabled && visibleTools.contains(.lut)
+        enabled && visibleTools.contains(.lut)
     }
 }
 

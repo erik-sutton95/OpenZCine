@@ -89,7 +89,7 @@ enum ScopeAssistSampling {
     /// Derives traffic-light readings from one tap, on this camera's mapping.
     static func trafficLightsReading(
         from samples: OpenCineMedia.ScopeSamples,
-        trafficLightsCrushClip: AssistConfiguration.CrushClipCompensation,
+        trafficLightsCrushClip: MonitorCrushClipCompensation,
         mapping: ExposureSignalMapping = ExposureSignalMapping(curve: .redLog3G10)
     ) -> ScopeTrafficLightsReading {
         let reading = TrafficLightsMeter.measure(
@@ -107,7 +107,7 @@ enum ScopeAssistSampling {
     /// as phosphor trail, traffic lights and the histogram display on the camera's axis.
     static func bundle(
         samples: OpenCineMedia.ScopeSamples,
-        trafficLightsCrushClip: AssistConfiguration.CrushClipCompensation,
+        trafficLightsCrushClip: MonitorCrushClipCompensation,
         mapping: ExposureSignalMapping = ExposureSignalMapping(curve: .redLog3G10),
         vectorscopeCube: CubeLUT? = nil,
         previous: ScopeAssistBundle = .empty

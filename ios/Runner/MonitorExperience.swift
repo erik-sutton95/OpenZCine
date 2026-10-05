@@ -58,7 +58,7 @@ struct MonitorExperience: View {
             // record start/stop. (Value wheels add their own per-detent feedback.)
             .sensoryFeedback(.selection, trigger: model.activePanel)
             .sensoryFeedback(.selection, trigger: model.displayMode)
-            .sensoryFeedback(.selection, trigger: model.preferences.liveViewVisibleAssistTools)
+            .sensoryFeedback(.selection, trigger: model.assist.liveTools)
             .sensoryFeedback(.impact(weight: .heavy), trigger: model.isRecording)
             // Confirm the focus-point app-lock on release — a firm thump locking, a light tap freeing.
             .sensoryFeedback(trigger: model.focusPointLocked) { _, locked in
@@ -701,7 +701,7 @@ private struct LiveFrameRaster: View {
     /// mirroring it would be wrong. The AF boxes DO describe positions in the picture and are
     /// handled where they are drawn.
     private var feedScale: CGSize {
-        let squeeze = desqueezeScale(model.assistConfiguration.desqueeze)
+        let squeeze = desqueezeScale(model.liveDesqueeze)
         guard model.liveFeedMirrored else { return squeeze }
         return CGSize(width: -squeeze.width, height: squeeze.height)
     }
@@ -887,9 +887,9 @@ private struct LiveFeedFocusOverlay: View {
             LiveFocusBoxOverlay(
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
                 mirrored: model.liveFeedMirrored,
-                // The raster's own value, not the rendered-tool set: the box has to register with
-                // the picture as `LiveFrameRaster.feedScale` actually presents it.
-                desqueeze: model.assistConfiguration.desqueeze
+                // The raster's own value: the box has to register with the picture as
+                // `LiveFrameRaster.feedScale` actually presents it.
+                desqueeze: model.liveDesqueeze
             )
             .equatable()
             // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
@@ -920,7 +920,7 @@ private struct LiveFeedFocusOverlay: View {
                 // rather than on where an unmirrored, un-de-squeezed one would have been.
                 if let rect = liveFocusBoxRect(
                     box, focus: focus, in: proxy.size,
-                    desqueeze: model.assistConfiguration.desqueeze,
+                    desqueeze: model.liveDesqueeze,
                     mirrored: model.liveFeedMirrored)
                 {
                     Color.clear
@@ -991,7 +991,7 @@ struct InstantReviewOverlay: View {
                     // with the image instead of leaving them on the squeezed geometry.
                     let fitted = Self.fittedRect(
                         image: desqueezedSize(
-                            review.image.size, model.assistConfiguration.desqueeze),
+                            review.image.size, model.liveDesqueeze),
                         container: proxy.size)
                     // The stand-in thumb shows blurred; the upgrade animates the blur away
                     // as the full image swaps underneath, reading as one continuous sharpen.
@@ -1342,7 +1342,7 @@ func liveFocusBoxRect(
     _ box: PTPLiveViewAFBox,
     focus: PTPLiveViewFocusInfo,
     in size: CGSize,
-    desqueeze: AssistConfiguration.Desqueeze,
+    desqueeze: NikonDesqueeze,
     mirrored: Bool
 ) -> CGRect? {
     guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return nil }
@@ -1374,7 +1374,7 @@ struct LiveFocusBoxOverlay: View, Equatable {
     /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
     var mirrored: Bool = false
     /// The de-squeeze the raster below is presenting with — see ``liveFocusBoxRect``.
-    var desqueeze = AssistConfiguration.Desqueeze()
+    var desqueeze = NikonDesqueeze.off
 
     nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
         // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
@@ -1774,7 +1774,7 @@ struct AssistToolButtonRow: View {
     var body: some View {
         AssistToolButton(
             tool: tool,
-            isOn: model.preferences.visibleAssistTools(for: context).contains(tool),
+            isOn: model.assist.tools(for: context).contains(tool),
             compact: compact
         )
         // Fit-mode scope cap (R7): a scope that can't activate renders grayed but stays tappable —

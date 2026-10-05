@@ -1,3 +1,4 @@
+import enum OpenCineMedia.MonitorCrushClipCompensation
 import Testing
 
 @testable import OpenZCineCore
@@ -176,7 +177,7 @@ struct ScopeSamplerTests {
 
     @Test("Crush/clip compensation maps quarter-stop options to pixel fractions")
     func crushClipCompensationStops() {
-        let expected: [(AssistConfiguration.CrushClipCompensation, Double)] = [
+        let expected: [(MonitorCrushClipCompensation, Double)] = [
             (.zero, 0.0), (.quarter, 0.25), (.half, 0.5), (.threeQuarter, 0.75), (.one, 1.0),
         ]
         for (compensation, stops) in expected {

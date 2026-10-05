@@ -436,8 +436,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         assistToolbarOrder: [MonitorAssistTool],
         exposureBarVisibleControls: Set<MonitorAssistTool>,
         framingBarVisibleControls: Set<MonitorAssistTool>,
-        liveViewVisibleAssistTools: Set<MonitorAssistTool>,
-        playbackVisibleAssistTools: Set<MonitorAssistTool>,
         recordConfirmationEnabled: Bool,
         bluetoothShutterEnabled: Bool = true,
         hapticsEnabled: Bool,
@@ -447,14 +445,11 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         qualityBias: QualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
         scopeActivationOrder: [MonitorAssistTool] = [],
-        cleanViewPinnedTools: Set<MonitorAssistTool> = Self.cleanViewDefaultPinnedTools,
         cleanChrome: DisplayChromeVisibility = .cleanDefaults,
         commandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoDisplayChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoCleanChrome: DisplayChromeVisibility = .cleanDefaults,
         photoCommandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
-        splitComparisonEnabled: Bool = false,
-        splitComparisonOrientation: SplitComparisonOrientation = .vertical,
         relayEncoderProfile: RelayEncoderProfile = .lowLatency,
         relayWatcherPasscode: String = "",
         relayAllowsControlRequests: Bool = true
@@ -467,8 +462,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             exposureBarVisibleControls, allowed: MonitorAssistTool.exposureBarTools)
         self.framingBarVisibleControls = Self.normalizedBarControls(
             framingBarVisibleControls, allowed: MonitorAssistTool.framingBarTools)
-        self.liveViewVisibleAssistTools = liveViewVisibleAssistTools
-        self.playbackVisibleAssistTools = playbackVisibleAssistTools
         self.recordConfirmationEnabled = recordConfirmationEnabled
         self.bluetoothShutterEnabled = bluetoothShutterEnabled
         self.hapticsEnabled = hapticsEnabled
@@ -478,14 +471,11 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.qualityBias = qualityBias
         self.portraitFeedAspect = portraitFeedAspect
         self.scopeActivationOrder = scopeActivationOrder
-        self.cleanViewPinnedTools = cleanViewPinnedTools
         self.cleanChrome = cleanChrome
         self.commandChrome = commandChrome
         self.photoDisplayChrome = photoDisplayChrome
         self.photoCleanChrome = photoCleanChrome
         self.photoCommandChrome = photoCommandChrome
-        self.splitComparisonEnabled = splitComparisonEnabled
-        self.splitComparisonOrientation = splitComparisonOrientation
         self.relayEncoderProfile = relayEncoderProfile
         self.relayWatcherPasscode = relayWatcherPasscode
         self.relayAllowsControlRequests = relayAllowsControlRequests
@@ -507,8 +497,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var exposureBarVisibleControls: Set<MonitorAssistTool>
     /// Framing-aid buttons shown on the bottom assist toolbar (independent of on/off state).
     public var framingBarVisibleControls: Set<MonitorAssistTool>
-    public var liveViewVisibleAssistTools: Set<MonitorAssistTool>
-    public var playbackVisibleAssistTools: Set<MonitorAssistTool>
     public var recordConfirmationEnabled: Bool
     /// A Bluetooth HID shutter remote's volume press toggles recording while the live monitor is
     /// up. On by default; the off toggle exists because the mechanism takes over the hardware
@@ -527,13 +515,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
     /// newest activation. Drives the portrait-fit recency-based 2-scope display selection.
     public var scopeActivationOrder: [MonitorAssistTool]
-    /// The view-assist tools DISP 2 shows; see ``MonitorChromePolicy``.
-    ///
-    /// Defaults to ``cleanViewDefaultPinnedTools`` rather than nothing. Clean strips the *chrome*
-    /// — the rail, the readouts, the buttons — but an operator on DISP 2 is still judging a
-    /// picture, and a grade, a focus aid and the two geometry corrections are what make it the
-    /// right picture rather than a raw one.
-    public var cleanViewPinnedTools: Set<MonitorAssistTool>
     /// DISP 2's chrome. Defaults to ``DisplayChromeVisibility/cleanDefaults`` — the bare image.
     public var cleanChrome: DisplayChromeVisibility
     /// DISP 3's chrome. Command replaces the feed with the dashboard, so only the rail cluster
@@ -546,13 +527,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var photoDisplayChrome: DisplayChromeVisibility
     public var photoCleanChrome: DisplayChromeVisibility
     public var photoCommandChrome: DisplayChromeVisibility
-    /// Whether the LUT tool renders as a 50/50 Log-vs-LUT comparison. Off by default — see
-    /// ``SplitComparison``.
-    public var splitComparisonEnabled: Bool
-    /// Which way the comparison divides the image. Persisted independently of
-    /// ``splitComparisonEnabled`` so switching the comparison off and on again keeps the
-    /// operator's choice.
-    public var splitComparisonOrientation: SplitComparisonOrientation
     /// The broadcaster's latency-vs-quality stance for the relay encoder.
     public var relayEncoderProfile: RelayEncoderProfile
     /// Watchers must enter this to receive the broadcast; empty means open. Four digits by UI
@@ -604,15 +578,21 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         setChrome(Self.defaults.chrome(for: mode, capture: capture), for: mode, capture: capture)
     }
 
-    /// The ≤2 scope tools the portrait-fit stacked zone displays: the two most recently
-    /// activated (per ``scopeActivationOrder``), shown in canonical ``MonitorAssistTool/scopeTools``
-    /// order for display stability. Older active scopes stay active-but-hidden and reappear in
-    /// fill mode. Fallback: pre-migration payloads decode with active scopes but an empty order —
-    /// then fall back to canonical `prefix(2)` (exactly the legacy behaviour).
-    public var displayedFitScopes: [MonitorAssistTool] {
-        let active = MonitorAssistTool.scopeTools.filter {
-            liveViewVisibleAssistTools.contains($0)
-        }
+    /// The ≤2 scope tools the portrait-fit stacked zone displays out of the `on` live tools: the
+    /// two most recently activated (per ``scopeActivationOrder``), shown in canonical
+    /// ``MonitorAssistTool/scopeTools`` order for display stability. Older active scopes stay
+    /// active-but-hidden and reappear in fill mode. With no recorded order (a migrated install),
+    /// the canonical `prefix(2)` shows.
+    /// Records a live scope switching on (it becomes the newest) or off. Other tools are ignored;
+    /// playback toggles never call this, so the live recency survives a review session.
+    public mutating func recordScopeActivation(_ tool: MonitorAssistTool, on: Bool) {
+        guard MonitorAssistTool.scopeTools.contains(tool) else { return }
+        scopeActivationOrder.removeAll { $0 == tool }
+        if on { scopeActivationOrder.append(tool) }
+    }
+
+    public func displayedFitScopes(on: Set<MonitorAssistTool>) -> [MonitorAssistTool] {
+        let active = MonitorAssistTool.scopeTools.filter { on.contains($0) }
         let ordered = scopeActivationOrder.filter { active.contains($0) }
         let chosen = ordered.isEmpty ? Array(active.prefix(2)) : Array(ordered.suffix(2))
         return MonitorAssistTool.scopeTools.filter { chosen.contains($0) }
@@ -621,16 +601,12 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case dispOrder, enabledDispModes, displayChrome, assistToolbarOrder
         case exposureBarVisibleControls, framingBarVisibleControls
-        case liveViewVisibleAssistTools, playbackVisibleAssistTools
-        case visibleAssistTools
         case recordConfirmationEnabled, recordHoldEnabled, bluetoothShutterEnabled, hapticsEnabled,
             keepScreenAwake, autoRotateFeedEnabled, streamPreset, qualityBias, portraitFeedAspect,
             scopeActivationOrder
-        case cleanViewPinnedTools
         case cleanChrome, commandChrome
         case cleanChromeV2
         case photoDisplayChrome, photoCleanChrome, photoCommandChrome
-        case splitComparisonEnabled, splitComparisonOrientation
         case relayEncoderProfile
         case relayWatcherPasscode, relayAllowsControlRequests
     }
@@ -689,29 +665,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         scopeActivationOrder =
             try Self.decodeAssistToolArrayIfPresent(from: container, forKey: .scopeActivationOrder)
             ?? []
-        if let live = try Self.decodeAssistToolSetIfPresent(
-            from: container, forKey: .liveViewVisibleAssistTools)
-        {
-            liveViewVisibleAssistTools = live
-            playbackVisibleAssistTools =
-                try Self.decodeAssistToolSetIfPresent(
-                    from: container, forKey: .playbackVisibleAssistTools) ?? []
-        } else if let legacy = try Self.decodeAssistToolSetIfPresent(
-            from: container, forKey: .visibleAssistTools)
-        {
-            liveViewVisibleAssistTools = legacy
-            playbackVisibleAssistTools = []
-        } else {
-            liveViewVisibleAssistTools = []
-            playbackVisibleAssistTools = []
-        }
-        // Added with the clean-view pin (#256). The key is absent only in payloads written
-        // before it existed, i.e. by an operator who never pinned anything — so absent decodes to
-        // the documented default rather than to empty. Anyone who HAS touched the set wrote it,
-        // and gets back exactly what they chose.
-        cleanViewPinnedTools =
-            try Self.decodeAssistToolSetIfPresent(from: container, forKey: .cleanViewPinnedTools)
-            ?? Self.cleanViewDefaultPinnedTools
         // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
         // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
         // the documented bare image, and DISP 3 inherits the old global set so a rail or battery
@@ -740,14 +693,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         photoCommandChrome =
             try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCommandChrome)
             ?? commandChrome
-        // The 50/50 comparison postdates every stored blob. Absent means "never chosen", which is
-        // the documented default: comparison off, and a vertical boundary the first time it is
-        // switched on.
-        splitComparisonEnabled =
-            try container.decodeIfPresent(Bool.self, forKey: .splitComparisonEnabled) ?? false
-        splitComparisonOrientation =
-            try container.decodeIfPresent(
-                SplitComparisonOrientation.self, forKey: .splitComparisonOrientation) ?? .vertical
         relayEncoderProfile =
             try container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile)
             ?? .lowLatency
@@ -765,8 +710,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(assistToolbarOrder, forKey: .assistToolbarOrder)
         try container.encode(exposureBarVisibleControls, forKey: .exposureBarVisibleControls)
         try container.encode(framingBarVisibleControls, forKey: .framingBarVisibleControls)
-        try container.encode(liveViewVisibleAssistTools, forKey: .liveViewVisibleAssistTools)
-        try container.encode(playbackVisibleAssistTools, forKey: .playbackVisibleAssistTools)
         try container.encode(recordConfirmationEnabled, forKey: .recordConfirmationEnabled)
         try container.encode(bluetoothShutterEnabled, forKey: .bluetoothShutterEnabled)
         try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
@@ -776,30 +719,14 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(qualityBias, forKey: .qualityBias)
         try container.encode(portraitFeedAspect, forKey: .portraitFeedAspect)
         try container.encode(scopeActivationOrder, forKey: .scopeActivationOrder)
-        try container.encode(cleanViewPinnedTools, forKey: .cleanViewPinnedTools)
         try container.encode(cleanChrome, forKey: .cleanChromeV2)
         try container.encode(commandChrome, forKey: .commandChrome)
         try container.encode(photoDisplayChrome, forKey: .photoDisplayChrome)
         try container.encode(photoCleanChrome, forKey: .photoCleanChrome)
         try container.encode(photoCommandChrome, forKey: .photoCommandChrome)
-        try container.encode(splitComparisonEnabled, forKey: .splitComparisonEnabled)
-        try container.encode(splitComparisonOrientation, forKey: .splitComparisonOrientation)
         try container.encode(relayEncoderProfile, forKey: .relayEncoderProfile)
         try container.encode(relayWatcherPasscode, forKey: .relayWatcherPasscode)
         try container.encode(relayAllowsControlRequests, forKey: .relayAllowsControlRequests)
-    }
-
-    /// Live-monitor assist visibility. Prefer ``visibleAssistTools(for:)`` when the context is known.
-    public var visibleAssistTools: Set<MonitorAssistTool> {
-        get { liveViewVisibleAssistTools }
-        set { liveViewVisibleAssistTools = newValue }
-    }
-
-    public func visibleAssistTools(for context: ViewAssistContext) -> Set<MonitorAssistTool> {
-        switch context {
-        case .liveView: liveViewVisibleAssistTools
-        case .playback: playbackVisibleAssistTools
-        }
     }
 
     public static let defaults = OperatorPreferences(
@@ -809,8 +736,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         assistToolbarOrder: MonitorAssistTool.activeCases,
         exposureBarVisibleControls: Set(MonitorAssistTool.exposureBarTools),
         framingBarVisibleControls: Set(MonitorAssistTool.framingBarTools),
-        liveViewVisibleAssistTools: [],
-        playbackVisibleAssistTools: [],
         recordConfirmationEnabled: true,
         hapticsEnabled: true,
         keepScreenAwake: true,
@@ -826,19 +751,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         commandChrome: DisplayChromeVisibility(),
         photoDisplayChrome: DisplayChromeVisibility(),
         photoCleanChrome: .cleanDefaults,
-        photoCommandChrome: DisplayChromeVisibility(),
-        splitComparisonEnabled: false,
-        splitComparisonOrientation: .vertical
+        photoCommandChrome: DisplayChromeVisibility()
     )
-
-    /// What DISP 2 shows out of the box: the grade, the focus aid, and the two corrections that
-    /// change the picture's geometry rather than decorate it.
-    ///
-    /// Clean is not "no tools" — it is no *chrome*. A de-squeezed, mirrored, graded image with
-    /// peaking on is still a clean image; it is the rail and the readouts that make a monitor busy.
-    public static let cleanViewDefaultPinnedTools: Set<MonitorAssistTool> = [
-        .lut, .peaking, .desqueeze, .mirror,
-    ]
 
     /// Whether `tool` should appear on the bottom assist toolbar (LUT is always shown).
     public func isAssistToolbarButtonVisible(_ tool: MonitorAssistTool) -> Bool {
@@ -869,16 +783,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             framingBarVisibleControls.remove(tool)
         } else {
             framingBarVisibleControls.insert(tool)
-        }
-    }
-
-    /// Toggles whether `tool` stays on screen in clean view (DISP 2). Off for every tool by
-    /// default — see ``MonitorChromePolicy``.
-    public mutating func toggleCleanViewPin(_ tool: MonitorAssistTool) {
-        if cleanViewPinnedTools.contains(tool) {
-            cleanViewPinnedTools.remove(tool)
-        } else {
-            cleanViewPinnedTools.insert(tool)
         }
     }
 
@@ -1003,159 +907,22 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     }
 }
 
-/// Persistable configuration for app-side assist overlays.
+/// The Nikon-only assist settings next to the shared `MonitorAssistState`: the LUT catalog pick,
+/// the camera level style, zebra entry units, instant review, the retired magnifier and the scope
+/// panels' options. Everything the shared state owns (tool on/off, guides, grid, desqueeze,
+/// false colour, zebra, peaking, crush/clip, 50/50 split) is gone from this blob; an older blob
+/// still decodes, its moved keys read once by the app's migration.
 public struct AssistConfiguration: Codable, Equatable, Sendable {
-    public struct Guides: Codable, Equatable, Sendable {
-        public enum Family: String, CaseIterable, Codable, Equatable, Sendable {
-            case film = "Film"
-            case social = "Social"
-        }
-
-        public enum AspectRatio: String, CaseIterable, Codable, Equatable, Hashable, Sendable,
-            Identifiable
-        {
-            // Film / cinema delivery
-            case ratio276 = "2.76:1"
-            case ratio239 = "2.39:1"
-            case ratio235 = "2.35:1"
-            case ratio200 = "2.00:1"
-            case ratio185 = "1.85:1"
-            case ratio16x9 = "16:9"
-            case ratio166 = "1.66:1"
-            case ratio143 = "1.43:1"
-            case ratio4x3 = "4:3"
-            // Social delivery
-            case ratio9x16 = "9:16"
-            case ratio4x5 = "4:5"
-            case ratio1x1 = "1:1"
-            case ratio2x3 = "2:3"
-            case ratio191 = "1.91:1"
-
-            public var id: String { rawValue }
-
-            /// Width ÷ height parsed from the `W:H` label (e.g. 2.39 for `2.39:1`, 0.5625 for `9:16`).
-            public var value: Double {
-                let parts = rawValue.split(separator: ":").compactMap { Double($0) }
-                guard parts.count == 2, parts[1] > 0 else { return 1 }
-                return parts[0] / parts[1]
-            }
-
-            /// Ratios shown on the Film tab, in display order (cinema / broadcast).
-            public static let film: [AspectRatio] = [
-                .ratio276, .ratio239, .ratio235, .ratio200, .ratio185, .ratio16x9, .ratio166,
-                .ratio143, .ratio4x3,
-            ]
-            /// Ratios shown on the Social tab, in display order (vertical / square / landscape feeds).
-            /// `16:9` appears in both tabs — selection is a single shared set, so it's the same case.
-            public static let social: [AspectRatio] = [
-                .ratio9x16, .ratio4x5, .ratio1x1, .ratio2x3, .ratio16x9, .ratio191,
-            ]
-
-            public static func ratios(for family: Family) -> [AspectRatio] {
-                switch family {
-                case .film: film
-                case .social: social
-                }
-            }
-        }
-
-        public init(
-            family: Family = .film,
-            selectedRatios: Set<AspectRatio> = [.ratio239],
-            maskEnabled: Bool = false
-        ) {
-            self.family = family
-            self.selectedRatios = selectedRatios
-            self.maskEnabled = maskEnabled
-        }
-
-        /// The Family tab last viewed in the popup (UI state — selection itself spans both tabs).
-        public var family: Family
-        /// Every aspect-ratio frame currently drawn. Multiple may be active at once; the mask darkens
-        /// the inverse of their union.
-        public var selectedRatios: Set<AspectRatio>
-        /// Darken everything outside the (combined) selected frames.
-        public var maskEnabled: Bool
-
-        /// Adds the ratio if absent, removes it if present.
-        public mutating func toggle(_ ratio: AspectRatio) {
-            if selectedRatios.contains(ratio) {
-                selectedRatios.remove(ratio)
-            } else {
-                selectedRatios.insert(ratio)
-            }
-        }
-
-        public func isSelected(_ ratio: AspectRatio) -> Bool {
-            selectedRatios.contains(ratio)
-        }
-
-        /// Compact label for status readouts: the lone ratio, a count when several are active, or
-        /// "—" when none.
-        public var summaryLabel: String {
-            if selectedRatios.count == 1 { return selectedRatios.first?.rawValue ?? "—" }
-            return selectedRatios.isEmpty ? "—" : "\(selectedRatios.count) ratios"
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case family, selectedRatios, maskEnabled
-            case aspectRatio  // legacy single-selection field
-        }
-
-        public init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            family = try container.decodeIfPresent(Family.self, forKey: .family) ?? .film
-            maskEnabled = try container.decodeIfPresent(Bool.self, forKey: .maskEnabled) ?? false
-            if let set = try container.decodeIfPresent(
-                Set<AspectRatio>.self, forKey: .selectedRatios)
-            {
-                selectedRatios = set
-            } else if let legacy = try container.decodeIfPresent(
-                AspectRatio.self, forKey: .aspectRatio)
-            {
-                // Migrate a config saved by the single-selection build.
-                selectedRatios = [legacy]
-            } else {
-                selectedRatios = [.ratio239]
-            }
-        }
-
-        public func encode(to encoder: any Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(family, forKey: .family)
-            try container.encode(selectedRatios, forKey: .selectedRatios)
-            try container.encode(maskEnabled, forKey: .maskEnabled)
-        }
-    }
-
-    public struct Grid: Codable, Equatable, Sendable {
-        public init(thirds: Bool = true, phi: Bool = false, diagonal: Bool = false) {
-            self.thirds = thirds
-            self.phi = phi
-            self.diagonal = diagonal
-        }
-
-        public var thirds: Bool
-        public var phi: Bool
-        public var diagonal: Bool
-
-        public var enabled: Bool {
-            thirds || phi || diagonal
-        }
-    }
-
     public struct Level: Codable, Equatable, Sendable {
         public enum Style: String, CaseIterable, Codable, Equatable, Sendable {
             case horizon = "Horizon"
             case gauge = "Gauge"
         }
 
-        public init(enabled: Bool = false, style: Style = .horizon) {
-            self.enabled = enabled
+        public init(style: Style = .horizon) {
             self.style = style
         }
 
-        public var enabled: Bool
         public var style: Style
     }
 
@@ -1194,176 +961,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         public var factor: Factor
     }
 
-    public struct Desqueeze: Codable, Equatable, Sendable {
-        /// Common anamorphic squeeze chips (including 1.6×). Custom values use [factor].
-        public enum Ratio: String, CaseIterable, Codable, Equatable, Sendable {
-            case x1 = "1x"
-            case x133 = "1.33x"
-            case x15 = "1.5x"
-            case x16 = "1.6x"
-            case x165 = "1.65x"
-            case x18 = "1.8x"
-            case x2 = "2x"
-
-            /// Numeric squeeze factor (e.g. `2.0` for a 2× anamorphic).
-            public var factor: Double {
-                switch self {
-                case .x1: 1.0
-                case .x133: 1.33
-                case .x15: 1.5
-                case .x16: 1.6
-                case .x165: 1.65
-                case .x18: 1.8
-                case .x2: 2.0
-                }
-            }
-
-            /// Nearest named chip for a snapped factor, if any chip matches within half a step.
-            public static func matching(factor: Double) -> Ratio? {
-                let snapped = Desqueeze.snap(factor)
-                return allCases.first { abs($0.factor - snapped) < 0.005 }
-            }
-        }
-
-        public enum Orientation: String, CaseIterable, Codable, Equatable, Sendable {
-            case horizontal = "Horizontal"
-            case vertical = "Vertical"
-        }
-
-        /// Inclusive operator range for custom de-squeeze.
-        public static let factorRange: ClosedRange<Double> = 1.0...2.0
-        /// Slider / step size for custom factor (0.01×).
-        public static let factorStep: Double = 0.01
-
-        public init(
-            enabled: Bool = false,
-            ratio: Ratio = .x1,
-            factor: Double? = nil,
-            orientation: Orientation = .horizontal
-        ) {
-            self.enabled = enabled
-            self.orientation = orientation
-            let resolved = Self.snap(factor ?? ratio.factor)
-            self.factor = resolved
-            self.ratio = Ratio.matching(factor: resolved) ?? ratio
-        }
-
-        public var enabled: Bool
-        /// Named chip when the factor matches a preset; otherwise the last selected chip (UI only).
-        public var ratio: Ratio
-        /// Applied squeeze factor in [factorRange], always the source of truth for rendering.
-        public var factor: Double
-        public var orientation: Orientation
-
-        /// True when [factor] is not one of the named chips (custom slider value).
-        public var isCustomFactor: Bool { Ratio.matching(factor: factor) == nil }
-
-        /// Sets the applied factor from a named chip.
-        public mutating func select(ratio: Ratio) {
-            self.ratio = ratio
-            self.factor = ratio.factor
-        }
-
-        /// Sets a custom (or snapped) factor from the 1.0…2.0 slider.
-        public mutating func select(factor raw: Double) {
-            let snapped = Self.snap(raw)
-            self.factor = snapped
-            if let match = Ratio.matching(factor: snapped) {
-                self.ratio = match
-            }
-        }
-
-        public static func snap(_ raw: Double) -> Double {
-            let clamped = min(max(raw, factorRange.lowerBound), factorRange.upperBound)
-            let steps = (clamped / factorStep).rounded()
-            return min(max(steps * factorStep, factorRange.lowerBound), factorRange.upperBound)
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case enabled, ratio, factor, orientation
-        }
-
-        public init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-            orientation =
-                try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .horizontal
-            if let storedFactor = try c.decodeIfPresent(Double.self, forKey: .factor) {
-                factor = Self.snap(storedFactor)
-                ratio =
-                    try c.decodeIfPresent(Ratio.self, forKey: .ratio)
-                    ?? Ratio.matching(factor: factor) ?? .x1
-            } else if let storedRatio = try c.decodeIfPresent(Ratio.self, forKey: .ratio) {
-                ratio = storedRatio
-                factor = storedRatio.factor
-            } else {
-                ratio = .x1
-                factor = 1.0
-            }
-        }
-
-        public func encode(to encoder: Encoder) throws {
-            var c = encoder.container(keyedBy: CodingKeys.self)
-            try c.encode(enabled, forKey: .enabled)
-            try c.encode(ratio, forKey: .ratio)
-            try c.encode(factor, forKey: .factor)
-            try c.encode(orientation, forKey: .orientation)
-        }
-    }
-
-    /// How much crush/clip pile-up to tolerate at scope edges before traffic lights glow,
-    /// expressed in stops of light (quarter-stop increments). Higher values are more forgiving —
-    /// useful on bodies with limited dynamic range where a small edge pile-up is normal.
-    public enum CrushClipCompensation: Int, CaseIterable, Codable, Equatable, Sendable,
-        Identifiable
-    {
-        // Raw values approximate stops×10 (quarter steps round down) so the 0 / 0.5 / 1.0 stops
-        // persisted by the earlier half-step range keep their meaning unchanged.
-        case zero = 0
-        case quarter = 2
-        case half = 5
-        case threeQuarter = 7
-        case one = 10
-
-        public var id: Int { rawValue }
-
-        /// Operator-facing label in stops (quarter-stop steps).
-        public var label: String {
-            switch self {
-            case .zero: "0"
-            case .quarter: "0.25"
-            case .half: "0.5"
-            case .threeQuarter: "0.75"
-            case .one: "1.0"
-            }
-        }
-
-        /// Tolerance in stops before crush/clip traffic lights fire.
-        public var stops: Double {
-            switch self {
-            case .zero: 0
-            case .quarter: 0.25
-            case .half: 0.5
-            case .threeQuarter: 0.75
-            case .one: 1.0
-            }
-        }
-
-        /// Fraction of total channel energy in the crush/clip band required to light a traffic light.
-        /// Each quarter-stop of compensation adds 2.5 percentage points (0 stops → 0%, 1 stop → 10%).
-        public var pixelFractionThreshold: Double { stops / 10.0 }
-
-        /// Lenient decode: values persisted by the earlier 0–2-stop range that exceed the new
-        /// 1.0-stop ceiling (1.5 → 15, 2.0 → 20) clamp to ``one`` instead of throwing — a throw
-        /// here would fail the whole preferences decode and wipe the operator's assist setup.
-        public init(from decoder: any Decoder) throws {
-            let raw = try decoder.singleValueContainer().decode(Int.self)
-            self = CrushClipCompensation(rawValue: raw) ?? (raw > 10 ? .one : .zero)
-        }
-    }
-
-    /// Traffic Lights RGB goal-post meter — panel scale. The meter's crush/clip tolerance is the
-    /// shared ``Scopes/crushClipCompensation`` setting (one value with the histogram).
     public struct TrafficLights: Codable, Equatable, Sendable {
         public static let scaleRange: ClosedRange<Double> = Scopes.scaleRange
         public static let defaultScale = 1.0
@@ -1382,12 +979,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             case scale
         }
 
-        /// Removed per-surface setting — read during decode by `AssistConfiguration.init(from:)`
-        /// so a customized value from the split era folds into the shared setting.
-        enum LegacyCodingKeys: String, CodingKey {
-            case crushClipCompensation
-        }
-
         public init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             scale = Self.clampedScale(
@@ -1395,95 +986,37 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         }
     }
 
-    /// Zebra overlay zones: highlight clip warning and optional midtone reference band.
+    /// How the zebra thresholds read in the editor. The thresholds themselves live on the shared
+    /// assist state's normalized monitoring axis; the unit only changes what the operator types.
     public struct Zebra: Codable, Equatable, Sendable {
         public enum Unit: String, CaseIterable, Codable, Equatable, Sendable {
             case native = "Native"
             case ire = "IRE"
-        }
 
-        public enum StripeColor: String, CaseIterable, Codable, Equatable, Sendable {
-            case white = "White"
-            case amber = "Amber"
-            case red = "Red"
-            case cyan = "Cyan"
-            case green = "Green"
-        }
+            /// Operator-facing value of a normalized threshold.
+            public func displayValue(for ire: Double, mapping: ExposureSignalMapping) -> Int {
+                switch self {
+                case .ire: Int(ire.rounded())
+                case .native: Int(mapping.signalNative(monitorPercent: ire).rounded())
+                }
+            }
 
-        public init(
-            unit: Unit = .ire,
-            highlightEnabled: Bool = true,
-            highlightIRE: Double = 100,
-            highlightColor: StripeColor = .white,
-            midtoneEnabled: Bool = true,
-            midtoneIRE: Double = 55,
-            midtoneColor: StripeColor = .amber
-        ) {
-            self.unit = unit
-            self.highlightEnabled = highlightEnabled
-            self.highlightIRE = highlightIRE
-            self.highlightColor = highlightColor
-            self.midtoneEnabled = midtoneEnabled
-            self.midtoneIRE = midtoneIRE
-            self.midtoneColor = midtoneColor
-        }
-
-        public var unit: Unit
-        public var highlightEnabled: Bool
-        /// Highlight point on OpenZCine's normalized black-to-clip monitoring axis.
-        public var highlightIRE: Double
-        public var highlightColor: StripeColor
-        public var midtoneEnabled: Bool
-        /// Midtone band centre on the normalized monitoring axis. ``unit`` only changes its editor.
-        public var midtoneIRE: Double
-        public var midtoneColor: StripeColor
-
-        /// Operator-facing threshold for display/edit, honouring ``unit``.
-        public func displayValue(for ire: Double, curve: ExposureToneCurve = .redLog3G10) -> Int {
-            displayValue(for: ire, mapping: ExposureSignalMapping(curve: curve))
-        }
-
-        public func displayValue(for ire: Double, mapping: ExposureSignalMapping) -> Int {
-            switch unit {
-            case .ire: Int(ire.rounded())
-            case .native:
-                Int(mapping.signalNative(monitorPercent: ire).rounded())
+            /// The normalized threshold an operator-typed value stands for.
+            public func monitorPercent(fromDisplay value: Int, mapping: ExposureSignalMapping)
+                -> Double
+            {
+                switch self {
+                case .ire: Double(value)
+                case .native: mapping.monitorPercent(signalNative: Double(value))
+                }
             }
         }
 
-        public mutating func setHighlight(
-            fromDisplay value: Int, curve: ExposureToneCurve = .redLog3G10
-        ) {
-            setHighlight(fromDisplay: value, mapping: ExposureSignalMapping(curve: curve))
+        public init(unit: Unit = .ire) {
+            self.unit = unit
         }
 
-        public mutating func setHighlight(
-            fromDisplay value: Int, mapping: ExposureSignalMapping
-        ) {
-            highlightIRE =
-                switch unit {
-                case .ire: Double(value)
-                case .native:
-                    mapping.monitorPercent(signalNative: Double(value))
-                }
-        }
-
-        public mutating func setMidtone(
-            fromDisplay value: Int, curve: ExposureToneCurve = .redLog3G10
-        ) {
-            setMidtone(fromDisplay: value, mapping: ExposureSignalMapping(curve: curve))
-        }
-
-        public mutating func setMidtone(
-            fromDisplay value: Int, mapping: ExposureSignalMapping
-        ) {
-            midtoneIRE =
-                switch unit {
-                case .ire: Double(value)
-                case .native:
-                    mapping.monitorPercent(signalNative: Double(value))
-                }
-        }
+        public var unit: Unit
     }
 
     /// Per-scope display options (footprint scale, plot mode, trace brightness, reference guide
@@ -1563,7 +1096,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         }
 
         /// Reference guide lines a waveform/parade draws (clip at the top, mid grey at centre, crush
-        /// at the bottom). Named `GuideLines` to avoid colliding with the aspect-ratio `Guides` above.
+        /// at the bottom). Named `GuideLines` to keep it apart from the aspect-ratio frame guides.
         public struct GuideLines: Codable, Equatable, Sendable {
             public var clip: Bool
             public var crush: Bool
@@ -1588,8 +1121,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             vectorscopeZoom: VectorscopeZoom = .x1,
             vectorscopeBrightness: Int = defaultBrightness,
             histogramScale: Double = defaultScale,
-            histogramTrafficLights: Bool = true,
-            crushClipCompensation: CrushClipCompensation = .quarter
+            histogramTrafficLights: Bool = true
         ) {
             self.waveformScale = Self.clampedScale(waveformScale)
             self.waveformMode = waveformMode
@@ -1604,7 +1136,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             self.vectorscopeBrightness = Self.clampedBrightness(vectorscopeBrightness)
             self.histogramScale = Self.clampedScale(histogramScale)
             self.histogramTrafficLights = histogramTrafficLights
-            self.crushClipCompensation = crushClipCompensation
         }
 
         public var waveformScale: Double
@@ -1620,22 +1151,16 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         public var vectorscopeBrightness: Int
         public var histogramScale: Double
         public var histogramTrafficLights: Bool
-        /// Crush/clip tolerance shared by every surface that meters the scope edges — the
-        /// histogram's traffic lights and the standalone goal-post meter read this one value.
-        public var crushClipCompensation: CrushClipCompensation
 
         enum CodingKeys: String, CodingKey {
             case waveformScale, waveformMode, waveformGuides, waveformBrightness, paradeScale,
                 paradeMode, paradeGuides, paradeBrightness,
                 vectorscopeScale, vectorscopeZoom, vectorscopeBrightness,
-                histogramScale, histogramTrafficLights,
-                crushClipCompensation, histogramCrushClipCompensation,
-                histogramNoiseFloorCompensation, waveformParadeBrightnessCalibrationVersion
+                histogramScale, histogramTrafficLights, waveformParadeBrightnessCalibrationVersion
         }
 
         /// Removed settings — decoded and discarded so older saved configs still load.
         private enum LegacyCodingKeys: String, CodingKey {
-            case histogramTrafficSensitivity
             case waveformSkinTone
         }
 
@@ -1659,7 +1184,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             try c.encode(vectorscopeBrightness, forKey: .vectorscopeBrightness)
             try c.encode(histogramScale, forKey: .histogramScale)
             try c.encode(histogramTrafficLights, forKey: .histogramTrafficLights)
-            try c.encode(crushClipCompensation, forKey: .crushClipCompensation)
             try c.encode(
                 Self.waveformParadeBrightnessCalibrationVersion,
                 forKey: .waveformParadeBrightnessCalibrationVersion)
@@ -1702,35 +1226,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
                 try c.decodeIfPresent(Double.self, forKey: .histogramScale) ?? Self.defaultScale)
             histogramTrafficLights =
                 try c.decodeIfPresent(Bool.self, forKey: .histogramTrafficLights) ?? true
-            if let explicit = try c.decodeIfPresent(
-                CrushClipCompensation.self, forKey: .crushClipCompensation)
-            {
-                crushClipCompensation = explicit
-            } else {
-                // Per-surface era: the histogram copy was ALWAYS encoded, so a stored `.zero`
-                // (the old default) is indistinguishable from "never touched" and upgrades to the
-                // shared `.quarter` default; a customized (non-zero) value is honored. The
-                // traffic-lights copy is folded in by `AssistConfiguration.init(from:)`, which
-                // can see both blobs.
-                var legacy = try c.decodeIfPresent(
-                    CrushClipCompensation.self, forKey: .histogramCrushClipCompensation)
-                if legacy == nil {
-                    // Renamed key — same persisted enum values.
-                    legacy = try c.decodeIfPresent(
-                        CrushClipCompensation.self, forKey: .histogramNoiseFloorCompensation)
-                }
-                if legacy == nil,
-                    let legacyPercent = try decoder.container(keyedBy: LegacyCodingKeys.self)
-                        .decodeIfPresent(Int.self, forKey: .histogramTrafficSensitivity)
-                {
-                    // Pre-stops migration stored 0/5/10/15/20 as percent; 0/5/10 map 1:1 to the
-                    // current raw values, anything above the 1.0-stop ceiling clamps to `.one`.
-                    legacy =
-                        CrushClipCompensation(rawValue: legacyPercent)
-                        ?? (legacyPercent > 10 ? .one : .zero)
-                }
-                crushClipCompensation = legacy.flatMap { $0 == .zero ? nil : $0 } ?? .quarter
-            }
             let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
             _ = try legacy.decodeIfPresent(
                 DiscardedWaveformSkinTone.self, forKey: .waveformSkinTone)
@@ -1738,135 +1233,49 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     }
 
     public init(
-        guides: Guides = Guides(),
-        grid: Grid = Grid(),
         level: Level = Level(),
-        desqueeze: Desqueeze = Desqueeze(),
-        falseColorReferenceEnabled: Bool = true,
-        falseColorScale: FalseColorScale = .stops,
         zebra: Zebra = Zebra(),
         trafficLights: TrafficLights = TrafficLights(),
-        peakingColor: Peaking.Color = .red,
-        peakingSensitivity: Peaking.Sensitivity = .medium,
         scopes: Scopes = Scopes(),
         selectedLUT: LUTSelection = .builtIn(.log3G10Rec709)
     ) {
-        self.guides = guides
-        self.grid = grid
         self.level = level
-        self.desqueeze = desqueeze
-        self.falseColorReferenceEnabled = falseColorReferenceEnabled
-        self.falseColorScale = falseColorScale
         self.zebra = zebra
         self.trafficLights = trafficLights
-        self.peakingColor = peakingColor
-        self.peakingSensitivity = peakingSensitivity
         self.scopes = scopes
         self.selectedLUT = selectedLUT
     }
 
-    public var guides: Guides
-    public var grid: Grid
+    /// Camera level overlay style (Nikon reads the body's attitude).
     public var level: Level
-    public var desqueeze: Desqueeze
-    /// Punch-in factor for the magnification assist; the punched-in state itself is not persisted.
     public var magnification: Magnification = Magnification()
-    public var falseColorReferenceEnabled: Bool
-    /// Which false-colour ramp the overlay reads against (stop landmarks, monitor IRE, or limits).
-    public var falseColorScale: FalseColorScale
-    /// Zebra highlight/midtone zones and display units.
     public var zebra: Zebra
-    /// Traffic Lights RGB goal-post meter panel scale.
     public var trafficLights: TrafficLights
-    /// Colour focus-peaking paints in-focused edges.
-    public var peakingColor: Peaking.Color
-    /// How aggressively peaking flags edges (maps to the detector threshold in the renderer).
-    public var peakingSensitivity: Peaking.Sensitivity
-    /// Instant playback review duration in seconds; 0 keeps the still up until dismissed.
     public var instantReviewSeconds: Int = 5
-    /// Overlay the AF box the shot focused with on the instant-playback still.
     public var instantReviewShowsFocusPoint: Bool = true
-    /// Show the capture settings line (ISO · shutter · iris · quality) under the still.
     public var instantReviewShowsCaptureInfo: Bool = true
-    /// Per-scope display options (size, mode, guide lines, traffic lights).
     public var scopes: Scopes
-    /// The LUT applied to the live view (gated by the `.lut` assist tool being on).
     public var selectedLUT: LUTSelection
 
-    /// Legacy accessor for the highlight zebra IRE — forwards to ``zebra``.
-    public var zebraHighlightIRE: Double {
-        get { zebra.highlightIRE }
-        set { zebra.highlightIRE = newValue }
-    }
-
     private enum CodingKeys: String, CodingKey {
-        case guides, grid, level, desqueeze, magnification, falseColorReferenceEnabled,
-            falseColorScale,
-            zebra, trafficLights,
-            zebraHighlightIRE, peakingColor, peakingSensitivity, scopes, selectedLUT,
+        case level, magnification, zebra, trafficLights, scopes, selectedLUT,
             instantReviewSeconds, instantReviewShowsFocusPoint, instantReviewShowsCaptureInfo
     }
 
-    /// Removed settings — decoded and discarded so older saved configs still load.
-    private enum LegacyCodingKeys: String, CodingKey {
-        case falseColorSkinReferenceEnabled, falseColorCurve
-    }
-
+    /// Every key is optional: blobs written before the shared state took the moved fields still
+    /// decode here, and a stored look that no longer exists falls back inside `LUTSelection`.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        // Fields present since the first persisted version decode normally; ones added later use
-        // `decodeIfPresent` with a default so an older saved config still loads (no reset).
-        guides = try c.decode(Guides.self, forKey: .guides)
-        grid = try c.decode(Grid.self, forKey: .grid)
-        level = try c.decode(Level.self, forKey: .level)
-        desqueeze = try c.decode(Desqueeze.self, forKey: .desqueeze)
-        // Added after the first persisted version, so an older saved config still loads.
+        level = try c.decodeIfPresent(Level.self, forKey: .level) ?? Level()
         magnification =
             try c.decodeIfPresent(Magnification.self, forKey: .magnification) ?? Magnification()
-        falseColorReferenceEnabled = try c.decode(Bool.self, forKey: .falseColorReferenceEnabled)
-        selectedLUT = try c.decode(LUTSelection.self, forKey: .selectedLUT)
-        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
-        _ = try legacy.decodeIfPresent(Bool.self, forKey: .falseColorSkinReferenceEnabled)
-        _ = try? legacy.decodeIfPresent(String.self, forKey: .falseColorCurve)
-        falseColorScale =
-            try c.decodeIfPresent(FalseColorScale.self, forKey: .falseColorScale) ?? .stops
-        if let decodedZebra = try c.decodeIfPresent(Zebra.self, forKey: .zebra) {
-            zebra = decodedZebra
-        } else {
-            let legacyIRE = try c.decodeIfPresent(Double.self, forKey: .zebraHighlightIRE) ?? 100
-            zebra = Zebra(highlightIRE: legacyIRE)
-        }
-        scopes = try c.decodeIfPresent(Scopes.self, forKey: .scopes) ?? Scopes()
-        // Compensation re-unification: split-era configs stored a second copy under
-        // trafficLights. When the scopes blob predates the shared key and its own histogram copy
-        // was never customized (absent or the old `.zero` default), a customized traffic-lights
-        // copy carries the operator's intent — fold it into the shared setting. Current encodes
-        // never write the old trafficLights key, so this only fires for split-era blobs.
-        if let scopesContainer = try? c.nestedContainer(
-            keyedBy: Scopes.CodingKeys.self, forKey: .scopes),
-            !scopesContainer.contains(.crushClipCompensation)
-        {
-            let histogramLegacy =
-                ((try? scopesContainer.decodeIfPresent(
-                    CrushClipCompensation.self, forKey: .histogramCrushClipCompensation)) ?? nil)
-                ?? ((try? scopesContainer.decodeIfPresent(
-                    CrushClipCompensation.self, forKey: .histogramNoiseFloorCompensation)) ?? nil)
-            if histogramLegacy == nil || histogramLegacy == .zero,
-                let trafficContainer = try? c.nestedContainer(
-                    keyedBy: TrafficLights.LegacyCodingKeys.self, forKey: .trafficLights),
-                let trafficLegacy =
-                    ((try? trafficContainer.decodeIfPresent(
-                        CrushClipCompensation.self, forKey: .crushClipCompensation)) ?? nil),
-                trafficLegacy != .zero
-            {
-                scopes.crushClipCompensation = trafficLegacy
-            }
-        }
+        zebra = try c.decodeIfPresent(Zebra.self, forKey: .zebra) ?? Zebra()
         trafficLights =
             try c.decodeIfPresent(TrafficLights.self, forKey: .trafficLights) ?? TrafficLights()
-        peakingColor = try c.decodeIfPresent(Peaking.Color.self, forKey: .peakingColor) ?? .red
-        peakingSensitivity =
-            try c.decodeIfPresent(Peaking.Sensitivity.self, forKey: .peakingSensitivity) ?? .medium
+        scopes = try c.decodeIfPresent(Scopes.self, forKey: .scopes) ?? Scopes()
+        selectedLUT =
+            try c.decodeIfPresent(LUTSelection.self, forKey: .selectedLUT)
+            ?? .builtIn(.log3G10Rec709)
         instantReviewSeconds =
             try c.decodeIfPresent(Int.self, forKey: .instantReviewSeconds) ?? 5
         instantReviewShowsFocusPoint =
@@ -1877,17 +1286,10 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(guides, forKey: .guides)
-        try c.encode(grid, forKey: .grid)
         try c.encode(level, forKey: .level)
-        try c.encode(desqueeze, forKey: .desqueeze)
         try c.encode(magnification, forKey: .magnification)
-        try c.encode(falseColorReferenceEnabled, forKey: .falseColorReferenceEnabled)
-        try c.encode(falseColorScale, forKey: .falseColorScale)
         try c.encode(zebra, forKey: .zebra)
         try c.encode(trafficLights, forKey: .trafficLights)
-        try c.encode(peakingColor, forKey: .peakingColor)
-        try c.encode(peakingSensitivity, forKey: .peakingSensitivity)
         try c.encode(scopes, forKey: .scopes)
         try c.encode(selectedLUT, forKey: .selectedLUT)
         try c.encode(instantReviewSeconds, forKey: .instantReviewSeconds)

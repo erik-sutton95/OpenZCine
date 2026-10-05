@@ -159,10 +159,10 @@ struct ZebraSettings: Equatable, Sendable {
     var highlightEnabled: Bool = true
     /// Clip point as *reference* IRE — converted to native luma through the signal `curve`.
     var highlightIRE: Double = 100
-    var highlightColor: AssistConfiguration.Zebra.StripeColor = .white
+    var highlightColor: MonitorZebraPaint = .white
     var midtoneEnabled: Bool = true
     var midtoneIRE: Double = 55
-    var midtoneColor: AssistConfiguration.Zebra.StripeColor = .amber
+    var midtoneColor: MonitorZebraPaint = .amber
     var curve: ExposureToneCurve = .redLog3G10
     var clipNative: Double? = nil
 
@@ -227,7 +227,7 @@ extension NativeAppModel {
     /// colour, peaking, and zebra use their default parameters for now (the tools are on/off
     /// toggles); the LUT follows the operator's picked look.
     var playbackImageEffects: LiveImageEffects {
-        imageEffects(for: preferences.visibleAssistTools(for: .playback))
+        imageEffects(for: assist.playbackTools)
     }
 
     private func imageEffects(for visible: Set<MonitorAssistTool>) -> LiveImageEffects {
@@ -236,13 +236,14 @@ extension NativeAppModel {
                 visibleTools: visible, selected: assistConfiguration.selectedLUT),
             falseColor: visible.contains(.falseColor)
                 ? FalseColorSettings(
-                    scale: assistConfiguration.falseColorScale,
+                    scale: assist.falseColorScale.nikonScale,
                     curve: exposureSignalMapping.curve,
                     clipNative: exposureSignalMapping.clipNative) : nil,
             peaking: visible.contains(.peaking)
                 ? PeakingSettings(
-                    color: assistConfiguration.peakingColor,
-                    sensitivity: assistConfiguration.peakingSensitivity,
+                    color: Peaking.Color(rawValue: assist.peakingColor.rawValue) ?? .red,
+                    sensitivity: Peaking.Sensitivity(rawValue: assist.peakingSensitivity.rawValue)
+                        ?? .medium,
                     // The photography feed is a display-referred preview, so its gradients run
                     // larger than the log video feed the gates were calibrated on. Shared core
                     // owns the squaring, so both shells resolve the same number.
@@ -252,12 +253,12 @@ extension NativeAppModel {
             zebra: visible.contains(.zebra)
                 ? ZebraSettings(
                     unit: assistConfiguration.zebra.unit,
-                    highlightEnabled: assistConfiguration.zebra.highlightEnabled,
-                    highlightIRE: assistConfiguration.zebra.highlightIRE,
-                    highlightColor: assistConfiguration.zebra.highlightColor,
-                    midtoneEnabled: assistConfiguration.zebra.midtoneEnabled,
-                    midtoneIRE: assistConfiguration.zebra.midtoneIRE,
-                    midtoneColor: assistConfiguration.zebra.midtoneColor,
+                    highlightEnabled: assist.zebraHighlight,
+                    highlightIRE: assist.zebraHighlightIRE,
+                    highlightColor: assist.zebraHighlightColor,
+                    midtoneEnabled: assist.zebraMidtone,
+                    midtoneIRE: assist.zebraMidtoneIRE,
+                    midtoneColor: assist.zebraMidtoneColor,
                     curve: exposureSignalMapping.curve,
                     clipNative: exposureSignalMapping.clipNative) : nil,
             blockSmoothing: DemoHarness.blockSmoothStrength.map { strength in
@@ -267,7 +268,8 @@ extension NativeAppModel {
             },
             blockDither: DemoHarness.blockDitherLevels.map { BlockDitherSettings(levels: $0) },
             splitComparison: LUTResolution.splitComparison(
-                visibleTools: visible, preferences: preferences, muted: splitComparisonMuted))
+                visibleTools: visible, enabled: assist.splitComparison,
+                vertical: assist.splitVertical, muted: splitComparisonMuted))
     }
 
     var liveImageEffects: LiveImageEffects {
@@ -293,7 +295,7 @@ extension NativeAppModel {
 
     /// Whether the horizon level overlay is visible — gates per-frame virtual-horizon updates.
     var levelAssistActive: Bool {
-        renderedLiveAssistTools.contains(.level) && assistConfiguration.level.enabled
+        renderedLiveAssistTools.contains(.level)
     }
 
     /// The cube the vectorscope pushes its sampled points through so it reads the MONITOR image:
@@ -320,7 +322,7 @@ extension NativeAppModel {
     /// Publishes scope bins/points and derived traffic-light readings in one assignment.
     /// Heavy derivation runs off the main actor; only the final `scopeAssist` assignment is main-bound.
     func publishScopeAssist(samples: OpenCineMedia.ScopeSamples) async {
-        let trafficLightsCrushClip = assistConfiguration.scopes.crushClipCompensation
+        let trafficLightsCrushClip = assist.crushClipCompensation
         let mapping = exposureSignalMapping
         let vectorscopeCube = vectorscopeMonitorCube(
             visibleTools: renderedLiveAssistTools,

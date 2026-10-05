@@ -1,3 +1,4 @@
+import enum OpenCineMedia.MonitorCrushClipCompensation
 import OpenZCineCore
 import Testing
 
@@ -70,9 +71,9 @@ struct ScopeFrameWireTests {
         func clipFlags(_ flat: [Float]) -> [Float] {
             (0..<3).map { flat[$0 * ScopeFrameWire.trafficChannelStride + 1] }
         }
-        let zero = reading(AssistConfiguration.CrushClipCompensation.zero.rawValue)
-        let quarter = reading(AssistConfiguration.CrushClipCompensation.quarter.rawValue)
-        let one = reading(AssistConfiguration.CrushClipCompensation.one.rawValue)
+        let zero = reading(MonitorCrushClipCompensation.zero.rawValue)
+        let quarter = reading(MonitorCrushClipCompensation.quarter.rawValue)
+        let one = reading(MonitorCrushClipCompensation.one.rawValue)
         #expect(clipFlags(zero) == [1, 1, 1])
         #expect(clipFlags(quarter) == [0, 0, 0])
         #expect(reading() == quarter)

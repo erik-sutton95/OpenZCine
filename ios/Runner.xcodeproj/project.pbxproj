@@ -84,6 +84,7 @@
 		C0DE000000000000000000B0 /* MonitorPortrait.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000B1 /* MonitorPortrait.swift */; };
 		C0DE000000000000000000B2 /* MonitorPortraitModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000B3 /* MonitorPortraitModules.swift */; };
 		C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C5 /* MonitorUnified.swift */; };
+		C0DE00000000000000000F01 /* NikonAssists.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F11 /* NikonAssists.swift */; };
 		C0DE000000000000000000C6 /* DemoHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C7 /* DemoHarness.swift */; };
 		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
@@ -120,6 +121,7 @@
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
+		C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F12 /* NikonAssistsTests.swift */; };
 		C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */; };
 		C1B000000000000000000004 /* NikonMediaLibraryAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */; };
 		C1C000000000000000000004 /* NikonMediaGalleryProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */; };
@@ -244,6 +246,7 @@
 		C0DE00000000000000000069 /* StartupPermissions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupPermissions.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000B1 /* MonitorPortrait.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortrait.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000B3 /* MonitorPortraitModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortraitModules.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000F11 /* NikonAssists.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAssists.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C5 /* MonitorUnified.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorUnified.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F2 /* PhotographyChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotographyChrome.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C7 /* DemoHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoHarness.swift; sourceTree = "<group>"; };
@@ -278,6 +281,7 @@
 		N0100000000000000000000D /* MulticamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinatorTests.swift; sourceTree = "<group>"; };
 		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
 		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000F12 /* NikonAssistsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAssistsTests.swift; sourceTree = "<group>"; };
 		C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaCatalogAdoptionTests.swift; sourceTree = "<group>"; };
 		C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaLibraryAdoptionTests.swift; sourceTree = "<group>"; };
 		C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaGalleryProjectionTests.swift; sourceTree = "<group>"; };
@@ -316,6 +320,7 @@
 			isa = PBXGroup;
 			children = (
 				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
+				C0DE00000000000000000F12 /* NikonAssistsTests.swift */,
 				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
@@ -415,6 +420,7 @@
 				C0DE000000000000000000B1 /* MonitorPortrait.swift */,
 				C0DE000000000000000000B3 /* MonitorPortraitModules.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
+				C0DE00000000000000000F11 /* NikonAssists.swift */,
 				C0DE000000000000000000F2 /* PhotographyChrome.swift */,
 				C0DE0000000000000000002F /* MonitorControls.swift */,
 				C0DE00000000000000000031 /* DesignShared.swift */,
@@ -618,6 +624,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
+				C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */,
 				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
@@ -684,6 +691,7 @@
 				C0DE000000000000000000B0 /* MonitorPortrait.swift in Sources */,
 				C0DE000000000000000000B2 /* MonitorPortraitModules.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
+				C0DE00000000000000000F01 /* NikonAssists.swift in Sources */,
 				C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */,
 				C0DE0000000000000000002E /* MonitorControls.swift in Sources */,
 				C0DE00000000000000000030 /* DesignShared.swift in Sources */,

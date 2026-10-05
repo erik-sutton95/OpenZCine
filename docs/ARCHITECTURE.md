@@ -138,8 +138,9 @@ home-indicator area) — the tile grid (fit) or capture bar (fill) fills whateve
 Clean and command modes keep the pre-v2 structure.
 
 Fit and fill diverge on how scopes render, matched by `OperatorPreferences.scopeActivationOrder`
-(persisted, oldest→newest activation, maintained by `AssistToolActivation.set` for
-`MonitorAssistTool.scopeTools` only):
+(persisted, oldest→newest activation, maintained by `OperatorPreferences.recordScopeActivation`
+from `NativeAppModel.setAssist` for live `MonitorAssistTool.scopeTools` only; which tools are on
+lives in the shared `MonitorAssistState`):
 
 - **Fit** stacks `OperatorPreferences.displayedFitScopes` — the 2 *most recently activated* scope
   tools (re-sorted into canonical order for display), capped regardless of how many are actually
