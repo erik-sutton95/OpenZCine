@@ -110,21 +110,8 @@ android {
             abiFilters += supportedAndroidAbi
         }
 
-        externalNativeBuild {
-            cmake {
-                // Static STL avoids clashing with Swift runtime's libc++_shared.so.
-                cppFlags += listOf("-std=c++17", "-fno-exceptions", "-fno-rtti")
-                arguments += listOf("-DANDROID_STL=c++_static")
-            }
-        }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/live_feed_vk/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 
     signingConfigs {
         if (keystorePath != null) {
@@ -303,6 +290,8 @@ dependencies {
     implementation(libs.opencine.appkit)
     // Shared prepared PCM sampling and decoded-audio source lifetime.
     implementation(libs.opencine.native.runtime)
+    // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.
+    implementation(libs.opencine.vulkan)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))
@@ -342,6 +331,8 @@ dependencies {
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+    // Retired donor renderer for exact Vulkan pixel parity; test APK only.
+    androidTestImplementation(project(":frozen-vulkan-donor"))
 
     debugImplementation(libs.compose.ui.test.manifest)
 }

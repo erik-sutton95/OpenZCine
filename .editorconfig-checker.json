@@ -11,6 +11,6 @@
     "ios/",
     "android/",
     "build/",
-    "Apps/Android/app/src/main/assets/shaders/vulkan/"
+    "Apps/Android/frozen-vulkan-donor/src/main/assets/shaders/vulkan/"
   ]
 }

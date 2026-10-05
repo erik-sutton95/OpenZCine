@@ -32,6 +32,8 @@ includeBuild("../../../OpenCine/Android") {
         // The shared cameras page, connection model and saved-camera document (SHELL-02).
         substitute(module("com.opencapture.opencine:appkit")).using(project(":appkit"))
         substitute(module("com.opencapture.opencine:native-runtime")).using(project(":native-runtime"))
+        // The shared renderer's legacy OpcVulkan JNI class, probed by the live-feed backend factory.
+        substitute(module("com.opencapture.opencine:vulkan")).using(project(":vulkan"))
     }
 }
 
@@ -42,3 +44,5 @@ include(":core-api")
 // process can host without giving the watch a Nikon/PTP implementation.
 include(":wear-relay")
 include(":wear")
+// androidTest-only frozen donor for Vulkan rendered-pixel parity (NikonBitmapVulkanPixelParityTest).
+include(":frozen-vulkan-donor")

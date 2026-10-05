@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5CA01A5203C108E5E0C97A63 /* FrozenNikonRuntimeEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */; };
+		DA09C9A965A9A7BE0DF9AB81 /* FrozenNikonUIImageGraphProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */; };
+		33E5374DD0792544E78B109F /* NikonMetalPresentPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40EB57B1007EDD19FCCD50ED /* NikonMetalPresentPolicyTests.swift */; };
+		7C3A6337E90AF8B2A9888BF9 /* NikonNativeFrameBakerOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6720AF76620F39771469F46 /* NikonNativeFrameBakerOwnershipTests.swift */; };
+		50CC723D16138C59F5C7EFD8 /* NikonNativeJPEGDecodeOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19D60C2B54A43E317DF5B8CC /* NikonNativeJPEGDecodeOwnershipTests.swift */; };
+		AD553037C8880BD9DF575044 /* NikonNativeUIImageGraphParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6314B694DBD29A6454D548 /* NikonNativeUIImageGraphParityTests.swift */; };
 		C1D000000000000000000002 /* NikonPeakingTinyWindowParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */; };
 		C1E000000000000000000002 /* NikonMediaDeliveryCoordinatorAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */; };
 		1E0000000000000000000051 /* NikonPlaybackOwnerAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0000000000000000000050 /* NikonPlaybackOwnerAdoptionTests.swift */; };
@@ -162,6 +168,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonRuntimeEffects.swift; sourceTree = "<group>"; };
+		1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonUIImageGraphProcessor.swift; sourceTree = "<group>"; };
+		40EB57B1007EDD19FCCD50ED /* NikonMetalPresentPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMetalPresentPolicyTests.swift; sourceTree = "<group>"; };
+		F6720AF76620F39771469F46 /* NikonNativeFrameBakerOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonNativeFrameBakerOwnershipTests.swift; sourceTree = "<group>"; };
+		19D60C2B54A43E317DF5B8CC /* NikonNativeJPEGDecodeOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonNativeJPEGDecodeOwnershipTests.swift; sourceTree = "<group>"; };
+		FD6314B694DBD29A6454D548 /* NikonNativeUIImageGraphParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonNativeUIImageGraphParityTests.swift; sourceTree = "<group>"; };
 		C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonPeakingTinyWindowParityTests.swift; sourceTree = "<group>"; };
 		C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaDeliveryCoordinatorAdapterTests.swift; sourceTree = "<group>"; };
 		1E0000000000000000000050 /* NikonPlaybackOwnerAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonPlaybackOwnerAdoptionTests.swift; sourceTree = "<group>"; };
@@ -332,6 +344,12 @@
 				C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */,
 				C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */,
 				1E0000000000000000000050 /* NikonPlaybackOwnerAdoptionTests.swift */,
+				51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */,
+				1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */,
+				40EB57B1007EDD19FCCD50ED /* NikonMetalPresentPolicyTests.swift */,
+				F6720AF76620F39771469F46 /* NikonNativeFrameBakerOwnershipTests.swift */,
+				19D60C2B54A43E317DF5B8CC /* NikonNativeJPEGDecodeOwnershipTests.swift */,
+				FD6314B694DBD29A6454D548 /* NikonNativeUIImageGraphParityTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -629,6 +647,12 @@
 				C1D000000000000000000002 /* NikonPeakingTinyWindowParityTests.swift in Sources */,
 				C1E000000000000000000002 /* NikonMediaDeliveryCoordinatorAdapterTests.swift in Sources */,
 				1E0000000000000000000051 /* NikonPlaybackOwnerAdoptionTests.swift in Sources */,
+				5CA01A5203C108E5E0C97A63 /* FrozenNikonRuntimeEffects.swift in Sources */,
+				DA09C9A965A9A7BE0DF9AB81 /* FrozenNikonUIImageGraphProcessor.swift in Sources */,
+				33E5374DD0792544E78B109F /* NikonMetalPresentPolicyTests.swift in Sources */,
+				7C3A6337E90AF8B2A9888BF9 /* NikonNativeFrameBakerOwnershipTests.swift in Sources */,
+				50CC723D16138C59F5C7EFD8 /* NikonNativeJPEGDecodeOwnershipTests.swift in Sources */,
+				AD553037C8880BD9DF575044 /* NikonNativeUIImageGraphParityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Guards the GLES2 shaders against GLSL ES 1.00 reserved words used as identifiers.
 #
-# Nothing in the build compiles these: the .glsl files under app/src/main/assets/shaders/ are
+# Nothing in the build compiles these: the shared native-runtime asset .glsl files are
 # loaded and compiled by the DRIVER at runtime, so a syntax error ships with a green
 # `android-check` and only shows up on a device. Worse, the live surface catches the compile
 # failure and falls back to the plain feed, so it reads as "the LUT and peaking silently stopped
@@ -16,7 +16,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-SHADER_DIR="Apps/Android/app/src/main/assets/shaders"
+SHADER_DIR="../OpenCine/Android/native-runtime/src/main/assets/shaders"
 
 # GLSL ES 1.00 §3.7, "keywords reserved for future use". Words that are already illegal as
 # identifiers in any C-like language (if/for/return...) are omitted: the compiler and review

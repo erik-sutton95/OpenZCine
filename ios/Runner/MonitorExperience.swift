@@ -1,5 +1,6 @@
 import CoreImage
 import MonitorUI
+import OpenCineApple
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -680,6 +681,7 @@ private struct LiveFrameRaster: View {
             image: model.liveFrameImage
                 ?? (model.isDemoSession ? UIImage(named: "MockFeed") : nil),
             effects: model.liveImageEffects,
+            source: model.liveFrameSource,
             isDemoSession: model.isDemoSession,
             fileStore: model.lutFileStore,
             width: width,
@@ -724,6 +726,7 @@ private struct FullBleedWhenMeasured: ViewModifier {
 private struct LiveFrameFeedLayer: View {
     let image: UIImage?
     let effects: LiveImageEffects
+    let source: LiveFrameSampleBus.Source?
     let isDemoSession: Bool
     let fileStore: LUTFileStore
     let width: CGFloat
@@ -735,7 +738,7 @@ private struct LiveFrameFeedLayer: View {
             if let image {
                 if metalFeedEnabled {
                     MetalLiveView(
-                        image: image, effects: effects, fileStore: fileStore
+                        image: image, effects: effects, fileStore: fileStore, source: source
                     )
                 } else if isDemoSession {
                     DemoProcessedLiveFrameView(

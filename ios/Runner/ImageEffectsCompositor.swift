@@ -1,6 +1,7 @@
 import CoreImage
 import Foundation
 import OpenCineApple
+import OpenCineMedia
 import OpenZCineCore
 import os
 
@@ -214,114 +215,20 @@ enum ImageEffectsCompositor {
 
     // MARK: - Block-artifact suppression
 
-    /// Variance-gated smoothing: pulls each pixel toward a local mean, but only where the
-    /// neighbourhood is flat enough that there is no real detail to lose.
-    ///
-    /// Deliberately **grid-free**. A boundary filter that keys on the JPEG 8×8 lattice is cheaper
-    /// per pixel, but it has to know the grid phase — and the phase moves under cropping, and moved
-    /// on Android for as long as the decoder was halving the frame. A filter aimed at the wrong
-    /// phase does nothing while looking like it works. This one keys on the only thing that is
-    /// always true: blocking is visible *because* it sits in smooth areas, so smooth areas are
-    /// where it is safe and sufficient to filter.
-    ///
-    /// Nine taps on a sparse 5×5 lattice (offsets 0, ±`r`) rather than a dense 25. Undersampling
-    /// aliases high frequencies, which is exactly the content the flatness gate has already
-    /// excluded — so the sparse lattice buys a 5 px span, wide enough to flatten an 8 px block
-    /// step into a ramp, at 3×3 cost.
-    private static let flatSmoothKernel: CIKernel? = CIKernel(
-        source: """
-            kernel vec4 flatSmooth(sampler src, float r, float gateGain, float strength) {
-              vec2 p = destCoord();
-              vec4 c4 = sample(src, samplerTransform(src, p));
-              vec4 c0 = sample(src, samplerTransform(src, p + vec2(-r, -r)));
-              vec4 c1 = sample(src, samplerTransform(src, p + vec2(0.0, -r)));
-              vec4 c2 = sample(src, samplerTransform(src, p + vec2( r, -r)));
-              vec4 c3 = sample(src, samplerTransform(src, p + vec2(-r, 0.0)));
-              vec4 c5 = sample(src, samplerTransform(src, p + vec2( r, 0.0)));
-              vec4 c6 = sample(src, samplerTransform(src, p + vec2(-r,  r)));
-              vec4 c7 = sample(src, samplerTransform(src, p + vec2(0.0,  r)));
-              vec4 c8 = sample(src, samplerTransform(src, p + vec2( r,  r)));
-              vec4 mean = (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8) / 9.0;
-              vec3 w = vec3(0.2126, 0.7152, 0.0722);
-              float m = dot(mean.rgb, w);
-              // Mean absolute deviation, not variance: same decision, no squaring, and it stays in
-              // code-value units so the gate is readable as "levels out of 255".
-              float dev = abs(dot(c0.rgb, w) - m) + abs(dot(c1.rgb, w) - m)
-                        + abs(dot(c2.rgb, w) - m) + abs(dot(c3.rgb, w) - m)
-                        + abs(dot(c4.rgb, w) - m) + abs(dot(c5.rgb, w) - m)
-                        + abs(dot(c6.rgb, w) - m) + abs(dot(c7.rgb, w) - m)
-                        + abs(dot(c8.rgb, w) - m);
-              dev = dev / 9.0;
-              float flatness = clamp(1.0 - dev * gateGain, 0.0, 1.0);
-              return vec4(mix(c4.rgb, mean.rgb, flatness * strength), c4.a);
-            }
-            """)
-
-    /// Adds a small amount of per-pixel noise to break up the periodicity of what blocking is left.
-    ///
-    /// This does not remove error, it makes the remaining error harder to *detect*, which is a
-    /// different and much cheaper goal. Blocking is objectionable out of proportion to its magnitude
-    /// because it is a regular lattice and the visual system locks onto periodic structure; measured
-    /// against ground truth, a boundary filter moved PSNR by +0.06 dB while dropping the blockiness
-    /// ratio from 1.85 to 1.50. Magnitude was never the thing that mattered. AV1 ships film-grain
-    /// synthesis as a normative feature for the same reason.
-    ///
-    /// Applied at **source** resolution, after the look. That reads like the wrong place for a
-    /// masker — the eye sees display pixels — but the artifact and the noise are magnified by the
-    /// same uniform upscale, so their spatial-frequency relationship is preserved exactly, and it
-    /// costs no extra full-drawable pass.
-    ///
-    /// White noise via a hash, not blue noise: blue noise masks better per unit visibility, but it
-    /// needs a texture to sample and this needs nothing. Upgrade path if it reads as too coarse.
-    private static let ditherKernel: CIKernel? = CIKernel(
-        source: """
-            kernel vec4 blockDither(sampler src, float amplitude) {
-              vec2 p = destCoord();
-              vec4 c = sample(src, samplerTransform(src, p));
-              float n = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453123);
-              return vec4(c.rgb + (n - 0.5) * amplitude, c.a);
-            }
-            """)
-
-    /// Smooths flat regions of `source` to soften block steps, leaving detail untouched. Returns
-    /// `source` unchanged when the kernel is unavailable — never drops the frame.
-    ///
-    /// The caller must keep this OFF the measurement path: zebras would under-report clipping and
-    /// peaking would measure its own smoothing. See `LiveFrameProcessor.outputCIImage`.
     static func applyFlatSmoothing(
         to source: CIImage, settings: BlockSmoothingSettings, extent: CGRect
     ) -> CIImage {
-        guard let kernel = flatSmoothKernel, settings.strength > 0 else { return source }
-        let clamped = source.clampedToExtent()
-        guard
-            let smoothed = kernel.apply(
-                extent: extent,
-                roiCallback: { _, rect in rect.insetBy(dx: -settings.radius, dy: -settings.radius)
-                },
-                arguments: [
-                    clamped,
-                    settings.radius,
-                    // Gate expressed as "levels out of 255" at the call site; the kernel wants its
-                    // reciprocal so the comparison is a multiply.
-                    1.0 / max(settings.gateLevels / 255.0, 1e-6),
-                    settings.strength,
-                ])
-        else { return source }
-        return smoothed.cropped(to: extent)
+        MonitorBlockArtifactCompositor.applyFlatSmoothing(
+            to: source,
+            settings: MonitorBlockSmoothing(radius: settings.radius, gateLevels: settings.gateLevels, strength: settings.strength),
+            extent: extent)
     }
 
-    /// Adds masking noise over `image`. Returns `image` unchanged when the kernel is unavailable.
     static func applyDither(
         to image: CIImage, settings: BlockDitherSettings, extent: CGRect
     ) -> CIImage {
-        guard let kernel = ditherKernel, settings.levels > 0 else { return image }
-        guard
-            let dithered = kernel.apply(
-                extent: extent,
-                roiCallback: { _, rect in rect },
-                arguments: [image.clampedToExtent(), settings.levels / 255.0])
-        else { return image }
-        return dithered.cropped(to: extent)
+        MonitorBlockArtifactCompositor.applyDither(
+            to: image, settings: MonitorBlockDither(levels: settings.levels), extent: extent)
     }
 
     /// Existing source settings remain values; the shared native owner builds both detector graphs.
@@ -355,24 +262,23 @@ enum ImageEffectsCompositor {
     static func applyZebra(
         over base: CIImage, source: CIImage, settings: ZebraSettings, extent: CGRect
     ) -> CIImage {
-        let luma = zebraLuma(from: source)
-        var output = base
-        if settings.highlightEnabled {
-            let threshold =
-                ExposureScale.signalNative(
-                    monitorPercent: settings.highlightIRE, mapping: settings.mapping)
-                / 255.0
-            let mask = highlightMask(luma: luma, threshold: threshold)
-            output = blendStripedZebra(
-                over: output, mask: mask, color: settings.highlightColor, extent: extent)
-        }
-        if settings.midtoneEnabled {
-            let centre = midtoneComparisonNative(settings: settings) / 255.0
-            let mask = midtoneBandMask(luma: luma, centre: centre, halfWidth: 5.0 / 255.0)
-            output = blendStripedZebra(
-                over: output, mask: mask, color: settings.midtoneColor, extent: extent)
-        }
-        return output
+        MonitorImageCompositor.applyResolvedZebra(
+            over: base, source: source, extent: extent, zebra: resolvedZebra(settings: settings))
+    }
+
+    static func resolvedZebra(settings: ZebraSettings) -> MonitorCodeZebraSpec {
+        let highlight = settings.highlightEnabled
+            ? ExposureScale.signalNative(monitorPercent: settings.highlightIRE,
+                mapping: settings.mapping) / 255.0 : nil
+        let centre = settings.midtoneEnabled ? midtoneComparisonNative(settings: settings) / 255.0 : nil
+        let halfWidth = 5.0 / 255.0
+        return MonitorCodeZebraSpec(
+            thresholds: MonitorZebraCodeThresholds(
+                highlight: highlight, midtoneLower: centre.map { $0 - halfWidth },
+                midtoneUpper: centre.map { $0 + halfWidth }),
+            highlightColor: MonitorRGB(zebraRGB(settings.highlightColor)),
+            midtoneColor: MonitorRGB(zebraRGB(settings.midtoneColor)),
+            maskPolicy: MonitorZebraMaskPolicy(highlightMeasure: .rec709Luma, rampBias: 0))
     }
 
     /// Resolves the midtone band centre on the native code-value axis.
@@ -390,105 +296,6 @@ enum ImageEffectsCompositor {
 
     private static func falseColorCacheKey(_ settings: FalseColorSettings) -> String {
         "false:\(settings.scale.rawValue):\(settings.curve.rawValue):\(settings.mapping.clipNative)"
-    }
-
-    private static func zebraLuma(from source: CIImage) -> CIImage {
-        source.applyingFilter(
-            "CIColorMatrix",
-            parameters: [
-                "inputRVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-                "inputGVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-                "inputBVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-            ])
-    }
-
-    private static func highlightMask(luma: CIImage, threshold: Double) -> CIImage {
-        let gain = 40.0
-        return
-            luma
-            .applyingFilter(
-                "CIColorMatrix",
-                parameters: [
-                    "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: gain, y: 0, z: 0, w: 0),
-                    "inputBVector": CIVector(x: gain, y: 0, z: 0, w: 0),
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                    "inputBiasVector": CIVector(
-                        x: -threshold * gain, y: -threshold * gain, z: -threshold * gain, w: 1),
-                ]
-            )
-            .applyingFilter("CIColorClamp")
-    }
-
-    /// Band mask that peaks when luma sits within `halfWidth` of `centre` (prototype ±5 native).
-    private static func midtoneBandMask(luma: CIImage, centre: Double, halfWidth: Double) -> CIImage
-    {
-        let gain = 40.0
-        let lower = centre - halfWidth
-        let upper = centre + halfWidth
-        let lowSide =
-            luma
-            .applyingFilter(
-                "CIColorMatrix",
-                parameters: [
-                    "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: gain, y: 0, z: 0, w: 0),
-                    "inputBVector": CIVector(x: gain, y: 0, z: 0, w: 0),
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                    "inputBiasVector": CIVector(
-                        x: -lower * gain, y: -lower * gain, z: -lower * gain, w: 1),
-                ]
-            )
-            .applyingFilter("CIColorClamp")
-        let highSide =
-            luma
-            .applyingFilter(
-                "CIColorMatrix",
-                parameters: [
-                    "inputRVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
-                    "inputBVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                    "inputBiasVector": CIVector(
-                        x: upper * gain, y: upper * gain, z: upper * gain, w: 1),
-                ]
-            )
-            .applyingFilter("CIColorClamp")
-        return lowSide.applyingFilter(
-            "CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: highSide])
-    }
-
-    private static func blendStripedZebra(
-        over base: CIImage, mask: CIImage, color: AssistConfiguration.Zebra.StripeColor,
-        extent: CGRect
-    ) -> CIImage {
-        let stripes =
-            (CIFilter(
-                name: "CIStripesGenerator",
-                parameters: [
-                    "inputColor0": CIColor(red: 0, green: 0, blue: 0),
-                    "inputColor1": CIColor(red: 1, green: 1, blue: 1),
-                    "inputWidth": 5.0,
-                    "inputSharpness": 1.0,
-                    kCIInputCenterKey: CIVector(x: 0, y: 0),
-                ])?.outputImage ?? CIImage(color: CIColor(red: 1, green: 1, blue: 1)))
-            .transformed(by: CGAffineTransform(rotationAngle: .pi / 4))
-            .cropped(to: extent)
-        let stripedMask = stripes.applyingFilter(
-            "CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: mask])
-        let (red, green, blue) = zebraRGB(color)
-        let tint = CIImage(color: CIColor(red: red, green: green, blue: blue)).cropped(to: extent)
-        return
-            (CIFilter(
-                name: "CIBlendWithMask",
-                parameters: [
-                    kCIInputImageKey: tint,
-                    kCIInputBackgroundImageKey: base,
-                    kCIInputMaskImageKey: stripedMask,
-                ])?.outputImage ?? base)
-            .cropped(to: extent)
     }
 
     private static func zebraRGB(_ color: AssistConfiguration.Zebra.StripeColor) -> (
