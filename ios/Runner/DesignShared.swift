@@ -1,5 +1,6 @@
 import OpenZCineCore
 import SwiftUI
+import struct MonitorPresentation.MonitorEdgeInsets
 
 /// Nikon's saved assist identifiers remain owned by its existing Codable preferences.
 typealias MonitorAssistTool = OpenZCineCore.MonitorAssistTool

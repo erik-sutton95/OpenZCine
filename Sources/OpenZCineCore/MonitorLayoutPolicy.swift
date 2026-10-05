@@ -1,71 +1,4 @@
-/// Edge inset values used by the native monitor chrome.
-public struct MonitorEdgeInsets: Equatable, Sendable {
-    public static let zero = MonitorEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
-
-    // Insets in points.
-    public let top: Double
-    public let leading: Double
-    public let bottom: Double
-    public let trailing: Double
-
-    public init(top: Double, leading: Double, bottom: Double, trailing: Double) {
-        self.top = top
-        self.leading = leading
-        self.bottom = bottom
-        self.trailing = trailing
-    }
-
-    /// Keeps the live camera surface full-bleed while placing touch chrome clear of device cutouts.
-    public static func chrome(for safeArea: MonitorEdgeInsets) -> MonitorEdgeInsets {
-        MonitorEdgeInsets(
-            top: max(14, safeArea.top + 8),
-            leading: max(16, safeArea.leading + 12),
-            bottom: max(12, safeArea.bottom + 8),
-            trailing: max(18, safeArea.trailing + 12)
-        )
-    }
-}
-
-/// Physical device orientation used to choose the live-view module direction.
-public enum MonitorDeviceOrientation: Equatable, Sendable {
-    case portrait
-    case portraitUpsideDown
-    case landscapeLeft
-    case landscapeRight
-    case unknown
-}
-
-/// Horizontal orientation for live-view module layout.
-public enum MonitorHorizontalLayoutDirection: Equatable, Sendable {
-    /// Standard landscape-left layout.
-    case standard
-
-    /// Horizontally mirrored landscape-right layout.
-    case mirrored
-
-    /// Resolves the layout direction from the dominant landscape side cutout.
-    public static func resolve(for safeArea: MonitorEdgeInsets) -> MonitorHorizontalLayoutDirection
-    {
-        let cutout = StartupSideCutoutAvoidance.resolve(for: safeArea)
-
-        return cutout.trailing > cutout.leading ? .mirrored : .standard
-    }
-
-    /// Resolves the layout direction from device orientation first, with safe area as fallback.
-    public static func resolve(
-        deviceOrientation: MonitorDeviceOrientation,
-        safeArea: MonitorEdgeInsets
-    ) -> MonitorHorizontalLayoutDirection {
-        switch deviceOrientation {
-        case .landscapeRight:
-            return .mirrored
-        case .portrait, .portraitUpsideDown, .landscapeLeft:
-            return .standard
-        case .unknown:
-            return resolve(for: safeArea)
-        }
-    }
-}
+import MonitorPresentation
 
 /// Rectangular frame for the native monitor live feed.
 public struct MonitorFeedFrame: Equatable, Sendable {
@@ -339,38 +272,6 @@ public enum StartupLayoutMargins {
             leading: horizontalBase,
             bottom: safeArea.bottom + (compact ? 16 : 18),
             trailing: horizontalBase
-        )
-    }
-}
-
-/// Side cutout reservation for landscape iPhone startup layouts.
-public struct StartupSideCutoutAvoidance: Equatable, Sendable {
-    /// Minimum side safe-area inset that represents a hardware cutout rather than corner padding.
-    public static let minimumCutoutInset = 50.0
-
-    /// Width to keep empty in the middle of the leading edge.
-    public let leading: Double
-
-    /// Width to keep empty in the middle of the trailing edge.
-    public let trailing: Double
-
-    public init(leading: Double, trailing: Double) {
-        self.leading = leading
-        self.trailing = trailing
-    }
-
-    /// Whether either landscape side has a hardware cutout lane.
-    public var hasSideCutout: Bool {
-        leading > 0 || trailing > 0
-    }
-
-    /// Keeps only large side safe-area insets as cutout lanes, allowing normal corner padding.
-    public static func resolve(for safeArea: MonitorEdgeInsets)
-        -> StartupSideCutoutAvoidance
-    {
-        StartupSideCutoutAvoidance(
-            leading: safeArea.leading >= minimumCutoutInset ? safeArea.leading : 0,
-            trailing: safeArea.trailing >= minimumCutoutInset ? safeArea.trailing : 0
         )
     }
 }

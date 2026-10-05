@@ -34,11 +34,15 @@ let package = Package(
             dependencies: [
                 .product(name: "OpenCineMedia", package: "OpenCine"),
                 .product(name: "OpenCineNikon", package: "OpenCine"),
+                // Shared live chrome layout policy (`MonitorEdgeInsets` and friends).
+                .product(name: "MonitorPresentation", package: "OpenCine"),
             ]
         ),
         .testTarget(
             name: "OpenZCineCoreTests",
-            dependencies: ["OpenZCineCore"],
+            dependencies: [
+                "OpenZCineCore", .product(name: "MonitorPresentation", package: "OpenCine"),
+            ],
             // Shared canonical JSON schema fixture consumed directly from the
             // source tree by Swift and Android transport tests; it is not an
             // app/runtime resource.
