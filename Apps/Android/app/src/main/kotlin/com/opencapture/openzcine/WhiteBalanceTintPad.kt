@@ -343,6 +343,3 @@ private fun cellFromNormalized(t: Float): Int {
 
 /** iOS `side: CGFloat = 108`. */
 private const val PAD_SIDE_DP = 108f
-
-/** Full pad cluster height: 28 + 8 + 108 + 8 + 28 (arrows + gaps + pad). */
-internal val WhiteBalanceTintPadClusterHeightDp = 28f + 8f + PAD_SIDE_DP + 8f + 28f

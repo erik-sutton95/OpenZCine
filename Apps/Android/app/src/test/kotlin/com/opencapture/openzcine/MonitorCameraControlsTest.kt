@@ -12,7 +12,6 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CodecBitDepthOption
 import com.opencapture.openzcine.settings.MonitorDisplayMode
-import com.opencapture.openzcine.settings.PortraitFeedAspect
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -151,12 +150,9 @@ class MonitorCameraControlsTest {
     }
 
     @Test
-    fun `capture bar shortens Auto Subject and maps WB preset icons`() {
+    fun `capture bar shortens Auto Subject`() {
         assertEquals("Auto-S", captureBarDisplayValue("Auto Subject"))
         assertEquals("AF-C", captureBarDisplayValue("AF-C"))
-        assertEquals(CaptureWbIcon.AUTO, captureBarWbIcon("Auto"))
-        assertEquals(CaptureWbIcon.SUNNY, captureBarWbIcon("Sunny"))
-        assertNull(captureBarWbIcon("5560K"))
     }
 
     @Test
@@ -357,21 +353,6 @@ class MonitorCameraControlsTest {
             ),
         )
         assertEquals("6K · 25p", compactRecordingModeFromRawDisplay("6048x3402 · 25p"))
-    }
-
-    @Test
-    fun `portrait pinch uses iOS snap thresholds`() {
-        assertEquals(
-            PortraitFeedAspect.FILL,
-            portraitAspectAfterPinch(1.16f, PortraitFeedAspect.FIT_16_9),
-        )
-        assertEquals(
-            PortraitFeedAspect.FIT_16_9,
-            portraitAspectAfterPinch(0.86f, PortraitFeedAspect.FILL),
-        )
-        assertNull(portraitAspectAfterPinch(1.15f, PortraitFeedAspect.FIT_16_9))
-        assertNull(portraitAspectAfterPinch(0.87f, PortraitFeedAspect.FILL))
-        assertNull(portraitAspectAfterPinch(1.4f, PortraitFeedAspect.FILL))
     }
 
     @Test

@@ -3,7 +3,6 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaCodecList
 import com.opencapture.opencine.runtime.MonitorFrameDecodeWorker
 import android.os.Build
 import android.util.Log
@@ -52,8 +51,6 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
@@ -1070,13 +1067,3 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorRefer
         }
     }
 }
-
-/** Runtime probe: does this SoC expose a hardware MJPEG video decoder? */
-private fun hasMjpegDecoder(): Boolean =
-    MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
-        !info.isEncoder &&
-            info.supportedTypes.any {
-                it.equals("video/mjpeg", ignoreCase = true) ||
-                    it.equals("video/x-motion-jpeg", ignoreCase = true)
-            }
-    }

@@ -47,12 +47,8 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.displayCutout
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -73,11 +69,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -105,25 +97,19 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FilmGlyph
 import com.opencapture.openzcine.FeedLutSelection
@@ -158,12 +144,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonNative
-
-/**
- * ObjectInfo budget per cursor advance. The facade alternates cards inside
- * each page, and Compose publishes every page before requesting the next one.
- */
-private const val MEDIA_BROWSE_PAGE_SIZE = 32
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
 internal sealed interface BrowseState {
@@ -2124,104 +2104,6 @@ private fun SelectionHeader(
     }
 }
 
-@Composable
-private fun FrameioSelectionAction(
-    readyCount: Int,
-    enabled: Boolean,
-    preparationInProgress: Boolean,
-    upload: FrameioDeliveryState.Uploading?,
-    rejoiningCamera: Boolean,
-    onClick: () -> Unit,
-) {
-    val label =
-        when {
-            rejoiningCamera -> "REJOINING CAMERA"
-            upload != null ->
-                "UP ${upload.itemIndex}/${upload.itemCount} ${(upload.progress * 100).roundToInt()}%"
-            preparationInProgress -> "PREPARING…"
-            else -> "FRAME.IO $readyCount"
-        }
-    Text(
-        label,
-        style = chromeStyle(11f, FontWeight.Bold, mono = true),
-        color =
-            if (enabled || preparationInProgress || upload != null || rejoiningCamera) {
-                LiveDesign.accent
-            } else {
-                LiveDesign.faint
-            },
-        maxLines = 1,
-        modifier =
-            Modifier.glass(CapsuleShape)
-                .semantics {
-                    when {
-                        rejoiningCamera -> {
-                            contentDescription = "Rejoining saved camera Wi-Fi network"
-                            liveRegion = LiveRegionMode.Polite
-                            disabled()
-                        }
-                        upload != null -> {
-                            contentDescription =
-                                "Uploading Frame.io clip ${upload.itemIndex} of ${upload.itemCount}: ${(upload.progress * 100).roundToInt()} percent"
-                            progressBarRangeInfo =
-                                ProgressBarRangeInfo(
-                                    upload.progress.toFloat().coerceIn(0f, 1f),
-                                    0f..1f,
-                                )
-                            liveRegion = LiveRegionMode.Polite
-                            disabled()
-                        }
-                        preparationInProgress -> {
-                            contentDescription = "Preparing selected media for Frame.io delivery"
-                            progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate
-                            liveRegion = LiveRegionMode.Polite
-                            disabled()
-                        }
-                        else -> {
-                            contentDescription =
-                                "Deliver $readyCount complete cached media items to Frame.io"
-                            role = Role.Button
-                            if (!enabled) disabled()
-                        }
-                    }
-                }.chromeClickable(enabled) { onClick() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-    )
-}
-
-@Composable
-private fun DeliverySelectionAction(
-    readyCount: Int,
-    enabled: Boolean,
-    shareInProgress: Boolean,
-    frameioPreparationInProgress: Boolean,
-    uploadInProgress: Boolean,
-    onClick: () -> Unit,
-) {
-    Text(
-        if (shareInProgress && !frameioPreparationInProgress && !uploadInProgress) {
-            "WORKING…"
-        } else {
-            "DELIVER"
-        },
-        style = chromeStyle(11f, FontWeight.Bold, mono = true),
-        color = if (enabled) LiveDesign.accent else LiveDesign.faint,
-        maxLines = 1,
-        modifier =
-            Modifier.glass(CapsuleShape)
-                .semantics {
-                    contentDescription =
-                        if (shareInProgress) {
-                            "Media delivery in progress"
-                        } else {
-                            "Choose delivery for $readyCount complete cached media items"
-                        }
-                    if (enabled) role = Role.Button else disabled()
-                }.chromeClickable(enabled) { onClick() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-    )
-}
-
 /** Sort popup uses explicit menu choices rather than cycling a hidden state. */
 /** iOS gallery REFRESH — an on-demand authoritative re-enumeration. */
 @Composable
@@ -3008,6 +2890,3 @@ private fun itemCountLabel(state: BrowseState, displayedCount: Int): String =
 
 private val CapsuleShape: RoundedCornerShape
     get() = RoundedCornerShape(percent = 50)
-
-private fun Modifier.badgeBackground(): Modifier =
-    background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(4.dp))

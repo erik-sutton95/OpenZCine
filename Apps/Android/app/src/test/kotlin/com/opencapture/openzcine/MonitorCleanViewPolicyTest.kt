@@ -51,14 +51,6 @@ class MonitorCleanViewPolicyTest {
     }
 
     @Test
-    fun `clean defers popups`() {
-        assertTrue(monitorAllowsPopups(MonitorDisplayMode.LIVE))
-        assertFalse(monitorAllowsPopups(MonitorDisplayMode.CLEAN))
-        // Command's dashboard tiles open the value pickers, so pop-ups stay allowed there.
-        assertTrue(monitorAllowsPopups(MonitorDisplayMode.COMMAND))
-    }
-
-    @Test
     fun `clean renders exactly the pinned scopes and leaves the stored set alone`() {
         val state = MonitorAssistState(pinnedNames = emptySet())
         state.syncVisible(setOf(MonitorAssistTool.WAVE, MonitorAssistTool.HISTO, MonitorAssistTool.LIGHTS))

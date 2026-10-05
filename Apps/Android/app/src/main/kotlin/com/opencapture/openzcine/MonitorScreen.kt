@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -113,7 +112,6 @@ import com.opencapture.opencine.appkit.commit
 import com.opencapture.opencine.appkit.quickControl
 import com.opencapture.opencine.appkit.MonitorCaptureDrum
 import com.opencapture.opencine.appkit.MonitorCaptureButton
-import com.opencapture.monitorui.MonitorFieldLayout
 import com.opencapture.monitorui.MonitorLayoutPolicy
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorCameraValues
@@ -136,7 +134,6 @@ import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlException
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionEvent
-import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.opencine.nikon.CameraFocusException
 import com.opencapture.opencine.nikon.CameraFocusPoint
@@ -152,7 +149,6 @@ import com.opencapture.opencine.nikon.LiveFeedRotation
 import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.opencine.nikon.metadataOnly
 import com.opencapture.opencine.nikon.LiveFrameSource
-import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.openzcine.relay.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -204,23 +200,6 @@ internal fun retainMonitorPickerForChrome(
 ): Boolean =
     cameraCommandPending ||
         (mode == MonitorDisplayMode.LIVE && (cameraValuesVisible || isTopBarPicker))
-
-/** Settings-only affordance used when the landscape side rails are hidden. */
-@Composable
-internal fun LandscapeSettingsRecoveryButton(
-    modifier: Modifier = Modifier,
-    onOpenSettings: () -> Unit,
-) {
-    val description = stringResource(R.string.monitor_settings_recovery)
-    AuxCircleButton(
-        modifier.semantics {
-            contentDescription = description
-        },
-        onClick = onOpenSettings,
-    ) { glyphModifier, tint ->
-        GearGlyph(tint, glyphModifier)
-    }
-}
 
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
 internal fun Modifier.zone(frame: ZoneFrame): Modifier =
@@ -3407,37 +3386,6 @@ internal fun toggleShutterLockOnCamera(
     )
 }
 
-/** Clearance between the battery row stack and the lock button above it (dp). */
-internal const val BATTERY_STACK_CLEARANCE_DP = 10f
-
-/**
- * Seats the stacked battery rows in the leading rail lane, directly under the
- * lock button (iOS parity). [anchor] is the zone map's phone-indicator frame —
- * it carries the lane's leading x.
- */
-internal fun batteryRowStackFrame(anchor: ZoneFrame, lock: ZoneFrame): ZoneFrame =
-    ZoneFrame(
-        x = anchor.x,
-        y = lock.y + lock.height + BATTERY_STACK_CLEARANCE_DP,
-        width = BATTERY_STACK_WIDTH_DP,
-        height = BATTERY_STACK_HEIGHT_DP,
-    )
-
-/**
- * Where the landscape battery gauges actually draw. Phone rails stack under the
- * lock using the per-indicator `batteryPhone` anchor; width-constrained maps
- * emit `.batteryInline` beside the lock and omit those per-indicator frames.
- */
-internal fun landscapeBatteryIndicatorsFrame(zones: MonitorZones): ZoneFrame? =
-    when (zones.batteryStyle) {
-        ZoneStyle.BATTERY_INLINE -> zones.batteryCluster
-        else -> zones.batteryPhone?.let { batteryRowStackFrame(it, zones.lock) }
-    }
-
-/** Trailing x of lock-side batteries for photography rail / feed-lane clearance. */
-internal fun photographyBatteryTrailing(zones: MonitorZones): Float? =
-    landscapeBatteryIndicatorsFrame(zones)?.let { it.x + it.width }
-
 /**
  * Photography hides the command display mode — its dashboard is still
  * movie-shaped (iOS `displayOrder` filter). Empty results (COMMAND-only
@@ -3521,20 +3469,6 @@ internal fun nextDisplayModeInOrder(
 }
 
 // MARK: - Edit view (per-DISP chrome)
-
-/**
- * The drawn bounds of the landscape rail column — settings, media, record and DISP. The zone map's
- * system cluster unions the top-left lock button in with these, which makes it span the whole
- * screen and useless as an outline; the lock carries its own badge anyway.
- */
-private fun railColumnFrame(zones: MonitorZones): ZoneFrame {
-    val column = listOf(zones.settings, zones.media, zones.record, zones.disp)
-    val left = column.minOf { it.x }
-    val top = column.minOf { it.y }
-    val right = column.maxOf { it.x + it.width }
-    val bottom = column.maxOf { it.y + it.height }
-    return ZoneFrame(left, top, right - left, bottom - top)
-}
 
 /**
  * Marks a monitor element as editable: while the Edit view is open on a mode that owns [section],

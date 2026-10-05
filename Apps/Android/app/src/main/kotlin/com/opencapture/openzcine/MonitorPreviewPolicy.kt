@@ -3,7 +3,6 @@ package com.opencapture.openzcine
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.settings.ChromeSection
-import com.opencapture.openzcine.settings.MonitorDisplayMode
 
 /**
  * Returns the monitor-owned live source only while a preview-bearing monitor
@@ -31,13 +30,6 @@ internal fun monitorPreviewFrameSource(
  * [monitorPreviewFrameSource].
  */
 internal fun monitorTimecodeFrameSource(source: LiveFrameSource?): LiveFrameSource? = source
-
-/**
- * Whether a transient pop-up (camera-value picker, assist options drawer) may
- * present in [mode]. Mirrors `MonitorChromePolicy.allowsPopups(in:)`.
- */
-internal fun monitorAllowsPopups(mode: MonitorDisplayMode): Boolean =
-    mode != MonitorDisplayMode.CLEAN
 
 /**
  * Recording inputs for preview policy use confirmed camera state. A start is

@@ -13,7 +13,6 @@ import com.opencapture.monitorui.settings.MonitorSettingsTab
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
@@ -122,23 +121,4 @@ class SettingsDirectReorderComposeTest {
         preferences.edit().clear().commit()
     }
 
-    @Test
-    fun hiddenRailSettingsRecoveryRemainsReachable() {
-        var opened = false
-        composeRule.setContent {
-            OpenZCineTheme {
-                LandscapeSettingsRecoveryButton(
-                    modifier = Modifier.size(63.dp),
-                    onOpenSettings = { opened = true },
-                )
-            }
-        }
-
-        composeRule
-            .onNodeWithContentDescription("Open Settings, restore hidden monitor controls")
-            .assertIsDisplayed()
-            .performClick()
-
-        composeRule.runOnIdle { assertTrue(opened) }
-    }
 }

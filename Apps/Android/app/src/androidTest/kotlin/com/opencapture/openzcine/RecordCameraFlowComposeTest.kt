@@ -27,7 +27,7 @@ import com.opencapture.opencine.nikon.CameraSession
 
 /**
  * Record start/stop coverage through the production monitor's Compose
- * semantics. It keeps the real RecordButton → MonitorScreen → CameraSession
+ * semantics. It keeps the real MonitorCaptureButton → MonitorScreen → CameraSession
  * state-flow path while supplying an in-memory session with no camera or
  * network I/O.
  */

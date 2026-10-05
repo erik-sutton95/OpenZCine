@@ -12,7 +12,6 @@ import java.util.Locale
 import kotlin.math.ceil
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
-internal const val UNAVAILABLE_TIMECODE = "—:—:—:—"
 
 /** Camera-owned values rendered around Android live view. */
 internal data class MonitorCameraReadouts(
@@ -479,16 +478,3 @@ internal fun liveViewHeaderTimecode(timecode: LiveFrameTimecode?): LiveFrameTime
             it.frame in 0..255 &&
             (it.on || it.hour != 0 || it.minute != 0 || it.second != 0 || it.frame != 0)
     }
-
-/**
- * Same acceptance as [liveViewHeaderTimecode] — kept as the public name used by
- * chrome / tests for "camera-owned, not synthetic" values.
- */
-internal fun authoritativeTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
-    liveViewHeaderTimecode(timecode)
-
-/** Exact camera timecode label, or the explicit unavailable placeholder. */
-internal fun cameraTimecodeLabel(timecode: LiveFrameTimecode?): String =
-    liveViewHeaderTimecode(timecode)?.let {
-        String.format(Locale.ROOT, "%02d:%02d:%02d:%02d", it.hour, it.minute, it.second, it.frame)
-    } ?: UNAVAILABLE_TIMECODE
