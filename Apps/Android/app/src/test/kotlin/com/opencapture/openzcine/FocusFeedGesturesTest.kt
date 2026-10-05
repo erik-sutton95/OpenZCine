@@ -108,16 +108,11 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `photo full-height frame maps corner and band-edge taps in range`() {
-        // The photography feed container IS the letterboxed 3:2 image
-        // (photographyFeedFrame): container aspect == source aspect, so the
-        // content rect fills the box exactly and every corner maps inclusive.
-        val container = photographyFeedFrame(
-            cinemaFeed = ZoneFrame(59f, 0f, 683f, 384f),
-            viewport = ZoneFrame(0f, 0f, 914f, 384f),
-            imageArea = "FX",
-            leadingLaneTrailing = 136f,
-            trailingLaneLeading = 844f,
-        )
+        // The photography feed container IS the letterboxed 3:2 image: FX at the full 384
+        // viewport height, centred between the side lanes at 136 and 844. Container
+        // aspect == source aspect, so the content rect fills the box exactly and every
+        // corner maps inclusive.
+        val container = ZoneFrame(202f, 0f, 576f, 384f)
         val content =
             liveFeedContentRect(container.width, container.height, 5_760, 3_840)
         requireNotNull(content)

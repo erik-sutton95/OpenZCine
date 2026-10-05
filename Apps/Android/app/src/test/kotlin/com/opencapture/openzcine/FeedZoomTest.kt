@@ -7,8 +7,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Pins the feed-zoom transform against the playback viewer's (`MediaStillViewer` /
- * `anchoredPinchPan`), which is the gesture this deliberately copies.
+ * Pins the feed-zoom transform against the playback viewer's (`MediaStillViewer`), which is
+ * the gesture this deliberately copies.
  *
  * The defining property is the Photos contract: the content point under the fingers stays under
  * the fingers while the pinch factor changes. That is asserted directly rather than pinning

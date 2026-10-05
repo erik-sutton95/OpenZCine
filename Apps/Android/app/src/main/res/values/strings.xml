@@ -528,12 +528,6 @@
     <string name="portrait_aspect_fit">Fit the whole picture</string>
     <string name="magnification_key_enter">Magnify %1$s</string>
     <string name="magnification_key_exit">Exit %1$s magnification</string>
-    <string name="record_start_title">Start recording?</string>
-    <string name="record_stop_title">Stop recording?</string>
-    <string name="record_start_message">Send the record command to the camera.</string>
-    <string name="record_stop_message">Stop the current take on the camera.</string>
-    <string name="action_start">Start</string>
-    <string name="action_stop">Stop</string>
     <string name="scope_fit_limit">2 scopes max in fit view — close one or pinch to fill</string>
     <string name="display_mode_live">Live</string>
     <string name="display_mode_clean">Clean</string>

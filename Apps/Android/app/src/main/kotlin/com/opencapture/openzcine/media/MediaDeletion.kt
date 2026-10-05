@@ -31,11 +31,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeClickable
-import com.opencapture.openzcine.chromePressable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
 import java.util.Locale
 import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
+import com.opencapture.monitorui.monitorChromeClickable
 
 /**
  * Camera-card deletion policy and the star-rating chrome shared by the still
@@ -73,22 +74,6 @@ private val MediaClipRecord.filenameExtension: String
  */
 internal fun MediaClipRecord.rawPairKey(ownerCameraID: String): String =
     "$ownerCameraID/$storageId/${filename.substringBeforeLast('.').lowercase(Locale.US)}"
-
-/**
- * This clip as a burst-detection frame (iOS `MediaClip.burstFrame`): capture identity plus a
- * format/dimensions signature, keyed by the object's library id so members map back to records.
- * RAW and JPEG of one shot share the stem so a burst of pairs counts once.
- */
-internal fun MediaClipRecord.burstFrame(ownerCameraID: String): BurstFrame =
-    BurstFrame(
-        id = libraryKey(ownerCameraID),
-        storageId = storageId,
-        handle = handle,
-        captureDate = captureDate,
-        stem = filename.substringBeforeLast('.').lowercase(Locale.US),
-        isRaw = isRawStill,
-        formatKey = "$filenameExtension|${pixelWidth}x$pixelHeight",
-    )
 
 /** The same-shot RAW behind a JPEG's item; null for unpaired stills. */
 internal fun rawSibling(
@@ -260,6 +245,7 @@ internal fun StarRatingRow(
     modifier: Modifier = Modifier,
     onSelect: (Int) -> Unit,
 ) {
+    val haptics = LocalOperatorHaptics.current
     Row(
         modifier
             // CircleShape renders as a capsule on a wide row, like iOS's Capsule.
@@ -277,7 +263,9 @@ internal fun StarRatingRow(
             Box(
                 Modifier.size(44.dp)
                     .semantics { role = Role.Button }
-                    .chromePressable { onSelect(if (star == stars) 0 else star) },
+                    .monitorChromeClickable(onClickFeedback = haptics::selection) {
+                        onSelect(if (star == stars) 0 else star)
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(

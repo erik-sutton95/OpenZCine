@@ -2,13 +2,13 @@ package com.opencapture.openzcine.transport
 
 import android.util.Log
 import com.opencapture.opencine.core.DiscoveryMode
+import com.opencapture.opencine.nikon.HostProbeVerdict
 import com.opencapture.opencine.nikon.NikonDialer
 import com.opencapture.opencine.nikon.NikonDiscovery
 import com.opencapture.opencine.nikon.NikonLocalInterface
 import com.opencapture.opencine.nikon.NikonPresence
 import java.net.Inet4Address
 import java.net.NetworkInterface
-import com.opencapture.opencine.nikon.HostProbeVerdict as DialVerdict
 
 /**
  * Isolated infrastructure (same-LAN Wi‑Fi) camera search — the Android twin of iOS
@@ -38,7 +38,7 @@ public class InfrastructureCameraFinder(
      */
     private val log: (String) -> Unit = { Log.i(TAG, it) },
     private val scanner: PortScanner = PortScanner { host, timeoutMillis ->
-        HostProbeVerdict.valueOf(SocketNikonDialer.scanControlPort(host, timeoutMillis).name)
+        SocketNikonDialer.scanControlPort(host, timeoutMillis)
     },
 ) {
     /** The seam that dials a host, so the sweep is testable without a network. */
@@ -62,7 +62,7 @@ public class InfrastructureCameraFinder(
         knownNames: Map<String, String> = emptyMap(),
         excludedHosts: Set<String> = emptySet(),
         onCameraAccessPoint: Boolean = false,
-        interfaces: List<LocalIPv4Interface> = localIPv4Interfaces(),
+        interfaces: List<NikonLocalInterface> = localIPv4Interfaces(),
     ): InfrastructureSearchReport {
         if (onCameraAccessPoint) {
             return InfrastructureSearchReport(miss = InfrastructureMissReason.OnCameraAccessPoint)
@@ -72,12 +72,9 @@ public class InfrastructureCameraFinder(
         if (localSubnets.isEmpty()) {
             return InfrastructureSearchReport(miss = InfrastructureMissReason.NoScannableInterface)
         }
-        val directed =
-            InfrastructureDiscovery.directedHosts(
-                candidates = directedCandidates,
-                localSubnets = localSubnets,
-                excluded = excludedHosts + interfaces.map(LocalIPv4Interface::address),
-            )
+        // NikonDiscovery drops excluded, own and off-subnet hosts; this keeps the app's stricter
+        // subnet text match (a zero-padded octet never matches).
+        val directed = directedCandidates.filter { CameraDiscovery.subnetBase(it) in localSubnets }
         // What the occupancy sweep heard, per host; an answer in any pass outranks silence.
         val swept = java.util.concurrent.ConcurrentHashMap<String, HostProbeVerdict>()
         val dialer =
@@ -86,27 +83,24 @@ public class InfrastructureCameraFinder(
 
                 override suspend fun isAlive(host: String): Boolean = false
 
-                override suspend fun scanControlPort(host: String, timeoutMillis: Int): DialVerdict {
+                override suspend fun scanControlPort(host: String, timeoutMillis: Int): HostProbeVerdict {
                     val verdict = scanner.probe(host, timeoutMillis)
-                    if (timeoutMillis == InfrastructureDiscovery.DIRECTED_TIMEOUT_MILLIS) {
+                    if (timeoutMillis == NikonDiscovery.DIRECTED_TIMEOUT_MILLIS) {
                         log("infra-search directed host=$host verdict=$verdict")
                     } else {
                         swept.merge(host, verdict) { old, new -> if (old.isOccupied) old else new }
                     }
-                    return DialVerdict.valueOf(verdict.name)
+                    return verdict
                 }
             }
         val result =
-            NikonDiscovery(dialer, { interfaces.map { NikonLocalInterface(it.name, it.address) } }, log)
+            NikonDiscovery(dialer, { interfaces }, log)
                 .search(DiscoveryMode.ACTIVE, directed, excludedHosts)
         val tally = InfrastructureSweepTally.from(swept)
         if (result.openHosts.isNotEmpty()) {
             return InfrastructureSearchReport(
                 cameras = result.openHosts.map { camera(it, knownNames) },
                 occupiedHosts = tally.occupiedHosts,
-                openPtpHosts = tally.openHosts,
-                localSubnets = localSubnets,
-                directedHosts = directed,
             )
         }
         val miss =
@@ -122,9 +116,6 @@ public class InfrastructureCameraFinder(
         return InfrastructureSearchReport(
             miss = miss,
             occupiedHosts = tally.occupiedHosts,
-            openPtpHosts = tally.openHosts,
-            localSubnets = localSubnets,
-            directedHosts = directed,
         )
     }
 
@@ -143,11 +134,8 @@ public class InfrastructureCameraFinder(
     }
 }
 
-/** One local IPv4 interface. Twin of the shared core's `LocalIPv4Interface`. */
-public data class LocalIPv4Interface(val name: String, val address: String)
-
 /** Live site-local IPv4 interfaces this device can sweep from. */
-public fun localIPv4Interfaces(): List<LocalIPv4Interface> =
+public fun localIPv4Interfaces(): List<NikonLocalInterface> =
     runCatching {
         NetworkInterface.getNetworkInterfaces()
             ?.toList()
@@ -159,7 +147,7 @@ public fun localIPv4Interfaces(): List<LocalIPv4Interface> =
                     .filterIsInstance<Inet4Address>()
                     .mapNotNull { it.hostAddress }
                     .filter(CameraDiscovery::isSupportedPtpIpDiscoveryHost)
-                    .map { LocalIPv4Interface(networkInterface.name, it) }
+                    .map { NikonLocalInterface(networkInterface.name, it) }
             }
     }
         .getOrDefault(emptyList())

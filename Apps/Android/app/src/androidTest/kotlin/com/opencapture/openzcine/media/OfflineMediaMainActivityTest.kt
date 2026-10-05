@@ -27,6 +27,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** End-to-end device coverage for opening one completed cache with no camera session. */
 @RunWith(AndroidJUnit4::class)
@@ -156,10 +158,10 @@ class OfflineMediaMainActivityTest {
             assertNotNull(device.waitForText(CACHED_FILENAME))
             device.waitForDescription("List view").click()
             device.waitForIdle()
-            assertEquals(MediaLibraryLayout.LIST, index.viewOptions(MediaLibrarySource.LOCAL).layout)
+            assertEquals(MonitorMediaLayout.LIST, index.viewOptions(MediaLibrarySource.LOCAL).layout)
             device.waitForDescription("Grid view").click()
-            for (size in MediaThumbnailSize.entries) {
-                device.waitForDescription(size.accessibilityLabel).click()
+            for ((size, label) in MonitorThumbnailSize.entries.zip(listOf("Small", "Medium", "Large"))) {
+                device.waitForDescription("$label thumbnails").click()
                 device.waitForIdle()
                 assertEquals(size, index.viewOptions(MediaLibrarySource.LOCAL).thumbnailSize)
             }
@@ -169,8 +171,8 @@ class OfflineMediaMainActivityTest {
             device.waitForIdle()
             val retained = index.viewOptions(MediaLibrarySource.LOCAL)
             assertEquals(MediaLibraryCategory.VIDEOS, retained.category)
-            assertEquals(MediaLibraryLayout.LIST, retained.layout)
-            assertEquals(MediaThumbnailSize.LARGE, retained.thumbnailSize)
+            assertEquals(MonitorMediaLayout.LIST, retained.layout)
+            assertEquals(MonitorThumbnailSize.LARGE, retained.thumbnailSize)
             scenario?.close()
             scenario = ActivityScenario.launch(
                 Intent(context, MainActivity::class.java)

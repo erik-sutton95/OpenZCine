@@ -8,11 +8,10 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.MessageDigest
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
 import java.util.Base64
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** The two safe library sources exposed by the Android browser. */
 internal enum class MediaLibrarySource(val title: String) {
@@ -26,22 +25,6 @@ internal enum class MediaLibraryCategory(val title: String) {
     VIDEOS("Videos"),
     PHOTOS("Photos"),
     FAVORITES("Favorites"),
-}
-
-/** Operator-selectable arrangement for the Android media library. */
-internal enum class MediaLibraryLayout(val accessibilityLabel: String) {
-    GRID("Switch to list view"),
-    LIST("Switch to grid view"),
-}
-
-/** Persisted adaptive-grid density, matching the current iOS media browser. */
-internal enum class MediaThumbnailSize(
-    val accessibilityLabel: String,
-    val minimumCellWidthDp: Int,
-) {
-    SMALL("Small thumbnails", 148),
-    MEDIUM("Medium thumbnails", 210),
-    LARGE("Large thumbnails", 280),
 }
 
 /**
@@ -155,9 +138,9 @@ internal enum class MediaLibrarySortOrder(val title: String) {
 internal data class MediaLibraryViewOptions(
     val source: MediaLibrarySource,
     val category: MediaLibraryCategory = MediaLibraryCategory.ALL,
-    val layout: MediaLibraryLayout = MediaLibraryLayout.GRID,
+    val layout: MonitorMediaLayout = MonitorMediaLayout.GRID,
     val sortOrder: MediaLibrarySortOrder = MediaLibrarySortOrder.NEWEST,
-    val thumbnailSize: MediaThumbnailSize = MediaThumbnailSize.MEDIUM,
+    val thumbnailSize: MonitorThumbnailSize = MonitorThumbnailSize.MEDIUM,
 )
 
 /**
@@ -448,9 +431,9 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         MediaLibraryViewOptions(
             source = enumValue(PREF_SOURCE, defaultSource),
             category = enumValue(PREF_CATEGORY, MediaLibraryCategory.ALL),
-            layout = enumValue(PREF_LAYOUT, MediaLibraryLayout.GRID),
+            layout = enumValue(PREF_LAYOUT, MonitorMediaLayout.GRID),
             sortOrder = enumValue(PREF_SORT, MediaLibrarySortOrder.NEWEST),
-            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MediaThumbnailSize.MEDIUM),
+            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MonitorThumbnailSize.MEDIUM),
         )
 
     /** Persists only local browsing preferences; camera commands are never stored here. */
@@ -607,12 +590,6 @@ internal fun MediaClipRecord.formatFilter(): MediaFormatFilter? =
     com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.formatKey(this)?.let { key ->
         MediaFormatFilter.entries.firstOrNull { it.title == key }
     }
-internal fun List<MediaClipRecord>.stillPixelWidths(): List<Int> =
-    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.stillWidths(this)
-internal fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? =
-    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.photoSizeKey(this, presentWidths)?.let { key ->
-        MediaPhotoSizeFilter.entries.firstOrNull { it.title == key }
-    }
 internal data class MediaFilterOptions(
     val formats: List<MediaFormatFilter> = emptyList(),
     val resolutions: List<MediaResolutionFilter> = emptyList(),
@@ -621,20 +598,6 @@ internal data class MediaFilterOptions(
 ) {
     val isEmpty get() = formats.isEmpty() && resolutions.isEmpty() && photoSizes.isEmpty() && dateWindows.isEmpty()
 }
-internal object MediaFilterDerivation {
-    fun options(clips: List<MediaClipRecord>, today: LocalDate = LocalDate.now()): MediaFilterOptions {
-        val offered = com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.offered(clips, today)
-        return MediaFilterOptions(
-            offered.formats.mapNotNull { key -> MediaFormatFilter.entries.firstOrNull { it.title == key } },
-            offered.resolutions.mapNotNull { key -> MediaResolutionFilter.entries.firstOrNull { it.title == key } },
-            offered.photoSizes.mapNotNull { key -> MediaPhotoSizeFilter.entries.firstOrNull { it.title == key } },
-            offered.dateWindows.mapNotNull { key -> MediaDateWindowFilter.entries.firstOrNull { it.title == key } })
-    }
-}
-internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
-    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.resolutionKey(this)?.let { key ->
-        MediaResolutionFilter.entries.firstOrNull { it.title == key }
-    }
 
 /** Pure set updates used by long-press, tap, and sweep selection. */
 internal object MediaLibrarySelection {

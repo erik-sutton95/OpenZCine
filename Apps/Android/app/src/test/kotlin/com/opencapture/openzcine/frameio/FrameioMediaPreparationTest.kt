@@ -5,7 +5,6 @@ import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.media.StagedMediaShare
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.attribute.FileTime
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,45 +15,6 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 class FrameioMediaPreparationTest {
-    @Test
-    fun `export watchdog resets only when codec progress advances`() {
-        var nowNanos = 0L
-        val watchdog = FrameioExportProgressWatchdog(stallTimeoutMillis = 100L) { nowNanos }
-
-        nowNanos = 99_000_000L
-        assertFalse(watchdog.hasStalled())
-        watchdog.recordProgress(10)
-        nowNanos = 198_000_000L
-        watchdog.recordProgress(10)
-        assertFalse(watchdog.hasStalled())
-        nowNanos = 199_000_000L
-        assertTrue(watchdog.hasStalled())
-        watchdog.recordProgress(11)
-        assertFalse(watchdog.hasStalled())
-    }
-
-    @Test
-    fun `packed core cube maps to Media3 red green blue indexing`() {
-        val size = 2
-        val packed = ByteArray(size * size * size * 4)
-        for (red in 0 until size) {
-            for (green in 0 until size) {
-                for (blue in 0 until size) {
-                    val offset = ((green * size + blue) * size + red) * 4
-                    packed[offset] = (red * 80).toByte()
-                    packed[offset + 1] = (green * 90).toByte()
-                    packed[offset + 2] = (blue * 100).toByte()
-                    packed[offset + 3] = 0xFF.toByte()
-                }
-            }
-        }
-
-        val cube = FrameioLutPayload("Unit LUT", size, packed).toMedia3Cube()
-
-        assertEquals(0xFF500064.toInt(), cube[1][0][1])
-        assertEquals(0xFF005A00.toInt(), cube[0][1][0])
-    }
-
     @Test
     fun `default bake creates a temporary mov without changing the staged original`() = runTest {
         withTempRoots { source, exportRoot ->
@@ -127,39 +87,6 @@ class FrameioMediaPreparationTest {
     }
 
     @Test
-    fun `mov finalizer writes QuickTime major and compatible brands`() {
-        val root = createTempDirectory("frameio-mov-brand")
-        try {
-            val target = root.resolve("export.mov")
-            Files.write(target, fakeIsoBmff())
-
-            finalizeMediaExportContainer(target, MediaExportContainer.MOV)
-
-            val bytes = Files.readAllBytes(target)
-            assertEquals("qt  ", String(bytes.copyOfRange(8, 12), Charsets.US_ASCII))
-            assertEquals("qt  ", String(bytes.copyOfRange(16, 20), Charsets.US_ASCII))
-            assertEquals("avc1", String(bytes.copyOfRange(20, 24), Charsets.US_ASCII))
-        } finally {
-            root.toFile().deleteRecursively()
-        }
-    }
-
-    @Test
-    fun `mov finalizer rejects an incomplete relabelled mp4`() {
-        val root = createTempDirectory("frameio-bad-mov")
-        try {
-            val target = root.resolve("export.mov")
-            Files.write(target, byteArrayOf(1, 2, 3, 4))
-
-            assertFailsWith<FrameioDeliveryException> {
-                finalizeMediaExportContainer(target, MediaExportContainer.MOV)
-            }
-        } finally {
-            root.toFile().deleteRecursively()
-        }
-    }
-
-    @Test
     fun `bake fails closed for a non-video artifact`() = runTest {
         withTempRoots { source, exportRoot ->
             Files.write(source, byteArrayOf(1, 2, 3, 4))
@@ -184,63 +111,6 @@ class FrameioMediaPreparationTest {
 
             assertTrue(error.message.orEmpty().contains("isn't a video proxy"))
             assertEquals(0, exporter.calls)
-        }
-    }
-
-    @Test
-    fun `orphan prune removes only expired owned exports`() {
-        val root = createTempDirectory("frameio-prune")
-        try {
-            val now = 10_000L
-            val expired = root.resolve("frameio-00000000-0000-0000-0000-000000000001.mp4")
-            val fresh = root.resolve("frameio-00000000-0000-0000-0000-000000000002.mp4")
-            val unrelated = root.resolve("camera-original.mp4")
-            Files.write(expired, byteArrayOf(1))
-            Files.write(fresh, byteArrayOf(2))
-            Files.write(unrelated, byteArrayOf(3))
-            Files.setLastModifiedTime(expired, FileTime.fromMillis(now - 2_000L))
-            Files.setLastModifiedTime(fresh, FileTime.fromMillis(now))
-
-            pruneOwnedFrameioExports(
-                root = root,
-                nowEpochMillis = now,
-                maximumAgeMillis = 1_000L,
-                maximumBytes = Long.MAX_VALUE,
-            )
-
-            assertFalse(Files.exists(expired))
-            assertTrue(Files.exists(fresh))
-            assertTrue(Files.exists(unrelated))
-        } finally {
-            root.toFile().deleteRecursively()
-        }
-    }
-
-    @Test
-    fun `orphan budget preserves protected export while evicting oldest unprotected files`() {
-        val root = createTempDirectory("frameio-budget")
-        try {
-            val oldest = root.resolve("frameio-00000000-0000-0000-0000-000000000011.mp4")
-            val protected = root.resolve("frameio-00000000-0000-0000-0000-000000000012.mp4")
-            val newest = root.resolve("frameio-00000000-0000-0000-0000-000000000013.mp4")
-            listOf(oldest, protected, newest).forEachIndexed { index, path ->
-                Files.write(path, byteArrayOf(1, 2, 3, 4))
-                Files.setLastModifiedTime(path, FileTime.fromMillis(1_000L + index))
-            }
-
-            pruneOwnedFrameioExports(
-                root = root,
-                protected = setOf(protected),
-                nowEpochMillis = 2_000L,
-                maximumAgeMillis = Long.MAX_VALUE,
-                maximumBytes = 4L,
-            )
-
-            assertFalse(Files.exists(oldest))
-            assertTrue(Files.exists(protected))
-            assertFalse(Files.exists(newest))
-        } finally {
-            root.toFile().deleteRecursively()
         }
     }
 

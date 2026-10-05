@@ -1,7 +1,7 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.NikonLocalInterface
 import com.opencapture.openzcine.transport.CameraDiscovery
-import com.opencapture.openzcine.transport.LocalIPv4Interface
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -623,11 +623,11 @@ class SavedCameraRecordsTest {
     fun `hotspot bases come from the softap interface, never the station one`() {
         val interfaces =
             listOf(
-                LocalIPv4Interface("wlan0", "192.168.1.42"),
-                LocalIPv4Interface("swlan0", "192.168.43.1"),
+                NikonLocalInterface("wlan0", "192.168.1.42"),
+                NikonLocalInterface("swlan0", "192.168.43.1"),
                 // Down-level duplicates and non-IPv4 keys must not widen the answer.
-                LocalIPv4Interface("ap0", "192.168.43.1"),
-                LocalIPv4Interface("rndis0", "192.168.42.129"),
+                NikonLocalInterface("ap0", "192.168.43.1"),
+                NikonLocalInterface("rndis0", "192.168.42.129"),
             )
         val bases = SavedCameraRecords.phoneHotspotSubnetBases(interfaces)
         assertEquals(setOf("192.168.43"), bases)
@@ -641,7 +641,7 @@ class SavedCameraRecordsTest {
             SavedCameraRecords.isPhoneHotspotHost(
                 "192.168.43.55",
                 SavedCameraRecords.phoneHotspotSubnetBases(
-                    listOf(LocalIPv4Interface("wlan0", "192.168.43.9"))
+                    listOf(NikonLocalInterface("wlan0", "192.168.43.9"))
                 ),
             )
         )

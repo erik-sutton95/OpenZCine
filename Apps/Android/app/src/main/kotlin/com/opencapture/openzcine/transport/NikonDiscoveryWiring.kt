@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.transport
 
+import com.opencapture.opencine.nikon.HostProbeVerdict
 import com.opencapture.opencine.nikon.NikonDialer
 import com.opencapture.opencine.nikon.NikonDiscovery
 import com.opencapture.opencine.nikon.NikonLocalInterface
@@ -17,7 +18,6 @@ import java.net.SocketException
 import java.net.SocketTimeoutException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import com.opencapture.opencine.nikon.HostProbeVerdict as DialVerdict
 
 /**
  * This phone's sockets behind OpenCine's `NikonDiscovery`: the presence port (presence reads and
@@ -75,34 +75,30 @@ internal object SocketNikonDialer : NikonDialer {
      * Connect and hang up on the PTP/IP port, keeping why it failed. Mute on purpose: an `Init`
      * aimed at a body in its pairing wait knocks it out of pairing; a bare connect cannot.
      */
-    override suspend fun scanControlPort(host: String, timeoutMillis: Int): DialVerdict =
+    override suspend fun scanControlPort(host: String, timeoutMillis: Int): HostProbeVerdict =
         withContext(Dispatchers.IO) {
             try {
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(host, CameraDiscovery.PTP_IP_PORT), timeoutMillis)
                 }
-                DialVerdict.OPEN
+                HostProbeVerdict.OPEN
             } catch (_: SocketTimeoutException) {
-                DialVerdict.TIMEOUT
+                HostProbeVerdict.TIMEOUT
             } catch (_: NoRouteToHostException) {
-                DialVerdict.NO_ROUTE
+                HostProbeVerdict.NO_ROUTE
             } catch (_: PortUnreachableException) {
-                DialVerdict.REFUSED
+                HostProbeVerdict.REFUSED
             } catch (_: ConnectException) {
                 // Refused: only a live host's kernel sends the RST.
-                DialVerdict.REFUSED
+                HostProbeVerdict.REFUSED
             } catch (_: SocketException) {
-                DialVerdict.NO_NETWORK
+                HostProbeVerdict.NO_NETWORK
             } catch (_: IOException) {
                 // Never evidence about the host: this is something about THIS device.
-                DialVerdict.UNREACHABLE_OTHER
+                HostProbeVerdict.UNREACHABLE_OTHER
             }
         }
 }
-
-/** This phone's sweepable interfaces as discovery reads them. */
-internal fun nikonInterfaces(): List<NikonLocalInterface> =
-    localIPv4Interfaces().map { NikonLocalInterface(it.name, it.address) }
 
 /**
  * The cameras list's discovery: PASSIVE only. Presence sweeps and liveness dials of saved hosts
@@ -111,7 +107,7 @@ internal fun nikonInterfaces(): List<NikonLocalInterface> =
  */
 internal class CameraListDiscovery(
     dialer: NikonDialer = SocketNikonDialer,
-    interfaces: () -> List<NikonLocalInterface> = ::nikonInterfaces,
+    interfaces: () -> List<NikonLocalInterface> = ::localIPv4Interfaces,
     log: (String) -> Unit = {},
 ) {
     private val discovery = NikonDiscovery(dialer, interfaces, log)

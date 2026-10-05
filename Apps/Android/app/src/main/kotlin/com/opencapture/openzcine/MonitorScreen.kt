@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorIcon
 import android.os.Build
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
@@ -28,14 +29,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.Icons
@@ -43,7 +42,6 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
@@ -113,8 +111,9 @@ import com.opencapture.opencine.appkit.commit
 import com.opencapture.opencine.appkit.quickControl
 import com.opencapture.opencine.appkit.MonitorCaptureDrum
 import com.opencapture.opencine.appkit.MonitorCaptureButton
-import com.opencapture.monitorui.MonitorFieldLayout
 import com.opencapture.monitorui.MonitorLayoutPolicy
+import com.opencapture.monitorui.monitorBottomInsetDp
+import com.opencapture.monitorui.monitorLeadingInsetDp
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorCameraValues
 import com.opencapture.monitorui.MonitorValue
@@ -136,7 +135,6 @@ import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlException
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionEvent
-import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.opencine.nikon.CameraFocusException
 import com.opencapture.opencine.nikon.CameraFocusPoint
@@ -152,7 +150,6 @@ import com.opencapture.opencine.nikon.LiveFeedRotation
 import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.opencine.nikon.metadataOnly
 import com.opencapture.opencine.nikon.LiveFrameSource
-import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.openzcine.relay.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -205,23 +202,6 @@ internal fun retainMonitorPickerForChrome(
     cameraCommandPending ||
         (mode == MonitorDisplayMode.LIVE && (cameraValuesVisible || isTopBarPicker))
 
-/** Settings-only affordance used when the landscape side rails are hidden. */
-@Composable
-internal fun LandscapeSettingsRecoveryButton(
-    modifier: Modifier = Modifier,
-    onOpenSettings: () -> Unit,
-) {
-    val description = stringResource(R.string.monitor_settings_recovery)
-    AuxCircleButton(
-        modifier.semantics {
-            contentDescription = description
-        },
-        onClick = onOpenSettings,
-    ) { glyphModifier, tint ->
-        GearGlyph(tint, glyphModifier)
-    }
-}
-
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
 internal fun Modifier.zone(frame: ZoneFrame): Modifier =
     offset(frame.x.dp, frame.y.dp).size(frame.width.dp, frame.height.dp)
@@ -256,60 +236,9 @@ internal fun Modifier.liveFeedBodyRotation(rotation: LiveFeedRotation): Modifier
             .graphicsLayer { rotationZ = rotation.displayDegreesClockwise }
     }
 
-/**
- * The iPhone Dynamic Island's landscape leading safe-area inset, in points/dp —
- * the canonical iOS geometry throughout the core tests
- * (`Tests/OpenZCineCoreTests/MonitorLayoutPolicyTests.swift`:
- * `MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)`).
- * `MonitorFeedLayout.leadingInset` turns it into a left chrome lane: the feed
- * starts at x = 59 while the fixed-margin lock button and battery rail
- * (chrome insets ignore the safe area; lock spans x 16–56) sit beside it.
- */
-internal const val IOS_ISLAND_LANE_DP = 59f
-
 /** The on-feed 50/50 quick key, matching the iOS pill. */
 private const val SPLIT_KEY_WIDTH_DP = 44f
 private const val SPLIT_KEY_HEIGHT_DP = 30f
-
-/**
- * The bottom inset handed to the portrait zone map while Android's system bars
- * are hidden. The SM-A127F reports a zero bottom inset in sticky immersive
- * mode, but the physical gesture/home-indicator area is still present. This
- * floor keeps the 83dp record control comfortably above that edge after the
- * shared layout reclaims its 14dp system-bar lift.
- */
-internal const val PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP = 30f
-
-/**
- * Leading inset handed to the zone map, in dp: the display cutout floored at
- * [IOS_ISLAND_LANE_DP], plus any transient system-bar lane on this edge.
- *
- * Devices whose punch-hole resolves below the core's 50dp cutout threshold
- * (SM-A127F: zero inset) would otherwise run the feed edge-to-edge, putting
- * the lock button and battery rail ON the image. Flooring the cutout at the
- * iPhone island lane synthesizes the iOS composition — feed right of the
- * chrome — as a platform-adapter decision, keeping the shared core
- * platform-blind. The floor is a MINIMUM under the physical cutout only; a
- * transient bar on this edge (reverse-landscape nav bar) still ADDS its lane
- * on top so the feed clears the overlay.
- */
-internal fun monitorLeadingInsetDp(cutoutDp: Float, transientBarDp: Float): Float =
-    maxOf(cutoutDp, IOS_ISLAND_LANE_DP) + maxOf(0f, transientBarDp - cutoutDp)
-
-/**
- * Bottom inset handed to the zone map, in dp.
- *
- * Sticky immersive mode can report no Android navigation-bar inset even
- * though a device still reserves its gesture area at the physical bottom.
- * Keep a portrait-only floor so the fixed system rail and its record button
- * never touch that edge; a real, larger system-bar/cutout inset still wins.
- */
-internal fun monitorBottomInsetDp(rawInsetDp: Float, isPortrait: Boolean): Float =
-    if (isPortrait) {
-        maxOf(rawInsetDp, PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP)
-    } else {
-        rawInsetDp
-    }
 
 /** Seats fail-closed feed feedback below any status deck mounted over the live image. */
 internal fun liveFeedColorNoticeTopInsetDp(
@@ -1281,19 +1210,9 @@ internal fun MonitorScreen(
             shutterLockedOverride = effectiveShutterLocked,
         )
     }
-    var pendingRecordTarget by remember { mutableStateOf<Boolean?>(null) }
-    val sendRecordCommand: (Boolean) -> Unit = { target -> commonControl.record(target) }
-    val requestRecordToggle: () -> Unit = {
-        if (recordControlEnabled) {
-            val target = !recording
-            if (operatorSettings.recordConfirmationEnabled.value) {
-                pendingRecordTarget = target
-                mediaRemoteShutter?.disarm()
-            } else {
-                sendRecordCommand(target)
-            }
-        }
-    }
+    // The shared record button owns its confirmation; while it is open the watch and the media
+    // remote shutter stay off, as they did behind the old Nikon dialog.
+    var recordConfirmationOpen by remember { mutableStateOf(false) }
     // Match the iOS watch's intentional confirmation bypass only after all
     // Android monitor/session/pending-command safety gates still hold. A watch
     // never owns a camera path; this reaches the same CameraSession seam as
@@ -1307,7 +1226,7 @@ internal fun MonitorScreen(
                         applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                         cameraConnected = sessionState is CameraSessionState.Connected,
                         recordCommandPending = recordCommandPending,
-                        recordConfirmationPending = pendingRecordTarget != null,
+                        recordConfirmationPending = recordConfirmationOpen,
                         cameraControlPending = pendingCommandControl != null,
                     )
                 executeWearRecordCommand(safety, recording) { target ->
@@ -1349,7 +1268,7 @@ internal fun MonitorScreen(
             cameraConnected = sessionState is CameraSessionState.Connected,
             recordCommandPending = recordCommandPending,
             applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
-            recordConfirmationPending = pendingRecordTarget != null,
+            recordConfirmationPending = recordConfirmationOpen,
             cameraControlPending = pendingCommandControl != null,
         )
     val latestRemoteShutterAction =
@@ -2013,7 +1932,7 @@ internal fun MonitorScreen(
                 capture = captureLayoutMode,
                 interfaceLocked = locked,
                 recordingOrPending =
-                    recording || recordCommandPending || pendingRecordTarget != null,
+                    recording || recordCommandPending || recordConfirmationOpen,
             )
         val railMounts: (ChromeSection) -> Boolean = { section ->
             // Availability outranks the rail plan's self-restore guarantees: a watcher without
@@ -2525,9 +2444,11 @@ internal fun MonitorScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            DotViewfinderGlyph(
-                                tint = LiveDesign.text.copy(alpha = 0.28f),
-                                modifier = Modifier.size(28.dp),
+                            MonitorIcon(
+                                MonitorIcon.FOCUS,
+                                null,
+                                Modifier.size(28.dp),
+                                LiveDesign.text.copy(alpha = 0.28f),
                             )
                             Text(
                                 text = stringResource(R.string.monitor_waiting_live_view),
@@ -2671,16 +2592,17 @@ internal fun MonitorScreen(
                     navigationHidden = false, interactive = accepts,
                     lock = { enabled -> LockButton(locked) { if (enabled) locked = !locked } },
                     settings = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenSettings() } },
-                        contentDescription = stringResource(R.string.a11y_monitor_settings)) { glyphModifier, tint -> GearGlyph(tint, glyphModifier) } },
+                        contentDescription = stringResource(R.string.a11y_monitor_settings)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.SETTINGS, null, glyphModifier, tint) } },
                     media = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenMedia() } },
-                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint -> MediaStackGlyph(tint, glyphModifier) } },
+                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.FILM, null, glyphModifier, tint) } },
                     record = { enabled ->
                         if (isPhotographyMode) PhotographyShutterButton(stillCapturing, enabled = enabled && !controlsSurrendered,
                             timerRemaining = photoTimerRemaining, bodyShutterPulse = bodyShutterPulse,
                             onPressed = photoShutterPressed, onReleased = photoShutterReleased)
                         else MonitorCaptureButton(commonControl, fieldLayout.record.width, enabled && recordControlEnabled,
                             confirm = operatorSettings.recordConfirmationEnabled.value,
-                            confirmationPolicy = MonitorControlModel.RecordConfirmationPolicy.EXPLICIT_TARGET)
+                            confirmationPolicy = MonitorControlModel.RecordConfirmationPolicy.EXPLICIT_TARGET,
+                            onConfirmingChange = { recordConfirmationOpen = it })
                     },
                     display = { enabled -> DispButton(displayModeOrder.indexOf(effectiveDisplayMode), displayModeOrder.size,
                         effectiveDisplayMode == MonitorDisplayMode.LIVE, onClick = { if (enabled) cycleDisplayMode() }) })
@@ -2879,10 +2801,11 @@ internal fun MonitorScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 // iOS full-screen arrows in a 40pt black circle.
-                FullScreenArrowsGlyph(
+                MonitorIcon(
+                    if (fillsViewport) MonitorIcon.MINIMIZE else MonitorIcon.MAXIMIZE,
+                    null,
+                    Modifier.size(15.dp),
                     LiveDesign.text,
-                    expand = !fillsViewport,
-                    modifier = Modifier.size(15.dp),
                 )
             }
         }
@@ -2934,10 +2857,7 @@ internal fun MonitorScreen(
                     )
                 } else {
                     // iOS uses `dot.viewfinder` in a 40pt black circle.
-                    DotViewfinderGlyph(
-                        LiveDesign.text,
-                        Modifier.size(17.dp),
-                    )
+                    MonitorIcon(MonitorIcon.FOCUS, null, Modifier.size(17.dp), LiveDesign.text)
                 }
             }
         }
@@ -3180,22 +3100,13 @@ internal fun MonitorScreen(
         }
         if (liveViewGuideVisible) {
             val guideController = requireNotNull(liveViewGuideController)
-            val guideAssistTarget =
-                if (isPortraitFill) {
-                    portraitFillAssistRailFrame(
-                        feed = zones.feed,
-                        captureStrip = zones.captureStrip.takeIf { cameraValuesVisible },
-                        expanded = false,
-                    )
-                } else {
-                    zones.assistStrip
-                }
+            // The shared palette sits at zones.assistStrip in every orientation; its portrait
+            // form is the vertical slider, fit or fill.
             LiveViewGuideOverlay(
                 controller = guideController,
                 zones = zones,
                 isPortrait = isPortrait,
-                usesVerticalAssistRail = isPortraitFill,
-                assistTarget = guideAssistTarget,
+                usesVerticalAssistRail = isPortrait,
             )
         }
         if (chromeEditorMode != null) {
@@ -3234,42 +3145,6 @@ internal fun MonitorScreen(
             )
         }
     }
-    pendingRecordTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { pendingRecordTarget = null },
-            title = {
-                Text(
-                    stringResource(
-                        if (target) R.string.record_start_title else R.string.record_stop_title,
-                    ),
-                )
-            },
-            text = {
-                Text(
-                    stringResource(
-                        if (target) R.string.record_start_message else R.string.record_stop_message,
-                    ),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingRecordTarget = null
-                        if (recordControlEnabled && target != recording) {
-                            sendRecordCommand(target)
-                        }
-                    },
-                ) {
-                    Text(stringResource(if (target) R.string.action_start else R.string.action_stop))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingRecordTarget = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
     activeCommandControl?.let { request ->
         CompositionLocalProvider(LocalMonitorGlass provides glass) {
             CommandControlDialog(
@@ -3280,90 +3155,6 @@ internal fun MonitorScreen(
                 onSelect = { label -> applyCameraControl(request, label) },
                 onDismiss = { activeCommandControl = null },
             )
-        }
-    }
-}
-
-@Composable
-private fun DotViewfinderGlyph(
-    tint: androidx.compose.ui.graphics.Color,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.foundation.Canvas(modifier) {
-        val stroke = size.minDimension * 0.09f
-        val corner = size.minDimension * 0.26f
-        // Center dot.
-        drawCircle(tint, radius = size.minDimension * 0.14f, center = center)
-        // Four open viewfinder corners.
-        val w = size.width
-        val h = size.height
-        fun cornerPath(
-            startX: Float, startY: Float, midX: Float, midY: Float, endX: Float, endY: Float,
-        ) {
-            val path = androidx.compose.ui.graphics.Path().apply {
-                moveTo(startX, startY)
-                lineTo(midX, midY)
-                lineTo(endX, endY)
-            }
-            drawPath(
-                path,
-                tint,
-                style =
-                    androidx.compose.ui.graphics.drawscope.Stroke(
-                        width = stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    ),
-            )
-        }
-        cornerPath(corner, 0f, 0f, 0f, 0f, corner)
-        cornerPath(w - corner, 0f, w, 0f, w, corner)
-        cornerPath(w, h - corner, w, h, w - corner, h)
-        cornerPath(corner, h, 0f, h, 0f, h - corner)
-    }
-}
-
-/**
- * The portrait Fit/Fill key's glyph: iOS `arrow.up.left.and.arrow.down.right` when [expand] is
- * true (fit, tapping fills), `arrow.down.right.and.arrow.up.left` otherwise.
- */
-@Composable
-private fun FullScreenArrowsGlyph(
-    tint: androidx.compose.ui.graphics.Color,
-    expand: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.foundation.Canvas(modifier) {
-        val stroke = size.minDimension * 0.11f
-        val head = size.minDimension * 0.26f
-        val inset = size.minDimension * 0.06f
-        val mid = size.minDimension * 0.42f
-        fun arrow(tipX: Float, tipY: Float, tailX: Float, tailY: Float) {
-            val path = androidx.compose.ui.graphics.Path().apply {
-                moveTo(tailX, tailY)
-                lineTo(tipX, tipY)
-                // L-shaped barbs run back toward the tail along each axis.
-                moveTo(tipX + (if (tailX > tipX) head else -head), tipY)
-                lineTo(tipX, tipY)
-                lineTo(tipX, tipY + (if (tailY > tipY) head else -head))
-            }
-            drawPath(
-                path,
-                tint,
-                style =
-                    androidx.compose.ui.graphics.drawscope.Stroke(
-                        width = stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    ),
-            )
-        }
-        val w = size.width
-        val h = size.height
-        if (expand) {
-            arrow(inset, inset, mid, mid)
-            arrow(w - inset, h - inset, w - mid, h - mid)
-        } else {
-            arrow(mid, mid, inset, inset)
-            arrow(w - mid, h - mid, w - inset, h - inset)
         }
     }
 }
@@ -3406,37 +3197,6 @@ internal fun toggleShutterLockOnCamera(
         next,
     )
 }
-
-/** Clearance between the battery row stack and the lock button above it (dp). */
-internal const val BATTERY_STACK_CLEARANCE_DP = 10f
-
-/**
- * Seats the stacked battery rows in the leading rail lane, directly under the
- * lock button (iOS parity). [anchor] is the zone map's phone-indicator frame —
- * it carries the lane's leading x.
- */
-internal fun batteryRowStackFrame(anchor: ZoneFrame, lock: ZoneFrame): ZoneFrame =
-    ZoneFrame(
-        x = anchor.x,
-        y = lock.y + lock.height + BATTERY_STACK_CLEARANCE_DP,
-        width = BATTERY_STACK_WIDTH_DP,
-        height = BATTERY_STACK_HEIGHT_DP,
-    )
-
-/**
- * Where the landscape battery gauges actually draw. Phone rails stack under the
- * lock using the per-indicator `batteryPhone` anchor; width-constrained maps
- * emit `.batteryInline` beside the lock and omit those per-indicator frames.
- */
-internal fun landscapeBatteryIndicatorsFrame(zones: MonitorZones): ZoneFrame? =
-    when (zones.batteryStyle) {
-        ZoneStyle.BATTERY_INLINE -> zones.batteryCluster
-        else -> zones.batteryPhone?.let { batteryRowStackFrame(it, zones.lock) }
-    }
-
-/** Trailing x of lock-side batteries for photography rail / feed-lane clearance. */
-internal fun photographyBatteryTrailing(zones: MonitorZones): Float? =
-    landscapeBatteryIndicatorsFrame(zones)?.let { it.x + it.width }
 
 /**
  * Photography hides the command display mode — its dashboard is still
@@ -3521,20 +3281,6 @@ internal fun nextDisplayModeInOrder(
 }
 
 // MARK: - Edit view (per-DISP chrome)
-
-/**
- * The drawn bounds of the landscape rail column — settings, media, record and DISP. The zone map's
- * system cluster unions the top-left lock button in with these, which makes it span the whole
- * screen and useless as an outline; the lock carries its own badge anyway.
- */
-private fun railColumnFrame(zones: MonitorZones): ZoneFrame {
-    val column = listOf(zones.settings, zones.media, zones.record, zones.disp)
-    val left = column.minOf { it.x }
-    val top = column.minOf { it.y }
-    val right = column.maxOf { it.x + it.width }
-    val bottom = column.maxOf { it.y + it.height }
-    return ZoneFrame(left, top, right - left, bottom - top)
-}
 
 /**
  * Marks a monitor element as editable: while the Edit view is open on a mode that owns [section],

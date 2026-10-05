@@ -76,7 +76,6 @@ import com.opencapture.opencine.nikon.PtpIpConnectionStrategy
 import com.opencapture.opencine.nikon.PtpIpInitiatorIdentity
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.opencine.nikon.CameraConnectionPhase
-import com.opencapture.opencine.nikon.CameraConnectionProgress
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.hasExternalUvcCamera
@@ -616,17 +615,6 @@ private sealed interface PairingPhase {
     data class Error(val message: String) : PairingPhase
 }
 
-/** Maps the shared-core lifecycle without treating a PTP-IP handshake as pairing. */
-private fun pairingPhaseFor(progress: CameraConnectionProgress): PairingPhase? =
-    when (progress.phase) {
-        CameraConnectionPhase.HANDSHAKING -> PairingPhase.Handshaking
-        CameraConnectionPhase.PAIRING -> PairingPhase.Pairing(progress.detail.ifBlank { null })
-        CameraConnectionPhase.CONFIRM_ON_CAMERA -> PairingPhase.ConfirmOnCamera(
-            progress.detail.ifBlank { null },
-        )
-        else -> null
-    }
-
 /**
  * Max wait for body Confirm + camera AP readiness (reassociation **or** PTP
  * probe). Keep modest — TCP probe exits early once the body answers.
@@ -647,14 +635,6 @@ internal const val FIRST_PAIR_BOUND_RETRY_INTERVAL_MILLIS: Long = 400L
 internal const val FIRST_PAIR_HOTSPOT_SETTLE_MILLIS: Long = 2_000L
 /** Specifier timeout for post-confirm rejoin attempts (full 45s only for first join). */
 internal const val FIRST_PAIR_REJOIN_TIMEOUT_MILLIS: Int = 10_000
-
-/**
- * First-pair / manual join: up to 3 specifier attempts (iOS NEHotspot does the
- * same). Association flake right after the camera raises its AP is routine.
- */
-internal const val CAMERA_AP_JOIN_ATTEMPTS: Int = 3
-
-internal const val CAMERA_AP_JOIN_RETRY_DELAY_MILLIS: Long = 2_000L
 
 /**
  * Pause after a successful camera-AP join before the first PTP-IP Init.
@@ -2154,7 +2134,7 @@ private fun DeviceInstructionCard(
  */
 @Composable
 internal fun TakeOverConfirmationDialog(
-    camera: DiscoveredCamera,
+    holder: String?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -2163,7 +2143,7 @@ internal fun TakeOverConfirmationDialog(
         title = { Text(stringResource(R.string.pairing_take_over_title)) },
         text = {
             Text(
-                camera.heldByDeviceName?.takeIf(String::isNotBlank)?.let {
+                holder?.takeIf(String::isNotBlank)?.let {
                     stringResource(R.string.pairing_take_over_message_named, it)
                 } ?: stringResource(R.string.pairing_take_over_message),
             )
@@ -2203,7 +2183,7 @@ private fun DiscoverBody(
     var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
     takeOverTarget?.let { held ->
         TakeOverConfirmationDialog(
-            camera = held,
+            holder = held.heldByDeviceName,
             onConfirm = {
                 takeOverTarget = null
                 onConnectCamera(held)
@@ -2478,75 +2458,3 @@ private fun usbCameraActionResource(access: UsbPtpCameraAccess): Int =
     }
 
 // MARK: - Controls
-
-@Composable
-internal fun StartupFilledButton(
-    text: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(
-                if (enabled) StartupColors.accent else StartupColors.control.copy(alpha = 0.6f)
-            )
-            .clickable(enabled = enabled, onClick = onClick)
-            .alpha(if (enabled) 1f else 0.55f),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text,
-            color = if (enabled) StartupColors.darkText else StartupColors.muted,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-        )
-    }
-}
-
-@Composable
-internal fun StartupOutlineButton(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    leadingChevron: Boolean = false,
-    enabled: Boolean = true,
-) {
-    Row(
-        modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(StartupColors.control.copy(alpha = if (enabled) 0.82f else 0.55f))
-            .border(1.dp, StartupColors.border.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .alpha(if (enabled) 1f else 0.55f)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        if (leadingChevron) {
-            StartupGlyph(
-                StartupGlyphKind.CHEVRON_LEFT,
-                tint = StartupColors.ink,
-                modifier = Modifier.size(13.dp),
-            )
-            Spacer(Modifier.width(5.dp))
-        }
-        // Auto-shrinks instead of clipping: the wizard's landscape intro column
-        // narrows to 148dp on the choose step, and large system font scales
-        // can outgrow any fixed width.
-        BasicText(
-            text,
-            style =
-                TextStyle(
-                    color = StartupColors.ink,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-            maxLines = 1,
-            autoSize = TextAutoSize.StepBased(10.sp, 14.sp, 0.5.sp),
-        )
-    }
-}

@@ -14,6 +14,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.opencine.media.FeedEffectsRenderPlan
+import com.opencapture.opencine.runtime.MonitorBitmapFrameLease
+import com.opencapture.opencine.runtime.MonitorBitmapFramePool
 import com.opencapture.opencine.runtime.MonitorBitmapGlesSession
 import org.junit.Assert.*
 import org.junit.Rule
@@ -43,7 +45,7 @@ class NikonBitmapGlesOwnershipTest {
 
     @Test fun closedPoolRetainsBorrowedPixelsUntilTheirSingleRelease() {
         val source = decodedSource()
-        val pool = LegacyLiveFeedFramePool(size = 1)
+        val pool = MonitorBitmapFramePool(size = 1)
         source.eraseColor(Color.rgb(180, 64, 210))
         val lease = requireNotNull(pool.copy(source))
         try {
@@ -65,12 +67,12 @@ class NikonBitmapGlesOwnershipTest {
 
     @Test fun allThreeSlotsAreBoundedAndOnlyReturnedSlotAcceptsSuccessorPixels() {
         val source = decodedSource()
-        val pool = LegacyLiveFeedFramePool()
+        val pool = MonitorBitmapFramePool()
         source.eraseColor(Color.RED)
         val a = requireNotNull(pool.copy(source))
         val b = requireNotNull(pool.copy(source))
         val c = requireNotNull(pool.copy(source))
-        var d: LegacyLiveFeedFrameLease? = null
+        var d: MonitorBitmapFrameLease? = null
         try {
             assertNull(pool.copy(source))
             a.release()

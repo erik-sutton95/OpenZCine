@@ -119,14 +119,6 @@ private fun qualificationCopy(reason: MulticamQualificationRefusal): String = wh
     MulticamQualificationRefusal.NOT_REACHABLE -> MulticamCopy.NOT_REACHABLE
 }
 
-/** Compatibility copy helper; admission consumes the typed qualification directly. */
-fun multicamRefusal(record: SavedCameraRecord, reachable: Boolean, memberHosts: Collection<String>): String? =
-    when (val qualification = multicamQualification(record, reachable, memberHosts)) {
-        MulticamQualification.Qualified -> null
-        MulticamQualification.Unknown -> "Multicam support is not known for this setup."
-        is MulticamQualification.Refused -> qualificationCopy(qualification.reason)
-    }
-
 sealed interface MemberStatus {
     data object Connecting : MemberStatus
 

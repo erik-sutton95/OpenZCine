@@ -12,7 +12,6 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -128,28 +127,24 @@ class MonitorReadoutsTest {
     @Test
     fun `timecode uses exact camera header fields and never an elapsed clock`() {
         val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 4)
-        assertEquals(camera, authoritativeTimecode(camera))
-        assertEquals("01:02:03:04", cameraTimecodeLabel(camera))
+        assertEquals(camera, liveViewHeaderTimecode(camera))
 
         // Pure off/zero is unavailable (no invented clock).
         val offZero = LiveFrameTimecode(on = false, hour = 0, minute = 0, second = 0, frame = 0)
-        assertNull(authoritativeTimecode(offZero))
-        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(offZero))
-        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(null))
+        assertNull(liveViewHeaderTimecode(offZero))
+        assertNull(liveViewHeaderTimecode(null))
 
         // Nikon can leave the header "on" flag clear while still advancing H:M:S:F
         // during a take — digits must still be accepted (iOS liveTimecode parity).
         val rollingWithFlagOff = camera.copy(on = false)
-        assertEquals(rollingWithFlagOff, authoritativeTimecode(rollingWithFlagOff))
-        assertEquals("01:02:03:04", cameraTimecodeLabel(rollingWithFlagOff))
+        assertEquals(rollingWithFlagOff, liveViewHeaderTimecode(rollingWithFlagOff))
     }
 
     @Test
     fun `out of range timecode is unavailable rather than normalized`() {
         val invalid = LiveFrameTimecode(on = true, hour = 24, minute = 0, second = 0, frame = 0)
 
-        assertNull(authoritativeTimecode(invalid))
-        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(invalid))
+        assertNull(liveViewHeaderTimecode(invalid))
     }
 
     @Test

@@ -65,7 +65,7 @@ internal fun clampFeedPan(
 
 /**
  * One transform step, taking the centroid, zoom change and pan change together exactly as the
- * playback viewer does (`MediaStillViewer` / `anchoredPinchPan`).
+ * playback viewer does (`MediaStillViewer`).
  *
  * With a center-pivot scale followed by a translation, a content point p renders at
  * `p * scale + offset`, so holding the point under the pinch centroid fixed across a scale step

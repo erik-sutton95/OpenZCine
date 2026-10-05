@@ -6,51 +6,11 @@ import com.opencapture.openzcine.bridge.ZoneStyle
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /** JVM coverage for photography chrome policy helpers. */
 class PhotographyChromeTest {
     private val lock = ZoneFrame(x = 16f, y = 12f, width = 40f, height = 40f)
     private val band = ZoneFrame(x = 59f, y = 320f, width = 700f, height = 58f)
-
-    @Test
-    fun `inline battery cluster trailing is the cluster right edge, not the phone pill`() {
-        val lock = ZoneFrame(x = 16f, y = 12f, width = 40f, height = 40f)
-        val cluster = ZoneFrame(x = 68f, y = 12f, width = 52f, height = 40f)
-        val zones = tabletZones(lock = lock, batteryCluster = cluster)
-
-        assertEquals(cluster, landscapeBatteryIndicatorsFrame(zones))
-        assertEquals(120f, photographyBatteryTrailing(zones))
-    }
-
-    @Test
-    fun `phone rail batteries still use the stacked row frame`() {
-        val lock = ZoneFrame(x = 16f, y = 12f, width = 40f, height = 40f)
-        val phone = ZoneFrame(x = 16f, y = 90f, width = 38f, height = 70f)
-        val zones =
-            tabletZones(
-                lock = lock,
-                batteryStyle = ZoneStyle.BATTERY_RAIL,
-                batteryCluster = ZoneFrame(x = 16f, y = 12f, width = 38f, height = 300f),
-                batteryPhone = phone,
-            )
-        val stack = batteryRowStackFrame(phone, lock)
-        assertEquals(stack, landscapeBatteryIndicatorsFrame(zones))
-        assertEquals(stack.x + stack.width, photographyBatteryTrailing(zones))
-    }
-
-    @Test
-    fun `no battery cluster leaves no lock-side trailing edge`() {
-        val zones =
-            tabletZones(
-                lock = lock,
-                batteryStyle = null,
-                batteryCluster = null,
-                batteryPhone = null,
-            )
-        assertNull(photographyBatteryTrailing(zones))
-    }
 
     private fun tabletZones(
         lock: ZoneFrame,
@@ -76,62 +36,6 @@ class PhotographyChromeTest {
             scopes = null,
             controlsGrid = null,
         )
-
-    @Test
-    fun `photo feed spans the full height between the reserved side lanes`() {
-        val viewport = ZoneFrame(0f, 0f, 914f, 384f)
-        val cinema = ZoneFrame(59f, 0f, 683f, 384f)
-        val railLane = 56f + 12f + 60f + 8f // 136
-        val rightRail = 914f - 70f
-
-        val fx =
-            photographyFeedFrame(
-                cinemaFeed = cinema,
-                viewport = viewport,
-                imageArea = "FX",
-                leadingLaneTrailing = railLane,
-                trailingLaneLeading = rightRail,
-            )
-        // 3:2 at the FULL viewport height (the capture band's glass overlays
-        // the image bottom, like iOS), letterboxed between the SIDE lanes.
-        assertEquals(3f / 2f, fx.width / fx.height, 0.01f)
-        assertEquals(viewport.height, fx.height, 0.01f)
-        assertEquals(0f, fx.y, 0.01f)
-        assertTrue(fx.x >= railLane)
-        assertTrue(fx.x + fx.width <= rightRail)
-        // Centred in the side-lane clear box.
-        assertEquals(
-            railLane + (rightRail - railLane) / 2f,
-            fx.x + fx.width / 2f,
-            0.5f,
-        )
-
-        // 1:1 keeps the square shape at full height inside the same lanes.
-        val square = photographyFeedFrame(cinema, viewport, "1:1", railLane, rightRail)
-        assertEquals(1f, square.width / square.height, 0.01f)
-        assertEquals(viewport.height, square.height, 0.01f)
-
-        // 16:9 takes the cinema placement exactly (iOS video-mode placement).
-        assertEquals(
-            cinema,
-            photographyFeedFrame(cinema, viewport, "16:9", railLane, rightRail),
-        )
-    }
-
-    @Test
-    fun `photo strip host is symmetric about the feed centre`() {
-        val band = ZoneFrame(100f, 320f, 700f, 58f)
-
-        // Feed centred right of the band's own middle: the host slice clips to
-        // the nearer band edge so Center alignment lands on the feed centre.
-        val host = photographyStripHostFrame(band, feedCenterX = 500f)
-        assertEquals(500f, host.x + host.width / 2f, 0.01f)
-        assertTrue(host.x >= band.x)
-        assertTrue(host.x + host.width <= band.x + band.width + 0.01f)
-
-        // A feed centre outside the band degrades to a zero-width slice at it.
-        assertEquals(0f, photographyStripHostFrame(band, feedCenterX = 90f).width)
-    }
 
     @Test
     fun `profile tile compacts the built-in picture controls`() {

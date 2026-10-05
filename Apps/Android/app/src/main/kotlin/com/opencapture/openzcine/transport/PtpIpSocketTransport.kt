@@ -1,9 +1,11 @@
 package com.opencapture.openzcine.transport
 
+import com.opencapture.opencine.core.RetryBackoff
 import java.io.EOFException
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
+import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -75,7 +77,7 @@ class PtpIpSocketTransport(
     private val host: String,
     private val port: Int = CameraDiscovery.PTP_IP_PORT,
     private val config: Config = Config(),
-    private val backoff: ReconnectBackoff = ReconnectBackoff(),
+    private val backoff: RetryBackoff = RetryBackoff(initialDelay = 500.0, maximumDelay = 30_000.0),
     private val jitter: () -> Double = { Random.nextDouble() },
 ) {
     /**
@@ -153,7 +155,7 @@ class PtpIpSocketTransport(
                 return connect()
             } catch (error: IOException) {
                 if (attempt + 1 >= config.maxReconnectAttempts) throw error
-                delay(backoff.delayMillis(attempt, jitter()))
+                delay(backoff.delay(attempt, jitter()).roundToLong())
                 attempt += 1
             }
         }

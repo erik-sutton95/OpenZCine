@@ -46,6 +46,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** Actual source-owned offline library; all content is SIMULATED metadata/stub bytes. */
 @RunWith(AndroidJUnit4::class)
@@ -92,8 +94,8 @@ class NikonMediaSelectionMainActivityTest {
         index.rememberCameraListing(bucket, clips)
         index.rememberCameraBucket(record.id, bucket, record.displayTitle)
         index.saveViewOptions(MediaLibraryViewOptions(
-            source = MediaLibrarySource.CAMERA, layout = MediaLibraryLayout.LIST,
-            sortOrder = MediaLibrarySortOrder.NAME, thumbnailSize = MediaThumbnailSize.SMALL,
+            source = MediaLibrarySource.CAMERA, layout = MonitorMediaLayout.LIST,
+            sortOrder = MediaLibrarySortOrder.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
         ))
         clips.forEach { clip ->
             cache.openEntry(bucket, MediaCacheObjectIdentity(clip), clip.sizeBytes).apply {

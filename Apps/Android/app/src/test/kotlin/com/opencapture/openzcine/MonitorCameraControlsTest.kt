@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorLayoutPolicy
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.opencine.nikon.CameraControl
@@ -12,7 +13,6 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CodecBitDepthOption
 import com.opencapture.openzcine.settings.MonitorDisplayMode
-import com.opencapture.openzcine.settings.PortraitFeedAspect
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -151,12 +151,9 @@ class MonitorCameraControlsTest {
     }
 
     @Test
-    fun `capture bar shortens Auto Subject and maps WB preset icons`() {
+    fun `capture bar shortens Auto Subject`() {
         assertEquals("Auto-S", captureBarDisplayValue("Auto Subject"))
         assertEquals("AF-C", captureBarDisplayValue("AF-C"))
-        assertEquals(CaptureWbIcon.AUTO, captureBarWbIcon("Auto"))
-        assertEquals(CaptureWbIcon.SUNNY, captureBarWbIcon("Sunny"))
-        assertNull(captureBarWbIcon("5560K"))
     }
 
     @Test
@@ -357,21 +354,6 @@ class MonitorCameraControlsTest {
             ),
         )
         assertEquals("6K · 25p", compactRecordingModeFromRawDisplay("6048x3402 · 25p"))
-    }
-
-    @Test
-    fun `portrait pinch uses iOS snap thresholds`() {
-        assertEquals(
-            PortraitFeedAspect.FILL,
-            portraitAspectAfterPinch(1.16f, PortraitFeedAspect.FIT_16_9),
-        )
-        assertEquals(
-            PortraitFeedAspect.FIT_16_9,
-            portraitAspectAfterPinch(0.86f, PortraitFeedAspect.FILL),
-        )
-        assertNull(portraitAspectAfterPinch(1.15f, PortraitFeedAspect.FIT_16_9))
-        assertNull(portraitAspectAfterPinch(0.87f, PortraitFeedAspect.FILL))
-        assertNull(portraitAspectAfterPinch(1.4f, PortraitFeedAspect.FILL))
     }
 
     @Test
@@ -707,37 +689,9 @@ class MonitorCameraControlsTest {
     }
 
     @Test
-    fun `portrait fill rail stays inside feed and above capture strip`() {
+    fun `portrait fill trailing false color key leaves the collapsed assist palette reachable`() {
         val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
-        val collapsed =
-            portraitFillAssistRailFrame(
-                zones.feed,
-                zones.captureStrip,
-                expanded = false,
-            )
-        val expanded =
-            portraitFillAssistRailFrame(
-                zones.feed,
-                zones.captureStrip,
-                expanded = true,
-            )
-
-        assertTrue(collapsed.y + collapsed.height <= requireNotNull(zones.captureStrip).y - 10f)
-        assertTrue(expanded.x >= zones.feed.x)
-        assertTrue(expanded.y >= zones.feed.y)
-        assertTrue(expanded.y + expanded.height <= zones.feed.y + zones.feed.height)
-        assertTrue(expanded.y + expanded.height <= requireNotNull(zones.captureStrip).y - 10f)
-    }
-
-    @Test
-    fun `portrait fill trailing false color key leaves collapsed rail reachable`() {
-        val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
-        val rail =
-            portraitFillAssistRailFrame(
-                zones.feed,
-                zones.captureStrip,
-                expanded = false,
-            )
+        val palette = MonitorLayoutPolicy.portraitAssists(floor = 610f, tablet = false)
         val reference =
             falseColorReferenceDefaultFrame(
                 feed = zones.feed,
@@ -745,7 +699,7 @@ class MonitorCameraControlsTest {
                 horizontalFraction = 1f,
             )
 
-        assertTrue(reference.x >= rail.x + rail.width)
+        assertTrue(reference.x >= palette.x + palette.width)
     }
 
     @Test

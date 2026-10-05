@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy
 import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
@@ -18,6 +19,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** JVM coverage for the persisted, core-authorized Android library state. */
 class MediaLibraryStateTest {
@@ -739,9 +742,9 @@ class MediaLibraryStateTest {
             MediaLibraryViewOptions(
                 source = MediaLibrarySource.LOCAL,
                 category = MediaLibraryCategory.FAVORITES,
-                layout = MediaLibraryLayout.LIST,
+                layout = MonitorMediaLayout.LIST,
                 sortOrder = MediaLibrarySortOrder.NAME,
-                thumbnailSize = MediaThumbnailSize.LARGE,
+                thumbnailSize = MonitorThumbnailSize.LARGE,
             )
 
         MediaLibraryIndex(preferences).saveViewOptions(options)
@@ -845,7 +848,7 @@ class MediaLibraryStateTest {
         // Nikon writes HEIF as `.HIF`; the shared core supplies the HEIF label off the wire.
         val hif = still(3, "DSC_0003.HIF", "HEIF")
 
-        val options = MediaFilterDerivation.options(listOf(jpeg, nef, hif), TODAY)
+        val options = filterOptions(listOf(jpeg, nef, hif), TODAY)
 
         assertEquals(
             listOf(MediaFormatFilter.JPEG, MediaFormatFilter.HEIF, MediaFormatFilter.NEF),
@@ -862,7 +865,7 @@ class MediaLibraryStateTest {
         val mov = clip(1, "A001.MOV").copy(pixelWidth = 6_048)
         val mp4 = clip(2, "A002.MP4").copy(pixelWidth = 1_920)
 
-        val options = MediaFilterDerivation.options(listOf(mov, mp4), TODAY)
+        val options = filterOptions(listOf(mov, mp4), TODAY)
 
         assertEquals(listOf(MediaFormatFilter.MOV, MediaFormatFilter.MP4), options.formats)
         assertEquals(listOf(MediaResolutionFilter.HD, MediaResolutionFilter.SIX_K), options.resolutions)
@@ -877,13 +880,13 @@ class MediaLibraryStateTest {
                 clip(2, "A002.MOV").copy(pixelWidth = 1_920),
             )
 
-        val options = MediaFilterDerivation.options(allMov, TODAY)
+        val options = filterOptions(allMov, TODAY)
 
         // No MP4 is listed, and a MOV chip would select every row — neither filters anything.
         assertTrue(options.formats.isEmpty())
         assertTrue(options.resolutions.isEmpty())
         assertTrue(options.isEmpty)
-        assertTrue(MediaFilterDerivation.options(emptyList(), TODAY).isEmpty)
+        assertTrue(filterOptions(emptyList(), TODAY).isEmpty)
     }
 
     @Test
@@ -898,7 +901,7 @@ class MediaLibraryStateTest {
         assertEquals(MediaPhotoSizeFilter.SMALL, small.photoSizeFilter(widths))
         assertEquals(
             listOf(MediaPhotoSizeFilter.LARGE, MediaPhotoSizeFilter.MEDIUM, MediaPhotoSizeFilter.SMALL),
-            MediaFilterDerivation.options(listOf(large, medium, small), TODAY).photoSizes,
+            filterOptions(listOf(large, medium, small), TODAY).photoSizes,
         )
 
         // The camera reported no dimensions: no SIZE chip is faked.
@@ -908,9 +911,9 @@ class MediaLibraryStateTest {
                 still(5, "DSC_0005.NEF", "NEF").copy(pixelWidth = 0),
             )
         assertNull(unsized.first().photoSizeFilter(unsized.stillPixelWidths()))
-        assertTrue(MediaFilterDerivation.options(unsized, TODAY).photoSizes.isEmpty())
+        assertTrue(filterOptions(unsized, TODAY).photoSizes.isEmpty())
         // One size present partitions nothing.
-        assertTrue(MediaFilterDerivation.options(listOf(large, large.copy(handle = 9)), TODAY).photoSizes.isEmpty())
+        assertTrue(filterOptions(listOf(large, large.copy(handle = 9)), TODAY).photoSizes.isEmpty())
     }
 
     @Test
@@ -925,7 +928,7 @@ class MediaLibraryStateTest {
         val widths = clips.stillPixelWidths()
 
         clips.forEach { assertNull(it.photoSizeFilter(widths)) }
-        assertTrue(MediaFilterDerivation.options(clips, TODAY).photoSizes.isEmpty())
+        assertTrue(filterOptions(clips, TODAY).photoSizes.isEmpty())
     }
 
     @Test
@@ -954,7 +957,7 @@ class MediaLibraryStateTest {
                 MediaDateWindowFilter.LAST_7_DAYS,
                 MediaDateWindowFilter.LAST_30_DAYS,
             ),
-            MediaFilterDerivation.options(spread, TODAY).dateWindows,
+            filterOptions(spread, TODAY).dateWindows,
         )
         // Everything shot today: every window selects every row, so none of them filters.
         val allToday =
@@ -962,7 +965,7 @@ class MediaLibraryStateTest {
                 clip(1, "A001.MOV", captureDate = daysAgo(0)),
                 clip(2, "A002.MP4", captureDate = daysAgo(0)),
             )
-        assertTrue(MediaFilterDerivation.options(allToday, TODAY).dateWindows.isEmpty())
+        assertTrue(filterOptions(allToday, TODAY).dateWindows.isEmpty())
     }
 
     @Test
@@ -977,7 +980,7 @@ class MediaLibraryStateTest {
                 storageId = 11,
             )
 
-        val retained = stale.retainingOfferedChips(MediaFilterDerivation.options(photos, TODAY))
+        val retained = stale.retainingOfferedChips(filterOptions(photos, TODAY))
 
         assertEquals(setOf(MediaFormatFilter.JPEG), retained.formats)
         assertTrue(retained.resolutions.isEmpty())
@@ -1109,3 +1112,18 @@ class MediaLibraryStateTest {
         }
     }
 }
+
+/** The chips the production gallery projection offers for [clips]. */
+private fun filterOptions(clips: List<MediaClipRecord>, today: LocalDate): MediaFilterOptions =
+    NikonAppGalleryProjection(
+        clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MediaLibrarySortOrder.NEWEST, today = today,
+    ).filterOptions
+
+private fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
+    NikonAndroidGalleryProjectionPolicy.resolutionKey(this)?.let { key -> MediaResolutionFilter.entries.first { it.title == key } }
+
+private fun List<MediaClipRecord>.stillPixelWidths(): List<Int> = NikonAndroidGalleryProjectionPolicy.stillWidths(this)
+
+private fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? =
+    NikonAndroidGalleryProjectionPolicy.photoSizeKey(this, presentWidths)
+        ?.let { key -> MediaPhotoSizeFilter.entries.first { it.title == key } }

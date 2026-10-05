@@ -2,7 +2,6 @@ package com.opencapture.openzcine.lut
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
@@ -63,6 +62,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.res.stringResource
+import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.openzcine.R
 
 /** Canonical RED IPP2 Output Presets page — same URL as iOS RedDownloadView. */
 internal const val RED_IPP2_PRESETS_URL =
@@ -308,7 +310,7 @@ private fun RedCloseChip(
                 ),
         contentAlignment = Alignment.Center,
     ) {
-        Text("✕", color = LiveDesign.text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        MonitorIcon(MonitorIcon.X, stringResource(R.string.action_close), Modifier.size(18.dp), LiveDesign.text)
     }
 }
 

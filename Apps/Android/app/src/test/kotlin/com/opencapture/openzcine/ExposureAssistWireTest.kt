@@ -1,6 +1,5 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.settings.normalizedZebraEntry
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -188,15 +187,5 @@ class ExposureAssistWireTest {
                 expectedCurveOrdinal = 0,
             )
         }
-    }
-
-    @Test
-    fun `zebra direct entry clamps the complete native and IRE ranges`() {
-        assertEquals(255, normalizedZebraEntry("255", 255))
-        assertEquals(255, normalizedZebraEntry("999", 255))
-        assertEquals(0, normalizedZebraEntry("0", 100))
-        assertEquals(8, normalizedZebraEntry("008", 100))
-        assertEquals(null, normalizedZebraEntry("", 100))
-        assertEquals(null, normalizedZebraEntry("not-a-number", 100))
     }
 }

@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorClipCard
 import com.opencapture.monitorui.MonitorCatalogDisplayControls
 import com.opencapture.monitorui.MonitorCatalogHeader
@@ -21,12 +22,11 @@ import com.opencapture.monitorui.MonitorMediaHitTarget
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.framing
 import com.opencapture.openzcine.performOperatorHaptic
-import com.opencapture.openzcine.LocalOperatorHaptics
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,12 +47,8 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.displayCutout
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -64,8 +60,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -73,11 +67,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -98,34 +88,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.ExposureAssistCameraInput
-import com.opencapture.openzcine.FilmGlyph
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.R
@@ -137,7 +118,6 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
-import com.opencapture.openzcine.frameio.FrameioPreparedArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
@@ -158,12 +138,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonNative
-
-/**
- * ObjectInfo budget per cursor advance. The facade alternates cards inside
- * each page, and Compose publishes every page before requesting the next one.
- */
-private const val MEDIA_BROWSE_PAGE_SIZE = 32
+import com.opencapture.openzcine.settings.PanelCloseButton
+import com.opencapture.monitorui.MonitorMediaLayout
+import androidx.compose.ui.platform.LocalConfiguration
+import com.opencapture.monitorui.monitorCatalogColumns
+import com.opencapture.monitorui.MonitorCatalogGrid
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
 internal sealed interface BrowseState {
@@ -193,25 +172,6 @@ private data class BatchShareResult(
     val staged: List<StagedMediaShare>,
     val stagedClips: List<MediaClipRecord>,
     val incompleteCount: Int,
-    val failedCount: Int,
-    val firstFailure: String?,
-)
-
-/** Gallery writer result paired with the selection items omitted before writing. */
-private data class GalleryDelivery(
-    val result: MediaGalleryBatchResult,
-    val omissions: MediaGalleryOmissions,
-)
-
-/** One configured, verified artifact paired with its stable source record. */
-private data class PreparedExternalMedia(
-    val clip: MediaClipRecord,
-    val artifact: FrameioPreparedArtifact,
-)
-
-/** Partial-safe result from applying one export configuration to staged media. */
-private data class ExternalMediaPreparation(
-    val prepared: List<PreparedExternalMedia>,
     val failedCount: Int,
     val firstFailure: String?,
 )
@@ -260,55 +220,6 @@ private fun stageSelectedMedia(
         }
     }
     return BatchShareResult(staged, stagedClips, incomplete, failed, firstFailure)
-}
-
-private suspend fun prepareExternalMedia(
-    controller: FrameioDeliveryController,
-    cameraID: String,
-    staged: BatchShareResult,
-    configuration: MediaDeliveryConfiguration,
-    cancellationCheck: () -> Unit,
-): ExternalMediaPreparation {
-    val prepared = mutableListOf<PreparedExternalMedia>()
-    var failed = 0
-    var firstFailure: String? = null
-    try {
-        staged.staged.zip(staged.stagedClips).forEach { (share, clip) ->
-            cancellationCheck()
-            try {
-                val artifact =
-                    controller.prepareForExternalDelivery(
-                    FrameioDeliveryArtifact(
-                        share = share,
-                        byteCount = withContext(Dispatchers.IO) { Files.size(share.file) },
-                        context =
-                            FrameioArtifactContext(
-                                cameraID = cameraID,
-                                captureDate = clip.captureDate,
-                                supportsLutBake =
-                                    clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
-                                stableClipIdentity = clip.libraryKey(cameraID),
-                            ),
-                    ),
-                    configuration,
-                )
-                prepared += PreparedExternalMedia(clip, artifact)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                failed += 1
-                if (firstFailure == null) firstFailure = error.message
-            }
-        }
-    } catch (error: CancellationException) {
-        withContext(NonCancellable) {
-            prepared.forEach { item ->
-                runCatching { controller.releaseExternalDelivery(item.artifact) }
-            }
-        }
-        throw error
-    }
-    return ExternalMediaPreparation(prepared, failed, firstFailure)
 }
 
 /** Privacy-bounded details attached to Android's share intent only when requested. */
@@ -490,9 +401,8 @@ internal fun MediaBrowseScreen(
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary,
     frameioController: FrameioDeliveryController,
-    mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
+    mediaDeliveryCoordinator: MediaDeliveryCoordinator,
     autoPlayFirstProxy: Boolean = false,
-    galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     /** Bumped when Settings clears the camera media cache so an open gallery reloads. */
     cacheRevision: Int = 0,
     /** The actual root's canonical index also receives Settings clear/delete mutations. */
@@ -531,10 +441,6 @@ internal fun MediaBrowseScreen(
             retired?.close()
         }
     }
-    val galleryGateway =
-        remember(context, galleryFailureInjection) {
-            AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
-        }
     LaunchedEffect(cameraID, savedCameraID, cameraDisplayName) {
         val savedID = savedCameraID ?: return@LaunchedEffect
         val displayName = cameraDisplayName ?: return@LaunchedEffect
@@ -969,125 +875,19 @@ internal fun MediaBrowseScreen(
     fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedSeriesClips
-        val coordinator = mediaDeliveryCoordinator
-        if (coordinator != null) {
-            // The whole selection goes to the coordinator: it caches whatever is still only on
-            // the camera before delivering. Filtering to already-cached entries here is what
-            // silently shipped 2 of 10 selected clips.
-            coordinator.beginNativeShare(
-                selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                configuration = configuration,
-                cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
-            ) { published, metadata ->
-                context.startActivity(
-                    AndroidMediaShareIntent.chooserIntent(context, published, metadata),
-                )
-                exitSelection()
-            }
-            return
+        // The whole selection goes to the coordinator: it caches whatever is still only on
+        // the camera before delivering. Filtering to already-cached entries here is what
+        // silently shipped 2 of 10 selected clips.
+        mediaDeliveryCoordinator.beginNativeShare(
+            selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
+            configuration = configuration,
+            cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
+        ) { published, metadata ->
+            context.startActivity(
+                AndroidMediaShareIntent.chooserIntent(context, published, metadata),
+            )
+            exitSelection()
         }
-        val selectionSnapshotLegacy = selectedSeriesClips
-        shareInProgress = true
-        shareMessage = null
-        shareJob =
-            scope.launch {
-                val stageContext = coroutineContext
-                try {
-                    val staged =
-                        withContext(Dispatchers.IO) {
-                            stageSelectedMedia(
-                                context,
-                                cacheStore,
-                                cameraID,
-                                selectionSnapshotLegacy,
-                                cameraIDFor = ::ownerCameraID,
-                            ) { stageContext.ensureActive() }
-                        }
-                    if (staged.staged.isEmpty()) {
-                        shareMessage =
-                            staged.firstFailure
-                                ?: "Only complete cached media can be shared."
-                    } else {
-                        val configured =
-                            prepareExternalMedia(
-                                frameioController,
-                                cameraID,
-                                staged,
-                                configuration,
-                            ) { stageContext.ensureActive() }
-                        val published = mutableListOf<StagedMediaShare>()
-                        val publishedClips = mutableListOf<MediaClipRecord>()
-                        var publicationFailures = 0
-                        var cleanupFailures = 0
-                        configured.prepared.forEach { item ->
-                            try {
-                                val share =
-                                    if (item.artifact.transientExport == null) {
-                                        item.artifact.share
-                                    } else {
-                                        withContext(Dispatchers.IO) {
-                                            MediaShareStager(context.cacheDir.toPath())
-                                                .stagePreparedArtifact(
-                                                    source = item.artifact.share.file,
-                                                    expectedBytes = item.artifact.byteCount,
-                                                    displayName = item.artifact.share.displayName,
-                                                    mimeType = item.artifact.share.mimeType,
-                                                ) { stageContext.ensureActive() }
-                                        }
-                                    }
-                                published += share
-                                publishedClips += item.clip
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (_: Exception) {
-                                publicationFailures += 1
-                            } finally {
-                                val released =
-                                    withContext(NonCancellable) {
-                                        runCatching {
-                                            frameioController.releaseExternalDelivery(item.artifact)
-                                        }.isSuccess
-                                    }
-                                if (!released) cleanupFailures += 1
-                            }
-                        }
-                        if (published.isEmpty()) {
-                            shareMessage =
-                                configured.firstFailure
-                                    ?: "Couldn't produce a complete configured share artifact."
-                            return@launch
-                        }
-                        val metadata =
-                            mediaDeliveryMetadataSummary(publishedClips)
-                                .takeIf { configuration.includeMetadata }
-                        context.startActivity(
-                            AndroidMediaShareIntent.chooserIntent(context, published, metadata),
-                        )
-                        val skipped =
-                            staged.incompleteCount +
-                                staged.failedCount +
-                                configured.failedCount +
-                                publicationFailures
-                        shareMessage =
-                            buildString {
-                                append("Sharing ${published.size} configured item")
-                                if (published.size != 1) append('s')
-                                if (skipped > 0) append("; $skipped skipped")
-                                if (cleanupFailures > 0) {
-                                    append("; $cleanupFailures temporary export cleanup failed")
-                                }
-                            }
-                        exitSelection()
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    shareMessage = error.message ?: "Couldn't prepare the selected media for sharing."
-                } finally {
-                    shareInProgress = false
-                    shareJob = null
-                }
-            }
     }
 
     fun presentNativeDelivery() {
@@ -1113,104 +913,14 @@ internal fun MediaBrowseScreen(
                     .operatorMessage(MediaGalleryOmissions(nonVideoCount = omittedCount))
             return
         }
-        val coordinator = mediaDeliveryCoordinator
-        if (coordinator != null) {
-            // The full snapshot goes across: the coordinator caches the on-camera clips first and
-            // reports the non-savable ones itself, so nothing is dropped between here and Gallery.
-            coordinator.beginSaveToPhotos(
-                selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                configuration = configuration,
-                cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
-            )
-            exitSelection()
-            return
-        }
-        shareInProgress = true
-        shareMessage = null
-        shareJob =
-            scope.launch {
-                val stageContext = coroutineContext
-                try {
-                    val staged =
-                        withContext(Dispatchers.IO) {
-                            stageSelectedMedia(
-                                context,
-                                cacheStore,
-                                cameraID,
-                                savableSelection,
-                            ) { stageContext.ensureActive() }
-                        }
-                    val configured =
-                        prepareExternalMedia(
-                            frameioController,
-                            cameraID,
-                            staged,
-                            configuration,
-                        ) { stageContext.ensureActive() }
-                    var artifactFailures = 0
-                    val artifacts =
-                        withContext(Dispatchers.IO) {
-                            configured.prepared.mapNotNull { item ->
-                                runCatching {
-                                    MediaGalleryArtifact.fromStagedShare(
-                                        item.artifact.share,
-                                        mediaCaptureTimestampMillis(item.clip.captureDate)
-                                            .takeIf { configuration.includeMetadata },
-                                    )
-                                }.onFailure { artifactFailures += 1 }
-                                    .getOrNull()
-                            }
-                        }
-                    var cleanupFailures = 0
-                    val result =
-                        try {
-                            withContext(Dispatchers.IO) {
-                                MediaGallerySaver(galleryGateway).save(artifacts) {
-                                    stageContext.ensureActive()
-                                }
-                            }
-                        } finally {
-                            configured.prepared.forEach { item ->
-                                val released =
-                                    withContext(NonCancellable) {
-                                        runCatching {
-                                            frameioController.releaseExternalDelivery(item.artifact)
-                                        }.isSuccess
-                                    }
-                                if (!released) cleanupFailures += 1
-                            }
-                        }
-                    val delivery =
-                        GalleryDelivery(
-                            result = result,
-                            omissions =
-                                MediaGalleryOmissions(
-                                    nonVideoCount = omittedCount,
-                                    incompleteCount = staged.incompleteCount,
-                                    preparationFailureCount =
-                                        staged.failedCount +
-                                            configured.failedCount +
-                                            artifactFailures,
-                                    temporaryCleanupFailureCount = cleanupFailures,
-                                ),
-                        )
-                    shareMessage = delivery.result.operatorMessage(delivery.omissions)
-                    if (
-                        delivery.result.savedCount == savableSelection.size &&
-                            delivery.result.failedCount == 0 &&
-                            delivery.omissions.totalCount == 0
-                    ) {
-                        exitSelection()
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Exception) {
-                    shareMessage = "Couldn't prepare the selected media for Gallery."
-                } finally {
-                    shareInProgress = false
-                    shareJob = null
-                }
-            }
+        // The full snapshot goes across: the coordinator caches the on-camera clips first and
+        // reports the non-savable ones itself, so nothing is dropped between here and Gallery.
+        mediaDeliveryCoordinator.beginSaveToPhotos(
+            selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
+            configuration = configuration,
+            cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
+        )
+        exitSelection()
     }
 
     fun presentFrameioDelivery() {
@@ -1231,7 +941,7 @@ internal fun MediaBrowseScreen(
                 val stageContext = coroutineContext
                 // The upload runs here, not in the coordinator, so hand it the job the overlay's
                 // Cancel must reach — otherwise Cancel stopped nothing mid-upload.
-                val deliveryTicket = mediaDeliveryCoordinator?.trackExternalDelivery(stageContext[Job])
+                val deliveryTicket = mediaDeliveryCoordinator.trackExternalDelivery(stageContext[Job])
                 var skippedBeforeUpload: Int? = null
                 var completedWithoutFailures = false
                 var cancelled = false
@@ -1240,7 +950,7 @@ internal fun MediaBrowseScreen(
                     // without this pass an uncached selection uploaded nothing and said nothing.
                     // Mid-hop the phone is off the camera's Wi-Fi — that selection was already
                     // cached before the hop, and retrying here would only stall on dead sockets.
-                    mediaDeliveryCoordinator?.cacheFromCamera(
+                    mediaDeliveryCoordinator.cacheFromCamera(
                         destination = MediaDeliveryKind.FRAMEIO,
                         selection =
                             selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
@@ -1286,7 +996,7 @@ internal fun MediaBrowseScreen(
                         }
                     skippedBeforeUpload = result.incompleteCount + result.failedCount
                     frameioController.deliver(artifacts, options) { state ->
-                        deliveryTicket?.let { mediaDeliveryCoordinator?.bindFrameioDeliveryState(it, state) }
+                        mediaDeliveryCoordinator.bindFrameioDeliveryState(deliveryTicket, state)
                     }
                     val completed = frameioController.deliveryState as? FrameioDeliveryState.Completed
                     completedWithoutFailures = completed != null && completed.failedCount == 0
@@ -1316,7 +1026,7 @@ internal fun MediaBrowseScreen(
                             )
                         }
                     if (completedWithoutFailures && !cancelled) exitSelection()
-                    deliveryTicket?.let { mediaDeliveryCoordinator?.finishExternalDelivery(it) }
+                    mediaDeliveryCoordinator.finishExternalDelivery(deliveryTicket)
                     frameioPreparationInProgress = false
                     shareInProgress = false
                     shareJob = null
@@ -1476,9 +1186,9 @@ internal fun MediaBrowseScreen(
             }
         }
 
-        CloseCircleButton(
-            Modifier.padding(start = 16.dp, top = maxOf(topPad, 22f).dp),
+        PanelCloseButton(
             onClick = { closeRequested = true },
+            modifier = Modifier.padding(start = 16.dp, top = maxOf(topPad, 22f).dp),
         )
 
         shareMessage?.let { message ->
@@ -1504,7 +1214,7 @@ internal fun MediaBrowseScreen(
                     },
                 busy = shareInProgress || frameioPreparationInProgress,
                 onCacheBeforeHop = {
-                    mediaDeliveryCoordinator?.cacheFromCamera(
+                    mediaDeliveryCoordinator.cacheFromCamera(
                         destination = MediaDeliveryKind.FRAMEIO,
                         selection =
                             selectedSeriesClips.map { MediaDeliverySelection(ownerCameraID(it), it) },
@@ -1630,7 +1340,6 @@ internal fun MediaBrowseScreen(
                 cameraTransferAvailable = cameraConnected,
                 connectionOwner = connectionOwner,
                 favoriteIDs = favorites,
-                galleryFailureInjection = galleryFailureInjection,
                 assists = assists,
                 exposureAssistCameraInput = exposureAssistCameraInput,
                 operatorSettings = operatorSettings,
@@ -1858,10 +1567,10 @@ internal fun MediaLibraryRail(
     onCategoryChange: (MediaLibraryCategory) -> Unit,
     onStorageSelect: (Long) -> Unit,
     showsGridControls: Boolean,
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
-    onLayoutChange: (MediaLibraryLayout) -> Unit,
-    onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
+    onLayoutChange: (MonitorMediaLayout) -> Unit,
+    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -1892,27 +1601,17 @@ internal fun MediaLibraryRail(
 
 @Composable
 private fun MediaGridLayoutControls(
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
-    onLayoutChange: (MediaLibraryLayout) -> Unit,
-    onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
+    onLayoutChange: (MonitorMediaLayout) -> Unit,
+    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     MonitorCatalogDisplayControls(
-        list = layout == MediaLibraryLayout.LIST,
-        thumbnailSize = when (thumbnailSize) {
-            MediaThumbnailSize.SMALL -> MonitorThumbnailSize.SMALL
-            MediaThumbnailSize.MEDIUM -> MonitorThumbnailSize.MEDIUM
-            MediaThumbnailSize.LARGE -> MonitorThumbnailSize.LARGE
-        },
-        onList = { onLayoutChange(if (it) MediaLibraryLayout.LIST else MediaLibraryLayout.GRID) },
-        onThumbnailSize = {
-            onThumbnailSizeChange(when (it) {
-                MonitorThumbnailSize.SMALL -> MediaThumbnailSize.SMALL
-                MonitorThumbnailSize.MEDIUM -> MediaThumbnailSize.MEDIUM
-                MonitorThumbnailSize.LARGE -> MediaThumbnailSize.LARGE
-            })
-        },
+        list = layout == MonitorMediaLayout.LIST,
+        thumbnailSize = thumbnailSize,
+        onList = { onLayoutChange(if (it) MonitorMediaLayout.LIST else MonitorMediaLayout.GRID) },
+        onThumbnailSize = onThumbnailSizeChange,
         modifier = modifier,
     )
 }
@@ -1920,10 +1619,10 @@ private fun MediaGridLayoutControls(
 /** iOS portrait bottom band: gradient fade + layout/density capsule. */
 @Composable
 private fun PortraitMediaGridControlsBand(
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
-    onLayoutChange: (MediaLibraryLayout) -> Unit,
-    onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
+    onLayoutChange: (MonitorMediaLayout) -> Unit,
+    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -2124,104 +1823,6 @@ private fun SelectionHeader(
     }
 }
 
-@Composable
-private fun FrameioSelectionAction(
-    readyCount: Int,
-    enabled: Boolean,
-    preparationInProgress: Boolean,
-    upload: FrameioDeliveryState.Uploading?,
-    rejoiningCamera: Boolean,
-    onClick: () -> Unit,
-) {
-    val label =
-        when {
-            rejoiningCamera -> "REJOINING CAMERA"
-            upload != null ->
-                "UP ${upload.itemIndex}/${upload.itemCount} ${(upload.progress * 100).roundToInt()}%"
-            preparationInProgress -> "PREPARING…"
-            else -> "FRAME.IO $readyCount"
-        }
-    Text(
-        label,
-        style = chromeStyle(11f, FontWeight.Bold, mono = true),
-        color =
-            if (enabled || preparationInProgress || upload != null || rejoiningCamera) {
-                LiveDesign.accent
-            } else {
-                LiveDesign.faint
-            },
-        maxLines = 1,
-        modifier =
-            Modifier.glass(CapsuleShape)
-                .semantics {
-                    when {
-                        rejoiningCamera -> {
-                            contentDescription = "Rejoining saved camera Wi-Fi network"
-                            liveRegion = LiveRegionMode.Polite
-                            disabled()
-                        }
-                        upload != null -> {
-                            contentDescription =
-                                "Uploading Frame.io clip ${upload.itemIndex} of ${upload.itemCount}: ${(upload.progress * 100).roundToInt()} percent"
-                            progressBarRangeInfo =
-                                ProgressBarRangeInfo(
-                                    upload.progress.toFloat().coerceIn(0f, 1f),
-                                    0f..1f,
-                                )
-                            liveRegion = LiveRegionMode.Polite
-                            disabled()
-                        }
-                        preparationInProgress -> {
-                            contentDescription = "Preparing selected media for Frame.io delivery"
-                            progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate
-                            liveRegion = LiveRegionMode.Polite
-                            disabled()
-                        }
-                        else -> {
-                            contentDescription =
-                                "Deliver $readyCount complete cached media items to Frame.io"
-                            role = Role.Button
-                            if (!enabled) disabled()
-                        }
-                    }
-                }.chromeClickable(enabled) { onClick() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-    )
-}
-
-@Composable
-private fun DeliverySelectionAction(
-    readyCount: Int,
-    enabled: Boolean,
-    shareInProgress: Boolean,
-    frameioPreparationInProgress: Boolean,
-    uploadInProgress: Boolean,
-    onClick: () -> Unit,
-) {
-    Text(
-        if (shareInProgress && !frameioPreparationInProgress && !uploadInProgress) {
-            "WORKING…"
-        } else {
-            "DELIVER"
-        },
-        style = chromeStyle(11f, FontWeight.Bold, mono = true),
-        color = if (enabled) LiveDesign.accent else LiveDesign.faint,
-        maxLines = 1,
-        modifier =
-            Modifier.glass(CapsuleShape)
-                .semantics {
-                    contentDescription =
-                        if (shareInProgress) {
-                            "Media delivery in progress"
-                        } else {
-                            "Choose delivery for $readyCount complete cached media items"
-                        }
-                    if (enabled) role = Role.Button else disabled()
-                }.chromeClickable(enabled) { onClick() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-    )
-}
-
 /** Sort popup uses explicit menu choices rather than cycling a hidden state. */
 /** iOS gallery REFRESH — an on-demand authoritative re-enumeration. */
 @Composable
@@ -2399,8 +2000,8 @@ private fun MediaLibraryBody(
     state: BrowseState,
     clips: List<MediaClipRecord>,
     source: MediaLibrarySource,
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
     cameraID: String,
     cameraIDFor: (MediaClipRecord) -> String = { cameraID },
     clipIdentity: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
@@ -2431,29 +2032,11 @@ private fun MediaLibraryBody(
                     ListingState(source)
                 } else if (clips.isEmpty()) {
                     EmptyState(source)
-                } else if (layout == MediaLibraryLayout.GRID) {
-                    MediaClipGrid(
-                        clips = clips,
-                        thumbnailSize = thumbnailSize,
-                        source = source,
-                        cameraIDFor = cameraIDFor,
-                        clipIdentity = clipIdentity,
-                        hasRawSibling = hasRawSibling,
-                        burstCountOf = burstCountOf,
-                        cameraConnected = cameraConnected,
-                        connectionOwner = connectionOwner,
-                        cacheStore = cacheStore,
-                        favorites = favorites,
-                        isSelecting = isSelecting,
-                        selectedIDs = selectedIDs,
-                        onOpen = onOpen,
-                        onBeginSelection = onBeginSelection,
-                        onSweepSelection = onSweepSelection,
-                        onToggleFavorite = onToggleFavorite,
-                    )
                 } else {
-                    MediaClipList(
+                    MediaClipGallery(
                         clips = clips,
+                        list = layout == MonitorMediaLayout.LIST,
+                        thumbnailSize = thumbnailSize,
                         source = source,
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
@@ -2494,14 +2077,15 @@ private fun rememberSelectionInputPolicy(): MonitorMediaSelectionConfiguration {
     }
 }
 
-/** Actual source cards consume the common mounted-hit and native input owner.
- * Browsing entry remains on the cells; a subsequent selecting touch arms a hold.
- * Native vertical scrolling and frame-clock edge scrolling share the real lazy state.
+/** Actual source cards consume the common mounted-hit and native input owner, in the shared
+ * catalog grid or a list. Browsing entry remains on the cells; a subsequent selecting touch arms a
+ * hold. Native vertical scrolling and frame-clock edge scrolling share the real lazy state.
  */
 @Composable
-private fun MediaClipGrid(
+private fun MediaClipGallery(
     clips: List<MediaClipRecord>,
-    thumbnailSize: MediaThumbnailSize,
+    list: Boolean,
+    thumbnailSize: MonitorThumbnailSize,
     source: MediaLibrarySource,
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
@@ -2519,98 +2103,24 @@ private fun MediaClipGrid(
     onToggleFavorite: (MediaClipRecord) -> Unit,
 ) {
     val gridState = rememberLazyGridState()
-    val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
-    // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
-    val currentSelectedIDs by rememberUpdatedState(selectedIDs)
-    val view = LocalView.current
-    val selectionInput = rememberSelectionInputPolicy()
-    MonitorMediaSelectionHost(
-        ids = orderedIDs,
-        selecting = isSelecting,
-        selected = selectedIDs,
-        scroll = gridState,
-        onOpen = { id -> clips.firstOrNull { clipIdentity(it) == id }?.let(onOpen) },
-        onSelectionChange = { _, next -> onSweepSelection(next) },
-        modifier = Modifier.fillMaxSize(),
-        sessionKey = source to connectionOwner,
-        configuration = selectionInput,
-        onFeedback = { event ->
-            view.performOperatorHaptic(
-                if (event == MonitorMediaSelectionFeedback.BEGAN) HapticFeedbackConstants.LONG_PRESS
-                else HapticFeedbackConstants.CLOCK_TICK,
-            )
-        },
-    ) { registry ->
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
-            state = gridState,
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(bottom = 28.dp),
-        ) {
-            items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
-                val identity = clipIdentity(clip)
-                MonitorMediaHitTarget(registry = registry, id = identity) {
-                    MediaClipArtworkAdapter(
-                        clip = clip,
-                        list = false,
-                        source = source,
-                        cameraID = cameraIDFor(clip),
-                        hasRawSibling = hasRawSibling(clip),
-                        burstCount = burstCountOf(clip),
-                        cameraConnected = cameraConnected,
-                        connectionOwner = connectionOwner,
-                        cacheStore = cacheStore,
-                        favorite = identity in favorites,
-                        selected = identity in selectedIDs,
-                        isSelecting = isSelecting,
-                        onClick = { onOpen(clip) },
-                        onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
-                        onToggleFavorite = { onToggleFavorite(clip) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** List arrangement keeps the same source-authorized records and actions. */
-@Composable
-private fun MediaClipList(
-    clips: List<MediaClipRecord>,
-    source: MediaLibrarySource,
-    cameraIDFor: (MediaClipRecord) -> String,
-    clipIdentity: (MediaClipRecord) -> String,
-    hasRawSibling: (MediaClipRecord) -> Boolean,
-    burstCountOf: (MediaClipRecord) -> Int? = { null },
-    cameraConnected: Boolean,
-    connectionOwner: Long?,
-    cacheStore: MediaCacheStore,
-    favorites: Set<String>,
-    isSelecting: Boolean,
-    selectedIDs: Set<String>,
-    onOpen: (MediaClipRecord) -> Unit,
-    onBeginSelection: (MediaClipRecord) -> Unit,
-    onSweepSelection: (Set<String>) -> Unit,
-    onToggleFavorite: (MediaClipRecord) -> Unit,
-) {
     val listState = rememberLazyListState()
     val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
     // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
     val currentSelectedIDs by rememberUpdatedState(selectedIDs)
     val view = LocalView.current
     val selectionInput = rememberSelectionInputPolicy()
+    val configuration = LocalConfiguration.current
+    val columns =
+        monitorCatalogColumns(thumbnailSize, minOf(configuration.screenWidthDp, configuration.screenHeightDp) >= 600)
     MonitorMediaSelectionHost(
         ids = orderedIDs,
         selecting = isSelecting,
         selected = selectedIDs,
-        scroll = listState,
+        scroll = if (list) listState else gridState,
         onOpen = { id -> clips.firstOrNull { clipIdentity(it) == id }?.let(onOpen) },
         onSelectionChange = { _, next -> onSweepSelection(next) },
         modifier = Modifier.fillMaxSize(),
-        sessionKey = source to connectionOwner,
+        sessionKey = Triple(source, connectionOwner, list),
         configuration = selectionInput,
         onFeedback = { event ->
             view.performOperatorHaptic(
@@ -2619,34 +2129,41 @@ private fun MediaClipList(
             )
         },
     ) { registry ->
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = 28.dp),
-        ) {
-            items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
-                val identity = clipIdentity(clip)
-                MonitorMediaHitTarget(registry = registry, id = identity) {
-                    MediaClipArtworkAdapter(
-                        clip = clip,
-                        list = true,
-                        source = source,
-                        cameraID = cameraIDFor(clip),
-                        hasRawSibling = hasRawSibling(clip),
-                        cameraConnected = cameraConnected,
-                        connectionOwner = connectionOwner,
-                        cacheStore = cacheStore,
-                        favorite = identity in favorites,
-                        selected = identity in selectedIDs,
-                        isSelecting = isSelecting,
-                        onClick = { onOpen(clip) },
-                        onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
-                        onToggleFavorite = { onToggleFavorite(clip) },
-                    )
-                }
+        val cell: @Composable (MediaClipRecord) -> Unit = { clip ->
+            val identity = clipIdentity(clip)
+            MonitorMediaHitTarget(registry = registry, id = identity) {
+                MediaClipArtworkAdapter(
+                    clip = clip,
+                    list = list,
+                    source = source,
+                    cameraID = cameraIDFor(clip),
+                    hasRawSibling = hasRawSibling(clip),
+                    // List rows carry no burst count.
+                    burstCount = if (list) null else burstCountOf(clip),
+                    cameraConnected = cameraConnected,
+                    connectionOwner = connectionOwner,
+                    cacheStore = cacheStore,
+                    favorite = identity in favorites,
+                    selected = identity in selectedIDs,
+                    isSelecting = isSelecting,
+                    onClick = { onOpen(clip) },
+                    onLongPress = { onBeginSelection(clip) },
+                    onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
+                    onToggleFavorite = { onToggleFavorite(clip) },
+                )
             }
+        }
+        if (list) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 28.dp),
+            ) {
+                items(clips, key = clipIdentity) { cell(it) }
+            }
+        } else {
+            MonitorCatalogGrid(clips, columns, key = clipIdentity, modifier = Modifier.fillMaxSize(), state = gridState, cell = cell)
         }
     }
 }
@@ -2815,7 +2332,7 @@ private fun ClipArtwork(
             contentScale = ContentScale.Crop,
         )
     } else {
-        FilmGlyph(LiveDesign.faint, Modifier.size(34.dp, 30.dp))
+        MonitorIcon(MonitorIcon.FILM, null, Modifier.size(30.dp), LiveDesign.faint)
     }
 }
 
@@ -2889,7 +2406,7 @@ private fun ListingState(source: MediaLibrarySource) {
 @Composable
 private fun EmptyState(source: MediaLibrarySource) {
     CenteredState {
-        FilmGlyph(LiveDesign.faint, Modifier.size(44.dp, 40.dp))
+        MonitorIcon(MonitorIcon.FILM, null, Modifier.size(40.dp), LiveDesign.faint)
         Text(
             if (source == MediaLibrarySource.CAMERA) "No clips yet" else "No complete cached media",
             style = chromeStyle(15f, FontWeight.Medium),
@@ -2959,33 +2476,6 @@ private fun MediaStatusMessage(message: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** Round glass close button with an X glyph (iOS `CloseButton`, 37pt). */
-@Composable
-private fun CloseCircleButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier.size(37.dp).glass(CircleShape).chromeClickable(onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.size(11.dp)) {
-            val stroke = 1.8.dp.toPx()
-            drawLine(
-                LiveDesign.text,
-                Offset(0f, 0f),
-                Offset(size.width, size.height),
-                stroke,
-                StrokeCap.Round,
-            )
-            drawLine(
-                LiveDesign.text,
-                Offset(size.width, 0f),
-                Offset(0f, size.height),
-                stroke,
-                StrokeCap.Round,
-            )
-        }
-    }
-}
-
 private fun MediaLibraryCategory.titleForHeader(): String =
     when (this) {
         MediaLibraryCategory.ALL -> "All clips"
@@ -3008,6 +2498,3 @@ private fun itemCountLabel(state: BrowseState, displayedCount: Int): String =
 
 private val CapsuleShape: RoundedCornerShape
     get() = RoundedCornerShape(percent = 50)
-
-private fun Modifier.badgeBackground(): Modifier =
-    background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(4.dp))

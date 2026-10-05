@@ -136,4 +136,13 @@ class MediaClipsTest {
         assertEquals("1:05", formatPlaybackTime(65_999))
         assertEquals("61:01", formatPlaybackTime(3_661_000))
     }
+
+    @Test
+    fun `partial camera listing is represented as a retryable failure`() {
+        val clip = MediaClips.parse(wire.lines().first()).single()
+
+        val state = incompleteCameraBrowseState(listOf(clip))
+
+        assertEquals("Listing stopped after 1 item. Retry to load the complete library.", state.message)
+    }
 }

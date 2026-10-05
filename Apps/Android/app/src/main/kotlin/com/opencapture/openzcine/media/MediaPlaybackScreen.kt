@@ -175,13 +175,12 @@ internal fun MediaPlaybackScreen(
     /** Native connection owner every camera call is addressed to; null reaches no camera. */
     connectionOwner: Long?,
     favoriteIDs: Set<String>,
-    galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     assists: NikonAssists,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
     frameioController: FrameioDeliveryController,
-    mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
+    mediaDeliveryCoordinator: MediaDeliveryCoordinator,
     onToggleFavorite: (MediaClipRecord) -> Unit,
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
     onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
@@ -235,7 +234,6 @@ internal fun MediaPlaybackScreen(
             favorite = favorite,
             previous = previous,
             next = next,
-            galleryFailureInjection = galleryFailureInjection,
             assists = assists,
             exposureAssistCameraInput = exposureAssistCameraInput,
             operatorSettings = operatorSettings,
@@ -266,13 +264,12 @@ private fun PlaybackClipSession(
     favorite: Boolean,
     previous: MonitorMediaRecord<NikonLibraryClip>?,
     next: MonitorMediaRecord<NikonLibraryClip>?,
-    galleryFailureInjection: MediaGalleryFailureInjection,
     assists: NikonAssists,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
     frameioController: FrameioDeliveryController,
-    mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
+    mediaDeliveryCoordinator: MediaDeliveryCoordinator,
     onToggleFavorite: () -> Unit,
     onRatingMirrored: (MediaClipRecord, Int) -> Unit,
     onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)?,
@@ -288,10 +285,6 @@ private fun PlaybackClipSession(
         }
     val shareCacheDirectory = remember(context) { context.cacheDir.toPath() }
     val deliveryScope = rememberCoroutineScope()
-    val galleryGateway =
-        remember(context, galleryFailureInjection) {
-            AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
-        }
     val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
     val currentOnNavigate by rememberUpdatedState(onNavigate)
     val coordinator =
@@ -417,38 +410,28 @@ private fun PlaybackClipSession(
 
     fun beginShare(configuration: MediaDeliveryConfiguration) {
         if (deliveryInProgress || actionInProgress) return
-        val coordinator = mediaDeliveryCoordinator
-        if (coordinator != null) {
-            session.pauseForDelivery(activePlayer?.isPlaying == true)
-            deliveryMessage = null
-            coordinator.beginNativeShare(
-                selection = listOf(MediaDeliverySelection(cameraID, clip)),
-                configuration = configuration,
-                cameraConnectionOwner = connectionOwner.takeIf { cameraTransferAvailable },
-            ) { published, metadata ->
-                context.startActivity(
-                    AndroidMediaShareIntent.chooserIntent(context, published, metadata),
-                )
-            }
-            return
+        session.pauseForDelivery(activePlayer?.isPlaying == true)
+        deliveryMessage = null
+        mediaDeliveryCoordinator.beginNativeShare(
+            selection = listOf(MediaDeliverySelection(cameraID, clip)),
+            configuration = configuration,
+            cameraConnectionOwner = connectionOwner.takeIf { cameraTransferAvailable },
+        ) { published, metadata ->
+            context.startActivity(
+                AndroidMediaShareIntent.chooserIntent(context, published, metadata),
+            )
         }
-        deliveryMessage = "Delivery progress coordinator is unavailable."
     }
 
     fun beginGallerySave(configuration: MediaDeliveryConfiguration) {
         if (deliveryInProgress || actionInProgress) return
-        val coordinator = mediaDeliveryCoordinator
-        if (coordinator != null) {
-            session.pauseForDelivery(activePlayer?.isPlaying == true)
-            deliveryMessage = null
-            coordinator.beginSaveToPhotos(
-                selection = listOf(MediaDeliverySelection(cameraID, clip)),
-                configuration = configuration,
-                cameraConnectionOwner = connectionOwner.takeIf { cameraTransferAvailable },
-            )
-            return
-        }
-        deliveryMessage = "Delivery progress coordinator is unavailable."
+        session.pauseForDelivery(activePlayer?.isPlaying == true)
+        deliveryMessage = null
+        mediaDeliveryCoordinator.beginSaveToPhotos(
+            selection = listOf(MediaDeliverySelection(cameraID, clip)),
+            configuration = configuration,
+            cameraConnectionOwner = connectionOwner.takeIf { cameraTransferAvailable },
+        )
     }
 
     fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
@@ -463,15 +446,15 @@ private fun PlaybackClipSession(
                     val completedEntry =
                         shareableEntry
                             ?: mediaDeliveryCoordinator
-                                ?.cacheFromCamera(
+                                .cacheFromCamera(
                                     destination = MediaDeliveryKind.FRAMEIO,
                                     selection = listOf(MediaDeliverySelection(cameraID, clip)),
                                     cameraConnectionOwner =
                                         connectionOwner.takeIf { cameraTransferAvailable },
                                     ticket = deliveryTicket,
                                 )
-                                ?.items
-                                ?.firstOrNull()
+                                .items
+                                .firstOrNull()
                                 ?.entry
                     if (completedEntry == null) {
                         deliveryMessage = "Couldn't cache this clip from the camera."
@@ -497,7 +480,7 @@ private fun PlaybackClipSession(
                         )
                     val capturedTicket = deliveryTicket
                     frameioController.deliver(listOf(artifact), options) { state ->
-                        capturedTicket?.let { mediaDeliveryCoordinator?.bindFrameioDeliveryState(it, state) }
+                        capturedTicket?.let { mediaDeliveryCoordinator.bindFrameioDeliveryState(it, state) }
                     }
                     deliveryMessage = "Uploaded to Frame.io."
                 } catch (error: CancellationException) {
@@ -506,7 +489,7 @@ private fun PlaybackClipSession(
                     deliveryMessage = error.message ?: "Couldn't deliver this clip to Frame.io."
                 } finally {
                     if (pendingAction == null && playbackPause != null) session.resumeAfterDelivery(playbackPause)
-                    deliveryTicket?.let { mediaDeliveryCoordinator?.finishExternalDelivery(it) }
+                    deliveryTicket?.let { mediaDeliveryCoordinator.finishExternalDelivery(it) }
                     if (deliveryJob === runningJob) {
                         deliveryJob = null
                         deliveryInProgress = false
@@ -517,7 +500,7 @@ private fun PlaybackClipSession(
         deliveryMessage = null
         deliveryInProgress = true
         // The overlay narrating this upload lives in the coordinator, and so must its Cancel.
-        deliveryTicket = mediaDeliveryCoordinator?.trackExternalDelivery(job)
+        deliveryTicket = mediaDeliveryCoordinator.trackExternalDelivery(job)
         job.start()
     }
 

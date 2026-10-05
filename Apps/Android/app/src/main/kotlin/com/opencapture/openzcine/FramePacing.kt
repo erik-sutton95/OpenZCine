@@ -7,11 +7,6 @@ import kotlinx.coroutines.flow.Flow
 
 typealias FramePacingStats = MonitorFramePacingStats
 
-suspend fun <T : Any> pumpFrames(frames: Flow<LiveFrame>, stats: FramePacingStats,
-    decode: (ByteArray) -> T?, present: (T) -> Unit) {
-    pumpFramesWithSourceFrame(frames, stats, { decode(it.jpegData) }, { _, decoded -> present(decoded) })
-}
-
 suspend fun <T : Any> pumpFramesWithSourceFrame(frames: Flow<LiveFrame>, stats: FramePacingStats,
     decode: (LiveFrame) -> T?, present: (LiveFrame, T) -> Unit,
     isCurrent: () -> Boolean = { true }) {

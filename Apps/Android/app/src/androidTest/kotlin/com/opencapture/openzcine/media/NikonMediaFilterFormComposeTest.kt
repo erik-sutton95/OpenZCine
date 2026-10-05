@@ -124,7 +124,7 @@ class NikonMediaFilterFormComposeTest {
             clip(3, "L.JPG", 6048, "20260715T120000", FIRST, "JPEG"),
             clip(4, "M.TIF", 4032, "20260401T120000", SECOND, "TIFF"),
         )
-        val offered = MediaFilterDerivation.options(clips, TODAY)
+        val offered = offered(clips)
         composeRule.setContent {
             FilterFixtureHost {
                 if (presented) MediaFilterDialog(
@@ -168,7 +168,7 @@ class NikonMediaFilterFormComposeTest {
 
     @Test
     fun actualNikonUnknownMetadataAndMissingCardsOfferNoInventedGroups() {
-        val offered = MediaFilterDerivation.options(listOf(clip(1, "A.MOV", 0, "", FIRST)), TODAY)
+        val offered = offered(listOf(clip(1, "A.MOV", 0, "", FIRST)))
         composeRule.setContent {
             FilterFixtureHost {
                 MediaFilterDialog(MediaLibraryFilters(), offered, emptyList(), {}, {})
@@ -311,6 +311,12 @@ class NikonMediaFilterFormComposeTest {
             assertEquals(expected, result.mapTo(linkedSetOf(), MediaClipRecord::filename))
         }
     }
+
+    /** The chips the production gallery projection offers for [clips]. */
+    private fun offered(clips: List<MediaClipRecord>): MediaFilterOptions =
+        NikonAppGalleryProjection(
+            clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MediaLibrarySortOrder.NEWEST, today = TODAY,
+        ).filterOptions
 
     private fun clip(handle: Long, name: String, width: Int, date: String, storage: Long, format: String? = null) =
         MediaClipRecord(

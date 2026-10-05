@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.runtime.monitorJpegSampleSizeForLongSide
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -17,7 +18,7 @@ class JpegSampleSizeTest {
     fun `full width live view frame decodes unscaled at the default cap`() {
         assertEquals(
             1,
-            jpegSampleSizeForLongSide(
+            monitorJpegSampleSizeForLongSide(
                 feedWidth,
                 feedHeight,
                 JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE,
@@ -27,7 +28,7 @@ class JpegSampleSizeTest {
 
     @Test
     fun `a cap below the feed width halves it -- the regression this guards`() {
-        assertEquals(2, jpegSampleSizeForLongSide(feedWidth, feedHeight, 960))
+        assertEquals(2, monitorJpegSampleSizeForLongSide(feedWidth, feedHeight, 960))
     }
 
     /**
@@ -38,20 +39,20 @@ class JpegSampleSizeTest {
      */
     @Test
     fun `a cap between the halves buys half resolution, not a trim`() {
-        assertEquals(2, jpegSampleSizeForLongSide(feedWidth, feedHeight, 720))
-        assertEquals(2, jpegSampleSizeForLongSide(feedWidth, feedHeight, 1023))
-        assertEquals(1, jpegSampleSizeForLongSide(feedWidth, feedHeight, feedWidth))
+        assertEquals(2, monitorJpegSampleSizeForLongSide(feedWidth, feedHeight, 720))
+        assertEquals(2, monitorJpegSampleSizeForLongSide(feedWidth, feedHeight, 1023))
+        assertEquals(1, monitorJpegSampleSizeForLongSide(feedWidth, feedHeight, feedWidth))
     }
 
     @Test
     fun `oversized sources are still bounded`() {
-        assertEquals(2, jpegSampleSizeForLongSide(1920, 1080, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
-        assertEquals(4, jpegSampleSizeForLongSide(4096, 2160, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
+        assertEquals(2, monitorJpegSampleSizeForLongSide(1920, 1080, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
+        assertEquals(4, monitorJpegSampleSizeForLongSide(4096, 2160, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
     }
 
     @Test
     fun `zero or invalid inputs never scale`() {
-        assertEquals(1, jpegSampleSizeForLongSide(feedWidth, feedHeight, 0))
-        assertEquals(1, jpegSampleSizeForLongSide(0, 0, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
+        assertEquals(1, monitorJpegSampleSizeForLongSide(feedWidth, feedHeight, 0))
+        assertEquals(1, monitorJpegSampleSizeForLongSide(0, 0, JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE))
     }
 }
