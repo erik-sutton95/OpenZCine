@@ -36,20 +36,6 @@ public struct ScopePoint: Equatable, Sendable {
         self.blue = blue
         self.luma = luma
     }
-
-    /// Down-weights pixels that sit on HEVC macroblock edges where blocking reads as spatial noise.
-    public static func blockEdgeWeight(
-        sampleX: Int, sampleY: Int, blockSize: Int = 8
-    ) -> Double {
-        guard sampleX >= 0, sampleY >= 0, blockSize > 1 else { return 1 }
-        let onXEdge = sampleX % blockSize == 0 || sampleX % blockSize == blockSize - 1
-        let onYEdge = sampleY % blockSize == 0 || sampleY % blockSize == blockSize - 1
-        switch (onXEdge, onYEdge) {
-        case (true, true): return 0.22
-        case (true, false), (false, true): return 0.48
-        default: return 1
-        }
-    }
 }
 
 /// The product of sampling one frame for the scopes: per-channel 256-bin histograms (for the
@@ -60,6 +46,17 @@ public struct ScopeSamples: Equatable, Sendable {
     public let histogramGreen: [Int]
     public let histogramBlue: [Int]
     public let points: [ScopePoint]
+
+    public init(
+        histogramLuma: [Int], histogramRed: [Int], histogramGreen: [Int], histogramBlue: [Int],
+        points: [ScopePoint]
+    ) {
+        self.histogramLuma = histogramLuma
+        self.histogramRed = histogramRed
+        self.histogramGreen = histogramGreen
+        self.histogramBlue = histogramBlue
+        self.points = points
+    }
 
     public static let empty = ScopeSamples(
         histogramLuma: Array(repeating: 0, count: 256),
@@ -270,215 +267,6 @@ public enum ScopeSampler {
         let total = histogram.reduce(0, +)
         guard total > 0 else { return 0 }
         return Double(histogram[from...to].reduce(0, +)) / Double(total)
-    }
-}
-
-/// Normalized RGB accumulated for one vectorscope density bin.
-public struct VectorscopeColor: Equatable, Sendable {
-    // Normalized components.
-    public let red: Double
-    public let green: Double
-    public let blue: Double
-
-    public init(red: Double, green: Double, blue: Double) {
-        self.red = red
-        self.green = green
-        self.blue = blue
-    }
-
-    /// Empty-bin colour.
-    public static let black = VectorscopeColor(red: 0, green: 0, blue: 0)
-
-    /// Converts average signal colour into a bright trace tint while retaining saturation and hue.
-    /// Neutral bins become white; dark saturated bins remain readable instead of disappearing.
-    public var traceTint: VectorscopeColor {
-        let low = min(red, green, blue)
-        let high = max(red, green, blue)
-        let span = high - low
-        guard high > 0.000_001, span > 0.000_001 else {
-            return VectorscopeColor(red: 1, green: 1, blue: 1)
-        }
-        let saturation = min(1, max(0, span / high))
-        func tint(_ component: Double) -> Double {
-            let pure = (component - low) / span
-            return (1 - saturation) + pure * saturation
-        }
-        return VectorscopeColor(red: tint(red), green: tint(green), blue: tint(blue))
-    }
-}
-
-/// Chroma-plane (Cb×Cr) density bins for the vectorscope, accumulated from the same sampled
-/// `ScopePoint`s the waveform and parade read. Per-bin channel sums retain trace colour without
-/// duplicating the sampled point array in the renderer.
-public struct VectorscopeBins: Equatable, Sendable {
-    /// Largest supported grid axis. The UI uses 128; this upper bound prevents accidental public
-    /// inputs from requesting multi-gigabyte backing arrays.
-    public static let maximumBinCount = 1_024
-
-    /// Bins per axis; `counts.count == binCount * binCount`. Row-major with Cb along x and Cr along
-    /// y (row 0 is the most negative Cr — the renderer flips so +Cr points up).
-    public let binCount: Int
-    public let counts: [UInt32]
-    private let redSums: [UInt32]
-    private let greenSums: [UInt32]
-    private let blueSums: [UInt32]
-    /// Highest single-bin count (0 when empty) — the renderer's density normaliser.
-    public let peak: UInt32
-
-    /// Creates a density-only bin grid. Trace colour defaults to white for occupied bins.
-    ///
-    /// This compatibility initializer preserves the original public API from before per-bin colour
-    /// accumulation was added. Invalid dimensions normalize to ``empty``.
-    public init(binCount: Int, counts: [UInt32]) {
-        guard let expected = Self.validElementCount(binCount: binCount), counts.count == expected
-        else {
-            self.init()
-            return
-        }
-        self.init(
-            uncheckedBinCount: binCount, counts: counts,
-            redSums: [UInt32](repeating: 0, count: expected),
-            greenSums: [UInt32](repeating: 0, count: expected),
-            blueSums: [UInt32](repeating: 0, count: expected))
-    }
-
-    /// Creates a bin grid with matching count and RGB-sum arrays. Invalid dimensions normalize to
-    /// ``empty`` so renderers can safely trust the square-grid invariant.
-    public init(
-        binCount: Int, counts: [UInt32], redSums: [UInt32], greenSums: [UInt32],
-        blueSums: [UInt32]
-    ) {
-        guard let expected = Self.validElementCount(binCount: binCount),
-            counts.count == expected, redSums.count == expected,
-            greenSums.count == expected, blueSums.count == expected
-        else {
-            self.init()
-            return
-        }
-        self.init(
-            uncheckedBinCount: binCount, counts: counts,
-            redSums: redSums, greenSums: greenSums, blueSums: blueSums)
-    }
-
-    private static func validElementCount(binCount: Int) -> Int? {
-        guard binCount >= 0, binCount <= maximumBinCount else { return nil }
-        let (count, overflow) = binCount.multipliedReportingOverflow(by: binCount)
-        return overflow ? nil : count
-    }
-
-    private init() {
-        self.init(
-            uncheckedBinCount: 0, counts: [], redSums: [], greenSums: [], blueSums: [])
-    }
-
-    private init(
-        uncheckedBinCount: Int, counts: [UInt32], redSums: [UInt32], greenSums: [UInt32],
-        blueSums: [UInt32]
-    ) {
-        binCount = uncheckedBinCount
-        self.counts = counts
-        self.redSums = redSums
-        self.greenSums = greenSums
-        self.blueSums = blueSums
-        peak = counts.max() ?? 0
-    }
-
-    /// Average normalized RGB for an occupied bin, or black for an empty/invalid bin.
-    public func averageColor(at index: Int) -> VectorscopeColor {
-        guard counts.indices.contains(index), counts[index] > 0,
-            redSums.indices.contains(index), greenSums.indices.contains(index),
-            blueSums.indices.contains(index)
-        else { return .black }
-        let divisor = Double(counts[index]) * 255
-        return VectorscopeColor(
-            red: Double(redSums[index]) / divisor,
-            green: Double(greenSums[index]) / divisor,
-            blue: Double(blueSums[index]) / divisor)
-    }
-
-    public static let empty = VectorscopeBins()
-}
-
-/// BT.709 RGB→CbCr conversion and 2D chroma-bin accumulation.
-///
-/// The vectorscope reads the MONITOR image: sampled clean points transformed through the
-/// operator's active look (their LUT, or the built-in display tone map when none is on) via
-/// ``monitorPoints(_:through:)``. Log-encoded camera codes carry almost no chroma spread, so a
-/// source-referred vectorscope collapses into an unreadable centre dot — the monitor domain is
-/// where chroma reading is meaningful. Waveform, parade, histogram, and traffic lights keep
-/// reading the untouched source/log codes.
-public enum VectorscopeSampler {
-    /// BT.709 chroma for 8-bit R'G'B' code values; each component spans −0.5…+0.5.
-    public static func chroma(red: UInt8, green: UInt8, blue: UInt8) -> (cb: Double, cr: Double) {
-        chroma(
-            red: Double(red) / 255, green: Double(green) / 255,
-            blue: Double(blue) / 255)
-    }
-
-    /// Transforms clean sampled points into the monitor domain through `cube` (the operator's
-    /// active LUT or the built-in display tone map). Spatial metadata is preserved.
-    public static func monitorPoints(_ points: [ScopePoint], through cube: CubeLUT) -> [ScopePoint]
-    {
-        guard !points.isEmpty else { return [] }
-        return points.map { point in
-            let mapped = cube.map(
-                red: Float(point.red) / 255, green: Float(point.green) / 255,
-                blue: Float(point.blue) / 255)
-            let red = byte(mapped.red)
-            let green = byte(mapped.green)
-            let blue = byte(mapped.blue)
-            let luma = byte(
-                0.2126 * mapped.red + 0.7152 * mapped.green + 0.0722 * mapped.blue)
-            return ScopePoint(
-                xRatio: point.xRatio, yRatio: point.yRatio,
-                sampleX: point.sampleX, sampleY: point.sampleY,
-                red: red, green: green, blue: blue, luma: luma)
-        }
-    }
-
-    private static func byte(_ normalized: Float) -> UInt8 {
-        UInt8(min(255, max(0, (Double(normalized) * 255).rounded())))
-    }
-
-    private static func chroma(
-        red r: Double, green g: Double, blue b: Double
-    ) -> (cb: Double, cr: Double) {
-        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return (cb: (b - y) / 1.8556, cr: (r - y) / 1.5748)
-    }
-
-    /// Accumulates sampled points into a `binCount`×`binCount` CbCr histogram. `gain` magnifies the
-    /// trace around the centre (the operator's 1x/2x zoom); samples pushed outside the plot are
-    /// dropped, matching a scope-tube edge clip.
-    public static func accumulate(
-        points: [ScopePoint], binCount: Int = 128, gain: Double = 1
-    ) -> VectorscopeBins {
-        guard binCount > 0, binCount <= VectorscopeBins.maximumBinCount, !points.isEmpty else {
-            return .empty
-        }
-        let (elementCount, overflow) = binCount.multipliedReportingOverflow(by: binCount)
-        guard !overflow else { return .empty }
-        var counts = [UInt32](repeating: 0, count: elementCount)
-        var redSums = [UInt32](repeating: 0, count: counts.count)
-        var greenSums = [UInt32](repeating: 0, count: counts.count)
-        var blueSums = [UInt32](repeating: 0, count: counts.count)
-        let scale = Double(binCount - 1)
-        for point in points {
-            let (cb, cr) = chroma(red: point.red, green: point.green, blue: point.blue)
-            let x = cb * gain + 0.5
-            let y = cr * gain + 0.5
-            guard x >= 0, x <= 1, y >= 0, y <= 1 else { continue }
-            let column = Int((x * scale).rounded())
-            let row = Int((y * scale).rounded())
-            let index = row * binCount + column
-            counts[index] &+= 1
-            redSums[index] &+= UInt32(point.red)
-            greenSums[index] &+= UInt32(point.green)
-            blueSums[index] &+= UInt32(point.blue)
-        }
-        return VectorscopeBins(
-            binCount: binCount, counts: counts,
-            redSums: redSums, greenSums: greenSums, blueSums: blueSums)
     }
 }
 

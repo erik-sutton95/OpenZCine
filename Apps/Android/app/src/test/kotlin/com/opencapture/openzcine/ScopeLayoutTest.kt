@@ -213,24 +213,6 @@ class ScopeLayoutTest {
     }
 
     @Test
-    fun `boosted trace alpha saturates instead of wrapping`() {
-        assertEquals(255, scopeTraceAlpha(colorAlpha = 0.8f, opacity = 2f))
-        assertEquals(0, scopeTraceAlpha(colorAlpha = 0.8f, opacity = -1f))
-        assertEquals(listOf(1f), scopeTracePassOpacities(1f))
-        assertEquals(listOf(1f, 0.5f), scopeTracePassOpacities(1.5f))
-        assertEquals(listOf(1f, 1f), scopeTracePassOpacities(2f))
-    }
-
-    @Test
-    fun `vectorscope bitmap wire accepts only the exact core payload`() {
-        assertTrue(isValidVectorPayloadSize(2 * 128 * 128 * 4))
-        assertFalse(isValidVectorPayloadSize(0))
-        assertFalse(isValidVectorPayloadSize(3))
-        assertFalse(isValidVectorPayloadSize(128 * 128 * 4))
-        assertFalse(isValidVectorPayloadSize(128 * 128 * 4 + 4))
-    }
-
-    @Test
     fun `vectorscope LUT request follows active built in and stored selections`() {
         assertEquals(1, scopeVectorLutRequest(null, curveOrdinal = 1) { null }?.lookOrdinal)
         assertEquals(
