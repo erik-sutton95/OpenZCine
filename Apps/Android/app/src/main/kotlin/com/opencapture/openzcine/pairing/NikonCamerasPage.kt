@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -142,19 +141,10 @@ internal fun nikonIntegrationSlots(
         addRoute = { camera, done ->
             AddSetupCard(camera, recordsOf(camera, records()), connector, credentials, done, onScanAccessPoint)
         },
-        prompt = { prompt -> (prompt as? NikonTakeOverPrompt)?.let { TakeOverPromptDialog(it) } },
+        prompt = { prompt ->
+            (prompt as? NikonTakeOverPrompt)?.let { TakeOverConfirmationDialog(it.holder, it.confirm, it.cancel) }
+        },
     )
-
-@Composable
-private fun TakeOverPromptDialog(prompt: NikonTakeOverPrompt) {
-    AlertDialog(
-        onDismissRequest = prompt.cancel,
-        title = { Text(stringResource(R.string.pairing_take_over_title)) },
-        text = { Text(prompt.fallbackText) },
-        confirmButton = { TextButton(onClick = prompt.confirm) { Text(stringResource(R.string.action_take_over)) } },
-        dismissButton = { TextButton(onClick = prompt.cancel) { Text(stringResource(R.string.action_cancel)) } },
-    )
-}
 
 /**
  * "+ Add setup": the kinds this camera does not have yet. Every row does something: a reachable

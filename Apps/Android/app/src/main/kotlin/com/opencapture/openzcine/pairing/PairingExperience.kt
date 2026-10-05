@@ -2134,7 +2134,7 @@ private fun DeviceInstructionCard(
  */
 @Composable
 internal fun TakeOverConfirmationDialog(
-    camera: DiscoveredCamera,
+    holder: String?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -2143,7 +2143,7 @@ internal fun TakeOverConfirmationDialog(
         title = { Text(stringResource(R.string.pairing_take_over_title)) },
         text = {
             Text(
-                camera.heldByDeviceName?.takeIf(String::isNotBlank)?.let {
+                holder?.takeIf(String::isNotBlank)?.let {
                     stringResource(R.string.pairing_take_over_message_named, it)
                 } ?: stringResource(R.string.pairing_take_over_message),
             )
@@ -2183,7 +2183,7 @@ private fun DiscoverBody(
     var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
     takeOverTarget?.let { held ->
         TakeOverConfirmationDialog(
-            camera = held,
+            holder = held.heldByDeviceName,
             onConfirm = {
                 takeOverTarget = null
                 onConnectCamera(held)
