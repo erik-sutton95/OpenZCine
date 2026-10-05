@@ -72,7 +72,7 @@ extension Notification.Name {
 /// a private intermediate texture and the present copies it to the swapchain texture.
 ///
 /// That intermediate is at the *feed's* resolution, not the drawable's (see
-/// `MetalFeedFrameBaker.bakeSize`), so the present is a scale rather than a copy — one bilinear
+/// `MonitorFrameBaker.bakeSize`), so the present is a scale rather than a copy: one bilinear
 /// sample per drawable pixel instead of a whole Core Image graph per drawable pixel.
 ///
 /// Opt-in alternative to `LiveFrameView` (see `FeedRenderMode`). **Needs on-device validation** — the
@@ -434,70 +434,6 @@ enum FeedUpscaler: String, CaseIterable, Sendable {
             return VTLowLatencySuperResolutionScalerConfiguration.isSupported
         #endif
     }()
-
-    /// Which of the factors the super-resolution processor `offered` for a source size to run at,
-    /// to blow that source up by `ratio`.
-    ///
-    /// The smallest offered factor that *clears* the ratio, so the fit after the model only ever
-    /// shrinks — enlarging a model's output with Lanczos would throw away the thing being paid
-    /// for. When nothing clears it, the largest offered gets as close as the processor allows.
-    /// `nil` when nothing is offered at all: that source size is not served, which is a rotation
-    /// away from being served and so never a reason to latch the option off.
-    ///
-    /// `held` — the factor already running for this same source size — wins whenever it still
-    /// clears the ratio, even though a smaller one would now do. The drawable walks through a dozen
-    /// intermediate sizes during a layout animation (a device log shows the MetalFX scaler rebuilt
-    /// five times across one), and changing factor restarts the processor, which loads an ML model
-    /// on the draw thread. An oversized factor costs some extra output pixels; a restart per
-    /// animation frame costs the operator the picture.
-    /// The size to hand the super-resolution model when the bake is larger than it will take.
-    ///
-    /// The low-latency processor tops out at 960×960 on device, and a Quality-preset ZR feed is
-    /// 1024×576 — over the ceiling, so it offers no scale factor at all and the option silently
-    /// did nothing. Shrinking the input by 6% to clear that ceiling buys a ×2 ML upscale of the
-    /// result, which is a far better trade than the 6% of source width it costs.
-    ///
-    /// Uniform, so the aspect the present letterboxes against is unchanged, and never an upscale:
-    /// a source already inside the limit is handed over untouched.
-    static func superResolutionInputSize(
-        source: (width: Int, height: Int),
-        target: (width: Int, height: Int),
-        scale: Float,
-        maximum: (width: Int, height: Int)
-    ) -> (width: Int, height: Int) {
-        guard source.width > 0, source.height > 0, maximum.width > 0, maximum.height > 0
-        else { return source }
-        // The ceiling first: some processors simply will not take a frame this big.
-        var shrink = min(
-            Double(maximum.width) / Double(source.width),
-            Double(maximum.height) / Double(source.height),
-            1)
-        // Then the panel. The model multiplies by a FIXED factor, so handing it the whole source
-        // when that factor overshoots produces pixels the fit immediately discards — measured on
-        // device as 1024×576 ×4 = 4096×2304 for a 2347×1320 panel: 75 MB a surface, three deep,
-        // and the drawable queue starved until `nextDrawable` timed out every frame. Shrink until
-        // the model's OUTPUT just clears the panel instead.
-        if scale > 0 {
-            let clears = max(
-                Double(target.width) / (Double(source.width) * Double(scale)),
-                Double(target.height) / (Double(source.height) * Double(scale)))
-            // Only ever shrink: when the factor cannot reach the panel even from the whole source,
-            // the fit enlarges the rest and there is nothing to give back here.
-            if clears < 1 { shrink = min(shrink, clears) }
-        }
-        guard shrink < 1 else { return source }
-        return (
-            max(1, Int((Double(source.width) * shrink).rounded(.down))),
-            max(1, Int((Double(source.height) * shrink).rounded(.down)))
-        )
-    }
-
-    static func superResolutionScale(offered: [Float], ratio: Double, held: Float? = nil) -> Float?
-    {
-        if let held, Double(held) >= ratio { return held }
-        let ordered = offered.sorted()
-        return ordered.first { Double($0) >= ratio } ?? ordered.last
-    }
 }
 
 /// Which upscaler the feed is using, set from the Link settings row.

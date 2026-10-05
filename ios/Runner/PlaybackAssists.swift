@@ -72,9 +72,6 @@ final class PlaybackScopeController {
     }
 }
 
-/// Actual native tap, track-query and meter-poll owner. Audio-session policy stays above it.
-typealias PlaybackAudioMeterController = MonitorPlaybackAudioMeterRuntime
-
 /// Loads the displayed video dimensions from an asset's primary video track.
 func loadVideoDisplaySize(from asset: AVAsset) async -> CGSize? {
     guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return nil }

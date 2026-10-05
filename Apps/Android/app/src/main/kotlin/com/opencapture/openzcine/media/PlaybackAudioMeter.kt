@@ -28,12 +28,6 @@ import kotlinx.coroutines.flow.asStateFlow
 private const val PLAYBACK_AUDIO_METER_POLL_MILLIS = 42L
 private const val PLAYBACK_AUDIO_METER_WIRE_SIZE = 6
 
-/** Loudest decoded linear samples accumulated since the previous meter poll. */
-internal data class DecodedPlaybackAudioPeaks(
-    val left: Float,
-    val right: Float,
-)
-
 /** A drained measurement with the actual prepared native input that admitted it. */
 internal class DecodedPlaybackAudioTicket(
     val sample: MonitorAudioPeakSample,
@@ -92,12 +86,6 @@ internal class DecodedPlaybackAudioProcessor : BaseAudioProcessor() {
 
     /** Raw measurement compatibility; production presentation consumes [drainTicket]. */
     fun drainSample(): MonitorAudioPeakSample? = drainTicket()?.sample
-
-    /** Existing raw-peak compatibility; production presentation consumes [drainSample]. */
-    fun drainPeaks(): DecodedPlaybackAudioPeaks {
-        val sample = drainSample()
-        return DecodedPlaybackAudioPeaks(sample?.left ?: 0f, sample?.right ?: 0f)
-    }
 
     override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
         synchronized(sourceLock) {

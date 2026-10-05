@@ -171,21 +171,6 @@ struct ZebraSettings: Equatable, Sendable {
     }
 }
 
-/// Source-compatible sampling addresses; the shared native runtime owns the buffers and contexts.
-enum FrameSampling {
-    static let cameraFileColorSpace = MonitorImageSampling.fileCodeColorSpace
-    static func rgbaBuffer(from pixelBuffer: CVPixelBuffer, maxWidth: Int)
-        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)?
-    {
-        MonitorImageSampling.rgbaBuffer(from: pixelBuffer, maxWidth: maxWidth)
-    }
-    static func rgbaBuffer(from image: UIImage, maxWidth: Int)
-        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)?
-    {
-        MonitorImageSampling.rgbaBuffer(from: image, maxWidth: maxWidth)
-    }
-}
-
 extension NativeAppModel {
     /// Transfer curve false colour should measure, derived from the active camera signal.
     var falseColorToneCurve: ExposureToneCurve {
@@ -343,7 +328,9 @@ extension NativeAppModel {
     /// and a fine stride regardless of which live-view assist tools are visible — for scope
     /// surfaces that don't register as assist tools (e.g. the portrait scopes frame).
     func refreshScopes(from image: UIImage, full: Bool = false) async {
-        guard let buffer = FrameSampling.rgbaBuffer(from: image, maxWidth: 200) else { return }
+        guard let buffer = MonitorImageSampling.rgbaBuffer(from: image, maxWidth: 200) else {
+            return
+        }
         openStillScopeSource()
         let visible = renderedLiveAssistTools
         let includePoints =

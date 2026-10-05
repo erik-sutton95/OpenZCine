@@ -114,7 +114,10 @@ import com.opencapture.openzcine.pairing.recordsAfterSharedEdit
 import com.opencapture.openzcine.pairing.recordsForgetting
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.opencine.appkit.AppIntegration
+import com.opencapture.opencine.appkit.AppShell
 import com.opencapture.opencine.appkit.CamerasModel
+import com.opencapture.opencine.appkit.ShellActions
+import com.opencapture.opencine.appkit.ShellBrand
 import com.opencapture.opencine.appkit.ShellModel
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.core.ConnectedCamera
@@ -471,10 +474,6 @@ class MainActivity : ComponentActivity() {
                             decoder = ::multicamDecoder,
                         )
                     }
-                // iOS showsCameraListWithoutSavedCameras: once a watcher-only device
-                // asks for the camera list, an empty saved list stops forcing the
-                // wizard — that's where nearby broadcasts live.
-                var watcherListRequested by rememberSaveable { mutableStateOf(false) }
                 // Branded launch splash (iOS `LaunchSplashTiming`: fully
                 // visible 2250ms, then a 350ms ease-out fade). Debug demo and
                 // scripted launches skip it so screenshots stay deterministic.
@@ -657,6 +656,8 @@ class MainActivity : ComponentActivity() {
                                     recordsAfterSharedEdit(savedCameras, savedCameraStore, pairingEnvironment.credentials::remove)
                             },
                             connectionScope,
+                            // A reachable setup beats a newer offline one (Nikon main's row rule).
+                            CamerasModel.RoutePolicy.PREFER_REACHABLE,
                         ).also { model -> savedCameraStore.onReplaced = model::reloadSaved }
                     }
                 val shell = remember(camerasModel, connectionScope) {
@@ -768,9 +769,9 @@ class MainActivity : ComponentActivity() {
                 // its own; explicit close happens on monitor exit.
                 val currentUvcSource = uvcSource
                 LaunchedEffect(currentUvcSource) { currentUvcSource?.start(this@MainActivity) }
-                val active = monitorSession
+                val monitored = monitorSession
                 val watching = watchController
-                if (active == null && watching != null) {
+                if (monitored == null && watching != null) {
                     val watchUi by watching.ui.collectAsState()
                     LaunchedEffect(watchUi.endedByBroadcaster) {
                         if (watchUi.endedByBroadcaster) {
@@ -871,132 +872,631 @@ class MainActivity : ComponentActivity() {
                             BackHandler { watchSettingsPresented = false }
                         }
                     }
-                } else if (active == null && shellState.cover == ShellModel.Cover.MEDIA) {
-                    val offlineBuckets = remember { completedMediaBuckets.values.toList() }
-                    val primary = offlineBuckets.firstOrNull()
-                    val offlineAssist =
-                        remember(primary?.cameraID, offlineBuckets.size) {
-                            restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
-                        }
-                    MediaBrowseScreen(
-                        catalogIndex = mediaLibraryIndex,
-                        cameraID = primary?.cameraID ?: "offline-all-cameras",
-                        cameraConnected = false,
-                        cameraSessionAvailable = false,
-                        connectionOwner = null,
-                        cacheRevision = mediaCacheRevision,
-                        savedCameraID = primary?.savedCameraID,
-                        cameraDisplayName =
-                            when {
-                                offlineBuckets.isEmpty() -> "Media Library"
-                                offlineBuckets.size == 1 -> offlineBuckets.first().displayName
-                                else -> "All cameras"
-                            },
-                        offlineCameraIDs = offlineBuckets.map { it.cameraID },
-                        assists = offlineAssist,
-                        exposureAssistCameraInput = ExposureAssistCameraInput(),
-                        operatorSettings = operatorSettings,
-                        lutLibrary = lutLibrary,
-                        frameioController = frameioController,
-                        mediaDeliveryCoordinator = mediaDeliveryCoordinator,
-                        onRatingDiagnostic = diagnostics::record,
-                        onClose = { shell.dismissCover() },
-                    )
-                } else if (active == null) {
-                    val standaloneSettingsPresented = shellState.cover == ShellModel.Cover.SETTINGS
-                    // An empty list is not a home unless a watcher asked for it. Once shown, the
-                    // pair page stays until the operator leaves it: pairing saves its profile
-                    // before the connect, and that must not swap the page mid-pairing.
-                    val pairingPage = shellState.pairing || (savedCameras.isEmpty() && !watcherListRequested)
+                } else {
+                    // The shared root (AppShell, iOS LinkExperience): the camera monitor while the shell holds
+                    // one, else Nikon's pair page or the shared cameras page, with the shell's cover over them.
+                    // The relay watcher above stays outside, like Pocket's. The standalone media library
+                    // replaces the pages: nothing discovers under it.
+                    val standaloneMedia = monitored == null && shellState.cover == ShellModel.Cover.MEDIA
+                    // The shell's pair route: an empty list is not a home unless a watcher asked for it. Once
+                    // shown, the pair page stays until the operator leaves it: pairing saves its profile before
+                    // the connect, and that must not swap the page mid-pairing.
+                    val pairingPage = shellState.pairing || (camerasState.saved.isEmpty() && !shellState.camerasChosen)
                     LaunchedEffect(pairingPage) { if (pairingPage) shell.beginPairing() }
-                    BackHandler(enabled = standaloneSettingsPresented) { shell.dismissCover() }
-                    BackHandler(
-                        enabled =
-                            !standaloneSettingsPresented &&
-                                pairingPage &&
-                                (savedCameras.isNotEmpty() || watcherListRequested),
-                    ) {
-                        shell.endPairing()
-                    }
-                    val nearbyBroadcasts by
-                        remember {
-                            com.opencapture.openzcine.relay.RelayBroadcastDirectory(
-                                    AndroidNsdBrowser(getSystemService(NsdManager::class.java))
-                                )
-                                .broadcasts()
-                        }
-                            .collectAsState(initial = emptyList())
-                    // Unicast presence sweep (iOS parity): on networks whose routers filter
-                    // multicast, the NSD browse lists nothing — direct answers on the presence
-                    // port keep broadcasts joinable, and an answer NSD cannot see is the proof
-                    // the network filters discovery (the operator warning in the list).
-                    var relayPresences by
-                        remember { mutableStateOf(emptyMap<String, RelayPresence>()) }
-                    var presenceRefutedNames by
-                        remember { mutableStateOf(emptySet<String>()) }
-                    var networkFiltersDiscovery by remember { mutableStateOf(false) }
-                    LaunchedEffect(Unit) {
-                        // The cameras list's discovery: passive only (presence sweep).
-                        val scanner = CameraListDiscovery()
-                        var hiddenSince = emptyMap<String, Long>()
-                        while (true) {
-                            // The scanner's own 30 s limiter makes most ticks no-ops. Each
-                            // completed sweep REPLACES the set — authoritative, so a host that
-                            // stopped answering leaves no ghost row — and the verdict
-                            // re-evaluates every tick so the 10 s hidden threshold trips
-                            // between sweeps.
-                            scanner.presences()?.let { hits ->
-                                relayPresences = hits
-                                // A browsed name with no unicast answer is a stale NSD
-                                // record — the goodbye packet is multicast too, and this
-                                // network eats it (iOS presenceRefutedRelayNames).
-                                presenceRefutedNames =
-                                    nearbyBroadcasts.mapTo(mutableSetOf()) { it.name } -
-                                        hits.values.mapTo(mutableSetOf()) { it.name }
+                    // The relay's NEARBY rows, browsed and swept only while the pages show.
+                    val (broadcasts, filtersDiscovery) =
+                        if (monitored == null && !standaloneMedia) {
+                            val nearbyBroadcasts by
+                                remember {
+                                    com.opencapture.openzcine.relay.RelayBroadcastDirectory(
+                                            AndroidNsdBrowser(getSystemService(NsdManager::class.java))
+                                        )
+                                        .broadcasts()
+                                }
+                                    .collectAsState(initial = emptyList())
+                            // Unicast presence sweep (iOS parity): on networks whose routers filter
+                            // multicast, the NSD browse lists nothing; direct answers on the presence
+                            // port keep broadcasts joinable, and an answer NSD cannot see is the proof
+                            // the network filters discovery (the operator warning in the list).
+                            var relayPresences by
+                                remember { mutableStateOf(emptyMap<String, RelayPresence>()) }
+                            var presenceRefutedNames by
+                                remember { mutableStateOf(emptySet<String>()) }
+                            var networkFiltersDiscovery by remember { mutableStateOf(false) }
+                            LaunchedEffect(Unit) {
+                                // The cameras list's discovery: passive only (presence sweep).
+                                val scanner = CameraListDiscovery()
+                                var hiddenSince = emptyMap<String, Long>()
+                                while (true) {
+                                    // The scanner's own 30 s limiter makes most ticks no-ops. Each
+                                    // completed sweep REPLACES the set (authoritative, so a host that
+                                    // stopped answering leaves no ghost row) and the verdict
+                                    // re-evaluates every tick so the 10 s hidden threshold trips
+                                    // between sweeps.
+                                    scanner.presences()?.let { hits ->
+                                        relayPresences = hits
+                                        // A browsed name with no unicast answer is a stale NSD
+                                        // record: the goodbye packet is multicast too, and this
+                                        // network eats it (iOS presenceRefutedRelayNames).
+                                        presenceRefutedNames =
+                                            nearbyBroadcasts.mapTo(mutableSetOf()) { it.name } -
+                                                hits.values.mapTo(mutableSetOf()) { it.name }
+                                    }
+                                    val now = android.os.SystemClock.elapsedRealtime()
+                                    hiddenSince =
+                                        updatedPresenceHiddenSince(
+                                            presences = relayPresences,
+                                            nsdNames =
+                                                nearbyBroadcasts.mapTo(mutableSetOf()) { it.name },
+                                            selfName = relayDeviceName,
+                                            previous = hiddenSince,
+                                            nowMillis = now,
+                                        )
+                                    networkFiltersDiscovery = presenceProvesFiltering(hiddenSince, now)
+                                    delay(10_000)
+                                }
                             }
-                            val now = android.os.SystemClock.elapsedRealtime()
-                            hiddenSince =
-                                updatedPresenceHiddenSince(
-                                    presences = relayPresences,
-                                    nsdNames =
-                                        nearbyBroadcasts.mapTo(mutableSetOf()) { it.name },
-                                    selfName = relayDeviceName,
-                                    previous = hiddenSince,
-                                    nowMillis = now,
-                                )
-                            networkFiltersDiscovery = presenceProvesFiltering(hiddenSince, now)
-                            delay(10_000)
+                            // In-use beacons (w=0) shield their camera from probes but are not joinable;
+                            // presence answers NSD never delivered join as rows.
+                            mergedNearbyBroadcasts(nearbyBroadcasts, relayPresences, relayDeviceName, presenceRefutedNames)
+                                .filter { it.isWatchable } to networkFiltersDiscovery
+                        } else {
+                            emptyList<com.opencapture.openzcine.relay.RelayBroadcast>() to false
                         }
-                    }
-                    Box(Modifier.fillMaxSize()) {
-                        if (!pairingPage) {
-                            // In-use beacons (w=0) shield their camera from probes but are not
-                            // joinable; presence answers NSD never delivered join as rows.
-                            val broadcasts =
-                                mergedNearbyBroadcasts(nearbyBroadcasts, relayPresences, relayDeviceName, presenceRefutedNames)
-                                    .filter { it.isWatchable }
-                            DisposableEffect(nikonPort) {
-                                nikonPort.pageVisible = true
-                                onDispose { nikonPort.pageVisible = false }
+                    @Composable
+                    fun CameraMonitor(active: CameraSession) {
+                        var monitorSessionRecoveryEnabled by
+                            remember(active) { mutableStateOf(true) }
+                        LaunchedEffect(active, pairingEnvironment) {
+                            try {
+                                awaitCancellation()
+                            } finally {
+                                withContext(NonCancellable) {
+                                    // A multicam member keeps its session for its tile.
+                                    if (!multicam.owns(active)) {
+                                        shellSessions.retire(active)
+                                        active.disconnect()
+                                        pairingEnvironment.releaseCameraAp()
+                                    }
+                                }
                             }
-                            CamerasScreen(
-                                model = camerasModel,
-                                brandName = "OpenZCine",
-                                onPair = shell::beginPairing,
-                                onMedia = {
-                                    // iOS openCachedMediaLibrary: every complete on-device cache bucket.
+                        }
+                        if (SwiftCore.isAvailable) {
+                            // The real shell needs the shared core's zone map. An APK
+                            // built without `just android-core` (plain CI android-check)
+                            // has no native library, so it keeps the placeholder.
+                            // Settings and Media are the shell's covers: mutually-exclusive,
+                            // full-screen surfaces over the monitor so it keeps its state while
+                            // either surface owns interaction.
+                            val overlay = shellState.cover
+                            LaunchedEffect(shellState.monitor?.id) {
+                                if (shellState.monitor != null && DemoHarness.opensMedia(intent)) {
                                     shell.open(ShellModel.Cover.MEDIA)
+                                }
+                            }
+                            val assist = remember(active) {
+                                restoreNikonAssists(applicationContext, debugAssistEffects, debugScopes, lutLibrary::contains).also { assists ->
+                                    debugSplitComparison?.let {
+                                        assists.shared.setSplitComparison(true, vertical = it == FeedSplitOrientation.VERTICAL)
+                                    }
+                                }
+                            }
+                            val currentSessionState by active.state.collectAsState()
+                            val currentCameraProperties by active.cameraProperties.collectAsState()
+                            LaunchedEffect(currentSessionState) {
+                                diagnostics.record(
+                                    when (currentSessionState) {
+                                        is CameraSessionState.Connected ->
+                                            AndroidDiagnosticEvent.CONNECTION_CONNECTED
+                                        CameraSessionState.Connecting ->
+                                            AndroidDiagnosticEvent.CONNECTION_CONNECTING
+                                        CameraSessionState.Disconnected ->
+                                            AndroidDiagnosticEvent.CONNECTION_DISCONNECTED
+                                    },
+                                )
+                            }
+                            DisposableEffect(active) {
+                                diagnostics.record(AndroidDiagnosticEvent.MONITOR_PRESENTED)
+                                onDispose {
+                                    liveViewGuide.onRealFrameUnavailable()
+                                    diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED)
+                                }
+                            }
+                            // In-use beacon (iOS parity): while this session is held and NOT shared,
+                            // advertise the relay type with ch= + w=0 so no other device's camera
+                            // list PTP-probes the held body. The real broadcast's advertisement
+                            // carries the same shield, so only one runs at a time.
+                            val inUseBeaconHost =
+                                if (
+                                    currentSessionState is CameraSessionState.Connected &&
+                                        !relayBroadcastEnabled
+                                ) {
+                                    activeSavedCamera?.host?.takeIf(String::isNotBlank)
+                                } else {
+                                    null
+                                }
+                            LaunchedEffect(inUseBeaconHost) {
+                                if (inUseBeaconHost == null) return@LaunchedEffect
+                                val beacon =
+                                    com.opencapture.openzcine.relay.CameraInUseBeacon(
+                                        getSystemService(NsdManager::class.java),
+                                        relayDeviceName,
+                                    )
+                                beacon.start(inUseBeaconHost)
+                                try {
+                                    kotlinx.coroutines.awaitCancellation()
+                                } finally {
+                                    beacon.stop()
+                                }
+                            }
+                            val playbackExposureAssistCameraInput =
+                                remember(
+                                    currentCameraProperties.codec,
+                                    currentCameraProperties.iso,
+                                    currentCameraProperties.baseIso,
+                                ) {
+                                    ExposureAssistCameraInput(
+                                        codec = currentCameraProperties.codec,
+                                        iso = currentCameraProperties.iso,
+                                        baseIso = currentCameraProperties.baseIso,
+                                    )
+                                }
+                            val monitorLinkHealth = remember(active) { AndroidLinkHealthMonitor() }
+                            val frameioCameraHop =
+                                remember(active, activeSavedCamera, pairingEnvironment, pairingScript, demo) {
+                                    AndroidFrameioCameraApHop(
+                                        activeSession = active,
+                                        savedCamera = activeSavedCamera,
+                                        environment = pairingEnvironment,
+                                        fixtureSession = pairingScript != null || demo?.second != null,
+                                        onReconnected = ::acceptPairedCamera,
+                                    )
+                                }
+                            DisposableEffect(frameioController, frameioCameraHop) {
+                                frameioController.attachCameraHop(frameioCameraHop)
+                                onDispose { frameioController.attachCameraHop(null) }
+                            }
+                            val disconnectToSavedCameraHome: (Boolean) -> Unit = disconnect@{ reconnect ->
+                                val exitingSession = active
+                                // A multicam member lent to Live View goes back to its tile: the
+                                // session stays open (no CloseSession) and the stage resumes it.
+                                if (multicam.lentMember(exitingSession) != null) {
+                                    shell.close()
+                                    return@disconnect
+                                }
+                                val reconnectID = activeSavedCamera?.id
+                                monitorSessionRecoveryEnabled = false
+                                suppressedUsbAutoReconnectHosts =
+                                    usbAutoReconnectSuppressionAfterUserAction(
+                                        suppressedHosts = suppressedUsbAutoReconnectHosts,
+                                        record = activeSavedCamera,
+                                        reconnect = reconnect,
+                                    )
+                                // iOS `disconnectCameraSession`: clear the shell
+                                // synchronously, then fire-and-forget network
+                                // teardown. Awaiting CloseSession / EndLiveView
+                                // here made Android feel hung for several seconds
+                                // after a drop or manual disconnect (stopLiveView
+                                // alone can wait commandTimeout+2s on a dead link).
+                                // The monitor LaunchedEffect dispose path still
+                                // runs disconnect + releaseCameraAp when the
+                                // session leaves composition.
+                                if (monitorSession === exitingSession) {
+                                    relayBroadcastController.stop(
+                                        notifyReason = "The broadcast ended.")
+                                    relayBroadcastEnabled = false
+                                    shell.close()
+                                    monitorSession = null
+                                    uvcSource?.close()
+                                    uvcSource = null
+                                    // Back to the cameras page, or the pair page when nothing
+                                    // is saved (an HDMI-only user may have no saved cameras).
+                                    shell.endPairing()
+                                    requestedReconnectID = if (reconnect) reconnectID else null
+                                }
+                            }
+                            // Keep the library identity stable while a consented Frame.io hop
+                            // disconnects this exact session. Re-keying it to "camera" here would
+                            // discard the selected clips and project context before upload.
+                            val cameraID =
+                                remember(active, activeSavedCamera) {
+                                    (active.state.value as? CameraSessionState.Connected)
+                                        ?.identity
+                                        ?.let { identity ->
+                                            identity.serialNumber.ifBlank {
+                                                "${identity.model}:${identity.name}"
+                                            }
+                                        }
+                                        ?: activeSavedCamera?.host
+                                        ?: "camera"
+                                }
+                            val returnToMulticam: (() -> Unit)? =
+                                if (multicam.lentMember(active) != null) {
+                                    { disconnectToSavedCameraHome(false) }
+                                } else {
+                                    null
+                                }
+                            CompositionLocalProvider(LocalMulticamReturn provides returnToMulticam) {
+                            Box {
+                                MonitorScreen(
+                                    active,
+                                    commonSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
+                                    commonControl = shell.control,
+                                    frameSource = demo?.second ?: uvcSource,
+                                    assists = assist,
+                                    operatorSettings = operatorSettings,
+                                    lutLibrary = lutLibrary,
+                                    frameioController = frameioController,
+                                    // Media already owned this gate. Settings also
+                                    // drops every preview consumer so the native
+                                    // live-view pump and GPU decode path release
+                                    // while Operator Setup is on top; otherwise
+                                    // the full-screen sheet fights the feed for
+                                    // CPU/GPU on lower-tier phones.
+                                    liveViewEnabled = overlay == null,
+                                    glassTierOverride = DemoHarness.glassTierOverride(intent),
+                                    mediaRemoteShutter = mediaRemoteShutter,
+                                    isMonitorFront = overlay == null,
+                                    sessionRecoveryEnabled =
+                                        monitorSessionRecoveryEnabled &&
+                                            frameioController.internetHopState
+                                                .allowsMonitorSessionRecovery(),
+                                    linkHealth = monitorLinkHealth,
+                                    activeTransportIsUsb =
+                                        activeSavedCamera?.transport == SavedCameraTransport.USB_C,
+                                    isDemoSession = pairingScript != null || demo?.second != null,
+                                    liveViewGuideController = liveViewGuide,
+                                    onOpenSettings = {
+                                        mediaRemoteShutter.disarm()
+                                        shell.open(ShellModel.Cover.SETTINGS)
+                                    },
+                                    onOpenMedia = {
+                                        mediaRemoteShutter.disarm()
+                                        shell.open(ShellModel.Cover.MEDIA)
+                                    },
+                                    // Recovery affordance's "Operator menu": the same explicit exit
+                                    // Operator Settings offers, so a late reconnect can never
+                                    // resurrect a session the operator just left.
+                                    onBackToOperatorMenu = {
+                                        mediaRemoteShutter.disarm()
+                                        disconnectToSavedCameraHome(false)
+                                    },
+                                    recoveryStateOverride = DemoHarness.sessionRecoveryOverride(intent),
+                                    onDriveDiagnostic = diagnostics::record,
+                                    controlsSurrendered =
+                                        relayBroadcastUi.controlHolderName != null,
+                                )
+                                relayBroadcastUi.controlHolderName?.let { holder ->
+                                    Row(
+                                        Modifier.align(Alignment.BottomCenter)
+                                            // The watcher's key already clears the bottom chrome per
+                                            // orientation; this pill's own fixed 64dp was
+                                            // orientation-blind and landed on the portrait system
+                                            // band's DISP/record/media row. One lane, one definition
+                                            // (relay/RelayWatchScreen.kt); iOS seats both keys
+                                            // against the same assist-strip zone.
+                                            .padding(
+                                                bottom =
+                                                    com.opencapture.openzcine.relay
+                                                        .relayControlKeyBottomInset()
+                                            )
+                                            .clip(RoundedCornerShape(22.dp))
+                                            .background(
+                                                androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f)
+                                            )
+                                            .clickable { relayBroadcastController.reclaimControl() }
+                                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            stringResource(R.string.sharing_revoke_control),
+                                            color = androidx.compose.ui.graphics.Color(0xFFE0A73A),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.8.sp,
+                                        )
+                                        Text(
+                                            holder,
+                                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f),
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
+                                relayBroadcastUi.pendingControlRequestName?.let { asking ->
+                                    Row(
+                                        Modifier.align(Alignment.TopCenter)
+                                            .padding(top = 10.dp)
+                                            .background(
+                                                androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f),
+                                                RoundedCornerShape(22.dp),
+                                            )
+                                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            stringResource(
+                                                R.string.sharing_asks_to_control, asking
+                                            ),
+                                            color = androidx.compose.ui.graphics.Color.White,
+                                            fontSize = 13.sp,
+                                        )
+                                        Text(
+                                            stringResource(R.string.sharing_decline),
+                                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f),
+                                            fontSize = 13.sp,
+                                            modifier =
+                                                Modifier.clickable {
+                                                    relayBroadcastController
+                                                        .declinePendingControl()
+                                                },
+                                        )
+                                        Text(
+                                            stringResource(R.string.sharing_grant),
+                                            color = androidx.compose.ui.graphics.Color(0xFFE0A73A),
+                                            fontSize = 13.sp,
+                                            modifier =
+                                                Modifier.clickable {
+                                                    relayBroadcastController.grantPendingControl()
+                                                },
+                                        )
+                                    }
+                                }
+                                when (overlay) {
+                                    null -> Unit
+                                    ShellModel.Cover.SETTINGS ->
+                                        OperatorSettingsScreen(
+                                            session = active,
+                                            assists = assist,
+                                            settings = operatorSettings,
+                                            mediaCacheStore = mediaCacheStore,
+                                            frameioController = frameioController,
+                                            linkHealth = monitorLinkHealth,
+                                            relaySharing = relayBroadcastController,
+                                            relaySharingEnabled = relayBroadcastEnabled,
+                                            onRelayShareToggle = { enable ->
+                                                if (enable) {
+                                                    val frames =
+                                                        demo?.second
+                                                            ?: uvcSource
+                                                            ?: (active as? SwiftCoreCameraSession)
+                                                                ?.liveFrames
+                                                                as? LiveFrameSource
+                                                    if (frames != null) {
+                                                        relayBroadcastController.watcherPasscode =
+                                                            operatorSettings
+                                                                .relayWatcherPasscode
+                                                                .value
+                                                        relayBroadcastController
+                                                            .allowsControlRequests =
+                                                            operatorSettings
+                                                                .relayAllowsControlRequests
+                                                                .value
+                                                        relayBroadcastController.encoderProfile =
+                                                            com.opencapture.openzcine.core
+                                                                .RelayEncoderProfile
+                                                                .fromWireValue(
+                                                                    operatorSettings
+                                                                        .relayEncoderProfile
+                                                                        .value
+                                                                )
+                                                        relayBroadcastEnabled =
+                                                            relayBroadcastController.start(
+                                                                session = active,
+                                                                frames = frames,
+                                                                cameraName =
+                                                                    activeSavedCamera
+                                                                        ?.displayTitle,
+                                                                servedCameraHost =
+                                                                    activeSavedCamera?.host,
+                                                            )
+                                                    }
+                                                } else {
+                                                    relayBroadcastController.stop(
+                                                        notifyReason = "The broadcast ended.")
+                                                    relayBroadcastEnabled = false
+                                                }
+                                            },
+                                            liveViewSource =
+                                                (active as? SwiftCoreCameraSession)
+                                                    ?.liveFrames as? SwiftCoreLiveFrameSource,
+                                            activeTransportLabel = activeSavedCamera?.transport?.displayName,
+                                            onDisconnect =
+                                                activeSavedCamera?.let {
+                                                    { disconnectToSavedCameraHome(false) }
+                                                },
+                                            onReconnect =
+                                                activeSavedCamera?.let {
+                                                    { disconnectToSavedCameraHome(true) }
+                                                },
+                                            systemSettingsActions = systemSettingsActions,
+                                            bugReportSubmitter = bugReportSubmitter,
+                                            bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
+                                            liveViewGuideController = liveViewGuide,
+                                            onShowGuideNow = {
+                                                liveViewGuide.replayNow()
+                                                shell.dismissCover()
+                                            },
+                                            onShowGuideOnNextRealFrame = {
+                                                liveViewGuide.replayOnNextRealFrame()
+                                                shell.dismissCover()
+                                            },
+                                            onCompletedMediaCacheCleared = {
+                                                mediaLibraryIndex.clearCameraCatalogs()
+                                                mediaCacheRevision += 1
+                                            },
+                                            onClose = { shell.dismissCover() },
+                                        )
+                                    ShellModel.Cover.MEDIA ->
+                                        MediaBrowseScreen(
+                                            catalogIndex = mediaLibraryIndex,
+                                            cameraID = cameraID,
+                                            mediaService = shellSessions.media(active, multicam.lentMember(active)?.control ?: shellSessions.acquire(active)),
+                                            cameraConnected =
+                                                currentSessionState is CameraSessionState.Connected,
+                                            connectionOwner =
+                                                (active as? SwiftCoreCameraSession)?.connectionOwner,
+                                            cacheRevision = mediaCacheRevision,
+                                            savedCameraID = activeSavedCamera?.id,
+                                            cameraDisplayName = activeSavedCamera?.displayTitle,
+                                            cameraStorageSlots = currentCameraProperties.storageSlots,
+                                            // Sidebar opens on the active capture side's
+                                            // media (iOS `openMediaBrowser`).
+                                            initialCategory =
+                                                if (prefersPhotographyChrome(currentCameraProperties)) {
+                                                    MediaLibraryCategory.PHOTOS
+                                                } else {
+                                                    MediaLibraryCategory.VIDEOS
+                                                },
+                                            assists = assist,
+                                            exposureAssistCameraInput = playbackExposureAssistCameraInput,
+                                            operatorSettings = operatorSettings,
+                                            lutLibrary = lutLibrary,
+                                            frameioController = frameioController,
+                                            mediaDeliveryCoordinator = mediaDeliveryCoordinator,
+                                            autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
+                                            onRatingDiagnostic = diagnostics::record,
+                                            onClose = { shell.dismissCover() },
+                                        )
+                                }
+                            }
+                            }
+                            BackHandler(enabled = overlay == ShellModel.Cover.SETTINGS) {
+                                shell.dismissCover()
+                            }
+                        } else {
+                            MonitorShell(
+                                active,
+                                frameSource = demo?.second,
+                                sessionRecoveryEnabled = monitorSessionRecoveryEnabled,
+                            )
+                        }
+                    }
+                    @Composable
+                    fun StandaloneMedia() {
+                        val offlineBuckets = remember { completedMediaBuckets.values.toList() }
+                        val primary = offlineBuckets.firstOrNull()
+                        val offlineAssist =
+                            remember(primary?.cameraID, offlineBuckets.size) {
+                                restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
+                            }
+                        MediaBrowseScreen(
+                            catalogIndex = mediaLibraryIndex,
+                            cameraID = primary?.cameraID ?: "offline-all-cameras",
+                            cameraConnected = false,
+                            cameraSessionAvailable = false,
+                            connectionOwner = null,
+                            cacheRevision = mediaCacheRevision,
+                            savedCameraID = primary?.savedCameraID,
+                            cameraDisplayName =
+                                when {
+                                    offlineBuckets.isEmpty() -> "Media Library"
+                                    offlineBuckets.size == 1 -> offlineBuckets.first().displayName
+                                    else -> "All cameras"
                                 },
-                                onSettings = { shell.open(ShellModel.Cover.SETTINGS) },
-                                // The shared pages' own ground and margins (the pair page draws
-                                // MonitorPalette.background itself; this page leaves it to the app).
-                                modifier =
-                                    Modifier.background(MonitorPalette.background)
-                                        .windowInsetsPadding(WindowInsets.safeDrawing)
-                                        .padding(start = 18.dp, top = 24.dp, end = 18.dp, bottom = 16.dp),
-                                nearbyNote = "on this network",
-                                onMultiview = if (MulticamCoordinator.TILES > 1) multicam::begin else null,
-                                onIntegrationAction = { cameraID, action ->
+                            offlineCameraIDs = offlineBuckets.map { it.cameraID },
+                            assists = offlineAssist,
+                            exposureAssistCameraInput = ExposureAssistCameraInput(),
+                            operatorSettings = operatorSettings,
+                            lutLibrary = lutLibrary,
+                            frameioController = frameioController,
+                            mediaDeliveryCoordinator = mediaDeliveryCoordinator,
+                            onRatingDiagnostic = diagnostics::record,
+                            onClose = { shell.dismissCover() },
+                        )
+                    }
+                    @Composable
+                    fun StandaloneSettings() {
+                        val standaloneAssist =
+                            remember {
+                                restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
+                            }
+                        OperatorSettingsScreen(
+                            session = null,
+                            assists = standaloneAssist,
+                            settings = operatorSettings,
+                            mediaCacheStore = mediaCacheStore,
+                            frameioController = frameioController,
+                            // iOS's startup Settings lands on Link; a debug
+                            // intent can still force a specific tab.
+                            initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.LINK,
+                            systemSettingsActions = systemSettingsActions,
+                            bugReportSubmitter = bugReportSubmitter,
+                            bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
+                            liveViewGuideController = liveViewGuide,
+                            onShowGuideOnNextRealFrame =
+                                liveViewGuide::replayOnNextRealFrame,
+                            onCompletedMediaCacheCleared = {
+                                mediaLibraryIndex.clearCameraCatalogs()
+                                mediaCacheRevision += 1
+                            },
+                            onClose = { shell.dismissCover() },
+                        )
+                    }
+                    val pairPage: @Composable () -> Unit = {
+                        BackHandler(enabled = camerasState.saved.isNotEmpty() || shellState.camerasChosen) {
+                            shell.endPairing()
+                        }
+                        PairingExperience(
+                            environment = pairingEnvironment,
+                            camerasModel = camerasModel,
+                            onReportProblem = { systemSettingsActions.openGitHubBugReport() },
+                            script = pairingScript,
+                            onPaired = ::acceptPairedCamera,
+                            onPairingProfilePrepared = ::persistPairedCameraProfile,
+                            onPairingAbandoned = ::discardAbandonedPairingSetup,
+                            onStartHdmiMonitor = {
+                                // Picture only: no PTP session, no saved
+                                // camera, and no stale profile steering
+                                // link-health or reconnect heuristics.
+                                activeSavedCamera = null
+                                adoptSetupStreamSettings(null)
+                                uvcSource = UvcFrameSource(applicationContext)
+                                monitorSession =
+                                    CaptureOnlyCameraSession(
+                                        getString(R.string.pairing_hdmi_device_title)
+                                    )
+                            },
+                            onOpenSettings = { shell.open(ShellModel.Cover.SETTINGS) },
+                            onShowSavedCameras =
+                                if (savedCameras.isEmpty()) {
+                                    null
+                                } else {
+                                    shell::endPairing
+                                },
+                            onOpenWatcherList = shell::showCameras,
+                            onShareDiagnostics = {
+                                if (!systemSettingsActions.shareDiagnostics()) {
+                                    Toast.makeText(
+                                            this@MainActivity,
+                                            getString(R.string.system_action_unavailable),
+                                            Toast.LENGTH_SHORT,
+                                        )
+                                        .show()
+                                }
+                            },
+                            onDiagnosticPhase = { phase ->
+                                if (phase != "connect.gate") {
+                                    AndroidDiagnosticEvent.fromPhase(phase)?.let {
+                                        diagnostics.record(it)
+                                    }
+                                }
+                            },
+                            onPrivacy = { systemSettingsActions.openPrivacy() },
+                            onTerms = { systemSettingsActions.openTerms() },
+                        )
+                    }
+                    AppShell(
+                        model = shell,
+                        brand = ShellBrand("OpenZCine", nearbyNote = "on this network"),
+                        actions =
+                            ShellActions(
+                                diagnostics = { systemSettingsActions.shareDiagnostics() },
+                                reportProblem = { systemSettingsActions.openGitHubBugReport() },
+                                multiview = if (MulticamCoordinator.TILES > 1) multicam::begin else null,
+                                integrationAction = { cameraID, action ->
                                     when (action) {
                                         AppNikonConnectPort.TAKE_OVER -> {
                                             val target = camerasState.failures[cameraID]?.target as? ConnectTarget.Saved
@@ -1016,15 +1516,16 @@ class MainActivity : ComponentActivity() {
                                             }
                                     }
                                 },
-                                extraNearby = nearbyBroadcastItems(broadcasts, networkFiltersDiscovery),
-                                onExtraNearby = { id ->
+                                privacy = { systemSettingsActions.openPrivacy() },
+                                terms = { systemSettingsActions.openTerms() },
+                                extraNearby = extra@{ id ->
                                     val broadcast =
-                                        broadcasts.firstOrNull { RELAY_ROW_PREFIX + it.name == id } ?: return@CamerasScreen
+                                        broadcasts.firstOrNull { RELAY_ROW_PREFIX + it.name == id } ?: return@extra
                                     // A watcher ON the camera's own AP can see broadcasts but its
                                     // join cannot reach them (camera APs isolate their clients).
                                     if (isOnCameraAccessPointNetwork(this@MainActivity)) {
                                         watchOnCameraApNoticeVisible = true
-                                        return@CamerasScreen
+                                        return@extra
                                     }
                                     relayBroadcastController.stop(notifyReason = "The broadcast ended.")
                                     relayBroadcastEnabled = false
@@ -1044,85 +1545,67 @@ class MainActivity : ComponentActivity() {
                                             )
                                             .also { it.start() }
                                 },
-                                onPrivacy = { systemSettingsActions.openPrivacy() },
-                                onTerms = { systemSettingsActions.openTerms() },
-                            )
-                            // "+ Add setup -> Camera access point" without a stored key: the
-                            // scan reads SSID and key off the camera's own network screen,
-                            // anchored to THIS camera (never a second one).
-                            scanningAccessPointFor?.let { camera ->
-                                CameraWifiScannerOverlay(
-                                    onConfirmed = { candidate ->
-                                        scanningAccessPointFor = null
-                                        nikonPort.pendingAccessPoint = candidate.ssid to candidate.key
-                                        camerasModel.addRoute(
-                                            RouteDraft(RouteKind.CAMERA_ACCESS_POINT, network = candidate.ssid),
-                                            camera,
-                                        )
-                                    },
-                                    onDismiss = { scanningAccessPointFor = null },
-                                )
+                            ),
+                        monitor = { live ->
+                            // A session handed over but not yet presented, or one already gone: nothing until
+                            // the app's session and the shell's monitor agree.
+                            val common = monitored?.let { multicam.lentMember(it)?.control ?: shellSessions.acquire(it) }
+                            if (monitored != null && common?.id == live.session.id) CameraMonitor(monitored)
+                        },
+                        page = { cover ->
+                            when (cover) {
+                                ShellModel.Cover.MEDIA -> StandaloneMedia()
+                                ShellModel.Cover.SETTINGS -> {
+                                    BackHandler { shell.dismissCover() }
+                                    StandaloneSettings()
+                                }
                             }
-                            if (watchOnCameraApNoticeVisible) {
-                                WifiOffPromptDialog(
-                                    onDismiss = { watchOnCameraApNoticeVisible = false },
-                                    title = R.string.watch_on_camera_ap_title,
-                                    message = R.string.watch_on_camera_ap_message,
-                                )
-                            }
-                        } else {
-                            PairingExperience(
-                                environment = pairingEnvironment,
-                                camerasModel = camerasModel,
-                                onReportProblem = { systemSettingsActions.openGitHubBugReport() },
-                                script = pairingScript,
-                                onPaired = ::acceptPairedCamera,
-                                onPairingProfilePrepared = ::persistPairedCameraProfile,
-                                onPairingAbandoned = ::discardAbandonedPairingSetup,
-                                onStartHdmiMonitor = {
-                                    // Picture only: no PTP session, no saved
-                                    // camera, and no stale profile steering
-                                    // link-health or reconnect heuristics.
-                                    activeSavedCamera = null
-                                    adoptSetupStreamSettings(null)
-                                    uvcSource = UvcFrameSource(applicationContext)
-                                    monitorSession =
-                                        CaptureOnlyCameraSession(
-                                            getString(R.string.pairing_hdmi_device_title)
-                                        )
-                                },
-                                onOpenSettings = { shell.open(ShellModel.Cover.SETTINGS) },
-                                onShowSavedCameras =
-                                    if (savedCameras.isEmpty()) {
-                                        null
-                                    } else {
-                                        shell::endPairing
-                                    },
-                                onOpenWatcherList = {
-                                    watcherListRequested = true
-                                    shell.endPairing()
-                                },
-                                onShareDiagnostics = {
-                                    if (!systemSettingsActions.shareDiagnostics()) {
-                                        Toast.makeText(
-                                                this@MainActivity,
-                                                getString(R.string.system_action_unavailable),
-                                                Toast.LENGTH_SHORT,
+                        },
+                        pageFrame = { _, content ->
+                            if (!standaloneMedia) {
+                                DisposableEffect(nikonPort) {
+                                    nikonPort.pageVisible = true
+                                    onDispose { nikonPort.pageVisible = false }
+                                }
+                                // The shared pages' own ground and margins (the pair page draws
+                                // MonitorPalette.background itself; this page leaves it to the app).
+                                Box(
+                                    Modifier.fillMaxSize()
+                                        .background(MonitorPalette.background)
+                                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                                        .padding(start = 18.dp, top = 24.dp, end = 18.dp, bottom = 16.dp),
+                                ) {
+                                    content()
+                                }
+                                // "+ Add setup -> Camera access point" without a stored key: the
+                                // scan reads SSID and key off the camera's own network screen,
+                                // anchored to THIS camera (never a second one).
+                                scanningAccessPointFor?.let { camera ->
+                                    CameraWifiScannerOverlay(
+                                        onConfirmed = { candidate ->
+                                            scanningAccessPointFor = null
+                                            nikonPort.pendingAccessPoint = candidate.ssid to candidate.key
+                                            camerasModel.addRoute(
+                                                RouteDraft(RouteKind.CAMERA_ACCESS_POINT, network = candidate.ssid),
+                                                camera,
                                             )
-                                            .show()
-                                    }
-                                },
-                                onDiagnosticPhase = { phase ->
-                                    if (phase != "connect.gate") {
-                                        AndroidDiagnosticEvent.fromPhase(phase)?.let {
-                                            diagnostics.record(it)
-                                        }
-                                    }
-                                },
-                                onPrivacy = { systemSettingsActions.openPrivacy() },
-                                onTerms = { systemSettingsActions.openTerms() },
-                            )
-                        }
+                                        },
+                                        onDismiss = { scanningAccessPointFor = null },
+                                    )
+                                }
+                                if (watchOnCameraApNoticeVisible) {
+                                    WifiOffPromptDialog(
+                                        onDismiss = { watchOnCameraApNoticeVisible = false },
+                                        title = R.string.watch_on_camera_ap_title,
+                                        message = R.string.watch_on_camera_ap_message,
+                                    )
+                                }
+                            }
+                        },
+                        extraNearby = nearbyBroadcastItems(broadcasts, filtersDiscovery),
+                        prePage = if (pairingPage && !standaloneMedia) pairPage else null,
+                    )
+                    if (monitored == null && !standaloneMedia) {
                         if (multicam.presented) {
                             MulticamStage(
                                 coordinator = multicam,
@@ -1148,463 +1631,7 @@ class MainActivity : ComponentActivity() {
                                 close = multicam::end,
                             )
                         }
-                        if (standaloneSettingsPresented) {
-                            val standaloneAssist =
-                                remember {
-                                    restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
-                                }
-                            OperatorSettingsScreen(
-                                session = null,
-                                assists = standaloneAssist,
-                                settings = operatorSettings,
-                                mediaCacheStore = mediaCacheStore,
-                                frameioController = frameioController,
-                                // iOS's startup Settings lands on Link; a debug
-                                // intent can still force a specific tab.
-                                initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.LINK,
-                                systemSettingsActions = systemSettingsActions,
-                                bugReportSubmitter = bugReportSubmitter,
-                                bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
-                                liveViewGuideController = liveViewGuide,
-                                onShowGuideOnNextRealFrame =
-                                    liveViewGuide::replayOnNextRealFrame,
-                                onCompletedMediaCacheCleared = {
-                                    mediaLibraryIndex.clearCameraCatalogs()
-                                    mediaCacheRevision += 1
-                                },
-                                onClose = { shell.dismissCover() },
-                            )
-                        }
                         LaunchSplashOverlay(visible = launchSplashVisible)
-                    }
-                } else {
-                    var monitorSessionRecoveryEnabled by
-                        remember(active) { mutableStateOf(true) }
-                    LaunchedEffect(active, pairingEnvironment) {
-                        try {
-                            awaitCancellation()
-                        } finally {
-                            withContext(NonCancellable) {
-                                // A multicam member keeps its session for its tile.
-                                if (!multicam.owns(active)) {
-                                    shellSessions.retire(active)
-                                    active.disconnect()
-                                    pairingEnvironment.releaseCameraAp()
-                                }
-                            }
-                        }
-                    }
-                    if (SwiftCore.isAvailable) {
-                        // The real shell needs the shared core's zone map. An APK
-                        // built without `just android-core` (plain CI android-check)
-                        // has no native library, so it keeps the placeholder.
-                        // Settings and Media are the shell's covers: mutually-exclusive,
-                        // full-screen surfaces over the monitor so it keeps its state while
-                        // either surface owns interaction.
-                        val overlay = shellState.cover
-                        LaunchedEffect(shellState.monitor?.id) {
-                            if (shellState.monitor != null && DemoHarness.opensMedia(intent)) {
-                                shell.open(ShellModel.Cover.MEDIA)
-                            }
-                        }
-                        val assist = remember(active) {
-                            restoreNikonAssists(applicationContext, debugAssistEffects, debugScopes, lutLibrary::contains).also { assists ->
-                                debugSplitComparison?.let {
-                                    assists.shared.setSplitComparison(true, vertical = it == FeedSplitOrientation.VERTICAL)
-                                }
-                            }
-                        }
-                        val currentSessionState by active.state.collectAsState()
-                        val currentCameraProperties by active.cameraProperties.collectAsState()
-                        LaunchedEffect(currentSessionState) {
-                            diagnostics.record(
-                                when (currentSessionState) {
-                                    is CameraSessionState.Connected ->
-                                        AndroidDiagnosticEvent.CONNECTION_CONNECTED
-                                    CameraSessionState.Connecting ->
-                                        AndroidDiagnosticEvent.CONNECTION_CONNECTING
-                                    CameraSessionState.Disconnected ->
-                                        AndroidDiagnosticEvent.CONNECTION_DISCONNECTED
-                                },
-                            )
-                        }
-                        DisposableEffect(active) {
-                            diagnostics.record(AndroidDiagnosticEvent.MONITOR_PRESENTED)
-                            onDispose {
-                                liveViewGuide.onRealFrameUnavailable()
-                                diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED)
-                            }
-                        }
-                        // In-use beacon (iOS parity): while this session is held and NOT shared,
-                        // advertise the relay type with ch= + w=0 so no other device's camera
-                        // list PTP-probes the held body. The real broadcast's advertisement
-                        // carries the same shield, so only one runs at a time.
-                        val inUseBeaconHost =
-                            if (
-                                currentSessionState is CameraSessionState.Connected &&
-                                    !relayBroadcastEnabled
-                            ) {
-                                activeSavedCamera?.host?.takeIf(String::isNotBlank)
-                            } else {
-                                null
-                            }
-                        LaunchedEffect(inUseBeaconHost) {
-                            if (inUseBeaconHost == null) return@LaunchedEffect
-                            val beacon =
-                                com.opencapture.openzcine.relay.CameraInUseBeacon(
-                                    getSystemService(NsdManager::class.java),
-                                    relayDeviceName,
-                                )
-                            beacon.start(inUseBeaconHost)
-                            try {
-                                kotlinx.coroutines.awaitCancellation()
-                            } finally {
-                                beacon.stop()
-                            }
-                        }
-                        val playbackExposureAssistCameraInput =
-                            remember(
-                                currentCameraProperties.codec,
-                                currentCameraProperties.iso,
-                                currentCameraProperties.baseIso,
-                            ) {
-                                ExposureAssistCameraInput(
-                                    codec = currentCameraProperties.codec,
-                                    iso = currentCameraProperties.iso,
-                                    baseIso = currentCameraProperties.baseIso,
-                                )
-                            }
-                        val monitorLinkHealth = remember(active) { AndroidLinkHealthMonitor() }
-                        val frameioCameraHop =
-                            remember(active, activeSavedCamera, pairingEnvironment, pairingScript, demo) {
-                                AndroidFrameioCameraApHop(
-                                    activeSession = active,
-                                    savedCamera = activeSavedCamera,
-                                    environment = pairingEnvironment,
-                                    fixtureSession = pairingScript != null || demo?.second != null,
-                                    onReconnected = ::acceptPairedCamera,
-                                )
-                            }
-                        DisposableEffect(frameioController, frameioCameraHop) {
-                            frameioController.attachCameraHop(frameioCameraHop)
-                            onDispose { frameioController.attachCameraHop(null) }
-                        }
-                        val disconnectToSavedCameraHome: (Boolean) -> Unit = disconnect@{ reconnect ->
-                            val exitingSession = active
-                            // A multicam member lent to Live View goes back to its tile: the
-                            // session stays open (no CloseSession) and the stage resumes it.
-                            if (multicam.lentMember(exitingSession) != null) {
-                                shell.close()
-                                return@disconnect
-                            }
-                            val reconnectID = activeSavedCamera?.id
-                            monitorSessionRecoveryEnabled = false
-                            suppressedUsbAutoReconnectHosts =
-                                usbAutoReconnectSuppressionAfterUserAction(
-                                    suppressedHosts = suppressedUsbAutoReconnectHosts,
-                                    record = activeSavedCamera,
-                                    reconnect = reconnect,
-                                )
-                            // iOS `disconnectCameraSession`: clear the shell
-                            // synchronously, then fire-and-forget network
-                            // teardown. Awaiting CloseSession / EndLiveView
-                            // here made Android feel hung for several seconds
-                            // after a drop or manual disconnect (stopLiveView
-                            // alone can wait commandTimeout+2s on a dead link).
-                            // The monitor LaunchedEffect dispose path still
-                            // runs disconnect + releaseCameraAp when the
-                            // session leaves composition.
-                            if (monitorSession === exitingSession) {
-                                relayBroadcastController.stop(
-                                    notifyReason = "The broadcast ended.")
-                                relayBroadcastEnabled = false
-                                shell.close()
-                                monitorSession = null
-                                uvcSource?.close()
-                                uvcSource = null
-                                // Back to the cameras page, or the pair page when nothing
-                                // is saved (an HDMI-only user may have no saved cameras).
-                                shell.endPairing()
-                                requestedReconnectID = if (reconnect) reconnectID else null
-                            }
-                        }
-                        // Keep the library identity stable while a consented Frame.io hop
-                        // disconnects this exact session. Re-keying it to "camera" here would
-                        // discard the selected clips and project context before upload.
-                        val cameraID =
-                            remember(active, activeSavedCamera) {
-                                (active.state.value as? CameraSessionState.Connected)
-                                    ?.identity
-                                    ?.let { identity ->
-                                        identity.serialNumber.ifBlank {
-                                            "${identity.model}:${identity.name}"
-                                        }
-                                    }
-                                    ?: activeSavedCamera?.host
-                                    ?: "camera"
-                            }
-                        val returnToMulticam: (() -> Unit)? =
-                            if (multicam.lentMember(active) != null) {
-                                { disconnectToSavedCameraHome(false) }
-                            } else {
-                                null
-                            }
-                        CompositionLocalProvider(LocalMulticamReturn provides returnToMulticam) {
-                        Box {
-                            MonitorScreen(
-                                active,
-                                commonSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
-                                commonControl = shell.control,
-                                frameSource = demo?.second ?: uvcSource,
-                                assists = assist,
-                                operatorSettings = operatorSettings,
-                                lutLibrary = lutLibrary,
-                                frameioController = frameioController,
-                                // Media already owned this gate. Settings also
-                                // drops every preview consumer so the native
-                                // live-view pump and GPU decode path release
-                                // while Operator Setup is on top — otherwise
-                                // the full-screen sheet fights the feed for
-                                // CPU/GPU on lower-tier phones.
-                                liveViewEnabled = overlay == null,
-                                glassTierOverride = DemoHarness.glassTierOverride(intent),
-                                mediaRemoteShutter = mediaRemoteShutter,
-                                isMonitorFront = overlay == null,
-                                sessionRecoveryEnabled =
-                                    monitorSessionRecoveryEnabled &&
-                                        frameioController.internetHopState
-                                            .allowsMonitorSessionRecovery(),
-                                linkHealth = monitorLinkHealth,
-                                activeTransportIsUsb =
-                                    activeSavedCamera?.transport == SavedCameraTransport.USB_C,
-                                isDemoSession = pairingScript != null || demo?.second != null,
-                                liveViewGuideController = liveViewGuide,
-                                onOpenSettings = {
-                                    mediaRemoteShutter.disarm()
-                                    shell.open(ShellModel.Cover.SETTINGS)
-                                },
-                                onOpenMedia = {
-                                    mediaRemoteShutter.disarm()
-                                    shell.open(ShellModel.Cover.MEDIA)
-                                },
-                                // Recovery affordance's "Operator menu": the same explicit exit
-                                // Operator Settings offers, so a late reconnect can never
-                                // resurrect a session the operator just left.
-                                onBackToOperatorMenu = {
-                                    mediaRemoteShutter.disarm()
-                                    disconnectToSavedCameraHome(false)
-                                },
-                                recoveryStateOverride = DemoHarness.sessionRecoveryOverride(intent),
-                                onDriveDiagnostic = diagnostics::record,
-                                controlsSurrendered =
-                                    relayBroadcastUi.controlHolderName != null,
-                            )
-                            relayBroadcastUi.controlHolderName?.let { holder ->
-                                Row(
-                                    Modifier.align(Alignment.BottomCenter)
-                                        // The watcher's key already clears the bottom chrome per
-                                        // orientation; this pill's own fixed 64dp was
-                                        // orientation-blind and landed on the portrait system
-                                        // band's DISP/record/media row. One lane, one definition
-                                        // (relay/RelayWatchScreen.kt) — iOS seats both keys
-                                        // against the same assist-strip zone.
-                                        .padding(
-                                            bottom =
-                                                com.opencapture.openzcine.relay
-                                                    .relayControlKeyBottomInset()
-                                        )
-                                        .clip(RoundedCornerShape(22.dp))
-                                        .background(
-                                            androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f)
-                                        )
-                                        .clickable { relayBroadcastController.reclaimControl() }
-                                        .padding(horizontal = 16.dp, vertical = 9.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        stringResource(R.string.sharing_revoke_control),
-                                        color = androidx.compose.ui.graphics.Color(0xFFE0A73A),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.8.sp,
-                                    )
-                                    Text(
-                                        holder,
-                                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f),
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                    )
-                                }
-                            }
-                            relayBroadcastUi.pendingControlRequestName?.let { asking ->
-                                Row(
-                                    Modifier.align(Alignment.TopCenter)
-                                        .padding(top = 10.dp)
-                                        .background(
-                                            androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f),
-                                            RoundedCornerShape(22.dp),
-                                        )
-                                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        stringResource(
-                                            R.string.sharing_asks_to_control, asking
-                                        ),
-                                        color = androidx.compose.ui.graphics.Color.White,
-                                        fontSize = 13.sp,
-                                    )
-                                    Text(
-                                        stringResource(R.string.sharing_decline),
-                                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f),
-                                        fontSize = 13.sp,
-                                        modifier =
-                                            Modifier.clickable {
-                                                relayBroadcastController
-                                                    .declinePendingControl()
-                                            },
-                                    )
-                                    Text(
-                                        stringResource(R.string.sharing_grant),
-                                        color = androidx.compose.ui.graphics.Color(0xFFE0A73A),
-                                        fontSize = 13.sp,
-                                        modifier =
-                                            Modifier.clickable {
-                                                relayBroadcastController.grantPendingControl()
-                                            },
-                                    )
-                                }
-                            }
-                            when (overlay) {
-                                null -> Unit
-                                ShellModel.Cover.SETTINGS ->
-                                    OperatorSettingsScreen(
-                                        session = active,
-                                        assists = assist,
-                                        settings = operatorSettings,
-                                        mediaCacheStore = mediaCacheStore,
-                                        frameioController = frameioController,
-                                        linkHealth = monitorLinkHealth,
-                                        relaySharing = relayBroadcastController,
-                                        relaySharingEnabled = relayBroadcastEnabled,
-                                        onRelayShareToggle = { enable ->
-                                            if (enable) {
-                                                val frames =
-                                                    demo?.second
-                                                        ?: uvcSource
-                                                        ?: (active as? SwiftCoreCameraSession)
-                                                            ?.liveFrames
-                                                            as? LiveFrameSource
-                                                if (frames != null) {
-                                                    relayBroadcastController.watcherPasscode =
-                                                        operatorSettings
-                                                            .relayWatcherPasscode
-                                                            .value
-                                                    relayBroadcastController
-                                                        .allowsControlRequests =
-                                                        operatorSettings
-                                                            .relayAllowsControlRequests
-                                                            .value
-                                                    relayBroadcastController.encoderProfile =
-                                                        com.opencapture.openzcine.core
-                                                            .RelayEncoderProfile
-                                                            .fromWireValue(
-                                                                operatorSettings
-                                                                    .relayEncoderProfile
-                                                                    .value
-                                                            )
-                                                    relayBroadcastEnabled =
-                                                        relayBroadcastController.start(
-                                                            session = active,
-                                                            frames = frames,
-                                                            cameraName =
-                                                                activeSavedCamera
-                                                                    ?.displayTitle,
-                                                            servedCameraHost =
-                                                                activeSavedCamera?.host,
-                                                        )
-                                                }
-                                            } else {
-                                                relayBroadcastController.stop(
-                                                    notifyReason = "The broadcast ended.")
-                                                relayBroadcastEnabled = false
-                                            }
-                                        },
-                                        liveViewSource =
-                                            (active as? SwiftCoreCameraSession)
-                                                ?.liveFrames as? SwiftCoreLiveFrameSource,
-                                        activeTransportLabel = activeSavedCamera?.transport?.displayName,
-                                        onDisconnect =
-                                            activeSavedCamera?.let {
-                                                { disconnectToSavedCameraHome(false) }
-                                            },
-                                        onReconnect =
-                                            activeSavedCamera?.let {
-                                                { disconnectToSavedCameraHome(true) }
-                                            },
-                                        systemSettingsActions = systemSettingsActions,
-                                        bugReportSubmitter = bugReportSubmitter,
-                                        bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
-                                        liveViewGuideController = liveViewGuide,
-                                        onShowGuideNow = {
-                                            liveViewGuide.replayNow()
-                                            shell.dismissCover()
-                                        },
-                                        onShowGuideOnNextRealFrame = {
-                                            liveViewGuide.replayOnNextRealFrame()
-                                            shell.dismissCover()
-                                        },
-                                        onCompletedMediaCacheCleared = {
-                                            mediaLibraryIndex.clearCameraCatalogs()
-                                            mediaCacheRevision += 1
-                                        },
-                                        onClose = { shell.dismissCover() },
-                                    )
-                                ShellModel.Cover.MEDIA ->
-                                    MediaBrowseScreen(
-                                        catalogIndex = mediaLibraryIndex,
-                                        cameraID = cameraID,
-                                        mediaService = shellSessions.media(active, multicam.lentMember(active)?.control ?: shellSessions.acquire(active)),
-                                        cameraConnected =
-                                            currentSessionState is CameraSessionState.Connected,
-                                        connectionOwner =
-                                            (active as? SwiftCoreCameraSession)?.connectionOwner,
-                                        cacheRevision = mediaCacheRevision,
-                                        savedCameraID = activeSavedCamera?.id,
-                                        cameraDisplayName = activeSavedCamera?.displayTitle,
-                                        cameraStorageSlots = currentCameraProperties.storageSlots,
-                                        // Sidebar opens on the active capture side's
-                                        // media (iOS `openMediaBrowser`).
-                                        initialCategory =
-                                            if (prefersPhotographyChrome(currentCameraProperties)) {
-                                                MediaLibraryCategory.PHOTOS
-                                            } else {
-                                                MediaLibraryCategory.VIDEOS
-                                            },
-                                        assists = assist,
-                                        exposureAssistCameraInput = playbackExposureAssistCameraInput,
-                                        operatorSettings = operatorSettings,
-                                        lutLibrary = lutLibrary,
-                                        frameioController = frameioController,
-                                        mediaDeliveryCoordinator = mediaDeliveryCoordinator,
-                                        autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
-                                        onRatingDiagnostic = diagnostics::record,
-                                        onClose = { shell.dismissCover() },
-                                    )
-                            }
-                        }
-                        }
-                        BackHandler(enabled = overlay == ShellModel.Cover.SETTINGS) {
-                            shell.dismissCover()
-                        }
-                    } else {
-                        MonitorShell(
-                            active,
-                            frameSource = demo?.second,
-                            sessionRecoveryEnabled = monitorSessionRecoveryEnabled,
-                        )
                     }
                 }
                 // Global delivery progress (iOS MediaDeliveryGlobalOverlay) — survives

@@ -169,9 +169,6 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "join.prefix" -> CONNECTION_JOIN_PREFIX
                 else -> null
             }
-
-        /** @deprecated Prefer [fromPhase]; kept for call-site clarity on failure-only paths. */
-        fun fromFailurePhase(phase: String): AndroidDiagnosticEvent? = fromPhase(phase)
     }
 }
 

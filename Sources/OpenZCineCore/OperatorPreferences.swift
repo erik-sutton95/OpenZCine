@@ -30,7 +30,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     /// that measures the frame.
     case mirror = "MIRROR"
     case instantReview = "PLAY"
-    /// Monitoring punch-in for critical focus (see `Magnification`).
+    /// Monitoring punch-in for critical focus. Retired; see ``isRetired``.
     case magnification = "MAG"
 
     public var id: String { rawValue }

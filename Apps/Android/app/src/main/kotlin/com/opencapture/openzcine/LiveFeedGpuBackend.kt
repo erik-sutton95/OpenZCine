@@ -96,10 +96,8 @@ internal object LiveFeedGpuBackendFactory {
         if (!vulkanProbed) {
             vulkanProbed = true
             vulkanAvailable =
-                runCatching {
-                    VulkanLiveFeedNative.nativeInitAssets(appContext.assets)
-                    VulkanLiveFeedNative.isAvailable()
-                }.getOrDefault(false)
+                runCatching { OpcVulkan.isAvailable && OpcVulkan.nativeProbeBitmap() }
+                    .getOrDefault(false)
             Log.i(TAG, "Vulkan native available=$vulkanAvailable")
         }
         return vulkanAvailable
@@ -188,64 +186,4 @@ internal class VulkanLiveFeedBackend(
     override fun resume() = native.resume()
     override fun pause() = native.pause()
     override fun dispose() = native.close()
-}
-
-/** Original internal helper signatures delegate to the shared native binding. */
-internal object VulkanLiveFeedNative {
-    fun nativeInitAssets(assets: android.content.res.AssetManager) = Unit
-    fun isAvailable(): Boolean = OpcVulkan.isAvailable && OpcVulkan.nativeProbeBitmap()
-    fun createSession(): Long = OpcVulkan.nativeCreateBitmap()
-    fun destroySession(session: Long) = OpcVulkan.nativeDestroy(session)
-    fun attachSurface(session: Long, surface: android.view.Surface): Boolean =
-        OpcVulkan.nativeAttachBitmapWindow(session, surface)
-    fun detachSurface(session: Long) = OpcVulkan.nativeDetachWindow(session)
-    fun resize(session: Long, width: Int, height: Int) = OpcVulkan.nativeResize(session, width, height)
-    fun resume(session: Long) { OpcVulkan.nativeSetBitmapPaused(session, false) }
-    fun pause(session: Long) { OpcVulkan.nativeSetBitmapPaused(session, true) }
-    fun clearFrame(session: Long) = OpcVulkan.nativeClearBitmap(session)
-    fun clearPlan(session: Long) = OpcVulkan.nativeClearBitmapPlan(session)
-    fun submitBitmap(session: Long, bitmap: Bitmap): Boolean = OpcVulkan.nativeSubmitBitmap(session, bitmap)
-
-    fun setPlan(
-        session: Long,
-        lutSize: Int, lutRgba: ByteArray?,
-        limitsPaintSize: Int, limitsPaintRgba: ByteArray?,
-        limitsWeightSize: Int, limitsWeightRgba: ByteArray?,
-        limitsOn: Boolean, peakingOn: Boolean,
-        peakingColor: FloatArray, deLogCurve: FloatArray,
-        peakingRatioThreshold: Float, peakingNoiseGate: Float,
-        zebraHighlightOn: Boolean, zebraHighlight: Float, zebraHighlightColor: FloatArray,
-        zebraMidtoneOn: Boolean, zebraMidtone: Float, zebraMidtoneColor: FloatArray,
-        aspectFill: Boolean, mirrored: Boolean, splitOn: Boolean, splitVertical: Boolean,
-    ): Boolean {
-        // Preserve the raw helper's original uniform values and cube payloads.
-        // The shared native owner validates each packed 2D cube independently.
-        val controls = FloatArray(40)
-        controls[0] = lutSize.toFloat()
-        controls[1] = if (peakingOn) 1f else 0f
-        controls[2] = if (zebraHighlightOn) 1f else 0f
-        controls[3] = if (zebraMidtoneOn) 1f else 0f
-        peakingColor.take(3).forEachIndexed { i, value -> controls[4 + i] = value }
-        zebraHighlightColor.take(3).forEachIndexed { i, value -> controls[8 + i] = value }
-        zebraMidtoneColor.take(3).forEachIndexed { i, value -> controls[12 + i] = value }
-        controls[16] = peakingRatioThreshold
-        controls[17] = peakingNoiseGate
-        controls[18] = zebraHighlight
-        controls[19] = zebraMidtone
-        controls[20] = if (aspectFill) 1f else 0f
-        controls[21] = if (splitOn) 1f else 0f
-        controls[22] = if (splitVertical) 1f else 0f
-        controls[23] = if (mirrored) 1f else 0f
-        deLogCurve.take(5).forEachIndexed { i, value -> controls[24 + i] = value }
-        controls[32] = limitsPaintSize.toFloat()
-        controls[33] = limitsWeightSize.toFloat()
-        controls[34] = if (limitsOn) 1f else 0f
-        controls[36] = 0f
-        controls[37] = 0f
-        controls[38] = 5f / 255f
-        return OpcVulkan.nativeConfigureBitmap(
-            session, controls, lutSize, lutRgba,
-            limitsPaintSize, limitsPaintRgba, limitsWeightSize, limitsWeightRgba,
-        )
-    }
 }

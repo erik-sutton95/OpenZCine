@@ -1,20 +1,35 @@
+import MonitorPresentation
+import MonitorUI
 import OpenCineAppKit
 import OpenZCineCore
 import SwiftUI
 
+/// The shared root (`AppShell`): the camera monitor, the shared cameras and pair pages with this
+/// app's own pages before them (the first-pair wizard, preparing live view, its own connect),
+/// and the standalone Media and Settings covers.
 struct LinkExperience: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
 
+    static let relayPrefix = "relay:"
+    static let filterNoticeID = "notice:filter"
+
     var body: some View {
-        // The safe area is read here and handed to the shared pages, which draw edge to edge.
-        GeometryReader { proxy in
-            page(proxy)
-                .ignoresSafeArea()
+        // The pages' ground and ink; the monitor keeps its own.
+        let pages = model.shell.monitor == nil
+        AppShell(
+            model: model.shell, brand: ShellBrand(name: "OpenZCine", nearbyNote: "on this network"),
+            actions: actions, extraNearby: extraNearby, prePage: prePage
+        ) { _ in
+            MonitorExperience()
+        } page: { cover in
+            NikonCoverPage(cover: cover)
         }
-        .background(StartupColors.backdrop.ignoresSafeArea())
-        .foregroundStyle(StartupColors.ink)
+        .background {
+            if pages { StartupColors.backdrop.ignoresSafeArea() }
+        }
+        .foregroundStyle(pages ? AnyShapeStyle(StartupColors.ink) : AnyShapeStyle(.primary))
         // Scanner blur backdrop lives on the presenter (not inside the fullScreenCover) so it
         // fades in place via opacity while the card keeps the cover's slide — the backdrop must
         // not ride the vertical slide.
@@ -32,6 +47,12 @@ struct LinkExperience: View {
             Task {
                 await model.refreshConnectedWiFiSSID()
             }
+        }
+        .onChange(of: showsCamerasPage, initial: true) { _, shows in
+            guard shows else { return }
+            model.cameras.sessionEnded()
+            model.cameras.reloadSaved()
+            model.nikonPort.found(model.discoveredCameras)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -95,36 +116,85 @@ struct LinkExperience: View {
             .allowsHitTesting(false)
     }
 
-    /// The shared pages (SHELL-02): the wizard and the app's own connects on the pair page, the
-    /// saved cameras on the cameras page.
-    @ViewBuilder private func page(_ proxy: GeometryProxy) -> some View {
-        let safeArea = proxy.safeAreaInsets
-        let layout = StartupContentLayout.fit(
-            viewportWidth: Double(proxy.size.width), viewportHeight: Double(proxy.size.height),
-            safeArea: proxy.monitorEdgeInsets)
-        if model.shouldShowFirstPairWizard {
-            StartupFirstPairWizardView(
-                isBusy: model.isStartupActionLocked, contentLayout: layout, safeArea: safeArea)
-        } else if model.isConnected {
-            StartupPreparingLiveView(compact: layout.mode == .singleColumn)
-                .padding(
-                    EdgeInsets(
-                        top: safeArea.top + 24, leading: safeArea.leading + 24,
-                        bottom: safeArea.bottom + 24,
-                        trailing: safeArea.trailing + 24))
-        } else if model.showsAppConnectProgress {
-            NikonConnectScreen(safeArea: safeArea)
-        } else if model.isPairingNearby {
-            PairScreen(
-                model: model.cameras, safeArea: safeArea,
-                onDone: { model.isPairingNearby = false },
-                onDiagnostics: { model.shareDiagnostics() },
-                onReportProblem: { model.isBugReportPresented = true },
-                onPrivacy: { openURL(SupportLinkCatalog.privacy) },
-                onTerms: { openURL(SupportLinkCatalog.terms) })
-        } else {
-            NikonCamerasPage(safeArea: safeArea)
+    /// The page this app shows before the shared ones, if any (SHELL-02): the wizard, the ready
+    /// page while a connected camera's live view starts, the app's own connect in progress.
+    private var prePageKind: NikonPrePage.Kind? {
+        if model.shouldShowFirstPairWizard { return .wizard }
+        if model.isConnected { return .preparing }
+        if model.showsAppConnectProgress { return .connecting }
+        return nil
+    }
+
+    private func prePage(_ safeArea: EdgeInsets) -> NikonPrePage? {
+        prePageKind.map { NikonPrePage(kind: $0, safeArea: safeArea) }
+    }
+
+    /// The shared cameras page is the one showing.
+    private var showsCamerasPage: Bool { model.shell.route == .cameras && prePageKind == nil }
+
+    private var actions: ShellActions {
+        ShellActions(
+            diagnostics: { model.shareDiagnostics() },
+            reportProblem: { model.isBugReportPresented = true },
+            multiview: MulticamCoordinator.tileCount > 1 ? { model.beginMulticam() } : nil,
+            integrationAction: { cameraID, action in
+                if action == NativeNikonPort.takeOverAction,
+                    case .saved(let camera, let routeID) = model.cameras.failures[cameraID]?.target,
+                    let host = camera.routes.first(where: { $0.id == routeID })?.extras[
+                        NikonSavedRecordsV0.Extra.host]
+                {
+                    model.nikonPort.allowTakeOver(host: host)
+                    _ = model.cameras.perform(.retry, for: cameraID)
+                    return
+                }
+                if action == NativeNikonPort.diagnosticsAction { model.shareDiagnostics() }
+            },
+            privacy: { openURL(SupportLinkCatalog.privacy) },
+            terms: { openURL(SupportLinkCatalog.terms) },
+            pair: {
+                // A NEARBY camera's Pair picks it on the shared pair page; "Pair a new camera"
+                // walks the wizard.
+                if model.cameras.selection != nil {
+                    model.shell.beginPairing()
+                } else {
+                    model.startFirstPairWizard()
+                }
+            },
+            media: { model.openCachedMediaLibrary() },
+            settings: { model.openStandaloneSettings() },
+            extraNearby: { id in
+                guard
+                    let broadcast = model.visibleRelayBroadcasts.first(where: {
+                        Self.relayPrefix + $0.id == id
+                    })
+                else { return }
+                model.joinRelay(broadcast)
+            })
+    }
+
+    /// The filtered-network notice when proven, then the broadcasts another device shares.
+    private var extraNearby: [CameraListItem] {
+        var items: [CameraListItem] = []
+        if model.networkFiltersDiscovery {
+            items.append(
+                CameraListItem(
+                    id: Self.filterNoticeID, name: "This network",
+                    subtitle: "Cameras below were found directly",
+                    status: "", actionTitle: "", isAvailable: false,
+                    failure: CameraConnectFailure(
+                        title: "Discovery is filtered",
+                        message:
+                            "This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router.",
+                        actions: [])))
         }
+        for broadcast in model.visibleRelayBroadcasts {
+            items.append(
+                CameraListItem(
+                    id: Self.relayPrefix + broadcast.id, name: broadcast.name,
+                    subtitle: "Live feed from another device",
+                    badge: "LIVE", status: "Watch this device's feed", actionTitle: "Watch"))
+        }
+        return items
     }
 
     private var pairingAlertPresented: Binding<Bool> {
@@ -147,6 +217,74 @@ struct LinkExperience: View {
             return "Make sure code \(pin) matches on \(cameraName), then tap Pair."
         }
         return "Confirm the pairing request from \(cameraName), then tap Pair."
+    }
+}
+
+/// This app's pages before the shared ones, laid out in the safe area the shell hands them.
+struct NikonPrePage: View {
+    enum Kind {
+        case wizard
+        case preparing
+        case connecting
+    }
+
+    @Environment(NativeAppModel.self) private var model
+    let kind: Kind
+    let safeArea: EdgeInsets
+
+    var body: some View {
+        // The shell's pages ignore the safe area; the layout fits what is left of it.
+        GeometryReader { proxy in
+            let layout = StartupContentLayout.fit(
+                viewportWidth: Double(proxy.size.width - safeArea.leading - safeArea.trailing),
+                viewportHeight: Double(proxy.size.height - safeArea.top - safeArea.bottom),
+                safeArea: MonitorEdgeInsets(
+                    top: Double(safeArea.top), leading: Double(safeArea.leading),
+                    bottom: Double(safeArea.bottom), trailing: Double(safeArea.trailing)))
+            switch kind {
+            case .wizard:
+                StartupFirstPairWizardView(
+                    isBusy: model.isStartupActionLocked, contentLayout: layout, safeArea: safeArea)
+            case .preparing:
+                StartupPreparingLiveView(compact: layout.mode == .singleColumn)
+                    .padding(
+                        EdgeInsets(
+                            top: safeArea.top + 24, leading: safeArea.leading + 24,
+                            bottom: safeArea.bottom + 24, trailing: safeArea.trailing + 24))
+            case .connecting:
+                NikonConnectScreen(safeArea: safeArea)
+            }
+        }
+    }
+}
+
+/// The standalone Media and Settings covers: the cameras page's, or a panel an internet hop
+/// re-hosts once the monitor has gone.
+private struct NikonCoverPage: View {
+    @Environment(NativeAppModel.self) private var model
+    let cover: ShellModel.Cover
+
+    var body: some View {
+        // The real device safe area, as the monitor host passes it. iOS reports the landscape
+        // Dynamic Island lane on both short edges; the clean side (the smaller inset) is zeroed so
+        // the surface hugs that bezel, matching the monitor's `fullScreenPanelSafeArea`.
+        GeometryReader { proxy in
+            let insets = proxy.safeAreaInsets
+            let islandOnLeading = insets.leading >= insets.trailing
+            let safeArea = MonitorEdgeInsets(
+                top: Double(insets.top),
+                leading: islandOnLeading ? Double(insets.leading) : 0,
+                bottom: Double(insets.bottom),
+                trailing: islandOnLeading ? 0 : Double(insets.trailing)
+            ).clearingWindowControls
+            switch cover {
+            case .media: MediaBrowserView(safeArea: safeArea)
+            case .settings: OperatorSettingsPanel(safeArea: safeArea)
+            }
+        }
+        .background(MonitorTheme.background.ignoresSafeArea())
+        // A cover, like the full-screen presentation it replaces: VoiceOver stays on it.
+        .accessibilityAddTraits(.isModal)
     }
 }
 

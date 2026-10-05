@@ -1,3 +1,4 @@
+import OpenCineApple
 import Testing
 
 @testable import Runner
@@ -13,16 +14,16 @@ struct LiveFeedNoiseFilterWindowTests {
     @Test("Both reference windows must be exactly full")
     func bothWindowsMustBeFull() {
         #expect(
-            LiveFeedNoiseFilter.canRun(
+            MonitorTemporalNoiseFilter.canRun(
                 past: 2, previousWanted: 2, futures: 2, futureWanted: 2))
 
         // The shipped bug, in both of its shapes.
         #expect(
-            !LiveFeedNoiseFilter.canRun(
+            !MonitorTemporalNoiseFilter.canRun(
                 past: 1, previousWanted: 2, futures: 2, futureWanted: 2),
             "one reference against a two-frame configuration is the iPad16,5 crash")
         #expect(
-            !LiveFeedNoiseFilter.canRun(
+            !MonitorTemporalNoiseFilter.canRun(
                 past: 0, previousWanted: 1, futures: 2, futureWanted: 2),
             "the first frame after a restart had an empty past window and ran anyway")
     }
@@ -31,10 +32,10 @@ struct LiveFeedNoiseFilterWindowTests {
     @Test("A zero-length window is full when it is empty")
     func zeroLengthWindowIsSatisfied() {
         #expect(
-            LiveFeedNoiseFilter.canRun(
+            MonitorTemporalNoiseFilter.canRun(
                 past: 0, previousWanted: 0, futures: 0, futureWanted: 0))
         #expect(
-            LiveFeedNoiseFilter.canRun(
+            MonitorTemporalNoiseFilter.canRun(
                 past: 1, previousWanted: 1, futures: 0, futureWanted: 0))
     }
 
@@ -43,10 +44,10 @@ struct LiveFeedNoiseFilterWindowTests {
     @Test("An over-full window is refused too")
     func overFullWindowIsRefused() {
         #expect(
-            !LiveFeedNoiseFilter.canRun(
+            !MonitorTemporalNoiseFilter.canRun(
                 past: 3, previousWanted: 2, futures: 2, futureWanted: 2))
         #expect(
-            !LiveFeedNoiseFilter.canRun(
+            !MonitorTemporalNoiseFilter.canRun(
                 past: 2, previousWanted: 2, futures: 3, futureWanted: 2))
     }
 }

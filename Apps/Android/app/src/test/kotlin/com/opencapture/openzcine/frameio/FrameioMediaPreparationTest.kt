@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.frameio
 
+import com.opencapture.opencine.runtime.MonitorMovieExportContainer
+import com.opencapture.opencine.runtime.MonitorMovieExportLut
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.media.StagedMediaShare
@@ -73,7 +75,7 @@ class FrameioMediaPreparationTest {
                     artifact(source, supportsLutBake = true),
                     MediaDeliveryConfiguration(
                         bakeLut = true,
-                        exportContainer = MediaExportContainer.MP4,
+                        exportContainer = MonitorMovieExportContainer.MP4,
                         selectedLut = FeedLutSelection.BuiltIn(FeedLut.MONO),
                     ),
                 ) {}
@@ -151,7 +153,7 @@ class FrameioMediaPreparationTest {
                     override suspend fun export(
                         source: Path,
                         target: Path,
-                        lut: FrameioLutPayload,
+                        lut: MonitorMovieExportLut,
                         onProgress: suspend (Double) -> Unit,
                     ) {
                         Files.write(target, byteArrayOf(9, 8, 7))
@@ -249,8 +251,8 @@ class FrameioMediaPreparationTest {
                 ),
         )
 
-    private fun unitLut(): FrameioLutPayload =
-        FrameioLutPayload(
+    private fun unitLut(): MonitorMovieExportLut =
+        MonitorMovieExportLut(
             displayName = "Unit LUT",
             cubeSize = 2,
             packedRgba = ByteArray(2 * 2 * 2 * 4) { 0xFF.toByte() },
@@ -265,8 +267,8 @@ class FrameioMediaPreparationTest {
         }
     }
 
-    private class FixedLutProvider(private val payload: FrameioLutPayload?) : FrameioLutProvider {
-        override suspend fun approvedPayload(selection: FeedLutSelection): FrameioLutPayload? = payload
+    private class FixedLutProvider(private val payload: MonitorMovieExportLut?) : FrameioLutProvider {
+        override suspend fun approvedPayload(selection: FeedLutSelection): MonitorMovieExportLut? = payload
     }
 
     private class FakeExporter : FrameioLutVideoExporter {
@@ -277,7 +279,7 @@ class FrameioMediaPreparationTest {
         override suspend fun export(
             source: Path,
             target: Path,
-            lut: FrameioLutPayload,
+            lut: MonitorMovieExportLut,
             onProgress: suspend (Double) -> Unit,
         ) {
             calls += 1
