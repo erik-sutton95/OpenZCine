@@ -1,9 +1,16 @@
 package com.opencapture.openzcine
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -81,5 +88,27 @@ class MonitorPickerDismissComposeTest {
         composeRule.onRoot().performTouchInput { click(Offset(8f, 8f)) }
 
         composeRule.runOnIdle { assertTrue(dismissed) }
+    }
+
+    /** The focus-dial row is a switch to TalkBack, so it must also say whether it is on. */
+    @Test
+    fun focusDialRowReportsWhetherItIsOn() {
+        var enabled by mutableStateOf(true)
+        composeRule.setContent {
+            MonitorControlPickerPanel(
+                picker = focusPicker(),
+                frame = pickerFrame,
+                controlsEnabled = true,
+                pendingControl = null,
+                feedback = null,
+                onSelect = { _, _ -> },
+                onDismiss = {},
+                mfScrubEnabled = enabled,
+                onToggleMfScrub = { enabled = !enabled },
+            )
+        }
+
+        composeRule.onNodeWithText("Focus dial").assertIsOn().performClick()
+        composeRule.onNodeWithText("Focus dial").assertIsOff()
     }
 }

@@ -68,6 +68,8 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -1713,7 +1715,10 @@ private fun MfScrubToggleRow(enabled: Boolean, onToggle: () -> Unit) {
             .background(LiveDesign.background.copy(alpha = 0.28f), ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .chromeClickable(onClick = onToggle)
-            .semantics { role = Role.Switch }
+            .semantics {
+                role = Role.Switch
+                toggleableState = ToggleableState(enabled)
+            }
             .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
