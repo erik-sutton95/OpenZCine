@@ -15,29 +15,6 @@ enum BrandColors {
     static let accentSoft = Color(red: 1.0, green: 0.882, blue: 0.0).opacity(0.18)
 }
 
-/// OZC monogram mark (legacy programmatic branding; superseded by `AppLogo` raster assets).
-struct OZCMonogramMark: View {
-    var size: CGFloat = 72
-    var cornerRadius: CGFloat = MonitorTheme.radius
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(BrandColors.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(BrandColors.accent.opacity(0.55), lineWidth: max(1, size * 0.018))
-            )
-            .overlay {
-                Text("OZC")
-                    .font(.system(size: size * 0.34, weight: .heavy, design: .rounded))
-                    .kerning(size * 0.02)
-                    .foregroundStyle(BrandColors.accent)
-            }
-            .frame(width: size, height: size)
-            .accessibilityLabel("OpenZCine")
-    }
-}
-
 /// OpenZCine wordmark title.
 struct OpenZCineWordmark: View {
     var fontSize: CGFloat = 34

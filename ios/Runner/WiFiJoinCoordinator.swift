@@ -35,12 +35,6 @@ final class WiFiJoinCoordinator {
         }
     }
 
-    /// Whether the next join attempt uses AccessorySetupKit instead of a custom progress sheet.
-    static var usesSystemAccessoryPicker: Bool {
-        if #available(iOS 18.0, *) { return true }
-        return false
-    }
-
     /// How a join attempt should reach the system Wi‑Fi sheet.
     enum JoinStrategy: Equatable, Sendable {
         /// iOS 18+: AccessorySetupKit picker with `NEHotspotConfiguration` fallback.
@@ -163,11 +157,6 @@ final class WiFiJoinCoordinator {
     /// what this prevents is the queue of alerts a caller builds by ticking faster than one
     /// association attempt takes to fail.
     private var reapplyInFlightSince: Date?
-
-    /// Clears the decline latch — call from a deliberate, operator-initiated join.
-    func clearReapplyDecline(ssid rawSSID: String) {
-        declinedReapplySSIDs.remove(rawSSID.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
 
     func reapplyCameraNetwork(ssid rawSSID: String) {
         let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)

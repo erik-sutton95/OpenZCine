@@ -552,23 +552,4 @@ final class FeedUpscaleSwitch {
     }
 
     private init() {}
-
-    /// Debug A/B: drop to `Off` and back to whatever was selected.
-    ///
-    /// Two states, not a cycle through all five. The question on a live feed is "is this doing
-    /// anything", and that is answered by flipping between the plain bilinear reference and the
-    /// pick — a cycle makes the operator track where in the list they are while looking at the
-    /// picture, which is the opposite of the job.
-    func toggleAgainstOff() {
-        if upscaler == .off {
-            upscaler = .supported(or: restoreAfterOff)
-            restoreAfterOff = nil
-        } else {
-            restoreAfterOff = upscaler
-            upscaler = .off
-        }
-    }
-
-    /// What `Off` came from, so the second tap goes back to it rather than to a default.
-    @ObservationIgnored private var restoreAfterOff: FeedUpscaler?
 }

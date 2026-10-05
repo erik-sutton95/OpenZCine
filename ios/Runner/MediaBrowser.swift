@@ -2452,44 +2452,6 @@ struct MediaPlayerView: View {
 
     // MARK: Bottom bar (playback transport or inline view-assist)
 
-    /// Compact playback chrome — primary controls use 44pt hit targets via `MonitorTapTargetButtonStyle`.
-    ///
-    /// Sized so the full transport row fits the narrowest supported width. It grew to eight
-    /// controls when the conform preview landed and silently overflowed: an HStack of fixed-size
-    /// children does not compress, so the row widened the whole chrome stack and pushed the TOP
-    /// bar's back and favourite buttons off both screen edges. Visual size only — `.monitorTapTarget`
-    /// keeps every hit target at 44pt regardless.
-    enum PlaybackChrome {
-        static let barPaddingH: CGFloat = 10
-        static let barPaddingV: CGFloat = 9
-        static let transportRowSpacing: CGFloat = 5
-        static let scrubberRowSpacing: CGFloat = 5
-        static let transportButtonSize = CGSize(width: 38, height: 36)
-        static let actionButtonSize = CGSize(width: 32, height: 36)
-        static let transportIconSize: CGFloat = 18
-        static let primaryTransportIconSize: CGFloat = 22
-        static let actionIconSize: CGFloat = 16
-
-        /// Narrowest screen the app ships on (iPhone SE class), in points. The row is checked
-        /// against this in `RunnerTests` so the next control added here fails a test rather than
-        /// silently shoving the top bar off the screen.
-        static let narrowestScreenWidth: CGFloat = 375
-        /// Horizontal padding the chrome stack applies outside the bar.
-        static let chromeHorizontalPadding: CGFloat = 16
-
-        /// Width the transport row needs: three transport buttons, five actions, the gaps between
-        /// them, the bar's own padding, and the minimum spacer.
-        static func transportRowWidth(
-            transportCount: Int = 3, actionCount: Int = 5, minimumSpacer: CGFloat = 6
-        ) -> CGFloat {
-            let buttons =
-                transportButtonSize.width * CGFloat(transportCount)
-                + actionButtonSize.width * CGFloat(actionCount)
-            let gaps = transportRowSpacing * CGFloat(transportCount + actionCount - 1)
-            return buttons + gaps + barPaddingH * 2 + minimumSpacer
-        }
-    }
-
     /// Star rating, pulled down from the top edge and left there until pushed back up.
     ///
     /// It used to sit above the transport, where it cost a permanent band of picture for a control

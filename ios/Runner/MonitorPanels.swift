@@ -1343,16 +1343,6 @@ struct PickerPanel: View {
             + "The camera is setting sensitivity."
     }
 
-    private var currentValue: String {
-        switch picker {
-        case .resolution: model.cameraState.resolutionFrameRate
-        case .codec: model.cameraState.codec
-        case .mode: model.commandExposureMode
-        default:
-            model.cameraState.values.first(where: { $0.label == picker.valueLabel })?.value ?? ""
-        }
-    }
-
     /// The drum's options for the active mode. IRIS is restricted to the mounted lens's reachable
     /// apertures; moded settings (ISO circuits, shutter angle/speed) swap the wheel per mode; the
     /// rest fall back to the flat picker list.

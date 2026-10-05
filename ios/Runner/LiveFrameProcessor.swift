@@ -289,12 +289,6 @@ extension NativeAppModel {
             || visible.contains(.trafficLights)
     }
 
-    /// Whether a scope assist that only needs histogram bins is on (GPU path samples for these).
-    var histogramScopeActive: Bool {
-        let visible = renderedLiveAssistTools
-        return visible.contains(.histogram) || visible.contains(.trafficLights)
-    }
-
     /// Whether the horizon level overlay is visible — gates per-frame virtual-horizon updates.
     var levelAssistActive: Bool {
         renderedLiveAssistTools.contains(.level)

@@ -372,33 +372,6 @@ struct MovablePanel<Content: View>: View {
     }
 }
 
-/// The on-screen rectangle where video is drawn with `AVLayerVideoGravity.resizeAspect` (aspect fit):
-/// letterbox when the container is wider than the clip, pillarbox when taller.
-func aspectFitRect(videoSize: CGSize, in container: CGRect) -> CGRect {
-    guard videoSize.width > 0, videoSize.height > 0, container.width > 0, container.height > 0
-    else {
-        return container
-    }
-    let videoAspect = videoSize.width / videoSize.height
-    let containerAspect = container.width / container.height
-    if containerAspect > videoAspect {
-        let height = container.height
-        let width = height * videoAspect
-        return CGRect(
-            x: container.minX + (container.width - width) / 2,
-            y: container.minY,
-            width: width,
-            height: height)
-    }
-    let width = container.width
-    let height = width / videoAspect
-    return CGRect(
-        x: container.minX,
-        y: container.minY + (container.height - height) / 2,
-        width: width,
-        height: height)
-}
-
 /// Applies a video track's `preferredTransform` so width/height match the displayed frame.
 func videoDisplaySize(naturalSize: CGSize, transform: CGAffineTransform) -> CGSize {
     let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)

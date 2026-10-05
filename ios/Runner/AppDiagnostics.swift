@@ -109,10 +109,6 @@ struct DiagnosticReportMetadata: Equatable, Sendable {
             operatingSystem: "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
         )
     }
-
-    var platformSummary: String {
-        "OpenZCine \(appVersion) (build \(buildNumber)), \(deviceClass), \(operatingSystem)"
-    }
 }
 
 enum DiagnosticReportError: LocalizedError {
@@ -1286,11 +1282,6 @@ final class BugReportFormModel {
 
     func removeScreenshot(id: UUID) {
         screenshots.removeAll { $0.id == id }
-        attachmentErrorMessage = nil
-    }
-
-    func clearScreenshots() {
-        screenshots.removeAll()
         attachmentErrorMessage = nil
     }
 

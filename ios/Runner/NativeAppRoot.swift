@@ -271,13 +271,6 @@ enum PreferencesStore {
     private static let movablePanelPositionsKey = "movablePanelPositions.v1"
     private static let proactiveWiFiJoinUserDeniedAtKey = "proactiveWiFiJoinUserDeniedAt.v1"
 
-    /// When the operator last denied the system camera Wi‑Fi join sheet.
-    static func loadProactiveWiFiJoinUserDeniedAt() -> Date? {
-        let interval = UserDefaults.standard.double(forKey: proactiveWiFiJoinUserDeniedAtKey)
-        guard interval > 0 else { return nil }
-        return Date(timeIntervalSince1970: interval)
-    }
-
     static func saveProactiveWiFiJoinUserDeniedAt(_ date: Date) {
         UserDefaults.standard.set(
             date.timeIntervalSince1970, forKey: proactiveWiFiJoinUserDeniedAtKey)
@@ -559,9 +552,6 @@ final class NativeAppModel {
             }
         }
 
-        /// Title of the card this path appears on.
-        var cardTitle: String { FirstPairCard.card(for: self).title }
-
         /// Short label for the nested option pills inside the Cable Link card.
         var optionTitle: String {
             switch self {
@@ -663,8 +653,6 @@ final class NativeAppModel {
             case .discoverAndPair: "Find and pair"
             }
         }
-
-        var stepNumber: Int { rawValue + 1 }
 
         static var stepCount: Int { allCases.count }
 
@@ -2868,15 +2856,6 @@ final class NativeAppModel {
             .contains { $0.host == host }
     }
 
-    var selectedDiscoveredCamera: DiscoveredCamera? {
-        if let selectedDiscoveredCameraID,
-            let selected = discoveredCameras.first(where: { $0.id == selectedDiscoveredCameraID })
-        {
-            return selected
-        }
-        return discoveredCameras.first
-    }
-
     var selectedPairingDiscoveryCamera: DiscoveredCamera? {
         let candidates = pairingDiscoveryCandidates
         if let selectedDiscoveredCameraID,
@@ -3421,12 +3400,6 @@ final class NativeAppModel {
         startRelayBrowsing()
     }
 
-    /// Skips informational wizard steps and opens camera discovery.
-    func skipToFirstPairDiscovery() {
-        guard shouldShowFirstPairWizard else { return }
-        enterFirstPairDiscoveryStep()
-    }
-
     private func enterFirstPairDiscoveryStep() {
         firstPairWizardStep = .discoverAndPair
         discoveryTransportFilter = firstPairTransportMethod.isCableLink ? .usbC : .wiFi
@@ -3621,11 +3594,6 @@ final class NativeAppModel {
         connectionFailureDetail = ""
         connectionPhase = .handshaking
         isConnectionProgressPresented = true
-    }
-
-    func showPairingHelp() {
-        connectionMessage =
-            "On the camera, open the network menu and turn on Connect to PC. When your camera appears below, tap it and follow the prompts on both screens."
     }
 
     /// True while a connection is being established — single-flights `connectToCamera` so overlapping
@@ -4235,12 +4203,6 @@ final class NativeAppModel {
         _ = knownMatchedHost
         _ = host
         return StartupConnectionCopy.friendly(baseError, path: connectionProgressPathKind)
-    }
-
-    func forgetPairingForCurrentHost() {
-        let host = cameraHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty else { return }
-        forgetPairing(host: host)
     }
 
     func forgetPairing(host: String) {
@@ -6177,14 +6139,6 @@ final class NativeAppModel {
         }
     }
 
-    private func preferredJoinCameraWiFiSSID() -> String? {
-        guard let camera = preferredJoinCameraWiFiSavedCamera() else { return nil }
-        return CameraWiFiJoinPolicy.resolvedSSID(
-            savedCamera: camera,
-            discoveredCamera: nil
-        )
-    }
-
     private func performWiFiJoinIfNeeded(
         transportKind: CameraTransportKind,
         savedCamera: PTPIPSavedCameraRecord?,
@@ -6703,23 +6657,6 @@ final class NativeAppModel {
         pendingPairingSaveCandidate = PendingPairingSaveCandidate(
             host: candidate.host, displayName: name, transport: candidate.transport,
             serialNumber: candidate.serialNumber)
-    }
-
-    private func confirmPairing(_ challenge: PTPIPPairingChallenge) async -> Bool {
-        adoptPairingChallengeName(challenge)
-        return await withCheckedContinuation { continuation in
-            pairingContinuation?.resume(returning: false)
-            pairingContinuation = continuation
-            pendingPairingChallenge = challenge
-            connection = .pairing(pin: challenge.pin ?? "VERIFY")
-            connectionPhase = .pairing
-            if let pin = challenge.pin {
-                connectionMessage = "Confirm code \(pin) on the camera, then tap Pair here."
-            } else {
-                connectionMessage = "Confirm the pairing request on the camera, then tap Pair here."
-            }
-            logConnection("pairing alert shown")
-        }
     }
 
     private func finishPairing(accepted: Bool) {
@@ -7369,15 +7306,6 @@ final class NativeAppModel {
         }
     }
 
-    /// How often the control pump runs its safe point.
-    ///
-    /// Deliberately a frame-like cadence rather than something faster: the safe point's internal
-    /// throttles (device-event polls every 4th call, the property round-robin's poll stride) are
-    /// written against a per-frame counter, so ticking at roughly the live-view rate reproduces
-    /// exactly the command pattern the camera saw before — minus the JPEG pulls, which is the
-    /// whole point of moving the picture off the camera.
-    private static let controlPumpInterval: Duration = .milliseconds(40)
-
     /// Services camera control when the camera's own frame loop isn't running.
     ///
     /// The frame loop's per-frame safe point (`runControlSafePoint`) is the ONLY place queued
@@ -7486,12 +7414,6 @@ final class NativeAppModel {
     private var streamsHeaderOnly: Bool {
         MonitorChromePolicy.streamsHeaderOnly(in: displayMode) && !activePanelHidesLiveFeed
     }
-
-    /// How long the loop waits between header-only pulls in Command mode — the same cadence the
-    /// mode's property polling already ran at, so the dashboard's transaction load is unchanged
-    /// apart from one small image fetch per tick. The camera keeps encoding at its own rate either
-    /// way: our pull rate does not change camera heat, the frame *size* does.
-    private static let commandHeaderPullInterval: Duration = .milliseconds(250)
 
     /// The `LiveViewImageSize` byte to request right now: the operator's preset, capped smaller when
     /// the phone is thermally stressed, the camera reports an overheat warning, or a take is in
@@ -7862,19 +7784,6 @@ final class NativeAppModel {
 
     private func formattedSeconds(_ seconds: Double) -> String {
         seconds >= 1 ? "\(Int(seconds))s" : "\(Int(seconds * 1000))ms"
-    }
-
-    private func runLiveViewControlSafePoint(
-        session: NativeCameraSession,
-        frameCounter: Int
-    ) async {
-        await runControlSafePoint(
-            session: session, pollEveryCall: false, frameCounter: frameCounter)
-    }
-
-    /// Services queued writes and property polls while live view is paused in command mode.
-    private func runCommandModeSafePoint(session: NativeCameraSession) async {
-        await runControlSafePoint(session: session, pollEveryCall: true)
     }
 
     /// Shared safe point for live-view frames and command-mode maintenance.
@@ -9700,21 +9609,6 @@ final class NativeAppModel {
             coordinateWidth: coordinateWidth,
             coordinateHeight: coordinateHeight
         )
-    }
-
-    /// True when `location` (feed space) lands on the camera's current AF / subject box, with a
-    /// touch-friendly margin — the gate for the double-tap-to-reset gesture.
-    func isLocationOnFocusBox(_ location: CGPoint, feedSize: CGSize) -> Bool {
-        guard let focus = liveViewFocus, feedSize.width > 0, feedSize.height > 0 else {
-            return false
-        }
-        return focus.boxIndex(
-            containingX: Double(location.x),
-            y: Double(location.y),
-            feedWidth: Double(feedSize.width),
-            feedHeight: Double(feedSize.height),
-            padding: 22
-        ) != nil
     }
 
     /// Applies an AF point at the given camera-space coordinate: in the demo it drops the on-screen
@@ -12402,16 +12296,6 @@ final class NativeAppModel {
         preferences.toggleChrome(section, for: mode, capture: capture ?? captureLayoutMode)
     }
 
-    func cycleStreamPreset() {
-        preferences.streamPreset = preferences.streamPreset.next
-        restartLiveViewForQualityChange()
-    }
-
-    func cycleQualityBias() {
-        preferences.qualityBias = preferences.qualityBias.next
-        restartLiveViewForQualityChange()
-    }
-
     func setStreamPreset(_ preset: OperatorPreferences.StreamPreset) {
         guard preferences.streamPreset != preset else { return }
         preferences.streamPreset = preset
@@ -13631,13 +13515,6 @@ extension NativeAppModel {
         mediaClipStore.listAllCachedClips().contains { isClipDownloaded($0) }
     }
 
-    /// Clips in the active browser source bucket before chip/tab filters.
-    var mediaBrowserSourceClips: [MediaClip] {
-        mediaClips
-    }
-
-    /// The category and chip options come from the same captured neutral projection pass.
-    var mediaCategoryTabClips: [MediaClip] { mediaProjectionPass.categoryClips }
     var mediaFilterOptions: MediaFilterOptions { mediaProjectionPass.filterOptions }
     var filteredMediaClips: [MediaClip] {
         let pass = mediaProjectionPass
@@ -13659,28 +13536,11 @@ extension NativeAppModel {
         NikonAppGalleryProjection.rawSibling(of: clip, in: mediaClips)
     }
 
-    /// On-disk cache size for the active browser source bucket.
-    var mediaBrowserCacheByteCount: UInt64 {
-        let bucket =
-            mediaBrowserSource == .camera ? mediaBucketID : MediaClipStore.localBucketID
-        return mediaClipStore.cachedByteCount(cameraID: bucket)
-    }
-
     /// Short transport label for the Media browser status readout.
     var mediaBrowserTransportLabel: String {
         if isDemoSession { return "DEMO" }
         guard isConnected else { return "OFFLINE" }
         return "WIFI"
-    }
-
-    /// Storage fragment for the status line (card free space or iPhone cache size).
-    var mediaBrowserStorageStatusLabel: String {
-        if mediaBrowserSource == .camera, let status = cameraState.mediaStatus {
-            return "\(status.gigabytesFree) GB"
-        }
-        let freeAcrossSlots = mediaStorageSlots.reduce(0) { $0 + $1.freeGigabytes }
-        if freeAcrossSlots > 0 { return "\(freeAcrossSlots) GB" }
-        return MediaClipFormatting.byteLabel(mediaBrowserCacheByteCount)
     }
 
     /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.
@@ -13828,31 +13688,6 @@ extension NativeAppModel {
         }
         refreshMediaClips()
         if mediaBrowserSource == .camera, cameraSession != nil {
-            scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
-        }
-    }
-
-    /// Clears on-disk clip cache for the active Media browser source bucket. Cancels any in-flight
-    /// stream first; `index.json` metadata (favorites, handles, Frame.io/export flags) is preserved.
-    func clearMediaCache() {
-        mediaActionStoreGeneration &+= 1
-        cancelClipStream()
-        // An in-flight enumeration would repopulate the freshly cleared index from its own
-        // older snapshot; the generation bump makes its late writes fall on the floor.
-        mediaProducer?.service.cancelCatalog()
-        mediaLibrary?.close()
-        mediaLibraryBytes?.retire()
-        mediaDownloadProgress.removeAll()
-
-        let clearingCameraBucket = mediaBrowserSource == .camera
-        let bucket = clearingCameraBucket ? mediaBucketID : MediaClipStore.localBucketID
-        // A camera bucket's index is CACHE — the camera re-enumerates the truth. Preserving it
-        // is what kept a formatted card's ghosts alive through every clear (#296). The local
-        // library keeps its index: there is no camera to rebuild it from.
-        mediaClipStore.clearCache(cameraID: bucket, preservingIndex: !clearingCameraBucket)
-        refreshMediaClips()
-        // Connected and looking at the camera → rebuild authoritatively right away.
-        if clearingCameraBucket, cameraSession != nil {
             scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
         }
     }

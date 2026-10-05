@@ -141,7 +141,6 @@ final class MediaDeliveryCoordinator {
     var overlayState: MediaDeliveryOverlayState? { lifetime.state.progress?.overlay }
     var currentClipFilename: String? { lifetime.state.progress?.filename }
     var completionToast: String? { lifetime.state.toast }
-    var shareStagingCleanupURL: URL? { lifetime.state.share?.payload.cleanupURL }
     var isActive: Bool { overlayState != nil }
     var showsLocalOverlay: Bool { lifetime.state.showsLocalOverlay }
     var showsGlobalChrome: Bool { isActive && !showsLocalOverlay }
@@ -202,7 +201,6 @@ final class MediaDeliveryCoordinator {
     func cancel() { withAnimation(.spring(duration: 0.32)) { lifetime.cancel() } }
     /// The app root owns this lifetime; temporary gallery covers do not close it.
     func close() { lifetime.close() }
-    func dismissCompletionToast() { lifetime.dismissToast() }
     func clearSharePresentation(id: UUID? = nil) { lifetime.clearSharePresentation(id: id) }
     @discardableResult func completeSharePresentation(id: UUID) -> Bool {
         lifetime.completeSharePresentation(id: id)
