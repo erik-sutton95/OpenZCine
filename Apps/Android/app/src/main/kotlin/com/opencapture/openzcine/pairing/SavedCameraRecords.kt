@@ -540,58 +540,6 @@ public object SavedCameraRecords {
     private fun normalizedTag(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)
 }
 
-/**
- * Groups per-setup records of the SAME physical body for presentation — the Android twin of the
- * shared core's `SavedCameraPathGroups`. iOS keys on the body serial; Android records carry no
- * serial, so identity is the ASSIGNED camera name (`cameraNamesMatch`): a generic or placeholder
- * name carries no identity and stays a singleton row, exactly like an iOS record that predates
- * the serial stamp. Grouping is presentation-only — records stay one-per-setup on disk.
- */
-public object SavedCameraGroups {
-    /** Same-camera groups, members most-recently-seen first; group order follows first sight. */
-    public fun group(records: List<SavedCameraRecord>): List<List<SavedCameraRecord>> {
-        val groups = mutableListOf<MutableList<SavedCameraRecord>>()
-        for (record in records) {
-            val existing =
-                groups.firstOrNull { group ->
-                    SavedCameraRecords.cameraNamesMatch(group[0].cameraName, record.cameraName)
-                }
-            if (existing == null) {
-                groups += mutableListOf(record)
-            } else {
-                existing += record
-            }
-        }
-        return groups.map { group ->
-            group.sortedByDescending { it.lastSeenAtEpochMillis ?: Long.MIN_VALUE }
-        }
-    }
-
-    /**
-     * The row's title: the camera's own name, then the operator's — "Nikon ZR · A-cam".
-     *
-     * A nickname REPLACING the reported name throws away the one thing that says which body this
-     * is once two of them are named for their job ("A-cam", "B-cam"); iOS keeps both
-     * (`StartupCameraListRow.title`). Any setup's custom name titles the whole group, so a rename
-     * made on the hotspot setup does not vanish when the cable one is active.
-     */
-    public fun rowTitle(group: List<SavedCameraRecord>): String {
-        val base = group.first().cameraName
-        val custom =
-            group.firstNotNullOfOrNull { it.customName?.trim()?.takeIf(String::isNotEmpty) }
-        return if (custom == null || custom == base) base else "$base · $custom"
-    }
-
-    /**
-     * The setup whose record drives the group's row: a discovered/attached one beats an offline
-     * one; ties go to the most recently seen (the group's own order).
-     */
-    public fun activeRecord(
-        group: List<SavedCameraRecord>,
-        isDiscovered: (SavedCameraRecord) -> Boolean,
-    ): SavedCameraRecord = group.firstOrNull(isDiscovered) ?: group.first()
-}
-
 /** Reads and writes saved camera profiles. */
 public interface SavedCameraStore {
     /** Returns the canonical saved-profile list. */

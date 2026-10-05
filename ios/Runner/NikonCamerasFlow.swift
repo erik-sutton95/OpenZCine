@@ -171,7 +171,7 @@ final class NativeNikonPort: NikonConnectPort {
         guard pending != nil else { return }
         if let connection = model.sharedConnection {
             model.connectionProgressUsesCard = false
-            model.isPairingNearby = false
+            model.shell.endPairing()
             finish(.success(connection))
             return
         }
@@ -222,89 +222,6 @@ final class NativeNikonPort: NikonConnectPort {
                     message:
                         "The camera didn't answer in time. Check it is on and on this network, then try again."
                 )))
-    }
-}
-
-/// The shared cameras page with this app's NEARBY rows (feeds other devices share, the filtered
-/// network notice), its add-setup sheet and its take-over prompt.
-struct NikonCamerasPage: View {
-    @Environment(NativeAppModel.self) private var model
-    @Environment(\.openURL) private var openURL
-    let safeArea: EdgeInsets
-
-    static let relayPrefix = "relay:"
-    static let filterNoticeID = "notice:filter"
-
-    var body: some View {
-        CamerasScreen(
-            model: model.cameras, brandName: "OpenZCine", nearbyNote: "on this network",
-            safeArea: safeArea,
-            onPair: {
-                // A NEARBY camera's Pair picks it on the shared pair page; "Pair a new camera"
-                // walks the wizard.
-                if model.cameras.selection != nil {
-                    model.isPairingNearby = true
-                } else {
-                    model.startFirstPairWizard()
-                }
-            },
-            onMedia: { model.openCachedMediaLibrary() },
-            onSettings: { model.openStandaloneSettings() },
-            onMultiview: MulticamCoordinator.tileCount > 1 ? { model.beginMulticam() } : nil,
-            onIntegrationAction: { cameraID, action in
-                if action == NativeNikonPort.takeOverAction,
-                    case .saved(let camera, let routeID) = model.cameras.failures[cameraID]?.target,
-                    let host = camera.routes.first(where: { $0.id == routeID })?.extras[
-                        NikonSavedRecordsV0.Extra.host]
-                {
-                    model.nikonPort.allowTakeOver(host: host)
-                    _ = model.cameras.perform(.retry, for: cameraID)
-                    return
-                }
-                if action == NativeNikonPort.diagnosticsAction { model.shareDiagnostics() }
-            },
-            extraNearby: extraNearby,
-            onExtraNearby: { id in
-                guard
-                    let broadcast = model.visibleRelayBroadcasts.first(where: {
-                        Self.relayPrefix + $0.id == id
-                    })
-                else { return }
-                model.joinRelay(broadcast)
-            },
-            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
-            onTerms: { openURL(SupportLinkCatalog.terms) }
-        )
-        .onAppear {
-            model.cameras.sessionEnded()
-            model.cameras.reloadSaved()
-            model.nikonPort.found(model.discoveredCameras)
-        }
-    }
-
-    /// The filtered-network notice when proven, then the broadcasts another device shares.
-    private var extraNearby: [CameraListItem] {
-        var items: [CameraListItem] = []
-        if model.networkFiltersDiscovery {
-            items.append(
-                CameraListItem(
-                    id: Self.filterNoticeID, name: "This network",
-                    subtitle: "Cameras below were found directly",
-                    status: "", actionTitle: "", isAvailable: false,
-                    failure: CameraConnectFailure(
-                        title: "Discovery is filtered",
-                        message:
-                            "This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router.",
-                        actions: [])))
-        }
-        for broadcast in model.visibleRelayBroadcasts {
-            items.append(
-                CameraListItem(
-                    id: Self.relayPrefix + broadcast.id, name: broadcast.name,
-                    subtitle: "Live feed from another device",
-                    badge: "LIVE", status: "Watch this device's feed", actionTitle: "Watch"))
-        }
-        return items
     }
 }
 
@@ -556,7 +473,9 @@ extension NativeAppModel {
         _ = NativeCameraConnectionStore.shared
         let cameras = CamerasModel(
             integrations: [AppIntegration(NikonIntegration(port: nikonPort), slots: slots)],
-            store: NikonCameras.store { [weak self] in self?.reloadSavedCameraRecords() })
+            store: NikonCameras.store { [weak self] in self?.reloadSavedCameraRecords() },
+            // A reachable setup beats a newer offline one (Nikon main's row rule).
+            routePolicy: .preferReachable)
         NativeCameraConnectionStore.shared.onSavedCamerasChanged = { [weak cameras] in
             cameras?.reloadSaved()
         }
