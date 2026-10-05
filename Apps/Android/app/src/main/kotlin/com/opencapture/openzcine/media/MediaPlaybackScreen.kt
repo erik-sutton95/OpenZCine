@@ -1094,7 +1094,6 @@ private fun rememberNikonNativePlayback(
                 geometry.feed.width / density, geometry.feed.height / density)
             val analysisViewport = ZoneFrame(context.analysis.x / density, context.analysis.y / density,
                 context.analysis.width / density, context.analysis.height / density)
-            val playbackInfoBar = ZoneFrame(0f, 0f, geometry.canvasWidth / density, context.analysis.y / density)
         if (framingAssistsVisible) {
             LocalFramingAssistOverlay(
                 configuration = playbackFramingConfiguration,
@@ -1121,8 +1120,6 @@ private fun rememberNikonNativePlayback(
                 currentFrameKey = { player.currentPosition },
                 cleanFrameSource =
                     playbackScopeFrameSource.takeIf { fallbackDisplayAssistsActive },
-                feed = feedFrame,
-                infoBar = playbackInfoBar,
                 viewport = analysisViewport,
             )
         }

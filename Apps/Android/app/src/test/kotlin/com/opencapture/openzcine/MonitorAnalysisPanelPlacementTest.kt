@@ -4,7 +4,7 @@ import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.bridge.ZoneStyle
 import com.opencapture.monitorui.MonitorAssistTool
-import com.opencapture.monitorui.MonitorScopePanelMath
+import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.test.Test
@@ -190,20 +190,7 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
-    fun `scope body reserves the exterior resize target inside safe bounds`() {
-        val layout =
-            MonitorAnalysisPanelLayout(
-                viewport = ZoneFrame(0f, 0f, 400f, 300f),
-                safeBounds = ZoneFrame(40f, 30f, 320f, 240f),
-            )
-
-        val scopeLayout = layout.withScopeGripClearance()
-
-        assertEquals(ZoneFrame(40f, 30f, 278f, 198f), scopeLayout.safeBounds)
-    }
-
-    @Test
-    fun `landscape defaults preserve legacy anchors then clamp once to control safe bounds`() {
+    fun `landscape false colour default preserves its legacy anchor then clamps once`() {
         val zones = landscapeZones()
         val layout =
             requireNotNull(
@@ -215,19 +202,8 @@ class MonitorAnalysisPanelPlacementTest {
                     statusBarVisible = true,
                     chromeMounts = LANDSCAPE_LIVE_CHROME,
                 ),
-            ).withScopeGripClearance()
+            )
 
-        assertEquals(
-            // Taller free-roam safeBounds (no top/bottom chrome carve) still
-            // use control-safe default anchors, then clamp once for the grip.
-            ZoneFrame(476f, 234f, 250f, 77f),
-            controlSafeScopeDefaultFrame(
-                ScopeKind.HISTOGRAM,
-                zones.feed,
-                zones.infoBar,
-                layout,
-            ),
-        )
         assertEquals(
             ZoneFrame(64f, 259f, 264f, 52f),
             controlSafeFalseColorReferenceDefaultFrame(
@@ -238,7 +214,7 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
-    fun `portrait fill defaults preserve legacy anchors then clamp once to safe bounds`() {
+    fun `portrait fill false colour default preserves its legacy anchor then clamps once`() {
         val zones = portraitZones()
         val panelLayout =
             requireNotNull(
@@ -253,15 +229,6 @@ class MonitorAnalysisPanelPlacementTest {
             )
 
         assertEquals(
-            ZoneFrame(108f, 483f, 250f, 77f),
-            controlSafeScopeDefaultFrame(
-                ScopeKind.HISTOGRAM,
-                zones.feed,
-                zones.infoBar,
-                panelLayout.withScopeGripClearance(),
-            ),
-        )
-        assertEquals(
             ZoneFrame(136f, 540f, 264f, 52f),
             controlSafeFalseColorReferenceDefaultFrame(
                 feed = zones.feed,
@@ -269,89 +236,6 @@ class MonitorAnalysisPanelPlacementTest {
                 horizontalFraction = 1f,
             ),
         )
-    }
-
-    @Test
-    fun `every scope family fits uniformly at min and max then restores its requested scale`() {
-        val landscapeZones = landscapeZones()
-        val portraitZones = portraitZones()
-        val layouts =
-            listOf(
-                Triple(
-                    landscapeZones.feed,
-                    landscapeZones.infoBar,
-                    requireNotNull(
-                        monitorAnalysisPanelLayout(
-                            zones = landscapeZones,
-                            physicalViewport = LANDSCAPE_VIEWPORT,
-                            isPortrait = false,
-                            isPortraitFill = false,
-                            statusBarVisible = true,
-                            chromeMounts = LANDSCAPE_LIVE_CHROME,
-                        ),
-                    ).withScopeGripClearance(),
-                ),
-                Triple(
-                    portraitZones.feed,
-                    portraitZones.infoBar,
-                    requireNotNull(
-                        monitorAnalysisPanelLayout(
-                            zones = portraitZones,
-                            physicalViewport = PORTRAIT_VIEWPORT,
-                            isPortrait = true,
-                            isPortraitFill = true,
-                            statusBarVisible = true,
-                            chromeMounts = PORTRAIT_FILL_CHROME,
-                        ),
-                    ).withScopeGripClearance(),
-                ),
-            )
-        val roomy =
-            MonitorAnalysisPanelLayout(
-                viewport = ZoneFrame(0f, 0f, 1_200f, 900f),
-                safeBounds = ZoneFrame(0f, 0f, 1_200f, 900f),
-            )
-
-        layouts.forEach { (feed, infoBar, layout) ->
-            ScopeKind.entries.forEach { kind ->
-                listOf(
-                    MonitorScopePanelMath.SCALE_MIN.toFloat(),
-                    MonitorScopePanelMath.SCALE_MAX.toFloat(),
-                ).forEach { requestedScale ->
-                    val configuration = configurationAtScale(requestedScale)
-                    val frame =
-                        controlSafeScopeDefaultFrame(
-                            kind = kind,
-                            feed = feed,
-                            infoBar = infoBar,
-                            layout = layout,
-                            assist = configuration,
-                        )
-                    val (baseWidth, baseHeight) = scopePanelBaseSize(kind)
-                    val expectedScale =
-                        scopePresentationScale(kind, requestedScale, layout.safeBounds)
-
-                    assertEquals(baseWidth * expectedScale, frame.width, 0.001f)
-                    assertEquals(baseHeight * expectedScale, frame.height, 0.001f)
-                    assertEquals(baseWidth * frame.height, baseHeight * frame.width, 0.01f)
-                    assertTrue(frame.x >= layout.safeBounds.x)
-                    assertTrue(frame.y >= layout.safeBounds.y)
-                    assertTrue(frame.x + frame.width <= layout.safeBounds.x + layout.safeBounds.width)
-                    assertTrue(frame.y + frame.height <= layout.safeBounds.y + layout.safeBounds.height)
-
-                    val restored =
-                        controlSafeScopeDefaultFrame(
-                            kind = kind,
-                            feed = feed,
-                            infoBar = infoBar,
-                            layout = roomy,
-                            assist = configuration,
-                        )
-                    assertEquals(baseWidth * requestedScale, restored.width, 0.001f)
-                    assertEquals(baseHeight * requestedScale, restored.height, 0.001f)
-                }
-            }
-        }
     }
 
     @Test
@@ -615,6 +499,49 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
+    fun `scope centres move once into the shared assist state and the false colour key stays`() {
+        val current = TestSharedPreferences()
+        val legacyScopes = TestSharedPreferences()
+        current.edit()
+            .putInt("schema", 2)
+            .putFloat("wave.centerX.v2", 0.25f)
+            .putFloat("wave.centerY.v2", 0.75f)
+            .putFloat("histo.centerX.v2", 0.875f)
+            .putFloat("histo.centerY.v2", 0.125f)
+            .putFloat("fcref.centerX.v2", 0.5f)
+            .putFloat("fcref.centerY.v2", 0.25f)
+            .apply()
+        legacyScopes.edit()
+            .putFloat("lights.centerX", 0.125f)
+            .putFloat("lights.centerY", 0.625f)
+            .apply()
+        val store = MonitorAnalysisPanelPlacementStore(current, legacyScopes, TestSharedPreferences())
+        val assist =
+            MonitorAssistState().apply {
+                storeCenter(MonitorAssistTool.HISTO, MonitorScopeStoredCenter(0.5, 0.5))
+            }
+
+        store.moveScopeCentres(into = assist)
+
+        assertEquals(MonitorScopeStoredCenter(0.25, 0.75), assist.centerFor(MonitorAssistTool.WAVE, portrait = false))
+        assertNull(assist.centerFor(MonitorAssistTool.WAVE, portrait = true))
+        assertEquals(MonitorScopeStoredCenter(0.125, 0.625), assist.centerFor(MonitorAssistTool.LIGHTS, portrait = false))
+        // A centre the shared state already holds wins.
+        assertEquals(MonitorScopeStoredCenter(0.5, 0.5), assist.centerFor(MonitorAssistTool.HISTO, portrait = false))
+        ScopeKind.entries.forEach { assertNull(store.storedCenter(it.monitorAnalysisPanelID())) }
+        assertFalse(legacyScopes.contains("lights.centerX"))
+        assertEquals(
+            NormalizedPanelCenter(0.5f, 0.25f),
+            store.storedCenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE),
+        )
+
+        // A later launch finds nothing left to move.
+        assist.storeCenter(MonitorAssistTool.WAVE, MonitorScopeStoredCenter(0.375, 0.375))
+        store.moveScopeCentres(into = assist)
+        assertEquals(MonitorScopeStoredCenter(0.375, 0.375), assist.centerFor(MonitorAssistTool.WAVE, portrait = false))
+    }
+
+    @Test
     fun `focus reset base frame preserves landscape and portrait feed corners`() {
         assertEquals(
             ZoneFrame(69f, 271f, 40f, 40f),
@@ -713,11 +640,6 @@ class MonitorAnalysisPanelPlacementTest {
             scopes = null,
             controlsGrid = null,
         )
-
-    private fun configurationAtScale(scale: Float): MonitorAssistState =
-        MonitorAssistState().apply {
-            ScopeKind.entries.forEach { setScale(it.assistTool, scale.toDouble()) }
-        }
 
     private fun testLayout(): MonitorAnalysisPanelLayout =
         MonitorAnalysisPanelLayout(

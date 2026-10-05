@@ -194,7 +194,10 @@ private const val LUT_CATEGORY_KEY = "lut.selection.category.v1"
 private const val LUT_FILE_KEY = "lut.selection.file.v1"
 private const val LUT_STORED = "stored"
 
-/** Restores the operator's assists. A debug selection seeds the session without saving. */
+/**
+ * Restores the operator's assists. A debug selection seeds the session without saving. Scope
+ * centres an older build saved in the Nikon placement store move into the shared state once.
+ */
 internal fun restoreNikonAssists(
     context: Context,
     debugEffects: FeedEffects? = null,
@@ -206,7 +209,7 @@ internal fun restoreNikonAssists(
         context.getSharedPreferences(OPERATOR_PREFERENCES, Context.MODE_PRIVATE),
         context.getSharedPreferences(PLAYBACK_PREFERENCES, Context.MODE_PRIVATE),
         debugEffects, debugScopes, availableStoredLut,
-    )
+    ).also { MonitorAnalysisPanelPlacementStore(context).moveScopeCentres(into = it.shared) }
 
 /** [restoreNikonAssists] over explicit stores, for JVM tests. */
 internal fun restoreNikonAssists(

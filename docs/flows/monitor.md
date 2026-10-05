@@ -209,12 +209,14 @@ flowchart TD
   `MonitorScopePanelStore`s, `NikonScopeOverlay`, `NikonScopePlot` on the camera's exposure axis),
   `MonitorOverlays.swift` (`FeedAssistOverlayModule`, `PlaybackAssistOverlayModule`,
   `FalseColorReference`), `GPUScopeSampler.swift`, `LiveFrameProcessor.refreshScopes`,
-  `ScopeAssistSampling`.
+  `ScopeAssistSampling`. Android: `ScopeView.kt` (`FloatingScopePanels` on the shared
+  `MonitorMovableScopePanel`, centres and sizes in the shared `MonitorAssistState`).
 - **Detail:** CPU path: `ScopeSampler` downsamples clean frame → bins/points at thermally throttled
   intervals. Opt-in `ZC_GPU_SCOPES=1`: GPU atomic histogram (`GPUScopeSampler`); waveform/parade
   scatter from `scopeScatterFrame` via Metal (`ScopeScatterView`). Traffic lights derived from
   shared sample bundle. The first launch on the shared stores copies the Nikon scope options, sizes
-  and landscape positions once.
+  and landscape positions once; Android moves its saved scope centres into the shared assist state
+  the same way. The shared panel has no recenter action.
   The reference key places IRE and Limits zones proportionally on the full 0–100 ruler with
   progressively lighter neutral-grey gaps; ZC Stops places sparse reference landmarks on its
   scene-stop ruler through the camera-aware maximum.

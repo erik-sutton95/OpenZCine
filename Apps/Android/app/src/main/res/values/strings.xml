@@ -546,8 +546,6 @@
     <string name="scope_title_vectorscope">VECTOR</string>
     <string name="scope_title_traffic_lights">TL</string>
     <string name="scope_panel_description">%1$s analysis panel, movable</string>
-    <string name="scope_panel_recenter">Recenter %1$s panel</string>
-    <string name="scope_panel_resize">Resize %1$s panel</string>
     <string name="scope_traffic_lights">Traffic Lights</string>
     <string name="scope_direction_balanced">balanced</string>
     <string name="scope_direction_over">over</string>

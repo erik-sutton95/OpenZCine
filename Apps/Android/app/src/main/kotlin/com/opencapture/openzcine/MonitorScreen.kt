@@ -2789,12 +2789,8 @@ internal fun MonitorScreen(
                 source = monitorFrameSource,
                 isPortrait = isPortrait,
                 portraitFloating = isPortraitFill,
-                feed = zones.feed,
-                infoBar = zones.infoBar,
                 scopeZone = zones.scopes,
                 panelLayout = analysisPanelLayout,
-                placementStore = analysisPanelPlacementStore,
-                placementRevision = analysisPanelPlacementRevision,
                 hapticsEnabled = operatorSettings.hapticsEnabled.value,
                 onPanelFrameChanged = onAnalysisPanelFrameChanged,
             )

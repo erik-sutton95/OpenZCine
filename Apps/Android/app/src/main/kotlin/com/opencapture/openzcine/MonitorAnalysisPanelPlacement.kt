@@ -2,6 +2,8 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.opencapture.monitorui.MonitorScopeStoredCenter
+import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.settings.SideRailPlan
@@ -513,6 +515,27 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
         internal const val LEGACY_FALSE_COLOR_STORE_NAME = "falseColorReferencePlacement"
         internal const val SCHEMA_KEY = "schema"
         internal const val SCHEMA_VERSION = 2
+    }
+}
+
+/**
+ * Moves the scope centres this store saved into the shared assist state once, then clears them
+ * here, so a later launch finds nothing to move. They were saved on the landscape canvas, so they
+ * fill the landscape slot, and a centre the shared state already holds wins. The false-colour key
+ * keeps this store.
+ */
+internal fun MonitorAnalysisPanelPlacementStore.moveScopeCentres(into: MonitorAssistState) {
+    ScopeKind.entries.forEach { kind ->
+        val id = kind.monitorAnalysisPanelID()
+        val stored = storedCenter(id) ?: return@forEach
+        if (into.centerFor(kind.assistTool, portrait = false) == null) {
+            into.storeCenter(
+                kind.assistTool,
+                MonitorScopeStoredCenter(stored.xFraction.toDouble(), stored.yFraction.toDouble()),
+                portrait = false,
+            )
+        }
+        recenter(id)
     }
 }
 

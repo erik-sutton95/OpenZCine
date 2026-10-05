@@ -1,50 +1,43 @@
 package com.opencapture.openzcine
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.TextureView
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import com.opencapture.monitorui.MonitorHistogramScopePlot
 import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.MonitorMovableScopePanel
 import com.opencapture.monitorui.MonitorParadeScopePlot
-import com.opencapture.monitorui.MonitorScopePanelMath
+import com.opencapture.monitorui.MonitorScopePanelSize
+import com.opencapture.monitorui.MonitorScopePoint
+import com.opencapture.monitorui.MonitorScopeRect
+import com.opencapture.monitorui.MonitorScopeSize
 import com.opencapture.monitorui.MonitorTrafficLightsGeometry
 import com.opencapture.monitorui.MonitorTrafficLightsMeter
 import com.opencapture.monitorui.MonitorVectorscopeScopePlot
@@ -95,21 +88,6 @@ private const val LEVEL_AXIS_BINS = 256
 
 /** Built-in vectorscope look size, as the feed's baked built-in LUTs. */
 private const val VECTOR_LUT_SIZE = 33
-
-/** Matches iOS's fixed 14pt bottom inset below its 58pt monitor control band. */
-private const val LANDSCAPE_SCOPE_BOTTOM_CHROME_CLEARANCE = 14f + LiveDesign.CONTROL_HEIGHT_DP
-
-/** iOS `feedOutsideCenter` gap between a floating panel and its cleared edge. */
-private const val SCOPE_PANEL_EDGE_GAP = 10f
-
-/** iOS exterior grip geometry: 14dp bracket in a 56dp operator touch target. */
-private const val SCOPE_RESIZE_GRIP_VISUAL_SIZE = 14f
-private const val SCOPE_RESIZE_GRIP_HIT_SIZE = 56f
-private const val SCOPE_RESIZE_GRIP_EXTERIOR_GAP = 2f
-private const val SCOPE_RESIZE_GRIP_PAD =
-    SCOPE_RESIZE_GRIP_HIT_SIZE - SCOPE_RESIZE_GRIP_VISUAL_SIZE
-
-private const val PLAYBACK_SCOPE_PLACEMENT_STORE = "playbackScopePanelPlacement"
 
 /** Android mirror of iOS's canonical scope-tool order. */
 enum class ScopeKind(val token: String) {
@@ -235,50 +213,6 @@ fun portraitDisplayedScopes(selected: Set<ScopeKind>, activationOrder: List<Scop
     return ScopeKind.canonical.filter(chosen::contains)
 }
 
-/** One floating panel's default physical size, mirroring the iOS base footprints. */
-internal fun scopePanelBaseSize(kind: ScopeKind): Pair<Float, Float> =
-    when (kind) {
-        ScopeKind.WAVEFORM, ScopeKind.PARADE -> 250f to 153f
-        ScopeKind.HISTOGRAM -> 250f to 77f
-        ScopeKind.VECTORSCOPE -> 190f to 190f
-        ScopeKind.TRAFFIC_LIGHTS -> 74f to 168f
-    }
-
-/** One floating panel's current requested physical size. */
-fun scopePanelSize(
-    kind: ScopeKind,
-    assist: MonitorAssistState = MonitorAssistState(),
-): Pair<Float, Float> {
-    val (width, height) = scopePanelBaseSize(kind)
-    val scale = assist.scaleFor(kind)
-    return width * scale to height * scale
-}
-
-/** The shared panel scale range. */
-internal fun clampScopeScale(value: Float): Float = MonitorScopePanelMath.clampedScale(value.toDouble()).toFloat()
-
-/** Uniform layout-only scale cap; applying it never rewrites the operator's stored scale. */
-internal fun scopePresentationScale(
-    kind: ScopeKind,
-    requestedScale: Float,
-    bounds: ZoneFrame,
-): Float {
-    val (baseWidth, baseHeight) = scopePanelBaseSize(kind)
-    return scopePresentationScale(baseWidth, baseHeight, requestedScale, bounds)
-}
-
-private fun scopePresentationScale(
-    baseWidth: Float,
-    baseHeight: Float,
-    requestedScale: Float,
-    bounds: ZoneFrame,
-): Float =
-    minOf(
-        clampScopeScale(requestedScale),
-        bounds.width / baseWidth,
-        bounds.height / baseHeight,
-    ).coerceAtLeast(0f)
-
 /** Current persisted scale for one scope kind. */
 internal fun MonitorAssistState.scaleFor(kind: ScopeKind): Float =
     when (kind) {
@@ -288,52 +222,6 @@ internal fun MonitorAssistState.scaleFor(kind: ScopeKind): Float =
         ScopeKind.VECTORSCOPE -> vectorScale
         ScopeKind.TRAFFIC_LIGHTS -> lightsScale
     }.toFloat()
-
-/**
- * Default landscape frame for a floating panel. The anchors mirror iOS's
- * movable panels (wave top-leading, parade/vector top side, histogram
- * bottom-trailing, traffic lights bottom-leading) but give every Android
- * default a distinct initial location. Dragging can always refine a crowded
- * five-scope setup and persists a normalized centre across viewport changes.
- */
-fun floatingScopeFrame(
-    kind: ScopeKind,
-    feed: ZoneFrame,
-    infoBar: ZoneFrame,
-    viewport: ZoneFrame = feed,
-    assist: MonitorAssistState = MonitorAssistState(),
-): ZoneFrame {
-    val (width, height) = scopePanelSize(kind, assist)
-    return floatingScopeFrame(kind, feed, infoBar, viewport, width, height)
-}
-
-private fun floatingScopeFrame(
-    kind: ScopeKind,
-    feed: ZoneFrame,
-    infoBar: ZoneFrame,
-    viewport: ZoneFrame,
-    width: Float,
-    height: Float,
-): ZoneFrame {
-    val top = max(feed.y, infoBar.y + infoBar.height) + SCOPE_PANEL_EDGE_GAP
-    val bottomEdge =
-        min(
-            feed.y + feed.height,
-            viewport.y + viewport.height - LANDSCAPE_SCOPE_BOTTOM_CHROME_CLEARANCE,
-        )
-    val bottom = bottomEdge - SCOPE_PANEL_EDGE_GAP - height
-    val leading = feed.x + SCOPE_PANEL_EDGE_GAP
-    val trailing = feed.x + feed.width - width - SCOPE_PANEL_EDGE_GAP
-    val candidate =
-        when (kind) {
-            ScopeKind.WAVEFORM -> ZoneFrame(leading, top, width, height)
-            ScopeKind.PARADE -> ZoneFrame(trailing, top, width, height)
-            ScopeKind.VECTORSCOPE -> ZoneFrame(trailing, top, width, height)
-            ScopeKind.HISTOGRAM -> ZoneFrame(trailing, bottom, width, height)
-            ScopeKind.TRAFFIC_LIGHTS -> ZoneFrame(leading, bottom, width, height)
-        }
-    return clampScopeFrame(candidate, viewport)
-}
 
 /** Keeps a floating panel wholly inside the physical viewport's safe drawing bounds. */
 fun clampScopeFrame(frame: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
@@ -348,13 +236,6 @@ fun clampScopeFrame(frame: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
         height = height,
     )
 }
-
-/** Mirrors iOS `MovablePanel`'s four-point position grid. */
-internal fun snapScopeFrame(frame: ZoneFrame): ZoneFrame =
-    frame.copy(
-        x = (frame.x / 4f).roundToInt() * 4f,
-        y = (frame.y / 4f).roundToInt() * 4f,
-    )
 
 /** One immutable native registration request for the vectorscope monitor cube. */
 internal data class ScopeVectorLutRequest(
@@ -468,12 +349,8 @@ internal fun ScopePanels(
     source: LiveFrameSource,
     isPortrait: Boolean,
     portraitFloating: Boolean = false,
-    feed: ZoneFrame,
-    infoBar: ZoneFrame,
     scopeZone: ZoneFrame?,
     panelLayout: MonitorAnalysisPanelLayout?,
-    placementStore: MonitorAnalysisPanelPlacementStore,
-    placementRevision: Int,
     hapticsEnabled: Boolean,
     onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
 ) {
@@ -523,17 +400,11 @@ internal fun ScopePanels(
     } else {
         FloatingScopePanels(
             displayed,
-            feed,
-            infoBar,
             requireNotNull(panelLayout),
-            axis,
-            bundle,
             assist,
-            placementStore = placementStore,
-            placementRevision = placementRevision,
             hapticsEnabled = hapticsEnabled,
             onPanelFrameChanged = onPanelFrameChanged,
-        )
+        ) { kind, modifier -> ScopePanel(kind, axis, bundle, assist, modifier) }
     }
 }
 
@@ -556,8 +427,6 @@ internal fun PlaybackScopePanels(
     textureView: TextureView,
     currentFrameKey: () -> Long,
     cleanFrameSource: PlaybackScopeFrameSource?,
-    feed: ZoneFrame,
-    infoBar: ZoneFrame,
     viewport: ZoneFrame,
 ) {
     val displayed = ScopeKind.canonical.filter(selectedScopes::contains)
@@ -594,16 +463,12 @@ internal fun PlaybackScopePanels(
             }
         }
     }
+    val bundle = bus.publications.collectAsState().value.bundle
     FloatingScopePanels(
         displayed = displayed,
-        feed = feed,
-        infoBar = infoBar,
         panelLayout = MonitorAnalysisPanelLayout(viewport = viewport, safeBounds = viewport),
-        axis = axis,
-        bundle = bus.publications.collectAsState().value.bundle,
         assist = assist,
-        placementStoreName = PLAYBACK_SCOPE_PLACEMENT_STORE,
-    )
+    ) { kind, modifier -> ScopePanel(kind, axis, bundle, assist, modifier) }
 }
 
 /** Resolves stacked portrait-fit scopes versus uncapped floating fill/landscape scopes. */
@@ -653,65 +518,70 @@ private fun PortraitScopePanels(
     }
 }
 
-/** Renders draggable, normalized-persisted landscape panels at distinct iOS-informed defaults. */
+/**
+ * The shared Pocket / Insta movable scope panels over the shared assist state: direct drag,
+ * corner resize, hold for the tool's options, and a centre saved per orientation. An unplaced
+ * panel starts at the canvas centre, as on Pocket. Each panel reports its frame (monitor-zone dp)
+ * so the focus-reset button can climb above it.
+ */
 @Composable
-private fun FloatingScopePanels(
+internal fun FloatingScopePanels(
     displayed: List<ScopeKind>,
-    feed: ZoneFrame,
-    infoBar: ZoneFrame,
     panelLayout: MonitorAnalysisPanelLayout,
-    axis: ScopeLevelAxis,
-    bundle: ScopeAssistBundle,
     assist: MonitorAssistState,
-    placementStoreName: String = "scopePanelPlacement",
-    placementStore: MonitorAnalysisPanelPlacementStore? = null,
-    placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
     onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
+    content: @Composable (ScopeKind, Modifier) -> Unit,
 ) {
-    val context = LocalContext.current.applicationContext
-    val legacyStore =
-        remember(context, placementStoreName, placementStore) {
-            placementStore?.let { null } ?: ScopePanelPlacementStore(context, placementStoreName)
-        }
-    val scopeLayout =
-        if (placementStore != null) {
-            panelLayout.withScopeGripClearance()
-        } else {
-            panelLayout
-        }
-    Box(Modifier.fillMaxSize()) {
+    val density = LocalDensity.current.density
+    val view = LocalView.current
+    val canvas = panelLayout.viewport.scopeRect(density)
+    val bounds = panelLayout.safeBounds.scopeRect(density)
+    val portrait = canvas.height > canvas.width
+    val report by rememberUpdatedState(onPanelFrameChanged)
+    var origin by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    Box(Modifier.fillMaxSize().onGloballyPositioned { origin = it }) {
         displayed.forEach { kind ->
             key(kind) {
-                val default =
-                    controlSafeScopeDefaultFrame(
-                        kind = kind,
-                        feed = feed,
-                        infoBar = infoBar,
-                        layout = scopeLayout,
-                        assist = assist,
-                    )
-                val baseSize = scopePanelBaseSize(kind)
-                FloatingScopePanel(
-                    kind = kind,
-                    default = default,
-                    panelLayout = scopeLayout,
-                    scale = assist.scaleFor(kind),
-                    baseWidth = baseSize.first,
-                    baseHeight = baseSize.second,
-                    placementStore = placementStore,
-                    legacyStore = legacyStore,
-                    placementRevision = placementRevision,
-                    hapticsEnabled = hapticsEnabled,
-                    onPanelFrameChanged = onPanelFrameChanged,
-                    onScaleChange = { assist.setScale(kind.assistTool, it.toDouble()) },
-                ) { modifier ->
-                    ScopePanel(
-                        kind = kind,
-                        axis = axis,
-                        bundle = bundle,
-                        assist = assist,
-                        modifier = modifier,
+                val tool = kind.assistTool
+                val id = kind.monitorAnalysisPanelID()
+                val description = stringResource(R.string.scope_panel_description, scopeTitle(kind))
+                DisposableEffect(id) { onDispose { report(id, null) } }
+                MonitorMovableScopePanel(
+                    identity = kind.token,
+                    base = kind.panelBase,
+                    scale = assist.scaleFor(kind).toDouble(),
+                    stored = assist.centerFor(tool, portrait),
+                    canvas = canvas,
+                    placementBounds = bounds,
+                    defaultCenter = MonitorScopePoint(canvas.midX, canvas.midY),
+                    enabled = true,
+                    onStore = { assist.storeCenter(tool, it, portrait) },
+                    onScale = { assist.setScale(tool, it) },
+                    onOpenOptions = { assist.configureTool = tool },
+                    onConfirm = {
+                        if (hapticsEnabled) view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
+                    },
+                    // The scope plates draw their own material, as in the portrait stack.
+                    fillPlate = false,
+                ) { size ->
+                    content(
+                        kind,
+                        Modifier
+                            .size(size.width.dp, size.height.dp)
+                            .semantics { contentDescription = description }
+                            .onGloballyPositioned { coordinates ->
+                                val root = origin ?: return@onGloballyPositioned
+                                val at = root.localPositionOf(coordinates, Offset.Zero)
+                                report(
+                                    id,
+                                    ZoneFrame(
+                                        at.x / density, at.y / density,
+                                        coordinates.size.width / density,
+                                        coordinates.size.height / density,
+                                    ),
+                                )
+                            },
                     )
                 }
             }
@@ -719,300 +589,19 @@ private fun FloatingScopePanels(
     }
 }
 
-/** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
-internal fun controlSafeScopeDefaultFrame(
-    kind: ScopeKind,
-    feed: ZoneFrame,
-    infoBar: ZoneFrame,
-    layout: MonitorAnalysisPanelLayout,
-    assist: MonitorAssistState = MonitorAssistState(),
-): ZoneFrame =
-    scopePanelBaseSize(kind).let { (baseWidth, baseHeight) ->
-        val presentationScale =
-            scopePresentationScale(
-                kind = kind,
-                requestedScale = assist.scaleFor(kind),
-                bounds = layout.safeBounds,
-            )
-        clampScopeFrame(
-            floatingScopeFrame(
-                kind = kind,
-                feed = feed,
-                infoBar = infoBar,
-                viewport = layout.viewport,
-                width = baseWidth * presentationScale,
-                height = baseHeight * presentationScale,
-            ),
-            layout.safeBounds,
-        )
-    }
-
-/** Leaves the exterior resize target inside the control-clear presentation frame. */
-internal fun MonitorAnalysisPanelLayout.withScopeGripClearance(): MonitorAnalysisPanelLayout =
-    copy(
-        safeBounds =
-            safeBounds.copy(
-                width = max(0f, safeBounds.width - SCOPE_RESIZE_GRIP_PAD),
-                height = max(0f, safeBounds.height - SCOPE_RESIZE_GRIP_PAD),
-            ),
-    )
-
-/** Current Android equivalent of iOS's persisted movable panel centre. */
-internal class ScopePanelPlacementStore(context: Context, name: String) {
-    private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
-
-    fun resolve(kind: ScopeKind, default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
-        val xKey = "${kind.token}.centerX"
-        val yKey = "${kind.token}.centerY"
-        if (!preferences.contains(xKey) || !preferences.contains(yKey)) return default
-        val normalizedX = preferences.getFloat(xKey, 0.5f)
-        val normalizedY = preferences.getFloat(yKey, 0.5f)
-        if (!normalizedX.isFinite() || !normalizedY.isFinite()) return default
-        val centerX = bounds.x + normalizedX * bounds.width
-        val centerY = bounds.y + normalizedY * bounds.height
-        return clampScopeFrame(
-            ZoneFrame(centerX - default.width / 2f, centerY - default.height / 2f, default.width, default.height),
-            bounds,
-        )
-    }
-
-    fun save(kind: ScopeKind, frame: ZoneFrame, bounds: ZoneFrame) {
-        val centerX = (frame.x + frame.width / 2f - bounds.x) / max(1f, bounds.width)
-        val centerY = (frame.y + frame.height / 2f - bounds.y) / max(1f, bounds.height)
-        preferences.edit()
-            .putFloat("${kind.token}.centerX", centerX.coerceIn(0f, 1f))
-            .putFloat("${kind.token}.centerY", centerY.coerceIn(0f, 1f))
-            .apply()
-    }
-}
-
-/** Drag wrapper for a floating panel. The persisted state commits only after a completed drag. */
-@Composable
-internal fun FloatingScopePanel(
-    kind: ScopeKind,
-    default: ZoneFrame,
-    panelLayout: MonitorAnalysisPanelLayout,
-    scale: Float,
-    baseWidth: Float,
-    baseHeight: Float,
-    placementStore: MonitorAnalysisPanelPlacementStore?,
-    legacyStore: ScopePanelPlacementStore?,
-    placementRevision: Int,
-    hapticsEnabled: Boolean,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
-    onScaleChange: (Float) -> Unit,
-    content: @Composable (Modifier) -> Unit,
-) {
-    val density = LocalDensity.current
-    val view = LocalView.current
-    val localizedTitle = scopeTitle(kind)
-    val panelDescription = stringResource(R.string.scope_panel_description, localizedTitle)
-    val recenterDescription = stringResource(R.string.scope_panel_recenter, localizedTitle)
-    val resizeDescription = stringResource(R.string.scope_panel_resize, localizedTitle)
-    val panelID = kind.monitorAnalysisPanelID()
-    fun resolvedFrame(): ZoneFrame =
-        placementStore?.resolve(panelID, default, panelLayout)
-            ?: requireNotNull(legacyStore).resolve(kind, default, panelLayout.safeBounds)
-
-    fun saveFrame(frame: ZoneFrame) {
-        if (placementStore != null) {
-            placementStore.save(panelID, frame, panelLayout)
-        } else {
-            requireNotNull(legacyStore).save(kind, frame, panelLayout.safeBounds)
+/** The shared panel footprint for one scope. */
+private val ScopeKind.panelBase: MonitorScopeSize
+    get() =
+        when (this) {
+            ScopeKind.WAVEFORM -> MonitorScopePanelSize.waveform
+            ScopeKind.PARADE -> MonitorScopePanelSize.parade
+            ScopeKind.HISTOGRAM -> MonitorScopePanelSize.histogram
+            ScopeKind.VECTORSCOPE -> MonitorScopePanelSize.vectorscope
+            ScopeKind.TRAFFIC_LIGHTS -> MonitorScopePanelSize.trafficLights
         }
-    }
-    var frame by
-        remember(kind, default, panelLayout, placementRevision) {
-            mutableStateOf(resolvedFrame())
-        }
-    val currentFrameCallback by rememberUpdatedState(onPanelFrameChanged)
-    SideEffect { currentFrameCallback(panelID, frame) }
-    DisposableEffect(panelID) {
-        onDispose { currentFrameCallback(panelID, null) }
-    }
-    var liveScale by
-        remember(kind, scale, panelLayout, baseWidth, baseHeight) {
-            mutableStateOf(
-                scopePresentationScale(
-                    baseWidth = baseWidth,
-                    baseHeight = baseHeight,
-                    requestedScale = scale,
-                    bounds = panelLayout.safeBounds,
-                ),
-            )
-        }
-    var isDragging by remember { mutableStateOf(false) }
-    var isResizing by remember { mutableStateOf(false) }
-    var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
-    val outerFrame =
-        frame.copy(
-            width = frame.width + SCOPE_RESIZE_GRIP_PAD,
-            height = frame.height + SCOPE_RESIZE_GRIP_PAD,
-        )
-    val lifted = isDragging || isResizing
-    // Outer box is only layout + grip hit area — never elevate it (empty pad
-    // made a hard rectangular "box under" shadow). Lift/shadow match iOS soft
-    // shadow on the panel chrome only.
-    Box(Modifier.zone(outerFrame)) {
-        Box(
-            Modifier
-                .size(frame.width.dp, frame.height.dp)
-                .zIndex(if (lifted) 1f else 0f)
-                // Outside the lift layer, so the 1.03 lift never scales the finger's delta.
-                .pointerInput(
-                    kind,
-                    default,
-                    panelLayout,
-                    baseWidth,
-                    baseHeight,
-                    scale,
-                    placementRevision,
-                    hapticsEnabled,
-                ) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = {
-                        isDragging = true
-                        if (hapticsEnabled) {
-                            view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
-                        }
-                    },
-                    onDragEnd = {
-                        isDragging = false
-                        saveFrame(frame)
-                    },
-                    onDragCancel = { isDragging = false },
-                ) { change, dragAmount ->
-                    change.consume()
-                    val snapped =
-                        clampScopeFrame(
-                            snapScopeFrame(
-                                frame.copy(
-                                    x = frame.x + dragAmount.x / density.density,
-                                    y = frame.y + dragAmount.y / density.density,
-                                ),
-                            ),
-                            panelLayout.safeBounds,
-                        )
-                    val cell =
-                        ((snapped.x + snapped.width / 2f) / 22f).roundToInt() * 100_000 +
-                            ((snapped.y + snapped.height / 2f) / 22f).roundToInt()
-                    if (cell != hapticCell) {
-                        hapticCell = cell
-                        if (hapticsEnabled) {
-                            view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                        }
-                    }
-                    frame = snapped
-                }
-            }
-                .graphicsLayer {
-                    scaleX = if (lifted) 1.03f else 1f
-                    scaleY = if (lifted) 1.03f else 1f
-                    shadowElevation = if (lifted) 18.dp.toPx() else 0f
-                    shape = ChromeShape
-                    clip = true
-                    ambientShadowColor = Color.Black.copy(alpha = 0.5f)
-                    spotShadowColor = Color.Black.copy(alpha = 0.5f)
-                }
-                .semantics {
-                    contentDescription = panelDescription
-                    if (placementStore != null) {
-                        customActions =
-                            listOf(
-                                CustomAccessibilityAction(recenterDescription) {
-                                    placementStore.recenter(panelID)
-                                    frame = clampScopeFrame(default, panelLayout.safeBounds)
-                                    true
-                                },
-                            )
-                    }
-                }
-        ) {
-            content(Modifier.fillMaxSize())
-        }
-        Canvas(
-            Modifier
-                .offset(
-                    (frame.width - SCOPE_RESIZE_GRIP_VISUAL_SIZE).dp,
-                    (frame.height - SCOPE_RESIZE_GRIP_VISUAL_SIZE).dp,
-                )
-                .size(SCOPE_RESIZE_GRIP_HIT_SIZE.dp)
-                .semantics { contentDescription = resizeDescription }
-                .pointerInput(
-                    kind,
-                    default,
-                    panelLayout,
-                    baseWidth,
-                    baseHeight,
-                    scale,
-                    placementRevision,
-                    hapticsEnabled,
-                ) {
-                    var startScale = liveScale
-                    var accumulated = 0f
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = {
-                            isResizing = true
-                            startScale = liveScale
-                            accumulated = 0f
-                            if (hapticsEnabled) {
-                                view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
-                            }
-                        },
-                        onDragEnd = {
-                            isResizing = false
-                            saveFrame(frame)
-                            onScaleChange(liveScale)
-                        },
-                        onDragCancel = {
-                            isResizing = false
-                            onScaleChange(liveScale)
-                        },
-                    ) { change, dragAmount ->
-                        change.consume()
-                        accumulated += (dragAmount.x + dragAmount.y) / density.density
-                        val requested =
-                            clampScopeScale(
-                                startScale + accumulated / (baseWidth + baseHeight),
-                            )
-                        val fitted =
-                            scopePresentationScale(
-                                baseWidth = baseWidth,
-                                baseHeight = baseHeight,
-                                requestedScale = requested,
-                                bounds = panelLayout.safeBounds,
-                            )
-                        val rounded =
-                            scopePresentationScale(
-                                baseWidth = baseWidth,
-                                baseHeight = baseHeight,
-                                requestedScale = (fitted * 100).roundToInt() / 100f,
-                                bounds = panelLayout.safeBounds,
-                            )
-                        val centerX = frame.x + frame.width / 2f
-                        val centerY = frame.y + frame.height / 2f
-                        liveScale = rounded
-                        frame =
-                            clampScopeFrame(
-                                ZoneFrame(
-                                    centerX - baseWidth * rounded / 2f,
-                                    centerY - baseHeight * rounded / 2f,
-                                    baseWidth * rounded,
-                                    baseHeight * rounded,
-                                ),
-                                panelLayout.safeBounds,
-                            )
-                    }
-                },
-        ) {
-            val leg = SCOPE_RESIZE_GRIP_VISUAL_SIZE.dp.toPx()
-            val vertex = Offset(leg + SCOPE_RESIZE_GRIP_EXTERIOR_GAP.dp.toPx(), leg + SCOPE_RESIZE_GRIP_EXTERIOR_GAP.dp.toPx())
-            val color = if (isResizing) LiveDesign.accent else LiveDesign.muted
-            drawLine(color, vertex, Offset(vertex.x - leg, vertex.y), 1.5.dp.toPx())
-            drawLine(color, vertex, Offset(vertex.x, vertex.y - leg), 1.5.dp.toPx())
-        }
-    }
-}
+
+private fun ZoneFrame.scopeRect(density: Float): MonitorScopeRect =
+    MonitorScopeRect(x * density, y * density, width * density, height * density)
 
 /** One panel view of the shared bundle; it never samples or collects frames itself. */
 @Composable

@@ -1,11 +1,9 @@
 package com.opencapture.openzcine
 
 import android.content.Context
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,12 +21,10 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -71,73 +67,6 @@ class LiveAssistOptionsComposeTest {
             composeRule.onAllNodesWithText(tool.title, ignoreCase = true)[0].assertIsDisplayed()
         }
 
-        preferences.edit().clear().commit()
-    }
-
-    @Test
-    fun liveMovablePanelRecentersThroughItsOwnAccessibilityAction() {
-        // #228 removed the options' "Recenter panel" link for iOS parity; the panel owns recenter.
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val preferences =
-            context.getSharedPreferences("ope68-live-panel-recenter", Context.MODE_PRIVATE)
-        preferences.edit().clear().commit()
-        val placements =
-            context.getSharedPreferences(MonitorAnalysisPanelPlacementStore.STORE_NAME, Context.MODE_PRIVATE)
-        placements.edit().clear().commit()
-        val store = MonitorAnalysisPanelPlacementStore(context)
-        val default = ZoneFrame(60f, 40f, 100f, 60f)
-        val layout =
-            MonitorAnalysisPanelLayout(
-                viewport = ZoneFrame(0f, 0f, 320f, 220f),
-                safeBounds = ZoneFrame(40f, 20f, 220f, 140f),
-            )
-        val moved = ZoneFrame(160f, 100f, 100f, 60f)
-        store.save(MonitorAnalysisPanelID.WAVEFORM, moved, layout)
-        composeRule.setContent {
-            OpenZCineTheme {
-                Box(Modifier.requiredSize(320.dp, 220.dp)) {
-                    FloatingScopePanel(
-                        kind = ScopeKind.WAVEFORM,
-                        default = default,
-                        panelLayout = layout,
-                        scale = 1f,
-                        baseWidth = 100f,
-                        baseHeight = 60f,
-                        placementStore = store,
-                        legacyStore = null,
-                        placementRevision = 0,
-                        hapticsEnabled = false,
-                        onPanelFrameChanged = { _, _ -> },
-                        onScaleChange = {},
-                    ) { modifier -> Box(modifier.fillMaxSize()) }
-                    NikonAssistInspector(
-                        MonitorAssistTool.WAVE, listOf(MonitorAssistTool.WAVE),
-                        idleNikonAssists().also { it.shared.toggle(MonitorAssistTool.WAVE) },
-                        OperatorSettings(preferences), ExposureAssistCameraInput(), null,
-                        320f, 220f, onDismiss = {},
-                    )
-                }
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Dismiss ${MonitorAssistTool.WAVE.title}")
-            .assertIsDisplayed()
-        composeRule.onAllNodesWithText("Recenter panel").assertCountEquals(0)
-        composeRule.runOnIdle {
-            assertEquals(moved, store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, layout))
-        }
-        val recenter =
-            composeRule
-                .onNodeWithContentDescription("WAVE analysis panel, movable")
-                .fetchSemanticsNode()
-                .config[SemanticsActions.CustomActions]
-                .single { it.label == "Recenter WAVE panel" }
-        composeRule.runOnIdle { recenter.action() }
-        composeRule.runOnIdle {
-            assertNull(store.storedCenter(MonitorAnalysisPanelID.WAVEFORM))
-            assertEquals(default, store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, layout))
-        }
-        placements.edit().clear().commit()
         preferences.edit().clear().commit()
     }
 

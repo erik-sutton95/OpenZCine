@@ -118,31 +118,6 @@ class ScopeLayoutTest {
     }
 
     @Test
-    fun `floating defaults stay inside bounds and keep traffic lights distinct`() {
-        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
-        val feed = ZoneFrame(59f, 0f, 734f, 393f)
-        val info = ZoneFrame(100f, 8f, 500f, 46f)
-        val wave = floatingScopeFrame(ScopeKind.WAVEFORM, feed, info, viewport)
-        val parade = floatingScopeFrame(ScopeKind.PARADE, feed, info, viewport)
-        val vector = floatingScopeFrame(ScopeKind.VECTORSCOPE, feed, info, viewport)
-        val lights = floatingScopeFrame(ScopeKind.TRAFFIC_LIGHTS, feed, info, viewport)
-        val bottomEdge =
-            viewport.y + viewport.height - 14f - LiveDesign.CONTROL_HEIGHT_DP - 10f
-
-        ScopeKind.canonical.forEach { kind ->
-            val frame = floatingScopeFrame(kind, feed, info, viewport)
-            assertTrue(frame.x >= viewport.x)
-            assertTrue(frame.y >= viewport.y)
-            assertTrue(frame.x + frame.width <= viewport.x + viewport.width)
-            assertTrue(frame.y + frame.height <= viewport.y + viewport.height)
-        }
-        assertTrue(lights.y + lights.height <= bottomEdge)
-        assertTrue(wave.x != lights.x || wave.y != lights.y)
-        assertEquals(parade.x + parade.width, vector.x + vector.width)
-        assertEquals(parade.y, vector.y)
-    }
-
-    @Test
     fun `false color reference mirrors inside the feed when outside is unavailable`() {
         val viewport = ZoneFrame(0f, 0f, 848f, 393f)
         val feed = ZoneFrame(59f, 0f, 734f, 393f)
@@ -194,21 +169,10 @@ class ScopeLayoutTest {
     }
 
     @Test
-    fun `operator scale changes the physical landscape footprint`() {
-        val configuration = MonitorAssistState().apply {
-            setScale(MonitorAssistTool.WAVE, 1.6)
-            setScale(MonitorAssistTool.HISTO, 0.6)
-        }
-
-        assertEquals(400f to 244.8f, scopePanelSize(ScopeKind.WAVEFORM, configuration))
-        assertEquals(150f to 46.2f, scopePanelSize(ScopeKind.HISTOGRAM, configuration))
+    fun `operator scale clamps to the shared range`() {
         assertEquals(
             1.6f,
             MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.scaleFor(ScopeKind.VECTORSCOPE),
-        )
-        assertEquals(
-            ZoneFrame(60f, 100f, 190f, 190f),
-            snapScopeFrame(ZoneFrame(59f, 101f, 190f, 190f)),
         )
     }
 

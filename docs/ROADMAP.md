@@ -205,7 +205,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   scopes plus the false-colour reference retain iOS-like direct drag while normalized app-local
   positions reconcile across viewport, orientation, and chrome changes. The shared zone map keeps
   every panel and exterior resize target clear of camera controls and system rails; live quick
-  settings and accessibility expose per-panel recenter actions. Portrait fit retains its fixed,
+  settings and accessibility expose per-panel recenter actions (the scopes have since moved to the
+  shared `MonitorMovableScopePanel`, which has none; only the false-colour key keeps it). Portrait fit retains its fixed,
   recency-selected two-scope stack, and feed-aligned overlays remain immovable. **[VERIFY-ON-HW]**
   Drag, clamp, relaunch, rotate, remove/re-add, and recenter every supported panel in the tightest
   Samsung landscape and portrait-fill states, then inspect all four edges.
