@@ -1,42 +1,11 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.bridge.ZoneStyle
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /** JVM coverage for photography chrome policy helpers. */
 class PhotographyChromeTest {
-    private val lock = ZoneFrame(x = 16f, y = 12f, width = 40f, height = 40f)
-    private val band = ZoneFrame(x = 59f, y = 320f, width = 700f, height = 58f)
-
-    private fun tabletZones(
-        lock: ZoneFrame,
-        batteryStyle: ZoneStyle? = ZoneStyle.BATTERY_INLINE,
-        batteryCluster: ZoneFrame?,
-        batteryPhone: ZoneFrame? = null,
-    ): MonitorZones =
-        MonitorZones(
-            feed = ZoneFrame(0f, 0f, 1133f, 744f),
-            infoBar = ZoneFrame(140f, 8f, 800f, 46f),
-            captureStrip = null,
-            assistStrip = band,
-            systemCluster = lock,
-            lock = lock,
-            disp = ZoneFrame(1000f, 300f, 44f, 34f),
-            record = ZoneFrame(1050f, 600f, 72f, 72f),
-            media = ZoneFrame(1000f, 12f, 40f, 40f),
-            settings = ZoneFrame(1090f, 12f, 40f, 40f),
-            batteryCluster = batteryCluster,
-            batteryStyle = batteryStyle,
-            batteryPhone = batteryPhone,
-            batteryCamera = null,
-            scopes = null,
-            controlsGrid = null,
-        )
-
     @Test
     fun `profile tile compacts the built-in picture controls`() {
         assertEquals("SD", compactPictureControlLabel("Standard"))

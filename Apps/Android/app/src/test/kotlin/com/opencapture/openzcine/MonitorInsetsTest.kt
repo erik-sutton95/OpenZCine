@@ -1,6 +1,6 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -14,8 +14,8 @@ class MonitorInsetsTest {
         assertEquals(
             62f,
             liveFeedColorNoticeTopInsetDp(
-                feed = ZoneFrame(59f, 0f, 734f, 393f),
-                infoBar = ZoneFrame(100f, 8f, 500f, 46f),
+                feed = MonitorRect(59f, 0f, 734f, 393f),
+                infoBar = MonitorRect(100f, 8f, 500f, 46f),
                 statusBarVisible = true,
             ),
         )
@@ -23,8 +23,8 @@ class MonitorInsetsTest {
 
     @Test
     fun liveColorNoticeUsesItsEdgeGapWhenTheDeckIsOutsideOrHidden() {
-        val feed = ZoneFrame(0f, 52f, 400f, 622f)
-        val infoBar = ZoneFrame(0f, 0f, 400f, 52f)
+        val feed = MonitorRect(0f, 52f, 400f, 622f)
+        val infoBar = MonitorRect(0f, 0f, 400f, 52f)
         assertEquals(8f, liveFeedColorNoticeTopInsetDp(feed, infoBar, statusBarVisible = true))
         assertEquals(8f, liveFeedColorNoticeTopInsetDp(feed, infoBar, statusBarVisible = false))
     }

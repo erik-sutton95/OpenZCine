@@ -43,8 +43,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorFieldLayout
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 
 /** The replayable three-step live monitor introduction, matching iOS concepts. */
@@ -256,10 +256,9 @@ internal class LiveViewGuideController(
 @Composable
 internal fun LiveViewGuideOverlay(
     controller: LiveViewGuideController,
-    zones: MonitorZones,
+    layout: MonitorFieldLayout,
     isPortrait: Boolean,
     usesVerticalAssistRail: Boolean,
-    assistTarget: ZoneFrame? = zones.assistStrip,
 ) {
     val step = controller.activeStep ?: return
     val paneTitleText = stringResource(R.string.guide_pane_title)
@@ -285,7 +284,7 @@ internal fun LiveViewGuideOverlay(
                 )
                 .semantics { contentDescription = backgroundDescription },
         )
-        guideTargetFrames(step, zones, assistTarget).forEach { frame ->
+        guideTargetFrames(step, layout).forEach { frame ->
             val highlight =
                 frame.expanded(5f).clampedInside(
                     viewportWidth = maxWidth.value,
@@ -442,18 +441,16 @@ private fun GuidePrimaryButton(title: String, contentDescription: String, onClic
 
 internal fun guideTargetFrames(
     step: LiveViewGuideStep,
-    zones: MonitorZones,
-    assistTarget: ZoneFrame? = zones.assistStrip,
-): List<ZoneFrame> =
+    layout: MonitorFieldLayout,
+): List<MonitorRect> =
     when (step) {
-        LiveViewGuideStep.CAMERA_CONTROLS ->
-            listOfNotNull(zones.infoBar, zones.captureStrip ?: zones.controlsGrid)
-        LiveViewGuideStep.VIEW_ASSIST -> listOfNotNull(assistTarget)
+        LiveViewGuideStep.CAMERA_CONTROLS -> listOf(layout.status, layout.values)
+        LiveViewGuideStep.VIEW_ASSIST -> listOf(layout.assists)
         LiveViewGuideStep.SYSTEM_CONTROLS ->
-            listOf(zones.lock, zones.disp, zones.record, zones.media, zones.settings)
+            listOf(layout.lock, layout.display, layout.record, layout.media, layout.settings)
     }
 
-private fun ZoneFrame.expanded(amount: Float): ZoneFrame =
+private fun MonitorRect.expanded(amount: Float): MonitorRect =
     copy(
         x = x - amount,
         y = y - amount,
@@ -461,14 +458,14 @@ private fun ZoneFrame.expanded(amount: Float): ZoneFrame =
         height = height + amount * 2f,
     )
 
-private fun ZoneFrame.clampedInside(
+private fun MonitorRect.clampedInside(
     viewportWidth: Float,
     viewportHeight: Float,
     strokeInset: Float,
-): ZoneFrame {
+): MonitorRect {
     val left = maxOf(x, strokeInset)
     val top = maxOf(y, strokeInset)
     val right = minOf(x + width, viewportWidth - strokeInset).coerceAtLeast(left)
     val bottom = minOf(y + height, viewportHeight - strokeInset).coerceAtLeast(top)
-    return ZoneFrame(left, top, right - left, bottom - top)
+    return MonitorRect(left, top, right - left, bottom - top)
 }

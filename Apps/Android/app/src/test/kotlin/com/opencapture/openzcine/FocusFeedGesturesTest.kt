@@ -1,6 +1,6 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.LiveFocusBox
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
@@ -112,7 +112,7 @@ class FocusFeedGesturesTest {
         // viewport height, centred between the side lanes at 136 and 844. Container
         // aspect == source aspect, so the content rect fills the box exactly and every
         // corner maps inclusive.
-        val container = ZoneFrame(202f, 0f, 576f, 384f)
+        val container = MonitorRect(202f, 0f, 576f, 384f)
         val content =
             liveFeedContentRect(container.width, container.height, 5_760, 3_840)
         requireNotNull(content)

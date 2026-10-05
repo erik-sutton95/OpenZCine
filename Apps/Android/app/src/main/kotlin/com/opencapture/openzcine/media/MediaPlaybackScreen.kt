@@ -114,7 +114,7 @@ import com.opencapture.openzcine.LocalFramingAssistOverlay
 import com.opencapture.openzcine.PlaybackScopePanels
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
@@ -1073,9 +1073,9 @@ private fun rememberNikonNativePlayback(
         canvas = { context ->
             val geometry = context.geometry
             val density = LocalDensity.current.density
-            val feedFrame = ZoneFrame(geometry.feed.x / density, geometry.feed.y / density,
+            val feedFrame = MonitorRect(geometry.feed.x / density, geometry.feed.y / density,
                 geometry.feed.width / density, geometry.feed.height / density)
-            val analysisViewport = ZoneFrame(context.analysis.x / density, context.analysis.y / density,
+            val analysisViewport = MonitorRect(context.analysis.x / density, context.analysis.y / density,
                 context.analysis.width / density, context.analysis.height / density)
         if (framingAssistsVisible) {
             LocalFramingAssistOverlay(

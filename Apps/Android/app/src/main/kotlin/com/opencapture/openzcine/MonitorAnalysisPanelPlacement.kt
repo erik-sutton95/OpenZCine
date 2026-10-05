@@ -4,8 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.opencine.appkit.MonitorAssistState
-import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorFieldLayout
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.math.max
 import kotlin.math.min
@@ -41,8 +41,8 @@ internal enum class LegacyPanelStore { SCOPES, FALSE_COLOR }
  * geometry.
  */
 internal data class MonitorAnalysisPanelLayout(
-    val viewport: ZoneFrame,
-    val safeBounds: ZoneFrame,
+    val viewport: MonitorRect,
+    val safeBounds: MonitorRect,
 ) {
     init {
         require(viewport.width >= 0f && viewport.height >= 0f) {
@@ -68,10 +68,10 @@ internal data class MonitorAnalysisPanelLayout(
  * The frame uses monitor-zone dp coordinates, matching every [MonitorAnalysisPanelLayout] frame.
  */
 internal fun focusResetButtonBaseFrame(
-    feed: ZoneFrame,
+    feed: MonitorRect,
     isPortrait: Boolean,
     bottomChromeInset: Float,
-): ZoneFrame {
+): MonitorRect {
     val x =
         if (isPortrait) {
             feed.x + feed.width - FOCUS_RESET_PANEL_GAP_DP - FOCUS_RESET_BUTTON_SIZE_DP
@@ -79,7 +79,7 @@ internal fun focusResetButtonBaseFrame(
             feed.x + FOCUS_RESET_PANEL_GAP_DP
         }
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x = x,
             y =
                 feed.y + feed.height -
@@ -101,20 +101,20 @@ internal fun focusResetButtonBaseFrame(
  * assist rail — all of which already own a corner.
  */
 internal fun splitComparisonKeyFrame(
-    feed: ZoneFrame,
+    feed: MonitorRect,
     isPortrait: Boolean,
     bottomChromeInset: Float,
     focusResetMounted: Boolean,
     widthDp: Float,
     heightDp: Float,
-): ZoneFrame {
+): MonitorRect {
     val lane = focusResetButtonBaseFrame(feed, isPortrait, bottomChromeInset)
     val lift = if (focusResetMounted) FOCUS_RESET_BUTTON_SIZE_DP + FOCUS_RESET_PANEL_GAP_DP else 0f
     // Right-aligned in portrait (the lane hugs the trailing edge there), leading-aligned in
     // landscape — so a key wider than the round reset button grows away from the feed edge.
     val x = if (isPortrait) lane.x + lane.width - widthDp else lane.x
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x = x,
             y = lane.y + (FOCUS_RESET_BUTTON_SIZE_DP - heightDp) / 2f - lift,
             width = widthDp,
@@ -133,10 +133,10 @@ internal fun splitComparisonKeyFrame(
  * also mounted above the panels in Compose, so an impossible fully-packed layout remains reachable.
  */
 internal fun focusResetButtonClearFrame(
-    base: ZoneFrame,
-    panelFrames: Collection<ZoneFrame>,
-    bounds: ZoneFrame,
-): ZoneFrame {
+    base: MonitorRect,
+    panelFrames: Collection<MonitorRect>,
+    bounds: MonitorRect,
+): MonitorRect {
     val panels = panelFrames.sortedByDescending { it.y + it.height }
     var frame = clampScopeFrame(base, bounds)
     repeat(FOCUS_RESET_MAX_CLEARANCE_PASSES) {
@@ -155,7 +155,7 @@ internal fun focusResetButtonClearFrame(
     return clampScopeFrame(frame, bounds)
 }
 
-private fun ZoneFrame.intersectsWithGap(other: ZoneFrame, gap: Float): Boolean =
+private fun MonitorRect.intersectsWithGap(other: MonitorRect, gap: Float): Boolean =
     x < other.x + other.width + gap &&
         x + width > other.x - gap &&
         y < other.y + other.height + gap &&
@@ -224,12 +224,12 @@ internal data class NormalizedPanelCenter(
             yFraction = yFraction.coerceIn(0f, 1f),
         )
 
-    fun frame(size: ZoneFrame, layout: MonitorAnalysisPanelLayout): ZoneFrame {
+    fun frame(size: MonitorRect, layout: MonitorAnalysisPanelLayout): MonitorRect {
         val normalized = reconciled()
         val centerX = layout.viewport.x + normalized.xFraction * layout.viewport.width
         val centerY = layout.viewport.y + normalized.yFraction * layout.viewport.height
         return clampScopeFrame(
-            ZoneFrame(
+            MonitorRect(
                 x = centerX - size.width / 2f,
                 y = centerY - size.height / 2f,
                 width = size.width,
@@ -240,7 +240,7 @@ internal data class NormalizedPanelCenter(
     }
 
     companion object {
-        fun from(frame: ZoneFrame, viewport: ZoneFrame): NormalizedPanelCenter =
+        fun from(frame: MonitorRect, viewport: MonitorRect): NormalizedPanelCenter =
             NormalizedPanelCenter(
                 xFraction =
                     (frame.x + frame.width / 2f - viewport.x) /
@@ -264,15 +264,15 @@ internal data class NormalizedPanelCenter(
  * system rail, and the assist palette's portrait column.
  */
 internal fun monitorAnalysisPanelLayout(
-    zones: MonitorZones,
-    physicalViewport: ZoneFrame,
+    layout: MonitorFieldLayout,
+    physicalViewport: MonitorRect,
     isPortrait: Boolean,
     isPortraitFill: Boolean,
     statusBarVisible: Boolean,
     chromeMounts: MonitorAnalysisChromeMounts,
 ): MonitorAnalysisPanelLayout? {
     if (isPortrait && !isPortraitFill) return null
-    val viewport = if (isPortraitFill) zones.feed else physicalViewport
+    val viewport = if (isPortraitFill) layout.picture else physicalViewport
     var left = viewport.x
     var top = viewport.y
     var right = viewport.x + viewport.width
@@ -281,20 +281,16 @@ internal fun monitorAnalysisPanelLayout(
     if (isPortraitFill) {
         // Portrait fill keeps tighter chrome carving — rails sit on the feed edges.
         if (statusBarVisible) {
-            top = max(top, zones.infoBar.y + zones.infoBar.height + PANEL_CONTROL_CLEARANCE_DP)
+            top = max(top, layout.status.maxY + PANEL_CONTROL_CLEARANCE_DP)
         }
         // The assist palette's portrait column grows up the leading edge; clear its full width.
         if (chromeMounts.assistStrip) {
-            zones.assistStrip?.let { palette ->
-                left = max(left, palette.x + palette.width + PANEL_CONTROL_CLEARANCE_DP)
-            }
+            left = max(left, layout.assists.maxX + PANEL_CONTROL_CLEARANCE_DP)
         }
         if (chromeMounts.captureStrip) {
-            zones.captureStrip?.let { strip ->
-                bottom = min(bottom, strip.y - PANEL_CONTROL_CLEARANCE_DP)
-            }
+            bottom = min(bottom, layout.values.y - PANEL_CONTROL_CLEARANCE_DP)
         }
-        bottom = min(bottom, zones.systemCluster.y - PANEL_CONTROL_CLEARANCE_DP)
+        bottom = min(bottom, layout.system.y - PANEL_CONTROL_CLEARANCE_DP)
     } else {
         // Landscape: carve only the vertical button rails, and only around the controls that are
         // actually mounted. Top/bottom chrome stays drawable over panels the way iOS does (rails
@@ -302,18 +298,16 @@ internal fun monitorAnalysisPanelLayout(
         val rail = chromeMounts.landscapeRail
         if (rail != null) {
             if (rail.lock) {
-                left = maxOf(left, zones.lock.x + zones.lock.width + PANEL_CONTROL_CLEARANCE_DP)
+                left = maxOf(left, layout.lock.maxX + PANEL_CONTROL_CLEARANCE_DP)
             }
             if (rail.batteries) {
-                zones.batteryCluster?.let {
-                    left = maxOf(left, it.x + it.width + PANEL_CONTROL_CLEARANCE_DP)
-                }
+                left = maxOf(left, layout.gauges.maxX + PANEL_CONTROL_CLEARANCE_DP)
             }
             listOfNotNull(
-                zones.disp.takeIf { rail.disp },
-                zones.record.takeIf { rail.record },
-                zones.media.takeIf { rail.media },
-                zones.settings.takeIf { rail.settings },
+                layout.display.takeIf { rail.disp },
+                layout.record.takeIf { rail.record },
+                layout.media.takeIf { rail.media },
+                layout.settings.takeIf { rail.settings },
             )
                 .minOfOrNull { it.x - PANEL_CONTROL_CLEARANCE_DP }
                 ?.let { right = min(right, it) }
@@ -327,7 +321,7 @@ internal fun monitorAnalysisPanelLayout(
     return MonitorAnalysisPanelLayout(
         viewport = viewport,
         safeBounds =
-            ZoneFrame(
+            MonitorRect(
                 x = safeLeft,
                 y = safeTop,
                 width = safeRight - safeLeft,
@@ -368,16 +362,16 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
 
     fun resolve(
         id: MonitorAnalysisPanelID,
-        default: ZoneFrame,
+        default: MonitorRect,
         layout: MonitorAnalysisPanelLayout,
-    ): ZoneFrame {
+    ): MonitorRect {
         val stored = load(id) ?: return clampScopeFrame(default, layout.safeBounds)
         return stored.frame(default, layout)
     }
 
     fun save(
         id: MonitorAnalysisPanelID,
-        frame: ZoneFrame,
+        frame: MonitorRect,
         layout: MonitorAnalysisPanelLayout,
     ) {
         val normalized = NormalizedPanelCenter.from(frame, layout.viewport)

@@ -1,8 +1,8 @@
 package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorLayoutPolicy
-import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorFieldLayout
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlCapabilities
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -358,8 +358,8 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `portrait fill picker clears the shared capture strip and system rail`() {
-        val viewport = ZoneFrame(0f, 0f, 400f, 800f)
-        val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
+        val viewport = MonitorRect(0f, 0f, 400f, 800f)
+        val zones = portraitZones(values = MonitorRect(0f, 610f, 400f, 64f))
 
         val frame =
             monitorPickerFrame(
@@ -371,15 +371,15 @@ class MonitorCameraControlsTest {
 
         assertEquals(12f, frame.x)
         assertEquals(376f, frame.width)
-        assertTrue(frame.y >= zones.infoBar.y + zones.infoBar.height + 8f)
-        assertTrue(frame.y + frame.height <= requireNotNull(zones.captureStrip).y - 10f)
-        assertTrue(frame.y + frame.height < zones.systemCluster.y)
+        assertTrue(frame.y >= zones.status.y + zones.status.height + 8f)
+        assertTrue(frame.y + frame.height <= zones.values.y - 10f)
+        assertTrue(frame.y + frame.height < zones.system.y)
     }
 
     @Test
     fun `portrait fit picker uses shared controls and system zones`() {
-        val viewport = ZoneFrame(0f, 0f, 400f, 800f)
-        val zones = portraitZones(captureStrip = null)
+        val viewport = MonitorRect(0f, 0f, 400f, 800f)
+        val zones = portraitZones()
 
         val frame =
             monitorPickerFrame(
@@ -390,18 +390,18 @@ class MonitorCameraControlsTest {
             )
 
         assertEquals(320f, frame.height)
-        assertEquals(zones.systemCluster.y - 10f, frame.y + frame.height)
+        assertEquals(zones.system.y - 10f, frame.y + frame.height)
         assertTrue(frame.x >= viewport.x)
         assertTrue(frame.x + frame.width <= viewport.x + viewport.width)
     }
 
     @Test
     fun `landscape picker leaves both system rails exposed`() {
-        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val viewport = MonitorRect(0f, 0f, 848f, 393f)
         val zones =
-            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
-                feed = ZoneFrame(59f, 0f, 734f, 393f),
-                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
+                picture = MonitorRect(59f, 0f, 734f, 393f),
+                status = MonitorRect(80f, 8f, 690f, 46f),
             )
 
         val frame =
@@ -414,7 +414,7 @@ class MonitorCameraControlsTest {
 
         // iOS trailing-aligns to the capture bar (not feed ± 8). Side rails stay
         // outside the capture strip / feed band by zone-map construction.
-        val strip = requireNotNull(zones.captureStrip)
+        val strip = zones.values
         assertEquals(strip.x, frame.x, 0.01f)
         assertEquals(strip.x + strip.width, frame.x + frame.width, 0.01f)
         assertTrue(frame.x >= viewport.x)
@@ -425,11 +425,11 @@ class MonitorCameraControlsTest {
     fun `landscape picker is tall enough for the WB tint pad cluster`() {
         // SM-A12-class short landscape (~853×384 dp). Tint needs header +
         // 180dp pad cluster (28+8+108+8+28) + mode tabs + GlassPanel padding.
-        val viewport = ZoneFrame(0f, 0f, 853f, 384f)
+        val viewport = MonitorRect(0f, 0f, 853f, 384f)
         val zones =
-            portraitZones(captureStrip = ZoneFrame(430f, 320f, 363f, 48f)).copy(
-                feed = ZoneFrame(59f, 0f, 734f, 384f),
-                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            portraitZones(values = MonitorRect(430f, 320f, 363f, 48f)).copy(
+                picture = MonitorRect(59f, 0f, 734f, 384f),
+                status = MonitorRect(80f, 8f, 690f, 46f),
             )
 
         val frame =
@@ -445,19 +445,19 @@ class MonitorCameraControlsTest {
             frame.height >= 300f,
             "picker height ${frame.height} must fit tint pad (≥ 300dp)",
         )
-        assertTrue(frame.y + frame.height <= requireNotNull(zones.captureStrip).y - 10f)
+        assertTrue(frame.y + frame.height <= zones.values.y - 10f)
     }
 
     @Test
     fun `landscape measured capture bar trailing-aligns the picker`() {
-        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val viewport = MonitorRect(0f, 0f, 848f, 393f)
         val zones =
-            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
-                feed = ZoneFrame(59f, 0f, 734f, 393f),
-                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
+                picture = MonitorRect(59f, 0f, 734f, 393f),
+                status = MonitorRect(80f, 8f, 690f, 46f),
             )
         // Content-hugging glass is narrower and trailing inside the zone slot.
-        val measured = ZoneFrame(520f, 332f, 260f, 44f)
+        val measured = MonitorRect(520f, 332f, 260f, 44f)
 
         val frame =
             monitorPickerFrame(
@@ -604,15 +604,15 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `top bar res codec frame drops below the info bar at 340dp`() {
-        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val viewport = MonitorRect(0f, 0f, 848f, 393f)
         val zones =
-            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
-                feed = ZoneFrame(59f, 0f, 734f, 393f),
-                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
+                picture = MonitorRect(59f, 0f, 734f, 393f),
+                status = MonitorRect(80f, 8f, 690f, 46f),
             )
         val frame = monitorTopBarPickerFrame(viewport, zones, isCommandCenter = false)
         assertEquals(340f, frame.width)
-        assertTrue(frame.y >= zones.infoBar.y + zones.infoBar.height + 8f - 0.1f)
+        assertTrue(frame.y >= zones.status.y + zones.status.height + 8f - 0.1f)
         assertTrue(frame.x >= viewport.x + 8f)
         assertTrue(frame.x + frame.width <= viewport.x + viewport.width - 8f)
         assertTrue(MonitorPickerKind.RESOLUTION.isTopBarPicker())
@@ -622,12 +622,12 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `top popdown centres under its own pill and quality gets the dual-drum room`() {
-        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val viewport = MonitorRect(0f, 0f, 848f, 393f)
         val zones =
-            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
-                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
+                status = MonitorRect(80f, 8f, 690f, 46f),
             )
-        val pill = ZoneFrame(600f, 14f, 90f, 30f)
+        val pill = MonitorRect(600f, 14f, 90f, 30f)
 
         val frame =
             monitorTopBarPickerFrame(
@@ -662,12 +662,12 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `landscape picker centres over a wide capture bar at the 420 cap`() {
-        val viewport = ZoneFrame(0f, 0f, 900f, 400f)
+        val viewport = MonitorRect(0f, 0f, 900f, 400f)
         val zones =
-            portraitZones(captureStrip = ZoneFrame(200f, 330f, 640f, 48f)).copy(
-                infoBar = ZoneFrame(80f, 8f, 740f, 46f),
+            portraitZones(values = MonitorRect(200f, 330f, 640f, 48f)).copy(
+                status = MonitorRect(80f, 8f, 740f, 46f),
             )
-        val measured = ZoneFrame(220f, 334f, 600f, 44f)
+        val measured = MonitorRect(220f, 334f, 600f, 44f)
 
         val frame =
             monitorPickerFrame(
@@ -690,12 +690,12 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `portrait fill trailing false color key leaves the collapsed assist palette reachable`() {
-        val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
+        val zones = portraitZones(values = MonitorRect(0f, 610f, 400f, 64f))
         val palette = MonitorLayoutPolicy.portraitAssists(floor = 610f, tablet = false)
         val reference =
             falseColorReferenceDefaultFrame(
-                feed = zones.feed,
-                viewport = zones.feed,
+                feed = zones.picture,
+                viewport = zones.picture,
                 horizontalFraction = 1f,
             )
 
@@ -760,23 +760,19 @@ class MonitorCameraControlsTest {
                 ),
         )
 
-    private fun portraitZones(captureStrip: ZoneFrame?): MonitorZones =
-        MonitorZones(
-            feed = ZoneFrame(0f, 52f, 400f, 622f),
-            infoBar = ZoneFrame(0f, 0f, 400f, 44f),
-            captureStrip = captureStrip,
-            assistStrip = null,
-            systemCluster = ZoneFrame(0f, 690f, 400f, 100f),
-            lock = ZoneFrame(10f, 710f, 40f, 40f),
-            disp = ZoneFrame(70f, 708f, 74f, 44f),
-            record = ZoneFrame(160f, 698f, 83f, 83f),
-            media = ZoneFrame(260f, 708f, 63f, 63f),
-            settings = ZoneFrame(330f, 708f, 63f, 63f),
-            batteryCluster = null,
-            batteryStyle = null,
-            batteryPhone = null,
-            batteryCamera = null,
-            scopes = null,
-            controlsGrid = ZoneFrame(0f, 300f, 400f, 390f),
+    // Production always mounts the assist palette; here it shares the values slot so it never
+    // seats the picker higher than the values do.
+    private fun portraitZones(values: MonitorRect = MonitorRect(0f, 300f, 400f, 390f)): MonitorFieldLayout =
+        testFieldLayout(
+            picture = MonitorRect(0f, 52f, 400f, 622f),
+            status = MonitorRect(0f, 0f, 400f, 44f),
+            values = values,
+            assists = values,
+            system = MonitorRect(0f, 690f, 400f, 100f),
+            lock = MonitorRect(10f, 710f, 40f, 40f),
+            display = MonitorRect(70f, 708f, 74f, 44f),
+            record = MonitorRect(160f, 698f, 83f, 83f),
+            media = MonitorRect(260f, 708f, 63f, 63f),
+            settings = MonitorRect(330f, 708f, 63f, 63f),
         )
 }

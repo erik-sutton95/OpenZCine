@@ -48,7 +48,7 @@ class MFDriveControllerTest {
 
     @Test
     fun `strip seats left of the right system rail, vertically centred`() {
-        val viewport = com.opencapture.openzcine.bridge.ZoneFrame(0f, 0f, 914f, 384f)
+        val viewport = com.opencapture.monitorui.MonitorRect(0f, 0f, 914f, 384f)
 
         val frame = mfDriveStripFrame(viewport, rightRailLeading = 830f)
 

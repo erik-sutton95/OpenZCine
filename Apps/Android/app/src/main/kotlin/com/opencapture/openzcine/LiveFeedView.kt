@@ -60,7 +60,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusInfo
@@ -727,8 +727,8 @@ internal fun LiveFeedColorModeNotice(
 @Composable
 internal fun FalseColorReferenceOverlay(
     effectsState: LiveFeedEffectsPresentationState,
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
+    feed: MonitorRect,
+    viewport: MonitorRect,
     modifier: Modifier = Modifier,
     placementStoreName: String = FalseColorReferencePlacementStore.STORE_NAME,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
@@ -737,7 +737,7 @@ internal fun FalseColorReferenceOverlay(
     placementStore: MonitorAnalysisPanelPlacementStore? = null,
     placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
+    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
 ) {
     val presentation = effectsState.falseColorReference ?: return
     val resolvedLayout =
@@ -758,11 +758,11 @@ internal fun FalseColorReferenceOverlay(
                 ?: FalseColorReferencePlacementStore(context, placementStoreName)
         }
     val panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE
-    fun resolvedFrame(): ZoneFrame =
+    fun resolvedFrame(): MonitorRect =
         placementStore?.resolve(panelID, default, resolvedLayout)
             ?: requireNotNull(legacyStore).resolve(default, resolvedLayout.safeBounds)
 
-    fun saveFrame(frame: ZoneFrame) {
+    fun saveFrame(frame: MonitorRect) {
         if (placementStore != null) {
             placementStore.save(panelID, frame, resolvedLayout)
         } else {
@@ -883,11 +883,11 @@ internal fun FalseColorReferenceOverlay(
 
 /** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
 internal fun controlSafeFalseColorReferenceDefaultFrame(
-    feed: ZoneFrame,
+    feed: MonitorRect,
     layout: MonitorAnalysisPanelLayout,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     horizontalFraction: Float = 0f,
-): ZoneFrame =
+): MonitorRect =
     clampScopeFrame(
         falseColorReferenceDefaultFrame(
             feed = feed,
@@ -900,11 +900,11 @@ internal fun controlSafeFalseColorReferenceDefaultFrame(
 
 /** iOS `feedOutsideCenter(.bottomLeading)` translated into the Android zone map. */
 internal fun falseColorReferenceDefaultFrame(
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
+    feed: MonitorRect,
+    viewport: MonitorRect,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     horizontalFraction: Float = 0f,
-): ZoneFrame {
+): MonitorRect {
     val feedBottom = feed.y + feed.height
     val outsideTop = feedBottom + FALSE_COLOR_REFERENCE_GAP
     val viewportBottom = viewport.y + viewport.height
@@ -918,7 +918,7 @@ internal fun falseColorReferenceDefaultFrame(
             ) - FALSE_COLOR_REFERENCE_GAP - FALSE_COLOR_REFERENCE_HEIGHT
         }
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x =
                 feed.x +
                     maxOf(0f, feed.width - min(FALSE_COLOR_REFERENCE_WIDTH, feed.width)) *
@@ -932,7 +932,7 @@ internal fun falseColorReferenceDefaultFrame(
 }
 
 /** Mirrors iOS `MovablePanel`'s fine 4-point position grid. */
-internal fun snapFalseColorReferenceFrame(frame: ZoneFrame): ZoneFrame =
+internal fun snapFalseColorReferenceFrame(frame: MonitorRect): MonitorRect =
     frame.copy(
         x = (frame.x / 4f).roundToInt() * 4f,
         y = (frame.y / 4f).roundToInt() * 4f,
@@ -942,7 +942,7 @@ internal fun snapFalseColorReferenceFrame(frame: ZoneFrame): ZoneFrame =
 private class FalseColorReferencePlacementStore(context: Context, name: String) {
     private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
-    fun resolve(default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
+    fun resolve(default: MonitorRect, bounds: MonitorRect): MonitorRect {
         if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
         val normalizedX = preferences.getFloat(CENTER_X_KEY, 0.5f)
         val normalizedY = preferences.getFloat(CENTER_Y_KEY, 0.5f)
@@ -956,7 +956,7 @@ private class FalseColorReferencePlacementStore(context: Context, name: String) 
         )
     }
 
-    fun save(frame: ZoneFrame, bounds: ZoneFrame) {
+    fun save(frame: MonitorRect, bounds: MonitorRect) {
         val centerX = (frame.x + frame.width / 2f - bounds.x) / maxOf(1f, bounds.width)
         val centerY = (frame.y + frame.height / 2f - bounds.y) / maxOf(1f, bounds.height)
         preferences.edit()
