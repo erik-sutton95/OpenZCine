@@ -187,12 +187,16 @@ struct MulticamStage: View {
         ]
     }
 
-    private func choose(slot: Int, readout: Int, choice: Int) {
-        guard let member = coordinator.member(atSlot: slot) else { return }
+    /// The value the operator picked, by the name shown: a choice the camera no longer
+    /// advertises writes nothing.
+    private func choose(slot: Int, readout: Int, choice: String) {
+        guard readout == 0 || readout == 2, let member = coordinator.member(atSlot: slot) else {
+            return
+        }
         let key: SettingKey = readout == 0 ? .iso : .whiteBalance
-        let offered = choices(key, of: member)
-        guard readout == 0 || readout == 2, offered.indices.contains(choice) else { return }
-        coordinator.set(offered[choice].value, on: member.id, label: readout == 0 ? "ISO" : "WB")
+        guard let value = choices(key, of: member).first(where: { $0.name == choice })?.value
+        else { return }
+        coordinator.set(value, on: member.id, label: readout == 0 ? "ISO" : "WB")
     }
 
     /// What the camera advertises for `key`, with the name the stage shows.

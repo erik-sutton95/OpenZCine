@@ -303,6 +303,11 @@ class MulticamCoordinator(
     fun names(plan: RecordPlan): List<String> =
         plan.targets.flatMap { it.entries }.mapNotNull { member(it)?.displayName }
 
+    /** Runs [plan] in the coordinator's scope, so Live View replacing the stage does not cancel it. */
+    fun start(plan: RecordPlan) {
+        scope.launch { run(plan) }
+    }
+
     suspend fun run(plan: RecordPlan) {
         if (groupBusy) return
         groupBusy = true

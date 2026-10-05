@@ -120,11 +120,12 @@ fun MulticamStage(
                         prompt = MulticamCopy.confirm(plan.direction, coordinator.names(plan)),
                     )
                 },
-                record = { plan, _ -> coordinator.run(plan) },
+                record = { plan, _ -> coordinator.start(plan) },
+                // The value the operator picked, by the name shown: one no longer advertised writes nothing.
                 choose = { slot, readout, choice ->
-                    coordinator.memberAt(slot)?.let { member ->
+                    coordinator.memberAt(slot)?.takeIf { readout == 0 || readout == 2 }?.let { member ->
                         val key = if (readout == 0) SettingKey.ISO else SettingKey.WHITE_BALANCE
-                        choices(key, member, coordinator).getOrNull(choice)?.takeIf { readout == 0 || readout == 2 }
+                        choices(key, member, coordinator).firstOrNull { it.second == choice }
                             ?.let { (value, _) -> coordinator.set(value, member.id, if (readout == 0) "ISO" else "WB") }
                     }
                 },
