@@ -1948,7 +1948,9 @@ struct AccentDrumWheel: View {
             modes: MonitorWaveformMode.allCases, mode: options.mode,
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
-                set: { options.wrappedValue.brightness = MonitorWaveformOptions.clampedBrightness($0) }),
+                set: {
+                    options.wrappedValue.brightness = MonitorWaveformOptions.clampedBrightness($0)
+                }),
             guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity when the preview is dark or low contrast.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
@@ -1960,7 +1962,9 @@ struct AccentDrumWheel: View {
             modes: MonitorParadeMode.allCases, mode: options.mode,
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
-                set: { options.wrappedValue.brightness = MonitorParadeOptions.clampedBrightness($0) }),
+                set: {
+                    options.wrappedValue.brightness = MonitorParadeOptions.clampedBrightness($0)
+                }),
             guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity for the separated channel lanes.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
@@ -1973,7 +1977,8 @@ struct AccentDrumWheel: View {
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
                 set: {
-                    options.wrappedValue.brightness = MonitorVectorscopeOptions.clampedBrightness($0)
+                    options.wrappedValue.brightness = MonitorVectorscopeOptions.clampedBrightness(
+                        $0)
                 }),
             zoomHelp:
                 "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the monitor image after its active LUT or display tone map.",
@@ -4437,21 +4442,24 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetWaveform() {
-        let store = model.scopePanels.waveform, base = MonitorWaveformOptions.default
+        let store = model.scopePanels.waveform
+        let base = MonitorWaveformOptions.default
         store.options.mode = base.mode
         store.options.guides = base.guides
         store.options.brightness = base.brightness
     }
 
     private func resetParade() {
-        let store = model.scopePanels.parade, base = MonitorParadeOptions.default
+        let store = model.scopePanels.parade
+        let base = MonitorParadeOptions.default
         store.options.mode = base.mode
         store.options.guides = base.guides
         store.options.brightness = base.brightness
     }
 
     private func resetHistogram() {
-        model.scopePanels.histogram.options.trafficLights = MonitorHistogramOptions.default.trafficLights
+        model.scopePanels.histogram.options.trafficLights =
+            MonitorHistogramOptions.default.trafficLights
         model.assist.resetOptions(.histogram)
     }
 
@@ -4465,7 +4473,8 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetVectorscope() {
-        let store = model.scopePanels.vectorscope, base = MonitorVectorscopeOptions.default
+        let store = model.scopePanels.vectorscope
+        let base = MonitorVectorscopeOptions.default
         store.options.zoom = base.zoom
         store.options.brightness = base.brightness
     }

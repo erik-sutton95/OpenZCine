@@ -134,7 +134,8 @@ extension ExposureSignalMapping {
     public var scopeLevelAxis: ScopeLevelAxis {
         ScopeLevelAxis(
             table: (0...255).map {
-                Float(ScopeDisplayScale.waveformLevel(signalNative: Double($0), mapping: self) * 100)
+                Float(
+                    ScopeDisplayScale.waveformLevel(signalNative: Double($0), mapping: self) * 100)
             },
             middleGrayIRE: ScopeDisplayScale.middleGrayLevel(mapping: self) * 100)
     }

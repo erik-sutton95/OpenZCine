@@ -108,9 +108,12 @@ struct NikonAssistInspector: View {
                                 NikonAssistGlyph(tool: item, size: 17)
                                 Text(item.rawValue).font(MonitorTheme.font(9, weight: .semibold))
                             }
-                            .foregroundStyle(item == tool ? MonitorTheme.accent : MonitorTheme.muted)
+                            .foregroundStyle(
+                                item == tool ? MonitorTheme.accent : MonitorTheme.muted
+                            )
                             .frame(width: portrait ? 88 : 96, height: 44)
-                            .monitorTabSurface(selected: item == tool, separator: item != tabs.first)
+                            .monitorTabSurface(
+                                selected: item == tool, separator: item != tabs.first)
                         }
                         .buttonStyle(MonitorTabButtonStyle())
                         .accessibilityLabel(item.title)
@@ -221,7 +224,8 @@ struct NikonAssistOptions: View {
                 NikonSettingsChoices(
                     options: ["3s", "5s", "7s", "∞"], selected: instantReviewDurationLabel
                 ) {
-                    model.assistConfiguration.instantReviewSeconds = $0 == "∞" ? 0 : Int($0.dropLast()) ?? 5
+                    model.assistConfiguration.instantReviewSeconds =
+                        $0 == "∞" ? 0 : Int($0.dropLast()) ?? 5
                 }
             }
             NikonSettingsSwitch(

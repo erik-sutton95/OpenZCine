@@ -1,9 +1,11 @@
 import CoreImage
 import OpenCineApple
-import enum OpenCineMedia.MonitorZebraPaint
 import OpenZCineCore
 import UIKit
 import XCTest
+
+import enum OpenCineMedia.MonitorZebraPaint
+
 @testable import Runner
 
 /// SIMULATED actual PNG decode and CI evaluation; no camera or physical qualification.

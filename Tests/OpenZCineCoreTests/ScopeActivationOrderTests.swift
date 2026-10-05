@@ -51,7 +51,8 @@ import Testing
         var prefs = OperatorPreferences()
         // Migrated install: active scopes but no recorded order.
         prefs.scopeActivationOrder = []
-        #expect(prefs.displayedFitScopes(on: [.waveform, .parade, .histogram]) == [.waveform, .parade])
+        #expect(
+            prefs.displayedFitScopes(on: [.waveform, .parade, .histogram]) == [.waveform, .parade])
     }
 
     @Test func deactivatingDisplayedScopePromotesRememberedOne() {

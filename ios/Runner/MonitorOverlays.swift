@@ -966,7 +966,8 @@ enum FalseColorReference {
             },
             markers: scale == .stops
                 ? stopAxisMarkers(mapping: mapping).map {
-                    MonitorFalseColorReferenceMarker(id: $0.id, label: $0.label, fraction: $0.fraction)
+                    MonitorFalseColorReferenceMarker(
+                        id: $0.id, label: $0.label, fraction: $0.fraction)
                 } : [],
             axisLabels: axisLabels)
     }

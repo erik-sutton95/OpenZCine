@@ -141,7 +141,9 @@ final class NikonAssistsTests: XCTestCase {
 
     func testCleanShowsTheStockPinsAndHidesEveryOtherTool() {
         let state = relaunch()
-        for tool in MonitorAssistTool.activeCases { state.set(tool, visible: true, context: .liveView) }
+        for tool in MonitorAssistTool.activeCases {
+            state.set(tool, visible: true, context: .liveView)
+        }
         let stock = NikonAssistState.cleanViewDefaultPinnedTools
         for tool in MonitorAssistTool.activeCases {
             XCTAssertTrue(state.isVisible(tool.selection), "\(tool) must show in live")
@@ -198,7 +200,8 @@ final class NikonAssistsTests: XCTestCase {
         state.cleanViewPinnedTools = []
         func split() -> SplitComparisonOrientation? {
             LUTResolution.splitComparison(
-                visibleTools: Set(MonitorAssistTool.activeCases.filter { state.isVisible($0.selection) }),
+                visibleTools: Set(
+                    MonitorAssistTool.activeCases.filter { state.isVisible($0.selection) }),
                 enabled: state.splitComparison, vertical: state.splitVertical)
         }
         XCTAssertNotNil(split())
@@ -321,12 +324,15 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertEqual(pillarbox.desqueezeFactor, 2)
         XCTAssertFalse(pillarbox.desqueezeHorizontal)
         XCTAssertFalse(pillarbox.desqueezeCustom)
-        XCTAssertEqual(pillarbox.desqueeze(visible: true), NikonDesqueeze(factor: 2, horizontal: false))
+        XCTAssertEqual(
+            pillarbox.desqueeze(visible: true), NikonDesqueeze(factor: 2, horizontal: false))
         XCTAssertEqual(pillarbox.desqueeze(visible: false), .off)
     }
 
     func testMigrationReadsTheOlderRatioAndLeavesAnUnchosenFactor() throws {
-        let ratio = try migrate(configuration: ["desqueeze": ["ratio": "1.5x", "orientation": "Vertical"]])
+        let ratio = try migrate(configuration: [
+            "desqueeze": ["ratio": "1.5x", "orientation": "Vertical"]
+        ])
         XCTAssertEqual(ratio.desqueezeFactor, 1.5)
         XCTAssertTrue(ratio.desqueezeHorizontal)
 
@@ -528,7 +534,8 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertNil(panels.waveform.options.storedCenterPortrait)
         XCTAssertNil(panels.parade.options.storedCenter)
         XCTAssertEqual(
-            panels.trafficLights.position, MonitorScopeStoredCenter(xFraction: 0.08, yFraction: 0.58))
+            panels.trafficLights.position,
+            MonitorScopeStoredCenter(xFraction: 0.08, yFraction: 0.58))
         XCTAssertEqual(panels.trafficLights.scale, 1.2)
     }
 

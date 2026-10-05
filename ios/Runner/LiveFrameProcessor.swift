@@ -356,7 +356,8 @@ extension NativeAppModel {
         let samples = OpenCineMedia.ScopeSampler.sampleRaw(
             bytes: buffer.data, width: buffer.width, height: buffer.height,
             bytesPerRow: buffer.bytesPerRow, transfer: .rec709, includePoints: includePoints,
-            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true)
+            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true
+        )
         await publishScopeAssist(samples: samples)
     }
 }

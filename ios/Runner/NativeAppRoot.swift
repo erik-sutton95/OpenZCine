@@ -2189,7 +2189,8 @@ final class NativeAppModel {
     var scopeAssist: ScopeAssistBundle { nativePictureBus.bundle }
     /// Publishes one bundle for the current picture source; a stale source is rejected.
     func publishLiveScopeBundle(_ bundle: ScopeAssistBundle) {
-        nativePictureBus.publish(nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
+        nativePictureBus.publish(
+            nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
     }
     /// A still sampled with no live picture (the demo's mock feed) opens the live source the
     /// frame loop would, or the bus drops its scopes.

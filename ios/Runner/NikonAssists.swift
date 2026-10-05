@@ -186,8 +186,9 @@ extension MonitorAssistState where Looks == NikonMonitorLooks {
         let configuration = object(Self.legacyConfigurationKey)
         func tools(_ key: String) -> Set<MonitorAssistSelection>? {
             (preferences[key] as? [String]).map {
-                Set($0.compactMap(MonitorAssistTool.init(rawValue:)).filter { !$0.isRetired }
-                    .map(\.selection))
+                Set(
+                    $0.compactMap(MonitorAssistTool.init(rawValue:)).filter { !$0.isRetired }
+                        .map(\.selection))
             }
         }
         func finite(_ value: Any?) -> Double? {
@@ -275,7 +276,8 @@ extension MonitorAssistState where Looks == NikonMonitorLooks {
         } else if let ire = finite(configuration["zebraHighlightIRE"]) {
             zebraHighlightIRE = ire
         }
-        if let color = (configuration["peakingColor"] as? String).flatMap(MonitorPeakingColor.init) {
+        if let color = (configuration["peakingColor"] as? String).flatMap(MonitorPeakingColor.init)
+        {
             peakingColor = color
         }
         if let sense = (configuration["peakingSensitivity"] as? String).flatMap(

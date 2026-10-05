@@ -1,6 +1,7 @@
-import enum OpenCineMedia.MonitorCrushClipCompensation
 import OpenZCineCore
 import Testing
+
+import enum OpenCineMedia.MonitorCrushClipCompensation
 
 @testable import OpenZCineAndroidFacade
 
@@ -24,8 +25,9 @@ struct ScopeFrameWireTests {
         #expect(Array(shifted.prefix(ScopeFrameWire.histogramBins)) == axis.table)
         // The ISO clip re-stretches the highlights only; mid grey never moves.
         #expect(shifted.last == ScopeFrameWire.levelAxis(curveOrdinal: 0).last)
-        #expect(ScopeFrameWire.levelAxis(curveOrdinal: 0, clipNative: .nan)
-            == ScopeFrameWire.levelAxis(curveOrdinal: 0))
+        #expect(
+            ScopeFrameWire.levelAxis(curveOrdinal: 0, clipNative: .nan)
+                == ScopeFrameWire.levelAxis(curveOrdinal: 0))
     }
 
     /// 100 mid-grey samples plus one white one: the white clears the 0-stop
@@ -55,8 +57,9 @@ struct ScopeFrameWireTests {
                 histogramBlue: bins(3), points: []),
             noiseFloorCompensation: .quarter,
             mapping: ExposureSignalMapping(curve: .redLog3G10))
-        #expect(ScopeFrameWire.trafficLights(histograms: histograms, curveOrdinal: 0)
-            == flat(expected))
+        #expect(
+            ScopeFrameWire.trafficLights(histograms: histograms, curveOrdinal: 0)
+                == flat(expected))
     }
 
     @Test func trafficLightsApplyTheSelectedCompensation() {
