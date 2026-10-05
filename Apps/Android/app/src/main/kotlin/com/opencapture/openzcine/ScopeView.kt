@@ -57,7 +57,7 @@ import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.opencine.runtime.ScopeSampleBus
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutSelection
@@ -224,12 +224,12 @@ internal fun MonitorAssistState.scaleFor(kind: ScopeKind): Float =
     }.toFloat()
 
 /** Keeps a floating panel wholly inside the physical viewport's safe drawing bounds. */
-fun clampScopeFrame(frame: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
+fun clampScopeFrame(frame: MonitorRect, bounds: MonitorRect): MonitorRect {
     val width = min(frame.width, bounds.width)
     val height = min(frame.height, bounds.height)
     val maxX = bounds.x + bounds.width - width
     val maxY = bounds.y + bounds.height - height
-    return ZoneFrame(
+    return MonitorRect(
         x = frame.x.coerceIn(bounds.x, maxX),
         y = frame.y.coerceIn(bounds.y, maxY),
         width = width,
@@ -268,10 +268,12 @@ internal fun scopeVectorLutRequest(
 /** The vectorscope's monitor look as a shared cube; null fails closed (no trace). */
 internal fun ScopeVectorLutRequest.cube(): MonitorLUTCube? =
     packedRgba?.let { runCatching { MonitorLUTCube(cubeSize, it) }.getOrNull() }
-        ?: SwiftCore.bakeLut(lookOrdinal, VECTOR_LUT_SIZE)?.let { MonitorLUTCube(VECTOR_LUT_SIZE, it) }
+        ?: SwiftCore.takeIf { it.isAvailable }?.bakeLut(lookOrdinal, VECTOR_LUT_SIZE)
+            ?.let { MonitorLUTCube(VECTOR_LUT_SIZE, it) }
 
 /** This camera's level axis for the shared plots (Swift `ScopeFrameWire.levelAxis`). */
 private fun nikonScopeLevelAxis(curveOrdinal: Int, clipNative: Float): ScopeLevelAxis? {
+    if (!SwiftCore.isAvailable) return null
     val flat = SwiftCore.scopeLevelAxis(curveOrdinal, clipNative)
     if (flat.size != LEVEL_AXIS_BINS + 1) return null
     return ScopeLevelAxis(flat.copyOf(LEVEL_AXIS_BINS), flat[LEVEL_AXIS_BINS].toDouble())
@@ -279,6 +281,7 @@ private fun nikonScopeLevelAxis(curveOrdinal: Int, clipNative: Float): ScopeLeve
 
 /** The core Traffic Lights meter on this tick's shared histograms. */
 private fun nikonTrafficLights(samples: ScopeSamples, inputs: ScopeTickInputs): ScopeTrafficLightsReading {
+    if (!SwiftCore.isAvailable) return ScopeTrafficLightsReading.NONE
     val histograms = FloatArray(4 * LEVEL_AXIS_BINS)
     listOf(samples.histogramLuma, samples.histogramRed, samples.histogramGreen, samples.histogramBlue)
         .forEachIndexed { channel, bins ->
@@ -349,10 +352,10 @@ internal fun ScopePanels(
     source: LiveFrameSource,
     isPortrait: Boolean,
     portraitFloating: Boolean = false,
-    scopeZone: ZoneFrame?,
+    scopeZone: MonitorRect?,
     panelLayout: MonitorAnalysisPanelLayout?,
     hapticsEnabled: Boolean,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
+    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
 ) {
     val displayed =
         displayedScopeKinds(
@@ -427,7 +430,7 @@ internal fun PlaybackScopePanels(
     textureView: TextureView,
     currentFrameKey: () -> Long,
     cleanFrameSource: PlaybackScopeFrameSource?,
-    viewport: ZoneFrame,
+    viewport: MonitorRect,
 ) {
     val displayed = ScopeKind.canonical.filter(selectedScopes::contains)
     if (displayed.isEmpty()) return
@@ -488,7 +491,7 @@ internal fun displayedScopeKinds(
 @Composable
 private fun PortraitScopePanels(
     displayed: List<ScopeKind>,
-    zone: ZoneFrame,
+    zone: MonitorRect,
     axis: ScopeLevelAxis,
     bundle: ScopeAssistBundle,
     assist: MonitorAssistState,
@@ -506,7 +509,7 @@ private fun PortraitScopePanels(
                 // share and deliberately ignores landscape footprint scale.
                 modifier =
                     Modifier.zone(
-                        ZoneFrame(
+                        MonitorRect(
                             x = 12f,
                             y = index * (panelHeight + spacing),
                             width = max(0f, zone.width - 24f),
@@ -530,7 +533,7 @@ internal fun FloatingScopePanels(
     panelLayout: MonitorAnalysisPanelLayout,
     assist: MonitorAssistState,
     hapticsEnabled: Boolean = true,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
+    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
     content: @Composable (ScopeKind, Modifier) -> Unit,
 ) {
     val density = LocalDensity.current.density
@@ -575,7 +578,7 @@ internal fun FloatingScopePanels(
                                 val at = root.localPositionOf(coordinates, Offset.Zero)
                                 report(
                                     id,
-                                    ZoneFrame(
+                                    MonitorRect(
                                         at.x / density, at.y / density,
                                         coordinates.size.width / density,
                                         coordinates.size.height / density,
@@ -600,7 +603,7 @@ private val ScopeKind.panelBase: MonitorScopeSize
             ScopeKind.TRAFFIC_LIGHTS -> MonitorScopePanelSize.trafficLights
         }
 
-private fun ZoneFrame.scopeRect(density: Float): MonitorScopeRect =
+private fun MonitorRect.scopeRect(density: Float): MonitorScopeRect =
     MonitorScopeRect(x * density, y * density, width * density, height * density)
 
 /** One panel view of the shared bundle; it never samples or collects frames itself. */

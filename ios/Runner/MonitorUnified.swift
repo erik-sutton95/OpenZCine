@@ -268,12 +268,18 @@ private struct NikonMonitorStatus: View {
         } color: {
             EmptyView()
         } mode: {
-            EmptyView()
+            // The shared bar shows `link` only in portrait; Nikon main keeps the FPS readout in the
+            // landscape bar too, behind the same Display toggle.
+            fpsReadout
         } link: {
-            if model.chromeSectionMounts(.fpsReadout) {
-                FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
-                    .chromeEditable(.fpsReadout, editing: model.chromeEditorMode)
-            }
+            fpsReadout
+        }
+    }
+
+    @ViewBuilder private var fpsReadout: some View {
+        if model.chromeSectionMounts(.fpsReadout) {
+            FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
+                .chromeEditable(.fpsReadout, editing: model.chromeEditorMode)
         }
     }
 
@@ -321,7 +327,7 @@ private struct NikonCaptureControls: View {
     @State private var preview: MonitorReadoutValue<MonitorCaptureField>?
     private var values: [CameraValue] {
         model.isPhotographyMode
-            ? model.cameraPropertySnapshot.photographyCaptureValues : model.cameraState.values
+            ? model.cameraPropertySnapshot.photographyCaptureValues : model.shownCameraValues
     }
     var body: some View {
         MonitorControlGrid(columns: columns, spacing: 6, equalColumns: columns < values.count) {
@@ -450,7 +456,8 @@ private struct NikonMonitorSystem: View {
                 "Open Media", size: CGSize(width: layout.media.width, height: layout.media.height),
                 action: model.openMediaBrowser
             ) {
-                MonitorIcon.film
+                // Nikon main: a photo glyph reads as "media" on the stills side; cinema keeps film.
+                if model.isPhotographyMode { MonitorIcon.image } else { MonitorIcon.film }
             }.accessibilityIdentifier("monitor.system.media").liveViewGuideAnchor(.media)
                 .chromeEditable(.railMedia, editing: editing)
         } record: {

@@ -75,8 +75,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorFieldLayout
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.relay.MonitorRelayWire
@@ -961,18 +961,18 @@ internal fun isoPickerPresentation(
 }
 
 /**
- * Seats the picker against frames supplied by the shared Swift zone map.
+ * Seats the picker against the shared field layout.
  * Landscape capture-bar pickers prefer the **measured** glass pill frame (iOS
  * `captureBarFrame`) so width and trailing edge match the content-hugging bar
  * rather than the wider zone slot.
  */
 internal fun monitorPickerFrame(
-    viewport: ZoneFrame,
-    zones: MonitorZones,
+    viewport: MonitorRect,
+    layout: MonitorFieldLayout,
     isPortrait: Boolean,
     anchor: MonitorPickerAnchor,
-    measuredCaptureBar: ZoneFrame? = null,
-): ZoneFrame {
+    measuredCaptureBar: MonitorRect? = null,
+): MonitorRect {
     val outerMargin = if (isPortrait) 12f else 8f
     // Portrait keeps a gap under the info bar. Landscape mirrors iOS: the
     // bottom-anchored picker may grow upward through the info-bar band so the
@@ -982,16 +982,13 @@ internal fun monitorPickerFrame(
         if (isPortrait) {
             max(
                 viewport.y + outerMargin,
-                zones.infoBar.y + zones.infoBar.height + 8f,
+                layout.status.maxY + 8f,
             )
         } else {
             viewport.y + outerMargin
         }
-    val zoneAnchor =
-        when (anchor) {
-            MonitorPickerAnchor.CAPTURE_STRIP -> zones.captureStrip
-            MonitorPickerAnchor.CONTROLS_GRID -> zones.controlsGrid
-        }
+    // Both anchors are the shared camera values slot; they differ in how the panel seats.
+    val zoneAnchor = layout.values
     // iOS uses the measured GlassPanel (`captureBarFrame`), not the zone slot.
     val measuredBar =
         measuredCaptureBar?.takeIf {
@@ -1007,21 +1004,12 @@ internal fun monitorPickerFrame(
     // (assist vs capture) so short handsets reclaim the dead band the zone map
     // sometimes leaves above the glass pills — but when we have a measured bar,
     // seat directly above it (iOS hasBar path).
-    val landscapeStripTop =
-        if (measuredBar != null) {
-            measuredBar.y
-        } else {
-            listOfNotNull(zones.captureStrip?.y, zones.assistStrip?.y).minOrNull()
-        }
+    val landscapeStripTop = measuredBar?.y ?: min(layout.values.y, layout.assists.y)
     val bottomLimit =
         when {
-            isPortrait && anchor == MonitorPickerAnchor.CAPTURE_STRIP && zoneAnchor != null ->
-                zoneAnchor.y - barGap
-            isPortrait -> zones.systemCluster.y - barGap
-            measuredBar != null -> measuredBar.y - barGap
-            landscapeStripTop != null -> landscapeStripTop - barGap
-            zoneAnchor != null -> zoneAnchor.y - barGap
-            else -> zones.feed.y + zones.feed.height - barGap
+            isPortrait && anchor == MonitorPickerAnchor.CAPTURE_STRIP -> zoneAnchor.y - barGap
+            isPortrait -> layout.system.y - barGap
+            else -> landscapeStripTop - barGap
         }
     val availableHeight = max(0f, bottomLimit - topLimit)
     // Landscape max raised so the tint pad (header + 180dp arrow cluster + mode
@@ -1034,18 +1022,14 @@ internal fun monitorPickerFrame(
     val width =
         if (isPortrait) {
             max(0f, viewport.width - outerMargin * 2f)
-        } else if (anchorFrame != null) {
-            min(420f, max(0f, anchorFrame.width))
         } else {
-            min(420f, max(0f, zones.feed.width))
+            min(420f, max(0f, anchorFrame.width))
         }
     val rawX =
         if (isPortrait) {
             viewport.x + outerMargin
-        } else if (anchorFrame != null) {
-            anchorFrame.x + anchorFrame.width / 2f - width / 2f
         } else {
-            zones.feed.x + zones.feed.width - outerMargin - width
+            anchorFrame.x + anchorFrame.width / 2f - width / 2f
         }
     // Keep the panel on-screen (iOS clamps its trailing edge to host − 8).
     val minX = viewport.x + outerMargin
@@ -1054,7 +1038,7 @@ internal fun monitorPickerFrame(
             minX,
             viewport.x + viewport.width - width - outerMargin,
         )
-    return ZoneFrame(
+    return MonitorRect(
         x = rawX.coerceIn(minX, maxX),
         y = max(topLimit, bottomLimit - height),
         width = width,
@@ -1070,18 +1054,18 @@ internal fun monitorPickerFrame(
  * cap. Command mode centres the panel in the viewport.
  */
 internal fun monitorTopBarPickerFrame(
-    viewport: ZoneFrame,
-    zones: MonitorZones,
+    viewport: MonitorRect,
+    layout: MonitorFieldLayout,
     isCommandCenter: Boolean = false,
     kind: MonitorPickerKind? = null,
-    anchorPill: ZoneFrame? = null,
-): ZoneFrame {
+    anchorPill: MonitorRect? = null,
+): MonitorRect {
     val outerMargin = 8f
     val preferredWidth = if (kind == MonitorPickerKind.QUALITY) 400f else 340f
     val width = min(preferredWidth, max(0f, viewport.width - outerMargin * 2f))
     if (isCommandCenter) {
         val height = min(300f, max(120f, viewport.height * 0.55f))
-        return ZoneFrame(
+        return MonitorRect(
             x = viewport.x + (viewport.width - width) / 2f,
             y = viewport.y + (viewport.height - height) / 2f,
             width = width,
@@ -1090,10 +1074,10 @@ internal fun monitorTopBarPickerFrame(
     }
     val anchorMid =
         anchorPill?.let { it.x + it.width / 2f }
-            ?: (zones.infoBar.x + zones.infoBar.width / 2f)
+            ?: layout.status.midX
     val anchorBottom =
         anchorPill?.let { it.y + it.height }
-            ?: (zones.infoBar.y + zones.infoBar.height)
+            ?: layout.status.maxY
     val x =
         (anchorMid - width / 2f).coerceIn(
             viewport.x + outerMargin,
@@ -1103,7 +1087,7 @@ internal fun monitorTopBarPickerFrame(
     val maxHeight = if (kind == MonitorPickerKind.QUALITY) 380f else 300f
     val height =
         min(maxHeight, max(120f, viewport.y + viewport.height - y - outerMargin))
-    return ZoneFrame(x = x, y = y, width = width, height = height)
+    return MonitorRect(x = x, y = y, width = width, height = height)
 }
 
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */
@@ -1127,7 +1111,7 @@ internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
 @Composable
 internal fun MonitorControlPickerPanel(
     picker: MonitorPickerPresentation,
-    frame: ZoneFrame,
+    frame: MonitorRect,
     commonControl: MonitorControlModel? = null,
     commonField: MonitorCaptureField? = null,
     controlsEnabled: Boolean,
@@ -1244,7 +1228,7 @@ internal fun MonitorControlPickerPanel(
 @Composable
 private fun PickerPanelBody(
     picker: MonitorPickerPresentation,
-    frame: ZoneFrame,
+    frame: MonitorRect,
     commonControl: MonitorControlModel? = null,
     commonField: MonitorCaptureField? = null,
     controlsEnabled: Boolean,
@@ -1761,11 +1745,11 @@ internal const val MF_DRIVE_STRIP_WIDTH_DP = 44f
  * (record/DISP/media/settings), vertically centred in the viewport.
  */
 internal fun mfDriveStripFrame(
-    viewport: ZoneFrame,
+    viewport: MonitorRect,
     rightRailLeading: Float,
-): ZoneFrame {
+): MonitorRect {
     val height = minOf(260f, viewport.height * 0.6f)
-    return ZoneFrame(
+    return MonitorRect(
         x = rightRailLeading - MF_DRIVE_STRIP_WIDTH_DP - 12f,
         y = viewport.y + (viewport.height - height) / 2f,
         width = MF_DRIVE_STRIP_WIDTH_DP,

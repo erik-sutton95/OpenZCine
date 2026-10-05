@@ -1,6 +1,6 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
@@ -119,8 +119,8 @@ class ScopeLayoutTest {
 
     @Test
     fun `false color reference mirrors inside the feed when outside is unavailable`() {
-        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
-        val feed = ZoneFrame(59f, 0f, 734f, 393f)
+        val viewport = MonitorRect(0f, 0f, 848f, 393f)
+        val feed = MonitorRect(59f, 0f, 734f, 393f)
 
         val frame = falseColorReferenceDefaultFrame(feed, viewport)
 
@@ -137,8 +137,8 @@ class ScopeLayoutTest {
 
     @Test
     fun `playback reference uses its already chrome-safe viewport directly`() {
-        val viewport = ZoneFrame(0f, 52f, 800f, 226f)
-        val feed = ZoneFrame(81f, 0f, 640f, 360f)
+        val viewport = MonitorRect(0f, 52f, 800f, 226f)
+        val feed = MonitorRect(81f, 0f, 640f, 360f)
 
         val frame =
             falseColorReferenceDefaultFrame(
@@ -163,8 +163,8 @@ class ScopeLayoutTest {
     @Test
     fun `false color panel movement snaps to the iOS four point grid`() {
         assertEquals(
-            ZoneFrame(60f, 100f, 264f, 52f),
-            snapFalseColorReferenceFrame(ZoneFrame(59f, 101f, 264f, 52f)),
+            MonitorRect(60f, 100f, 264f, 52f),
+            snapFalseColorReferenceFrame(MonitorRect(59f, 101f, 264f, 52f)),
         )
     }
 

@@ -34,7 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.LiveAudioMeterChannel
 import com.opencapture.opencine.nikon.LiveAudioMeterLevels
 import kotlin.math.max
@@ -66,8 +66,8 @@ internal fun audioMeterPanelSize(isDebugFixture: Boolean): Pair<Float, Float> =
 internal fun AudioMetersOverlay(
     levels: LiveAudioMeterLevels?,
     sensitivity: String?,
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
+    feed: MonitorRect,
+    viewport: MonitorRect,
     placementStoreName: String = "audioMeterPlacement",
     bottomChromeClearance: Float = AUDIO_PANEL_BOTTOM_CHROME_CLEARANCE,
     trailingEdgeGap: Float = AUDIO_PANEL_EDGE_GAP,
@@ -117,20 +117,20 @@ internal fun AudioMetersOverlay(
 
 /** Bottom-trailing iOS-equivalent default, constrained to the physical viewport. */
 internal fun floatingAudioMeterFrame(
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
+    feed: MonitorRect,
+    viewport: MonitorRect,
     width: Float,
     height: Float,
     bottomChromeClearance: Float = AUDIO_PANEL_BOTTOM_CHROME_CLEARANCE,
     trailingEdgeGap: Float = AUDIO_PANEL_EDGE_GAP,
-): ZoneFrame {
+): MonitorRect {
     val bottomEdge =
         min(
             feed.y + feed.height,
             viewport.y + viewport.height - bottomChromeClearance.coerceAtLeast(0f),
         )
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x = feed.x + feed.width - width - trailingEdgeGap.coerceAtLeast(0f),
             y = bottomEdge - height - AUDIO_PANEL_EDGE_GAP,
             width = width,
@@ -322,13 +322,13 @@ private fun DrawScope.drawAudioMeters(levels: LiveAudioMeterLevels?) {
 private class AudioMeterPlacementStore(context: Context, name: String) {
     private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
-    fun resolve(default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
+    fun resolve(default: MonitorRect, bounds: MonitorRect): MonitorRect {
         if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
         val normalizedX = preferences.getFloat(CENTER_X_KEY, 0.5f)
         val normalizedY = preferences.getFloat(CENTER_Y_KEY, 0.5f)
         if (!normalizedX.isFinite() || !normalizedY.isFinite()) return default
         return clampScopeFrame(
-            ZoneFrame(
+            MonitorRect(
                 x = bounds.x + normalizedX * bounds.width - default.width / 2f,
                 y = bounds.y + normalizedY * bounds.height - default.height / 2f,
                 width = default.width,
@@ -338,7 +338,7 @@ private class AudioMeterPlacementStore(context: Context, name: String) {
         )
     }
 
-    fun save(frame: ZoneFrame, bounds: ZoneFrame) {
+    fun save(frame: MonitorRect, bounds: MonitorRect) {
         val centerX = (frame.x + frame.width / 2f - bounds.x) / max(1f, bounds.width)
         val centerY = (frame.y + frame.height / 2f - bounds.y) / max(1f, bounds.height)
         preferences.edit()
