@@ -112,7 +112,7 @@ struct ConformPreviewTests {
         #expect(MonitorConformPreview.rateLabel(60) == "60")
         #expect(MonitorConformPreview.rateLabel(23.976) == "23.98")
         #expect(MonitorConformPreview.rateLabel(29.97) == "29.97")
-        #expect(MonitorConformPreview.rateLabel(0) == "—")
+        #expect(MonitorConformPreview.rateLabel(0) == "\u{2014}")
     }
 
     /// The pulldown rates do not divide evenly, so the percentage has to survive a non-integer.
