@@ -3484,6 +3484,9 @@ extension RunnerTests {
             func visit(_ object: NSObject) {
                 guard seen.insert(ObjectIdentifier(object)).inserted else { return }
                 result.append(object)
+                // SwiftUI vends its nodes through `accessibilityElements`; `accessibilityElement(at:)`
+                // can answer nil for them.
+                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
                 let count = object.accessibilityElementCount()
                 if count > 0 && count < 512 {
                     for index in 0..<count {
@@ -3529,7 +3532,8 @@ extension RunnerTests {
 
         try await settle()
         let expand = try XCTUnwrap(
-            elements(host.view).first { identifier($0) == "monitor.assists.expand" })
+            elements(host.view).first { identifier($0) == "monitor.assists.expand" },
+            "Exposed: \(elements(host.view).map(identifier).filter { !$0.isEmpty })")
         XCTAssertTrue(expand.accessibilityActivate())
         try await settle()
         let bar = model.captureBarFrame
