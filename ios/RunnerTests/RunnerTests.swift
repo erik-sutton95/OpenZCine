@@ -3442,3 +3442,141 @@ extension RunnerTests {
         add(attachment)
     }
 }
+
+extension RunnerTests {
+    /// Landscape: the expanded View Assist palette's lower row lies over the camera values bar.
+    /// The palette draws above the values (Pocket's layering), so the values never paint over a
+    /// chip or take its tap. Reduce Transparency makes the palette glass opaque, so a covered
+    /// chip's pixels must not change when the values do, while the uncovered values must.
+    @MainActor
+    func testExpandedLandscapePaletteDrawsAboveTheCameraValues() async throws {
+        let model = NativeAppModel()
+        model.preferences = OperatorPreferences.defaults
+        model.startDemoSession()
+        let delivery = MediaDeliveryCoordinator()
+        let host = UIHostingController(
+            rootView: GeometryReader { proxy in
+                NikonMonitorShell(
+                    context: LiveViewLayoutContext(
+                        proxy: proxy, deviceOrientation: .unknown, screenWidth: nil)
+                )
+                .environment(model).environment(delivery)
+                .environment(\._accessibilityReduceTransparency, true)
+            })
+        host.safeAreaRegions = []
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        func settle() async throws {
+            for _ in 0..<60 {
+                host.view.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        func elements(_ root: NSObject) -> [NSObject] {
+            var seen = Set<ObjectIdentifier>()
+            var result: [NSObject] = []
+            func visit(_ object: NSObject) {
+                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+                result.append(object)
+                let count = object.accessibilityElementCount()
+                if count > 0 && count < 512 {
+                    for index in 0..<count {
+                        if let child = object.accessibilityElement(at: index) as? NSObject {
+                            visit(child)
+                        }
+                    }
+                }
+                if let view = object as? UIView { for child in view.subviews { visit(child) } }
+            }
+            visit(root)
+            return result.filter { $0.isAccessibilityElement && !$0.accessibilityFrame.isEmpty }
+        }
+        func identifier(_ object: NSObject) -> String {
+            let getter = NSSelectorFromString("accessibilityIdentifier")
+            guard object.responds(to: getter) else { return "" }
+            return object.perform(getter)?.takeUnretainedValue() as? String ?? ""
+        }
+        func render() -> CGImage? {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(bounds: host.view.bounds, format: format).image { _ in
+                host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+            }.cgImage
+        }
+        func pixels(_ image: CGImage, _ rect: CGRect) -> [UInt8] {
+            let crop = rect.integral
+            var bytes = [UInt8](repeating: 0, count: Int(crop.width * crop.height) * 4)
+            bytes.withUnsafeMutableBytes { buffer in
+                let context = CGContext(
+                    data: buffer.baseAddress, width: Int(crop.width), height: Int(crop.height),
+                    bitsPerComponent: 8, bytesPerRow: Int(crop.width) * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                context?.draw(
+                    image,
+                    in: CGRect(
+                        x: -crop.minX, y: crop.maxY - CGFloat(image.height),
+                        width: CGFloat(image.width), height: CGFloat(image.height)))
+            }
+            return bytes
+        }
+
+        try await settle()
+        let expand = try XCTUnwrap(
+            elements(host.view).first { identifier($0) == "monitor.assists.expand" })
+        XCTAssertTrue(expand.accessibilityActivate())
+        try await settle()
+        let bar = model.captureBarFrame
+        let covered = elements(host.view).filter { identifier($0).hasPrefix("monitor.assist.") }
+            .map { $0.accessibilityFrame.intersection(bar) }
+            .filter { !$0.isNull && $0.width >= 8 && $0.height >= 8 }
+        XCTAssertFalse(covered.isEmpty, "The open landscape palette must reach the values bar")
+        let palette = elements(host.view).filter { identifier($0).hasPrefix("monitor.assist") }
+            .map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
+        let open = CGRect(
+            x: palette.maxX + 8, y: bar.minY, width: bar.maxX - palette.maxX - 8,
+            height: bar.height)
+        // Copy the regions now: a renderer image read after a later render showed the later frame.
+        let regions = [open] + covered
+        let first = try XCTUnwrap(render())
+        let shown = regions.map { pixels(first, $0) }
+
+        let state = model.cameraState
+        model.cameraState = CameraDisplayState(
+            recordState: state.recordState, timecode: state.timecode,
+            resolutionFrameRate: state.resolutionFrameRate, codec: state.codec,
+            media: state.media, liveFPS: state.liveFPS,
+            cameraBatteryPercent: state.cameraBatteryPercent,
+            phoneBatteryPercent: state.phoneBatteryPercent, cameraName: state.cameraName,
+            lens: state.lens, temperature: state.temperature,
+            values: state.values.map { CameraValue(label: $0.label, value: "8888") },
+            mediaStatus: state.mediaStatus)
+        try await settle()
+        let image = try XCTUnwrap(render())
+        let changed = regions.map { pixels(image, $0) }
+        let attachment = XCTAttachment(image: UIImage(cgImage: image))
+        attachment.name = "SIMULATED-landscape-palette-over-values"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        // A value painted over a chip changes hundreds of its pixels; allow 1% for icon noise.
+        func differing(_ index: Int) -> Int {
+            stride(from: 0, to: shown[index].count, by: 4).filter {
+                shown[index][$0..<$0 + 4] != changed[index][$0..<$0 + 4]
+            }.count
+        }
+        func noise(_ rect: CGRect) -> Int { Int(rect.integral.width * rect.integral.height) / 100 }
+        XCTAssertGreaterThan(differing(0), noise(open), "The uncovered camera values must redraw")
+        for (index, rect) in covered.enumerated() {
+            XCTAssertLessThanOrEqual(
+                differing(index + 1), noise(rect),
+                "A camera value drew over the open palette at \(NSCoder.string(for: rect))")
+        }
+    }
+}
