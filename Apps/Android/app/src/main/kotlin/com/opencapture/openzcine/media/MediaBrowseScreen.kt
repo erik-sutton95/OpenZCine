@@ -2529,6 +2529,8 @@ private fun MediaClipGrid(
 ) {
     val gridState = rememberLazyGridState()
     val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
+    // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
+    val currentSelectedIDs by rememberUpdatedState(selectedIDs)
     val view = LocalView.current
     val selectionInput = rememberSelectionInputPolicy()
     MonitorMediaSelectionHost(
@@ -2574,7 +2576,7 @@ private fun MediaClipGrid(
                         isSelecting = isSelecting,
                         onClick = { onOpen(clip) },
                         onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(selectedIDs, identity)) },
+                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
                         onToggleFavorite = { onToggleFavorite(clip) },
                     )
                 }
@@ -2605,6 +2607,8 @@ private fun MediaClipList(
 ) {
     val listState = rememberLazyListState()
     val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
+    // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
+    val currentSelectedIDs by rememberUpdatedState(selectedIDs)
     val view = LocalView.current
     val selectionInput = rememberSelectionInputPolicy()
     MonitorMediaSelectionHost(
@@ -2647,7 +2651,7 @@ private fun MediaClipList(
                         isSelecting = isSelecting,
                         onClick = { onOpen(clip) },
                         onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(selectedIDs, identity)) },
+                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
                         onToggleFavorite = { onToggleFavorite(clip) },
                     )
                 }
