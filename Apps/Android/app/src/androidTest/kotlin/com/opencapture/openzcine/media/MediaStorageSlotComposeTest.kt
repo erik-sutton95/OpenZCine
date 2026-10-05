@@ -25,6 +25,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** Device contract for the shared portrait/landscape camera-slot selector. */
 @RunWith(AndroidJUnit4::class)
@@ -94,8 +96,8 @@ class MediaStorageSlotComposeTest {
                             onCategoryChange = {},
                             onStorageSelect = {},
                             showsGridControls = false,
-                            layout = MediaLibraryLayout.GRID,
-                            thumbnailSize = MediaThumbnailSize.MEDIUM,
+                            layout = MonitorMediaLayout.GRID,
+                            thumbnailSize = MonitorThumbnailSize.MEDIUM,
                             onLayoutChange = {},
                             onThumbnailSizeChange = {},
                             modifier = Modifier.width(172.dp),

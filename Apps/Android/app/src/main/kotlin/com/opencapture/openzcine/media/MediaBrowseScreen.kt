@@ -60,8 +60,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -141,6 +139,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.openzcine.settings.PanelCloseButton
+import com.opencapture.monitorui.MonitorMediaLayout
+import androidx.compose.ui.platform.LocalConfiguration
+import com.opencapture.monitorui.monitorCatalogColumns
+import com.opencapture.monitorui.MonitorCatalogGrid
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
 internal sealed interface BrowseState {
@@ -1565,10 +1567,10 @@ internal fun MediaLibraryRail(
     onCategoryChange: (MediaLibraryCategory) -> Unit,
     onStorageSelect: (Long) -> Unit,
     showsGridControls: Boolean,
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
-    onLayoutChange: (MediaLibraryLayout) -> Unit,
-    onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
+    onLayoutChange: (MonitorMediaLayout) -> Unit,
+    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -1599,27 +1601,17 @@ internal fun MediaLibraryRail(
 
 @Composable
 private fun MediaGridLayoutControls(
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
-    onLayoutChange: (MediaLibraryLayout) -> Unit,
-    onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
+    onLayoutChange: (MonitorMediaLayout) -> Unit,
+    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     MonitorCatalogDisplayControls(
-        list = layout == MediaLibraryLayout.LIST,
-        thumbnailSize = when (thumbnailSize) {
-            MediaThumbnailSize.SMALL -> MonitorThumbnailSize.SMALL
-            MediaThumbnailSize.MEDIUM -> MonitorThumbnailSize.MEDIUM
-            MediaThumbnailSize.LARGE -> MonitorThumbnailSize.LARGE
-        },
-        onList = { onLayoutChange(if (it) MediaLibraryLayout.LIST else MediaLibraryLayout.GRID) },
-        onThumbnailSize = {
-            onThumbnailSizeChange(when (it) {
-                MonitorThumbnailSize.SMALL -> MediaThumbnailSize.SMALL
-                MonitorThumbnailSize.MEDIUM -> MediaThumbnailSize.MEDIUM
-                MonitorThumbnailSize.LARGE -> MediaThumbnailSize.LARGE
-            })
-        },
+        list = layout == MonitorMediaLayout.LIST,
+        thumbnailSize = thumbnailSize,
+        onList = { onLayoutChange(if (it) MonitorMediaLayout.LIST else MonitorMediaLayout.GRID) },
+        onThumbnailSize = onThumbnailSizeChange,
         modifier = modifier,
     )
 }
@@ -1627,10 +1619,10 @@ private fun MediaGridLayoutControls(
 /** iOS portrait bottom band: gradient fade + layout/density capsule. */
 @Composable
 private fun PortraitMediaGridControlsBand(
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
-    onLayoutChange: (MediaLibraryLayout) -> Unit,
-    onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
+    onLayoutChange: (MonitorMediaLayout) -> Unit,
+    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -2008,8 +2000,8 @@ private fun MediaLibraryBody(
     state: BrowseState,
     clips: List<MediaClipRecord>,
     source: MediaLibrarySource,
-    layout: MediaLibraryLayout,
-    thumbnailSize: MediaThumbnailSize,
+    layout: MonitorMediaLayout,
+    thumbnailSize: MonitorThumbnailSize,
     cameraID: String,
     cameraIDFor: (MediaClipRecord) -> String = { cameraID },
     clipIdentity: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
@@ -2040,29 +2032,11 @@ private fun MediaLibraryBody(
                     ListingState(source)
                 } else if (clips.isEmpty()) {
                     EmptyState(source)
-                } else if (layout == MediaLibraryLayout.GRID) {
-                    MediaClipGrid(
-                        clips = clips,
-                        thumbnailSize = thumbnailSize,
-                        source = source,
-                        cameraIDFor = cameraIDFor,
-                        clipIdentity = clipIdentity,
-                        hasRawSibling = hasRawSibling,
-                        burstCountOf = burstCountOf,
-                        cameraConnected = cameraConnected,
-                        connectionOwner = connectionOwner,
-                        cacheStore = cacheStore,
-                        favorites = favorites,
-                        isSelecting = isSelecting,
-                        selectedIDs = selectedIDs,
-                        onOpen = onOpen,
-                        onBeginSelection = onBeginSelection,
-                        onSweepSelection = onSweepSelection,
-                        onToggleFavorite = onToggleFavorite,
-                    )
                 } else {
-                    MediaClipList(
+                    MediaClipGallery(
                         clips = clips,
+                        list = layout == MonitorMediaLayout.LIST,
+                        thumbnailSize = thumbnailSize,
                         source = source,
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
@@ -2103,14 +2077,15 @@ private fun rememberSelectionInputPolicy(): MonitorMediaSelectionConfiguration {
     }
 }
 
-/** Actual source cards consume the common mounted-hit and native input owner.
- * Browsing entry remains on the cells; a subsequent selecting touch arms a hold.
- * Native vertical scrolling and frame-clock edge scrolling share the real lazy state.
+/** Actual source cards consume the common mounted-hit and native input owner, in the shared
+ * catalog grid or a list. Browsing entry remains on the cells; a subsequent selecting touch arms a
+ * hold. Native vertical scrolling and frame-clock edge scrolling share the real lazy state.
  */
 @Composable
-private fun MediaClipGrid(
+private fun MediaClipGallery(
     clips: List<MediaClipRecord>,
-    thumbnailSize: MediaThumbnailSize,
+    list: Boolean,
+    thumbnailSize: MonitorThumbnailSize,
     source: MediaLibrarySource,
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
@@ -2128,98 +2103,24 @@ private fun MediaClipGrid(
     onToggleFavorite: (MediaClipRecord) -> Unit,
 ) {
     val gridState = rememberLazyGridState()
-    val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
-    // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
-    val currentSelectedIDs by rememberUpdatedState(selectedIDs)
-    val view = LocalView.current
-    val selectionInput = rememberSelectionInputPolicy()
-    MonitorMediaSelectionHost(
-        ids = orderedIDs,
-        selecting = isSelecting,
-        selected = selectedIDs,
-        scroll = gridState,
-        onOpen = { id -> clips.firstOrNull { clipIdentity(it) == id }?.let(onOpen) },
-        onSelectionChange = { _, next -> onSweepSelection(next) },
-        modifier = Modifier.fillMaxSize(),
-        sessionKey = source to connectionOwner,
-        configuration = selectionInput,
-        onFeedback = { event ->
-            view.performOperatorHaptic(
-                if (event == MonitorMediaSelectionFeedback.BEGAN) HapticFeedbackConstants.LONG_PRESS
-                else HapticFeedbackConstants.CLOCK_TICK,
-            )
-        },
-    ) { registry ->
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
-            state = gridState,
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(bottom = 28.dp),
-        ) {
-            items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
-                val identity = clipIdentity(clip)
-                MonitorMediaHitTarget(registry = registry, id = identity) {
-                    MediaClipArtworkAdapter(
-                        clip = clip,
-                        list = false,
-                        source = source,
-                        cameraID = cameraIDFor(clip),
-                        hasRawSibling = hasRawSibling(clip),
-                        burstCount = burstCountOf(clip),
-                        cameraConnected = cameraConnected,
-                        connectionOwner = connectionOwner,
-                        cacheStore = cacheStore,
-                        favorite = identity in favorites,
-                        selected = identity in selectedIDs,
-                        isSelecting = isSelecting,
-                        onClick = { onOpen(clip) },
-                        onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
-                        onToggleFavorite = { onToggleFavorite(clip) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** List arrangement keeps the same source-authorized records and actions. */
-@Composable
-private fun MediaClipList(
-    clips: List<MediaClipRecord>,
-    source: MediaLibrarySource,
-    cameraIDFor: (MediaClipRecord) -> String,
-    clipIdentity: (MediaClipRecord) -> String,
-    hasRawSibling: (MediaClipRecord) -> Boolean,
-    burstCountOf: (MediaClipRecord) -> Int? = { null },
-    cameraConnected: Boolean,
-    connectionOwner: Long?,
-    cacheStore: MediaCacheStore,
-    favorites: Set<String>,
-    isSelecting: Boolean,
-    selectedIDs: Set<String>,
-    onOpen: (MediaClipRecord) -> Unit,
-    onBeginSelection: (MediaClipRecord) -> Unit,
-    onSweepSelection: (Set<String>) -> Unit,
-    onToggleFavorite: (MediaClipRecord) -> Unit,
-) {
     val listState = rememberLazyListState()
     val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
     // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
     val currentSelectedIDs by rememberUpdatedState(selectedIDs)
     val view = LocalView.current
     val selectionInput = rememberSelectionInputPolicy()
+    val configuration = LocalConfiguration.current
+    val columns =
+        monitorCatalogColumns(thumbnailSize, minOf(configuration.screenWidthDp, configuration.screenHeightDp) >= 600)
     MonitorMediaSelectionHost(
         ids = orderedIDs,
         selecting = isSelecting,
         selected = selectedIDs,
-        scroll = listState,
+        scroll = if (list) listState else gridState,
         onOpen = { id -> clips.firstOrNull { clipIdentity(it) == id }?.let(onOpen) },
         onSelectionChange = { _, next -> onSweepSelection(next) },
         modifier = Modifier.fillMaxSize(),
-        sessionKey = source to connectionOwner,
+        sessionKey = Triple(source, connectionOwner, list),
         configuration = selectionInput,
         onFeedback = { event ->
             view.performOperatorHaptic(
@@ -2228,34 +2129,41 @@ private fun MediaClipList(
             )
         },
     ) { registry ->
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = 28.dp),
-        ) {
-            items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
-                val identity = clipIdentity(clip)
-                MonitorMediaHitTarget(registry = registry, id = identity) {
-                    MediaClipArtworkAdapter(
-                        clip = clip,
-                        list = true,
-                        source = source,
-                        cameraID = cameraIDFor(clip),
-                        hasRawSibling = hasRawSibling(clip),
-                        cameraConnected = cameraConnected,
-                        connectionOwner = connectionOwner,
-                        cacheStore = cacheStore,
-                        favorite = identity in favorites,
-                        selected = identity in selectedIDs,
-                        isSelecting = isSelecting,
-                        onClick = { onOpen(clip) },
-                        onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
-                        onToggleFavorite = { onToggleFavorite(clip) },
-                    )
-                }
+        val cell: @Composable (MediaClipRecord) -> Unit = { clip ->
+            val identity = clipIdentity(clip)
+            MonitorMediaHitTarget(registry = registry, id = identity) {
+                MediaClipArtworkAdapter(
+                    clip = clip,
+                    list = list,
+                    source = source,
+                    cameraID = cameraIDFor(clip),
+                    hasRawSibling = hasRawSibling(clip),
+                    // List rows carry no burst count.
+                    burstCount = if (list) null else burstCountOf(clip),
+                    cameraConnected = cameraConnected,
+                    connectionOwner = connectionOwner,
+                    cacheStore = cacheStore,
+                    favorite = identity in favorites,
+                    selected = identity in selectedIDs,
+                    isSelecting = isSelecting,
+                    onClick = { onOpen(clip) },
+                    onLongPress = { onBeginSelection(clip) },
+                    onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
+                    onToggleFavorite = { onToggleFavorite(clip) },
+                )
             }
+        }
+        if (list) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 28.dp),
+            ) {
+                items(clips, key = clipIdentity) { cell(it) }
+            }
+        } else {
+            MonitorCatalogGrid(clips, columns, key = clipIdentity, modifier = Modifier.fillMaxSize(), state = gridState, cell = cell)
         }
     }
 }

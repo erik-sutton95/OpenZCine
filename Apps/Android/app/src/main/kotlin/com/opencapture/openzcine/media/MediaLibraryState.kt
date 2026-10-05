@@ -8,11 +8,10 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.MessageDigest
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
 import java.util.Base64
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** The two safe library sources exposed by the Android browser. */
 internal enum class MediaLibrarySource(val title: String) {
@@ -26,22 +25,6 @@ internal enum class MediaLibraryCategory(val title: String) {
     VIDEOS("Videos"),
     PHOTOS("Photos"),
     FAVORITES("Favorites"),
-}
-
-/** Operator-selectable arrangement for the Android media library. */
-internal enum class MediaLibraryLayout(val accessibilityLabel: String) {
-    GRID("Switch to list view"),
-    LIST("Switch to grid view"),
-}
-
-/** Persisted adaptive-grid density, matching the current iOS media browser. */
-internal enum class MediaThumbnailSize(
-    val accessibilityLabel: String,
-    val minimumCellWidthDp: Int,
-) {
-    SMALL("Small thumbnails", 148),
-    MEDIUM("Medium thumbnails", 210),
-    LARGE("Large thumbnails", 280),
 }
 
 /**
@@ -155,9 +138,9 @@ internal enum class MediaLibrarySortOrder(val title: String) {
 internal data class MediaLibraryViewOptions(
     val source: MediaLibrarySource,
     val category: MediaLibraryCategory = MediaLibraryCategory.ALL,
-    val layout: MediaLibraryLayout = MediaLibraryLayout.GRID,
+    val layout: MonitorMediaLayout = MonitorMediaLayout.GRID,
     val sortOrder: MediaLibrarySortOrder = MediaLibrarySortOrder.NEWEST,
-    val thumbnailSize: MediaThumbnailSize = MediaThumbnailSize.MEDIUM,
+    val thumbnailSize: MonitorThumbnailSize = MonitorThumbnailSize.MEDIUM,
 )
 
 /**
@@ -448,9 +431,9 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         MediaLibraryViewOptions(
             source = enumValue(PREF_SOURCE, defaultSource),
             category = enumValue(PREF_CATEGORY, MediaLibraryCategory.ALL),
-            layout = enumValue(PREF_LAYOUT, MediaLibraryLayout.GRID),
+            layout = enumValue(PREF_LAYOUT, MonitorMediaLayout.GRID),
             sortOrder = enumValue(PREF_SORT, MediaLibrarySortOrder.NEWEST),
-            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MediaThumbnailSize.MEDIUM),
+            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MonitorThumbnailSize.MEDIUM),
         )
 
     /** Persists only local browsing preferences; camera commands are never stored here. */

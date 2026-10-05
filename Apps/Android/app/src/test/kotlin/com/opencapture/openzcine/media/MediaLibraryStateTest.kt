@@ -19,6 +19,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** JVM coverage for the persisted, core-authorized Android library state. */
 class MediaLibraryStateTest {
@@ -740,9 +742,9 @@ class MediaLibraryStateTest {
             MediaLibraryViewOptions(
                 source = MediaLibrarySource.LOCAL,
                 category = MediaLibraryCategory.FAVORITES,
-                layout = MediaLibraryLayout.LIST,
+                layout = MonitorMediaLayout.LIST,
                 sortOrder = MediaLibrarySortOrder.NAME,
-                thumbnailSize = MediaThumbnailSize.LARGE,
+                thumbnailSize = MonitorThumbnailSize.LARGE,
             )
 
         MediaLibraryIndex(preferences).saveViewOptions(options)
