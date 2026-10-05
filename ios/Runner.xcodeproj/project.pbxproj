@@ -62,7 +62,6 @@
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */; };
 		A652A40C5850105E136F0739 /* LiveFrameRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852060CB19F3A779DA73A8F3 /* LiveFrameRenderer.swift */; };
-		AB12CD34EF56AB12CD34EF01 /* ScopeTraceMetalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF56AB12CD34EF02 /* ScopeTraceMetalView.swift */; };
 		B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */; };
 		BRND00000000000000000002 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BRND00000000000000000001 /* Branding.swift */; };
 		C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000002 /* NativeAppRoot.swift */; };
@@ -82,9 +81,11 @@
 		C0DE00000000000000000060 /* AccessorySetupWiFiCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */; };
 		C0DE00000000000000000066 /* CameraWiFiScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000067 /* CameraWiFiScannerView.swift */; };
 		C0DE00000000000000000068 /* StartupPermissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000069 /* StartupPermissions.swift */; };
-		C0DE000000000000000000B0 /* MonitorPortrait.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000B1 /* MonitorPortrait.swift */; };
 		C0DE000000000000000000B2 /* MonitorPortraitModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000B3 /* MonitorPortraitModules.swift */; };
 		C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C5 /* MonitorUnified.swift */; };
+		C0DE00000000000000000F01 /* NikonAssists.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F11 /* NikonAssists.swift */; };
+		C0DE00000000000000000F03 /* NikonAssistInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F13 /* NikonAssistInspector.swift */; };
+		C0DE00000000000000000F04 /* NikonScopes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F14 /* NikonScopes.swift */; };
 		C0DE000000000000000000C6 /* DemoHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C7 /* DemoHarness.swift */; };
 		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
@@ -121,6 +122,7 @@
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
+		C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F12 /* NikonAssistsTests.swift */; };
 		C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */; };
 		C1B000000000000000000004 /* NikonMediaLibraryAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */; };
 		C1C000000000000000000004 /* NikonMediaGalleryProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */; };
@@ -222,7 +224,6 @@
 		9B8454460465D3532DE04016 /* Version.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Version.xcconfig; path = ../Config/Version.xcconfig; sourceTree = "<group>"; };
 		9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RedDownloadView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScopeAssistSampling.swift; sourceTree = "<group>"; };
-		AB12CD34EF56AB12CD34EF02 /* ScopeTraceMetalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeTraceMetalView.swift; sourceTree = "<group>"; };
 		B47FA7E6D89EF63D0B2B27B2 /* FrameDecoder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FrameDecoder.swift; sourceTree = "<group>"; };
 		B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModel.swift; path = Frameio/FrameioModel.swift; sourceTree = "<group>"; };
 		B99B47BB1FB3BC66DC16FAC8 /* Frameio.local.xcconfig.example */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Frameio.local.xcconfig.example; sourceTree = "<group>"; };
@@ -244,8 +245,10 @@
 		C0DE00000000000000000061 /* AccessorySetupWiFiCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessorySetupWiFiCoordinator.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000067 /* CameraWiFiScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiScannerView.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000069 /* StartupPermissions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupPermissions.swift; sourceTree = "<group>"; };
-		C0DE000000000000000000B1 /* MonitorPortrait.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortrait.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000B3 /* MonitorPortraitModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortraitModules.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000F11 /* NikonAssists.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAssists.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000F13 /* NikonAssistInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAssistInspector.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000F14 /* NikonScopes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonScopes.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C5 /* MonitorUnified.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorUnified.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F2 /* PhotographyChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotographyChrome.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C7 /* DemoHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoHarness.swift; sourceTree = "<group>"; };
@@ -280,6 +283,7 @@
 		N0100000000000000000000D /* MulticamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinatorTests.swift; sourceTree = "<group>"; };
 		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
 		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000F12 /* NikonAssistsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAssistsTests.swift; sourceTree = "<group>"; };
 		C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaCatalogAdoptionTests.swift; sourceTree = "<group>"; };
 		C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaLibraryAdoptionTests.swift; sourceTree = "<group>"; };
 		C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaGalleryProjectionTests.swift; sourceTree = "<group>"; };
@@ -318,6 +322,7 @@
 			isa = PBXGroup;
 			children = (
 				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
+				C0DE00000000000000000F12 /* NikonAssistsTests.swift */,
 				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
@@ -414,9 +419,11 @@
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
 				C0DE000000000000000000F8 /* MonitorRecovery.swift */,
-				C0DE000000000000000000B1 /* MonitorPortrait.swift */,
 				C0DE000000000000000000B3 /* MonitorPortraitModules.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
+				C0DE00000000000000000F11 /* NikonAssists.swift */,
+				C0DE00000000000000000F13 /* NikonAssistInspector.swift */,
+				C0DE00000000000000000F14 /* NikonScopes.swift */,
 				C0DE000000000000000000F2 /* PhotographyChrome.swift */,
 				C0DE0000000000000000002F /* MonitorControls.swift */,
 				C0DE00000000000000000031 /* DesignShared.swift */,
@@ -428,7 +435,6 @@
 				43398C0B64AE0344D7602746 /* MetalLiveView.swift */,
 				31188208A12A06911B1DC3AB /* FrameScopeSampler.swift */,
 				A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */,
-				AB12CD34EF56AB12CD34EF02 /* ScopeTraceMetalView.swift */,
 				644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */,
 				C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */,
 				1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */,
@@ -621,6 +627,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
+				C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */,
 				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
@@ -684,9 +691,11 @@
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
 				C0DE000000000000000000F7 /* MonitorRecovery.swift in Sources */,
-				C0DE000000000000000000B0 /* MonitorPortrait.swift in Sources */,
 				C0DE000000000000000000B2 /* MonitorPortraitModules.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
+				C0DE00000000000000000F01 /* NikonAssists.swift in Sources */,
+				C0DE00000000000000000F03 /* NikonAssistInspector.swift in Sources */,
+				C0DE00000000000000000F04 /* NikonScopes.swift in Sources */,
 				C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */,
 				C0DE0000000000000000002E /* MonitorControls.swift in Sources */,
 				C0DE00000000000000000030 /* DesignShared.swift in Sources */,
@@ -706,7 +715,6 @@
 				0F8144A1310FEEE9A63795A8 /* MetalLiveView.swift in Sources */,
 				8E1FB0F353F42E2DCCDEF3F0 /* FrameScopeSampler.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */,
-				AB12CD34EF56AB12CD34EF01 /* ScopeTraceMetalView.swift in Sources */,
 				B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */,
 				079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */,
 				0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */,

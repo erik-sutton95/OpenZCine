@@ -1634,8 +1634,7 @@ struct MediaPhotoViewer: View {
                         // Anamorphic stills are judged at their intended geometry; the file is
                         // never touched. `nil` (de-squeeze off) means the image's own ratio.
                         .aspectRatio(
-                            desqueezedAspectRatio(
-                                image.size, model.assistConfiguration.desqueeze),
+                            desqueezedAspectRatio(image.size, model.playbackDesqueeze),
                             contentMode: .fit
                         )
                         .frame(width: geo.size.width, height: geo.size.height)
@@ -1980,11 +1979,11 @@ extension UIImage.Orientation {
 // MARK: - Player
 
 private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
-    let trafficLightsCrushClip: AssistConfiguration.CrushClipCompensation
+    let trafficLightsCrushClip: MonitorCrushClipCompensation
     let mapping: ExposureSignalMapping
     let vectorscopeCube: CubeLUT?
 
-    func bundle(samples: OpenZCineCore.ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
+    func bundle(samples: OpenCineMedia.ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
         ScopeAssistSampling.bundle(
             samples: samples,
             trafficLightsCrushClip: trafficLightsCrushClip,
@@ -2118,8 +2117,6 @@ struct MediaPlayerView: View {
 
     @State private var assistOptionsTool: MonitorAssistTool?
     @State private var playbackBarFrame: CGRect = .zero
-    @State private var playbackAssistToolbarFrame: CGRect = .zero
-    @State private var playbackAssistPanelRevealed = false
 
     @State private var isFavorite = false
     @State private var exportState: ExportStatus = .none
@@ -2224,22 +2221,19 @@ struct MediaPlayerView: View {
             })
     }
 
+    /// The shared assist palette in the playback slot, over the playback flags.
     private func playbackTools(_ context: MonitorPlaybackToolsContext) -> some View {
-        VStack {
-            Spacer()
-            HStack {
-                if context.expanded.wrappedValue { playbackAssistToolbar }
-                Button {
-                    context.expanded.wrappedValue.toggle()
-                } label: {
-                    MonitorIcon.slidersHorizontal.frame(width: 18, height: 18)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel(context.expanded.wrappedValue
-                    ? "Hide playback assist toolbar" : "Show playback assist toolbar")
-            }
-            .padding(.horizontal, 16).padding(.bottom, max(context.safeTop, 14))
-        }
+        let tools = model.playbackAssistPaletteTools
+        let (metrics, frame) = MonitorAssistPaletteLayout.fieldMonitor(
+            context.presentation, toolCount: tools.count, safeTop: context.safeTop)
+        return NikonAssistPalette(
+            tools: tools, context: .playback, layout: metrics, expanded: context.expanded,
+            onOptions: { assistOptionsTool = $0 }
+        )
+        .position(x: frame.midX, y: frame.midY)
+        .frame(
+            width: context.presentation.viewport.width,
+            height: context.presentation.viewport.height, alignment: .topLeading)
     }
 
     private var currentClipIndex: Int? {
@@ -2257,33 +2251,25 @@ struct MediaPlayerView: View {
     }
 
     private var playbackScopesActive: Bool {
-        let visible = model.preferences.playbackVisibleAssistTools
+        let visible = model.assist.playbackTools
         return visible.contains(.waveform) || visible.contains(.parade)
             || visible.contains(.histogram) || visible.contains(.trafficLights)
             || visible.contains(.vectorscope)
     }
 
     private var playbackAudioMetersActive: Bool {
-        model.preferences.playbackVisibleAssistTools.contains(.audioMeters)
-    }
-
-    /// Playback de-squeeze uses the shared factor, gated by playback-visible tools.
-    private var playbackDesqueeze: AssistConfiguration.Desqueeze {
-        var config = model.assistConfiguration.desqueeze
-        config.enabled = model.preferences.playbackVisibleAssistTools.contains(.desqueeze)
-        return config
+        model.assist.playbackTools.contains(.audioMeters)
     }
 
     private var playbackScopeDerivationConfiguration: PlaybackScopeDerivationConfiguration {
-        let scopes = model.assistConfiguration.scopes
         // Playback scopes measure source/log on the same anchored axis as live view; clips don't
         // persist a per-clip tone mode yet, so the mapping follows current camera state. The
         // vectorscope reads the monitor image through the look the player bakes (LUT tool + LUT).
         return PlaybackScopeDerivationConfiguration(
-            trafficLightsCrushClip: scopes.crushClipCompensation,
+            trafficLightsCrushClip: model.assist.crushClipCompensation,
             mapping: model.playbackExposureSignalMapping,
             vectorscopeCube: model.vectorscopeMonitorCube(
-                visibleTools: model.preferences.playbackVisibleAssistTools,
+                visibleTools: model.assist.playbackTools,
                 curve: model.playbackExposureSignalMapping.curve))
     }
 
@@ -2302,12 +2288,10 @@ struct MediaPlayerView: View {
                             }
                         })
                     },
-                    onShareButtonFrame: { shareButtonFrame = $0 },
-                    onChromeVisibilityChanged: { if !$0 { dismissPlaybackAssistOptions() } },
-                    onAssistExpansionChanged: { if !$0 { dismissPlaybackAssistOptions() } }),
+                    onShareButtonFrame: { shareButtonFrame = $0 }),
                 picture: {
                     PlayerLayerView(player: player)
-                        .scaleEffect(desqueezeScale(playbackDesqueeze), anchor: .center)
+                        .scaleEffect(desqueezeScale(model.playbackDesqueeze), anchor: .center)
                 },
                 feedAssists: { rect in
                     FeedAlignedAssists(clean: false, feed: rect,
@@ -2317,7 +2301,7 @@ struct MediaPlayerView: View {
                     if playbackScopesActive || playbackAudioMetersActive {
                         PlaybackAssistOverlayModule(
                             scopeAssist: playbackScopeAssist, videoRect: rect,
-                            audioLevels: playbackAudioLevels)
+                            audioLevels: playbackAudioLevels, onOptions: { assistOptionsTool = $0 })
                             .frame(width: size.width, height: size.height)
                     }
                 }, tools: { context in playbackTools(context) })
@@ -2351,8 +2335,15 @@ struct MediaPlayerView: View {
             }
 
             if let tool = assistOptionsTool {
-                playbackAssistOptionsOverlay(tool: tool)
-                    .zIndex(4)
+                GeometryReader { proxy in
+                    NikonAssistInspector(
+                        tool: tool, tools: model.playbackAssistPaletteTools, viewport: proxy.size,
+                        safeArea: proxy.safeAreaInsets, onSelect: { assistOptionsTool = $0 },
+                        onDismiss: { assistOptionsTool = nil })
+                }
+                .ignoresSafeArea()
+                .environment(model)
+                .zIndex(4)
             }
         }
         .task(id: activeClip.id) {
@@ -2378,51 +2369,18 @@ struct MediaPlayerView: View {
         .onChange(of: isPlaying) { _, playing in
             model.isMediaPlaybackActive = playing
         }
-        .onChange(of: model.preferences.playbackVisibleAssistTools) { _, _ in
+        .onChange(of: model.assist.playbackTools) { _, _ in
             updatePlaybackEffects()
             syncPlaybackScopeSampling()
             syncPlaybackAudioMetering()
         }
-        .onChange(of: model.assistConfiguration) { _, _ in
+        .onChange(of: model.playbackImageEffects) { _, _ in
             updatePlaybackEffects()
         }
-        .onChange(of: model.assistConfiguration.scopes.crushClipCompensation) { _, _ in
+        .onChange(of: model.assist.crushClipCompensation) { _, _ in
             restartPlaybackScopeSampling()
         }
         .mediaDeliveryShareSheet(onDismiss: resumePlaybackIfNeeded)
-    }
-
-    /// Mirrors live-monitor `PanelHost.bottomAssistBody` — glass popup anchored above the playback bar.
-    private func playbackAssistOptionsOverlay(tool: MonitorAssistTool) -> some View {
-        PlaybackAssistOptionsOverlay(
-            tool: tool,
-            anchorToolbarFrame: playbackAssistToolbarFrame,
-            isRevealed: playbackAssistPanelRevealed,
-            onBackdropTap: dismissPlaybackAssistOptions,
-            onClose: dismissPlaybackAssistOptions
-        )
-        .environment(model)
-    }
-
-    private func presentPlaybackAssistOptions(_ tool: MonitorAssistTool) {
-        playbackAssistPanelRevealed = false
-        assistOptionsTool = tool
-        schedulePlaybackAssistReveal()
-    }
-
-    private func dismissPlaybackAssistOptions() {
-        assistOptionsTool = nil
-    }
-
-    /// Same slide-up curve as live-monitor assist popups (`NativeAppModel.panelRevealCurve`).
-    private func schedulePlaybackAssistReveal() {
-        Task { @MainActor in
-            await Task.yield()
-            guard assistOptionsTool != nil else { return }
-            withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.20)) {
-                playbackAssistPanelRevealed = true
-            }
-        }
     }
 
     private func startDelivery(_ request: MediaDeliveryBeginRequest) {
@@ -2515,49 +2473,6 @@ struct MediaPlayerView: View {
                 + actionButtonSize.width * CGFloat(actionCount)
             let gaps = transportRowSpacing * CGFloat(transportCount + actionCount - 1)
             return buttons + gaps + barPaddingH * 2 + minimumSpacer
-        }
-    }
-
-    /// Playback drops the live-only tools. The horizon needs a camera to read, and magnification is
-    /// driven by an on-feed key playback does not mount — offering it here would be a switch with
-    /// nothing behind it.
-    private var visiblePlaybackToolbarTools: [MonitorAssistTool] {
-        model.preferences.assistToolbarOrder.filter {
-            $0 != .level && $0 != .magnification
-                && model.preferences.isAssistToolbarButtonVisible($0)
-        }
-    }
-
-    /// Same assist toolbar row as the live monitor: tap toggles, long-press opens options.
-    private var playbackAssistToolbar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(
-                    Array(visiblePlaybackToolbarTools.enumerated()),
-                    id: \.element.id
-                ) { index, tool in
-                    if index > 0 && index.isMultiple(of: 3) {
-                        Rectangle()
-                            .fill(LiveDesign.hairlineStrong)
-                            .frame(width: 1, height: 22)
-                            .padding(.horizontal, 3)
-                    }
-                    AssistToolButtonRow(tool: tool, context: .playback) { tool in
-                        presentPlaybackAssistOptions(tool)
-                    }
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { playbackAssistToolbarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        playbackAssistToolbarFrame = frame
-                    }
-            }
         }
     }
 
@@ -2709,7 +2624,7 @@ struct MediaPlayerView: View {
         playbackScopeController.startPolling(
             effectsBox: playbackEffectsBox,
             isActive: { [model] in
-                let visible = model.preferences.playbackVisibleAssistTools
+                let visible = model.assist.playbackTools
                 return visible.contains(.waveform) || visible.contains(.parade)
                     || visible.contains(.histogram) || visible.contains(.trafficLights)
                     || visible.contains(.vectorscope)

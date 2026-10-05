@@ -1,4 +1,5 @@
 import Foundation
+import enum OpenCineMedia.MonitorCrushClipCompensation
 
 /// Which half of a goal-post column shows level fill — exposure balance reads from centre gray.
 public enum TrafficLightsBarSide: Equatable, Sendable {
@@ -75,7 +76,7 @@ public enum TrafficLightsMeter {
     /// Measures per-channel levels and clip/crush flags from scope samples.
     public static func measure(
         samples: ScopeSamples,
-        noiseFloorCompensation: AssistConfiguration.CrushClipCompensation,
+        noiseFloorCompensation: MonitorCrushClipCompensation,
         curve: ExposureToneCurve = .redLog3G10
     ) -> TrafficLightsReading {
         measure(
@@ -85,7 +86,7 @@ public enum TrafficLightsMeter {
 
     public static func measure(
         samples: ScopeSamples,
-        noiseFloorCompensation: AssistConfiguration.CrushClipCompensation,
+        noiseFloorCompensation: MonitorCrushClipCompensation,
         mapping: ExposureSignalMapping
     ) -> TrafficLightsReading {
         let threshold = noiseFloorCompensation.pixelFractionThreshold

@@ -11,10 +11,9 @@ import Foundation
 /// - `.clean` (DISP 2): **the image, the rail and the focus box**. Clean offers exactly the same
 ///   element list as live — it is DISP 1 with different defaults, not a smaller feature — but the
 ///   status deck, both bottom strips and the lock key start hidden. Every view-assist tool starts
-///   hidden too, and comes back only when the operator lists it in
-///   ``OperatorPreferences/cleanViewPinnedTools`` — off for all 17 by default. Leaving clean
-///   restores the prior visibility exactly, because the list is a *filter*: clean never mutates
-///   the operator's on/off set.
+///   hidden too, except the tools the operator pins into clean view on the shared assist state
+///   (its `cleanViewPinnedTools`). Leaving clean restores the prior visibility exactly, because the
+///   list is a *filter*: clean never mutates the operator's on/off set.
 /// - `.command` (DISP 3): the data dashboard owns the screen; there is no feed, so no feed overlay
 ///   or scope renders regardless of pins.
 ///
@@ -34,35 +33,6 @@ import Foundation
 /// feed swipe is not an escape route for an operator who does not already know about it. The lock
 /// key returns while the interface is locked, because it is the only control that clears the lock.
 public enum MonitorChromePolicy {
-    /// Whether `tool` renders right now: switched on for `context`, and permitted by `mode`.
-    public static func isToolVisible(
-        _ tool: MonitorAssistTool,
-        mode: DispMode,
-        context: ViewAssistContext = .liveView,
-        preferences: OperatorPreferences
-    ) -> Bool {
-        guard preferences.visibleAssistTools(for: context).contains(tool) else { return false }
-        switch mode {
-        case .live: return true
-        case .clean: return preferences.cleanViewPinnedTools.contains(tool)
-        case .command: return false
-        }
-    }
-
-    /// The switched-on tools `mode` actually lets through — the set every render site should read.
-    public static func visibleTools(
-        mode: DispMode,
-        context: ViewAssistContext = .liveView,
-        preferences: OperatorPreferences
-    ) -> Set<MonitorAssistTool> {
-        let on = preferences.visibleAssistTools(for: context)
-        switch mode {
-        case .live: return on
-        case .clean: return on.intersection(preferences.cleanViewPinnedTools)
-        case .command: return []
-        }
-    }
-
     /// Whether `section` renders in `mode` right now. The one read every chrome mount site should
     /// use, so a mode's configuration cannot drift between shells or orientations.
     public static func showsSection(
@@ -265,81 +235,5 @@ public enum MonitorChromeEditLayout {
             y: Swift.min(Swift.max(frame.y, badgeGap), maxY),
             width: frame.width,
             height: frame.height)
-    }
-}
-
-/// Pure on/off semantics for the live-monitor and playback view-assist tools.
-public enum AssistToolActivation {
-    public static func set(
-        _ tool: MonitorAssistTool,
-        visible: Bool,
-        context: ViewAssistContext,
-        preferences: inout OperatorPreferences,
-        configuration: inout AssistConfiguration
-    ) {
-        switch context {
-        case .liveView:
-            if visible {
-                preferences.liveViewVisibleAssistTools.insert(tool)
-            } else {
-                preferences.liveViewVisibleAssistTools.remove(tool)
-            }
-            if MonitorAssistTool.scopeTools.contains(tool) {
-                preferences.scopeActivationOrder.removeAll { $0 == tool }
-                if visible {
-                    preferences.scopeActivationOrder.append(tool)
-                }
-            }
-        case .playback:
-            if visible {
-                preferences.playbackVisibleAssistTools.insert(tool)
-            } else {
-                preferences.playbackVisibleAssistTools.remove(tool)
-            }
-        }
-        syncOverlayEnabledFlags(preferences: preferences, configuration: &configuration)
-    }
-
-    public static func set(
-        _ tool: MonitorAssistTool,
-        visible: Bool,
-        preferences: inout OperatorPreferences,
-        configuration: inout AssistConfiguration
-    ) {
-        set(
-            tool, visible: visible, context: .liveView, preferences: &preferences,
-            configuration: &configuration)
-    }
-
-    public static func toggle(
-        _ tool: MonitorAssistTool,
-        context: ViewAssistContext,
-        preferences: inout OperatorPreferences,
-        configuration: inout AssistConfiguration
-    ) {
-        let isOn = preferences.visibleAssistTools(for: context).contains(tool)
-        set(
-            tool, visible: !isOn, context: context, preferences: &preferences,
-            configuration: &configuration)
-    }
-
-    public static func toggle(
-        _ tool: MonitorAssistTool,
-        preferences: inout OperatorPreferences,
-        configuration: inout AssistConfiguration
-    ) {
-        toggle(tool, context: .liveView, preferences: &preferences, configuration: &configuration)
-    }
-
-    private static func syncOverlayEnabledFlags(
-        preferences: OperatorPreferences,
-        configuration: inout AssistConfiguration
-    ) {
-        configuration.level.enabled =
-            preferences.liveViewVisibleAssistTools.contains(.level)
-            || preferences.playbackVisibleAssistTools.contains(.level)
-        configuration.desqueeze.enabled =
-            preferences.liveViewVisibleAssistTools.contains(.desqueeze)
-            || preferences.playbackVisibleAssistTools.contains(.desqueeze)
     }
 }

@@ -463,25 +463,6 @@ class PhotographyPickersTest {
     }
 
     @Test
-    fun `photography pins PLAY then EV to the front of the assist rail`() {
-        val tools =
-            listOf(
-                AssistTool.PEAK, AssistTool.ZEBRA, AssistTool.EV, AssistTool.PLAY,
-                AssistTool.HISTO,
-            )
-        assertEquals(
-            listOf(
-                AssistTool.PLAY, AssistTool.EV, AssistTool.PEAK, AssistTool.ZEBRA,
-                AssistTool.HISTO,
-            ),
-            frontPinnedAssistTools(tools, photography = true),
-        )
-        // Cinema never sees the photography-only tool.
-        assertTrue(AssistTool.PLAY.isPhotographyOnly)
-        assertTrue(AssistTool.PLAY.appliesToPhotography)
-    }
-
-    @Test
     fun `review info line captures the shot settings`() {
         assertEquals(
             "ISO 800   1/250   f/2.8   RAW+JPEG Fine",

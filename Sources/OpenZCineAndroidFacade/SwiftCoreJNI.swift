@@ -155,119 +155,35 @@
         return javaString(env, AndroidFrameioWire.mediaType(forFilename: filename))
     }
 
-    // MARK: - Monitor layout
-
-    /// `SwiftCore.monitorZoneMap(...): FloatArray` — the shared core's
-    /// `MonitorZoneLayout.map` flattened per `MonitorZoneMapWire` (records of
-    /// `[kind, style, x, y, width, height]`). The Compose shell consumes the
-    /// same zone frames the iOS shell does; no layout math lives in Kotlin.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_monitorZoneMap")
-    public func swiftCoreMonitorZoneMap(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
-        viewportWidth: jfloat, viewportHeight: jfloat,
-        safeTop: jfloat, safeLeading: jfloat, safeBottom: jfloat, safeTrailing: jfloat,
-        mode: jint, isPortrait: jboolean, aspectFill: jboolean,
-        scopeCount: jint, mirrored: jboolean, bottomBarHeight: jfloat,
-        portraitFeedAspectRatio: jfloat, canDriveCamera: jboolean
-    ) -> jfloatArray? {
-        let flat = MonitorZoneMapWire.flattened(
-            viewportWidth: Double(viewportWidth),
-            viewportHeight: Double(viewportHeight),
-            safeTop: Double(safeTop),
-            safeLeading: Double(safeLeading),
-            safeBottom: Double(safeBottom),
-            safeTrailing: Double(safeTrailing),
-            mode: Int(mode),
-            isPortrait: isPortrait != 0,
-            aspectFill: aspectFill != 0,
-            scopeCount: Int(scopeCount),
-            mirrored: mirrored != 0,
-            bottomBarHeight: Double(bottomBarHeight),
-            portraitFeedAspectRatio: Double(portraitFeedAspectRatio),
-            canDriveCamera: canDriveCamera != 0
-        )
-        let fns = table(env)
-        guard let array = fns.NewFloatArray!(env, jsize(flat.count)) else { return nil }
-        flat.withUnsafeBufferPointer { buffer in
-            fns.SetFloatArrayRegion!(env, array, 0, jsize(flat.count), buffer.baseAddress)
-        }
-        return array
-    }
-
     // MARK: - Scopes
 
-    /// `SwiftCore.scopeAnchors(curve): FloatArray` — fixed axis anchors and
-    /// vectorscope graticule targets per `ScopeFrameWire.anchors`.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeAnchors")
-    public func swiftCoreScopeAnchors(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curve: jint
+    /// `SwiftCore.scopeLevelAxis(curve, clip): FloatArray`: the shared scopes'
+    /// level axis for this camera per `ScopeFrameWire.levelAxis`. Called once
+    /// per camera mapping, never per tick.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeLevelAxis")
+    public func swiftCoreScopeLevelAxis(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curve: jint, clipNative: jfloat
     ) -> jfloatArray? {
-        javaFloatArray(env, ScopeFrameWire.anchors(curveOrdinal: Int(curve)))
+        javaFloatArray(
+            env, ScopeFrameWire.levelAxis(curveOrdinal: Int(curve), clipNative: Double(clipNative)))
     }
 
-    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve, clip, compensation, points): FloatArray`
-    /// — one scope tick's waveform/parade/histogram payload plus the additive
-    /// Swift-owned Traffic Lights trailer described by `ScopeFrameWire.traces`.
-    /// `compensation` is a persisted core enum raw value; Swift decodes and
-    /// applies it while Kotlin stays presentation-only. The trailer is
-    /// versioned so malformed data fails closed in Kotlin. Blocking; Kotlin
-    /// calls it off the main thread.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeTraces")
-    public func swiftCoreScopeTraces(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
-        width: jint, height: jint, bytesPerRow: jint, curve: jint, clipNative: jfloat,
-        compensation: jint, includePoints: jboolean
+    /// `SwiftCore.scopeTrafficLights(histograms, curve, clip, compensation): FloatArray`
+    /// returns the core Traffic Lights reading for the shared sampler's histograms
+    /// per `ScopeFrameWire.trafficLights`. `compensation` is a persisted core
+    /// enum raw value; Swift decodes and applies it.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeTrafficLights")
+    public func swiftCoreScopeTrafficLights(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, histograms: jfloatArray?,
+        curve: jint, clipNative: jfloat, compensation: jint
     ) -> jfloatArray? {
-        guard let buffer = swiftBytes(env, rgba) else { return nil }
+        let bins =
+            swiftFloats(env, histograms, maximumCount: 4 * ScopeFrameWire.histogramBins) ?? []
         return javaFloatArray(
             env,
-            ScopeFrameWire.traces(
-                rgba: buffer, width: Int(width), height: Int(height),
-                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve),
-                clipNative: Double(clipNative),
-                crushClipCompensationRaw: Int(compensation),
-                includePoints: includePoints != 0))
-    }
-
-    /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve, zoom, brightness, lut): ByteArray`
-    /// — one scope tick's soft + crisp 128×128 premultiplied-RGBA vectorscope
-    /// images per `ScopeFrameWire.vectorDisplayPixels`. Empty without samples.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeVector")
-    public func swiftCoreScopeVector(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
-        width: jint, height: jint, bytesPerRow: jint, curve: jint, zoom: jint,
-        brightness: jint, lutHandle: jlong
-    ) -> jbyteArray? {
-        guard let buffer = swiftBytes(env, rgba) else { return nil }
-        return javaByteArray(
-            env,
-            ScopeFrameWire.vectorDisplayPixels(
-                rgba: buffer, width: Int(width), height: Int(height),
-                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve), zoomOrdinal: Int(zoom),
-                brightnessPercent: Int(brightness), lutHandle: Int64(lutHandle)))
-    }
-
-    /// `SwiftCore.registerScopeVectorLut(lookOrdinal, packedRgba, cubeSize): Long`
-    /// — one bounded configuration update when the active operator LUT changes.
-    /// Built-ins carry no byte payload; stored cubes arrive in the existing
-    /// Swift-validated packed layout and are unpacked exactly once per handle.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_registerScopeVectorLut")
-    public func swiftCoreRegisterScopeVectorLut(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, lookOrdinal: jint,
-        packedRGBA: jbyteArray?, cubeSize: jint
-    ) -> jlong {
-        let maximumBytes = 64 * 64 * 64 * 4
-        let packed = swiftBytes(env, packedRGBA, maximumCount: maximumBytes)
-        return ScopeFrameWire.registerVectorCube(
-            lookOrdinal: Int(lookOrdinal), packedRGBA: packed, size: Int(cubeSize)) ?? -1
-    }
-
-    /// Releases a vectorscope LUT registration after its Compose sampler is cancelled.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_unregisterScopeVectorLut")
-    public func swiftCoreUnregisterScopeVectorLut(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jlong
-    ) {
-        ScopeFrameWire.unregisterVectorCube(handle: Int64(handle))
+            ScopeFrameWire.trafficLights(
+                histograms: bins.map { Int($0) }, curveOrdinal: Int(curve),
+                clipNative: Double(clipNative), crushClipCompensationRaw: Int(compensation)))
     }
 
     // MARK: - Feed effects (baked in the core, uploaded by Kotlin)

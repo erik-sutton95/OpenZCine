@@ -4,7 +4,8 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
-import com.opencapture.openzcine.settings.ScopeAssistConfiguration
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -117,31 +118,6 @@ class ScopeLayoutTest {
     }
 
     @Test
-    fun `floating defaults stay inside bounds and keep traffic lights distinct`() {
-        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
-        val feed = ZoneFrame(59f, 0f, 734f, 393f)
-        val info = ZoneFrame(100f, 8f, 500f, 46f)
-        val wave = floatingScopeFrame(ScopeKind.WAVEFORM, feed, info, viewport)
-        val parade = floatingScopeFrame(ScopeKind.PARADE, feed, info, viewport)
-        val vector = floatingScopeFrame(ScopeKind.VECTORSCOPE, feed, info, viewport)
-        val lights = floatingScopeFrame(ScopeKind.TRAFFIC_LIGHTS, feed, info, viewport)
-        val bottomEdge =
-            viewport.y + viewport.height - 14f - LiveDesign.CONTROL_HEIGHT_DP - 10f
-
-        ScopeKind.canonical.forEach { kind ->
-            val frame = floatingScopeFrame(kind, feed, info, viewport)
-            assertTrue(frame.x >= viewport.x)
-            assertTrue(frame.y >= viewport.y)
-            assertTrue(frame.x + frame.width <= viewport.x + viewport.width)
-            assertTrue(frame.y + frame.height <= viewport.y + viewport.height)
-        }
-        assertTrue(lights.y + lights.height <= bottomEdge)
-        assertTrue(wave.x != lights.x || wave.y != lights.y)
-        assertEquals(parade.x + parade.width, vector.x + vector.width)
-        assertEquals(parade.y, vector.y)
-    }
-
-    @Test
     fun `false color reference mirrors inside the feed when outside is unavailable`() {
         val viewport = ZoneFrame(0f, 0f, 848f, 393f)
         val feed = ZoneFrame(59f, 0f, 734f, 393f)
@@ -193,41 +169,11 @@ class ScopeLayoutTest {
     }
 
     @Test
-    fun `operator scale changes the physical landscape footprint`() {
-        val configuration =
-            ScopeAssistConfiguration(
-                waveformScale = 1.6f,
-                histogramScale = 0.6f,
-            )
-
-        assertEquals(400f to 244.8f, scopePanelSize(ScopeKind.WAVEFORM, configuration))
-        assertEquals(150f to 46.2f, scopePanelSize(ScopeKind.HISTOGRAM, configuration))
+    fun `operator scale clamps to the shared range`() {
         assertEquals(
             1.6f,
-            ScopeAssistConfiguration().withScale(ScopeKind.VECTORSCOPE, 2f).vectorscopeScale,
+            MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.scaleFor(ScopeKind.VECTORSCOPE),
         )
-        assertEquals(
-            ZoneFrame(60f, 100f, 190f, 190f),
-            snapScopeFrame(ZoneFrame(59f, 101f, 190f, 190f)),
-        )
-    }
-
-    @Test
-    fun `boosted trace alpha saturates instead of wrapping`() {
-        assertEquals(255, scopeTraceAlpha(colorAlpha = 0.8f, opacity = 2f))
-        assertEquals(0, scopeTraceAlpha(colorAlpha = 0.8f, opacity = -1f))
-        assertEquals(listOf(1f), scopeTracePassOpacities(1f))
-        assertEquals(listOf(1f, 0.5f), scopeTracePassOpacities(1.5f))
-        assertEquals(listOf(1f, 1f), scopeTracePassOpacities(2f))
-    }
-
-    @Test
-    fun `vectorscope bitmap wire accepts only the exact core payload`() {
-        assertTrue(isValidVectorPayloadSize(2 * 128 * 128 * 4))
-        assertFalse(isValidVectorPayloadSize(0))
-        assertFalse(isValidVectorPayloadSize(3))
-        assertFalse(isValidVectorPayloadSize(128 * 128 * 4))
-        assertFalse(isValidVectorPayloadSize(128 * 128 * 4 + 4))
     }
 
     @Test

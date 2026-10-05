@@ -184,7 +184,7 @@ data class FeedEffectsConfiguration(
  * preserving the active look so disabling False resumes it; LIMITS composites
  * only crush/clip zones over that look.
  *
- * The shared [AssistState] owns this in normal operation. Debug intent extras
+ * The shared [NikonAssists] owns this in normal operation. Debug intent extras
  * (see `DemoHarness`) still seed deterministic sessions: `--es zc.assist
  * lut,falsecolor,peaking,zebra`, plus `--es zc.lut <log3g10|nlog|mono>` and
  * `--es zc.fc.scale <stops|ire|limits>`.

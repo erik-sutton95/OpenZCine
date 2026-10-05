@@ -1,14 +1,14 @@
 # OpenZCine Android
 
 Production Jetpack Compose shell. The monitor screen is a 1:1 port of the iOS shell's
-chrome, laid out by the shared core's zone map (`SwiftCore.monitorZoneMap` →
-`MonitorZoneLayout.map`) in both orientations — no layout math lives in Kotlin. It covers
+chrome, laid out by the shared OpenCine field monitor geometry (`MonitorLayoutPolicy.fieldMonitor`)
+in both orientations, as on iOS. It covers
 the live feed, top info deck, capture readout strip, the assist toolbar (wired to the
 feed-effects engine + scope panels, toggles persisted), lock/battery band, the
 record/DISP/media/settings controls with DISP 1→2→3 cycling (3 = the command dashboard),
 and both persisted portrait feed layouts (sensor rotation; the activity survives it). A portrait
 pinch snaps between fit 16:9 and fill at the same thresholds as iOS. The selected value enters
-`SwiftCore.monitorZoneMap`, while the renderer, framing/focus/level overlays, capture-strip
+shared field monitor layout, while the renderer, framing/focus/level overlays, capture-strip
 clearance, stacked scopes, and fill-only vertical assist rail all consume those returned zones and
 the same exact visible-image crop. DISP 3 observes the real Swift-core property snapshot, persists
 its primary-tile order, and opens typed control pickers for ISO, shutter, iris, white balance,

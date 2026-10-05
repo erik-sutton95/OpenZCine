@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -70,69 +72,66 @@ class FeedEffectsTest {
         assertEquals(FeedSplitOrientation.VERTICAL, on.activeSplitComparison)
     }
 
+    /** [tools] on, nothing pinned, the comparison armed with the given axis. */
+    private fun assists(lut: FeedLut, split: FeedSplitOrientation, vararg tools: MonitorAssistTool): NikonAssists {
+        val state = MonitorAssistState(pinnedNames = emptySet())
+        state.syncVisible(tools.toSet())
+        state.setSplitComparison(true, vertical = split == FeedSplitOrientation.VERTICAL)
+        state.syncVisible(tools.toSet())
+        return NikonAssists(state, FeedLutSelection.BuiltIn(lut)) {}
+    }
+
+    private fun NikonAssists.rendered(mode: MonitorDisplayMode, photography: Boolean = false) =
+        feedEffects { shared.rendersLive(it, mode, photography) }
+
     @Test
     fun `clean view drops the comparison with the lut it belongs to`() {
-        val effects =
-            FeedEffects(
-                lut = FeedLutSelection.BuiltIn(FeedLut.MONO),
-                splitComparison = FeedSplitOrientation.HORIZONTAL,
-            )
-        assertEquals(
-            FeedSplitOrientation.HORIZONTAL,
-            renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = false).activeSplitComparison,
-        )
+        val assists = assists(FeedLut.MONO, FeedSplitOrientation.HORIZONTAL, MonitorAssistTool.LUT)
+        assertEquals(FeedSplitOrientation.HORIZONTAL, assists.rendered(MonitorDisplayMode.LIVE).activeSplitComparison)
         // Clean drops an unpinned LUT, and the divider and labels have to leave with it.
-        assertNull(
-            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, emptySet(), photography = false)
-                .activeSplitComparison,
-        )
-        assertEquals(
-            FeedSplitOrientation.HORIZONTAL,
-            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, setOf(AssistTool.LUT), photography = false)
-                .activeSplitComparison,
-        )
+        assertNull(assists.rendered(MonitorDisplayMode.CLEAN).activeSplitComparison)
+        assists.shared.pinned = setOf(MonitorAssistTool.LUT)
+        assertEquals(FeedSplitOrientation.HORIZONTAL, assists.rendered(MonitorDisplayMode.CLEAN).activeSplitComparison)
     }
 
     @Test
     fun `photography drops a video lut instead of grading an already-display-referred frame`() {
-        // The reported bug: a LUT left on in video survived the flip to photo, so a Log→709 look
-        // landed on the stills live view, which is already display-referred — and the photo
+        // The reported bug: a LUT left on in video survived the flip to photo, so a Log to 709 look
+        // landed on the stills live view, which is already display-referred, and the photo
         // toolbar has no LUT key to switch it off with.
-        val effects =
-            FeedEffects(
-                lut = FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709),
-                splitComparison = FeedSplitOrientation.VERTICAL,
-                peaking = true,
-            )
+        val assists =
+            assists(FeedLut.LOG3G10_709, FeedSplitOrientation.VERTICAL, MonitorAssistTool.LUT, MonitorAssistTool.PEAK)
 
-        val photo = renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = true)
+        val photo = assists.rendered(MonitorDisplayMode.LIVE, photography = true)
         assertNull(photo.lut)
         // The divider and its LOG/LUT labels ride the look, so they leave with it.
         assertNull(photo.activeSplitComparison)
-        // Peaking is an exposure aid photographers do use — dropping the LUT must not take it.
+        // Peaking is an exposure aid photographers do use; dropping the LUT must not take it.
         assertTrue(photo.peaking)
 
         // Nothing is persisted by the filter: video still renders the operator's look untouched.
-        val video = renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = false)
-        assertEquals(effects.lut, video.lut)
+        val video = assists.rendered(MonitorDisplayMode.LIVE)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709), video.lut)
         assertEquals(FeedSplitOrientation.VERTICAL, video.activeSplitComparison)
     }
 
     @Test
     fun `photography keeps its own aids and drops only the cinema-only ones`() {
         // One gate for every render path, so the tool table is the single source of truth.
-        for (tool in AssistTool.entries) {
+        val state = MonitorAssistState(pinnedNames = emptySet())
+        state.syncVisible(MonitorAssistTool.entries.toSet())
+        for (tool in MonitorAssistTool.entries) {
+            state.pinned = emptySet()
             assertEquals(
                 tool.appliesToPhotography,
-                assistToolRendersInMode(
-                    tool, MonitorDisplayMode.LIVE, emptySet(), photography = true),
+                state.rendersLive(tool, MonitorDisplayMode.LIVE, photography = true),
                 "photography rendering disagrees with the tool table for $tool",
             )
             // A clean-view pin cannot smuggle a cinema-only tool into the photo feed either.
+            state.pinned = setOf(tool)
             assertEquals(
                 tool.appliesToPhotography,
-                assistToolRendersInMode(
-                    tool, MonitorDisplayMode.CLEAN, setOf(tool), photography = true),
+                state.rendersLive(tool, MonitorDisplayMode.CLEAN, photography = true),
                 "a clean pin overrode the photography filter for $tool",
             )
         }

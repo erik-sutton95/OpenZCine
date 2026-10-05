@@ -18,10 +18,10 @@ import com.opencapture.monitorui.MonitorMediaSelectionConfiguration
 import com.opencapture.monitorui.MonitorMediaSelectionFeedback
 import com.opencapture.monitorui.MonitorMediaSelectionHost
 import com.opencapture.monitorui.MonitorMediaHitTarget
-
+import com.opencapture.openzcine.NikonAssists
+import com.opencapture.openzcine.framing
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.openzcine.LocalOperatorHaptics
-
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -124,7 +124,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FilmGlyph
 import com.opencapture.openzcine.FeedLutSelection
@@ -486,13 +485,12 @@ internal fun MediaBrowseScreen(
      * the persisted tab; manual tab switches persist as before.
      */
     initialCategory: MediaLibraryCategory? = null,
-    liveAssistState: AssistState,
+    assists: NikonAssists,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary,
     frameioController: FrameioDeliveryController,
     mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
-    selectedLut: FeedLutSelection,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     /** Bumped when Settings clears the camera media cache so an open gallery reloads. */
@@ -505,12 +503,6 @@ internal fun MediaBrowseScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val playbackAssistState =
-        remember(context, lutLibrary) {
-            PlaybackAssistState.restore(context, liveAssistState) { selection ->
-                lutLibrary.contains(selection)
-            }
-        }
     val cacheStore =
         remember(context) {
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
@@ -900,6 +892,7 @@ internal fun MediaBrowseScreen(
                 }.toSet()
             }
     }
+    val selectedLut = assists.lut
     val selectedLutLabel =
         when (selectedLut) {
             is FeedLutSelection.BuiltIn -> selectedLut.value.label
@@ -1569,7 +1562,7 @@ internal fun MediaBrowseScreen(
                 val owner = ownerCameraID(clip)
                 MediaStillViewer(
                     clip = clip,
-                    desqueeze = operatorSettings.localFramingAssistConfiguration,
+                    desqueeze = assists.shared.framing(assists.shared::isOn, operatorSettings.levelStyle),
                     cameraID = owner,
                     cameraTransferAvailable = cameraConnected,
                     connectionOwner = connectionOwner,
@@ -1637,10 +1630,8 @@ internal fun MediaBrowseScreen(
                 cameraTransferAvailable = cameraConnected,
                 connectionOwner = connectionOwner,
                 favoriteIDs = favorites,
-                framingConfiguration = operatorSettings.localFramingAssistConfiguration,
                 galleryFailureInjection = galleryFailureInjection,
-                playbackAssistState = playbackAssistState,
-                sharedAssistState = liveAssistState,
+                assists = assists,
                 exposureAssistCameraInput = exposureAssistCameraInput,
                 operatorSettings = operatorSettings,
                 lutLibrary = lutLibrary,
@@ -1667,7 +1658,7 @@ internal fun MediaBrowseScreen(
             val owner = ownerCameraID(clip)
             MediaStillViewer(
                 clip = clip,
-                desqueeze = operatorSettings.localFramingAssistConfiguration,
+                desqueeze = assists.shared.framing(assists.shared::isOn, operatorSettings.levelStyle),
                 cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
                 connectionOwner = connectionOwner,
@@ -2529,6 +2520,8 @@ private fun MediaClipGrid(
 ) {
     val gridState = rememberLazyGridState()
     val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
+    // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
+    val currentSelectedIDs by rememberUpdatedState(selectedIDs)
     val view = LocalView.current
     val selectionInput = rememberSelectionInputPolicy()
     MonitorMediaSelectionHost(
@@ -2574,7 +2567,7 @@ private fun MediaClipGrid(
                         isSelecting = isSelecting,
                         onClick = { onOpen(clip) },
                         onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(selectedIDs, identity)) },
+                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
                         onToggleFavorite = { onToggleFavorite(clip) },
                     )
                 }
@@ -2605,6 +2598,8 @@ private fun MediaClipList(
 ) {
     val listState = rememberLazyListState()
     val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
+    // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
+    val currentSelectedIDs by rememberUpdatedState(selectedIDs)
     val view = LocalView.current
     val selectionInput = rememberSelectionInputPolicy()
     MonitorMediaSelectionHost(
@@ -2647,7 +2642,7 @@ private fun MediaClipList(
                         isSelecting = isSelecting,
                         onClick = { onOpen(clip) },
                         onLongPress = { onBeginSelection(clip) },
-                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(selectedIDs, identity)) },
+                        onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
                         onToggleFavorite = { onToggleFavorite(clip) },
                     )
                 }

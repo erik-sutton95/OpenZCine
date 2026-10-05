@@ -15,65 +15,6 @@ class PhotographyChromeTest {
     private val band = ZoneFrame(x = 59f, y = 320f, width = 700f, height = 58f)
 
     @Test
-    fun `photo assist rail hugs the lock row and clears the widest left chrome`() {
-        // Battery stack reaches further right than the lock button.
-        val frame =
-            photographyAssistRailFrame(
-                lock = lock,
-                batteryTrailing = 78f,
-                assistBand = band,
-                measuredCaptureBar = null,
-                expanded = true,
-            )
-
-        assertEquals(78f + 12f, frame.x)
-        assertEquals(lock.y, frame.y)
-        assertEquals(ASSIST_RAIL_EXPANDED_WIDTH_DP, frame.width)
-        // No strip in the lane: the rail runs to the band's bottom edge.
-        assertEquals(band.y + band.height - lock.y, frame.height)
-    }
-
-    @Test
-    fun `photo assist rail stops above the band when the capture strip enters its lane`() {
-        val laneTrailing = 78f + 12f + ASSIST_RAIL_EXPANDED_WIDTH_DP
-        val strip = ZoneFrame(x = laneTrailing + 10f, y = 322f, width = 500f, height = 54f)
-
-        val frame =
-            photographyAssistRailFrame(
-                lock = lock,
-                batteryTrailing = 78f,
-                assistBand = band,
-                measuredCaptureBar = strip,
-                expanded = true,
-            )
-
-        assertEquals(band.y - 10f - lock.y, frame.height)
-    }
-
-    @Test
-    fun `collapsed photo rail pill centre-aligns on the lock button`() {
-        val frame =
-            photographyAssistRailFrame(
-                lock = lock,
-                batteryTrailing = null,
-                assistBand = band,
-                measuredCaptureBar = null,
-                expanded = false,
-            )
-
-        assertEquals(ASSIST_RAIL_COLLAPSED_PILL_DP, frame.width)
-        assertEquals(ASSIST_RAIL_COLLAPSED_PILL_DP, frame.height)
-        // Vertically centred on the lock row.
-        assertEquals(
-            lock.y + (lock.height - ASSIST_RAIL_COLLAPSED_PILL_DP) / 2f,
-            frame.y,
-        )
-        // Horizontally centred in the expanded rail's lane.
-        val laneCentre = lock.x + lock.width + 12f + ASSIST_RAIL_EXPANDED_WIDTH_DP / 2f
-        assertEquals(laneCentre - ASSIST_RAIL_COLLAPSED_PILL_DP / 2f, frame.x)
-    }
-
-    @Test
     fun `inline battery cluster trailing is the cluster right edge, not the phone pill`() {
         val lock = ZoneFrame(x = 16f, y = 12f, width = 40f, height = 40f)
         val cluster = ZoneFrame(x = 68f, y = 12f, width = 52f, height = 40f)
@@ -81,17 +22,6 @@ class PhotographyChromeTest {
 
         assertEquals(cluster, landscapeBatteryIndicatorsFrame(zones))
         assertEquals(120f, photographyBatteryTrailing(zones))
-
-        val rail =
-            photographyAssistRailFrame(
-                lock = lock,
-                batteryTrailing = photographyBatteryTrailing(zones),
-                assistBand = band,
-                measuredCaptureBar = null,
-                expanded = true,
-            )
-        assertEquals(120f + 12f, rail.x)
-        assertTrue(rail.x >= cluster.x + cluster.width)
     }
 
     @Test
@@ -111,7 +41,7 @@ class PhotographyChromeTest {
     }
 
     @Test
-    fun `photo rail hugs the lock when there is no battery cluster`() {
+    fun `no battery cluster leaves no lock-side trailing edge`() {
         val zones =
             tabletZones(
                 lock = lock,
@@ -120,15 +50,6 @@ class PhotographyChromeTest {
                 batteryPhone = null,
             )
         assertNull(photographyBatteryTrailing(zones))
-        val rail =
-            photographyAssistRailFrame(
-                lock = lock,
-                batteryTrailing = photographyBatteryTrailing(zones),
-                assistBand = band,
-                measuredCaptureBar = null,
-                expanded = true,
-            )
-        assertEquals(lock.x + lock.width + 12f, rail.x)
     }
 
     private fun tabletZones(
@@ -160,7 +81,7 @@ class PhotographyChromeTest {
     fun `photo feed spans the full height between the reserved side lanes`() {
         val viewport = ZoneFrame(0f, 0f, 914f, 384f)
         val cinema = ZoneFrame(59f, 0f, 683f, 384f)
-        val railLane = 56f + 12f + ASSIST_RAIL_EXPANDED_WIDTH_DP + 8f // 136
+        val railLane = 56f + 12f + 60f + 8f // 136
         val rightRail = 914f - 70f
 
         val fx =

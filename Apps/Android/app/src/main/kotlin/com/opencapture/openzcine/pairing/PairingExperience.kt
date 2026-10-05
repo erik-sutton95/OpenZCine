@@ -49,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -100,6 +101,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -1368,10 +1370,16 @@ public fun PairingExperience(
     }
 
     if (script?.autoConnect == true) {
-        // Demo scripts pass a host via the discovery list; never invent an IP.
+        // Demo scripts drive the operator's own action; never invent an IP.
         LaunchedEffect(script) {
-            val host = cameras.firstOrNull()?.host ?: return@LaunchedEffect
-            connect(host)
+            if (flow.step == PairingStep.NETWORK && flow.path == PairingPath.CAMERA_ACCESS_POINT) {
+                // The network step connects by joining the scanned access point, then discovers
+                // the camera on that link. Same scripted scan as `joinPopup`.
+                joinCameraAp("NIKON_ZR_01234", "a1b2c3d4")
+            } else {
+                // Scripted discovery publishes its camera after a delay; wait for the first host.
+                connect(snapshotFlow { cameras.firstOrNull()?.host }.filterNotNull().first())
+            }
         }
     }
     if (script?.joinPopup != null) {

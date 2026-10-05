@@ -8,6 +8,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.res.stringResource
+import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.settings.MonitorDisplayChoice
 import com.opencapture.monitorui.settings.MonitorDisplayOrderGroup
 import com.opencapture.monitorui.settings.MonitorDisplayOrderItem
@@ -16,15 +17,14 @@ import com.opencapture.monitorui.settings.MonitorDisplaySection
 import com.opencapture.monitorui.settings.MonitorDisplaySettings
 import com.opencapture.monitorui.settings.MonitorDisplayToggle
 import com.opencapture.monitorui.settings.MonitorSettingsScrollContext
-import com.opencapture.openzcine.AssistTool
+import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.R
-import com.opencapture.openzcine.labelResource
-import com.opencapture.openzcine.titleResource
 
 /** Existing saved values and admitted Nikon actions; common code owns the Display assembly. */
 @Composable
 internal fun NikonDisplaySettings(
     settings: OperatorSettings,
+    assist: MonitorAssistState,
     compact: Boolean,
     onToggle: (OperatorSettings.Toggle) -> Unit,
     onInteraction: () -> Unit,
@@ -36,11 +36,9 @@ internal fun NikonDisplaySettings(
     var expandedMode by rememberSaveable { mutableStateOf<MonitorDisplayMode?>(null) }
     var pickedCapture by rememberSaveable { mutableStateOf<CaptureLayoutMode?>(null) }
     val capture = pickedCapture ?: liveCaptureMode
-    val tools = assistOrder(settings, onInteraction)
-    val pins = AssistTool.entries.map { tool ->
-        val title = stringResource(tool.titleResource())
-        MonitorDisplayToggle(tool.name, title, settings.isPinnedToCleanView(tool), action = {
-            settings.toggleCleanViewPin(tool)
+    val pins = MonitorAssistTool.cleanPinCases.filter { it != MonitorAssistTool.ND }.map { tool ->
+        MonitorDisplayToggle(tool.name, tool.title, tool in assist.pinned, action = {
+            assist.togglePin(tool)
             onInteraction()
         })
     }
@@ -72,7 +70,6 @@ internal fun NikonDisplaySettings(
             readouts = readouts,
             pinsTitle = stringResource(R.string.settings_clean_view_tools),
             pins = if (mode == MonitorDisplayMode.CLEAN) pins else emptyList(),
-            tools = if (mode == MonitorDisplayMode.LIVE) tools else null,
         )
     }
     MonitorDisplaySettings(
@@ -93,29 +90,6 @@ internal fun NikonDisplaySettings(
         scrollContext = MonitorSettingsScrollContext(parentScrollState, viewportBounds),
     )
 }
-
-@Composable
-private fun assistOrder(settings: OperatorSettings, onInteraction: () -> Unit): MonitorDisplayOrderGroup =
-    MonitorDisplayOrderGroup(title = "", caption = stringResource(R.string.settings_assist_toolbar_caption),
-        items = settings.assistToolbarOrder.mapIndexed { index, tool ->
-            val title = stringResource(tool.titleResource())
-            val visible = settings.isAssistToolbarToolVisible(tool)
-            MonitorDisplayOrderItem(id = tool.name, title = title, isOn = visible,
-                supplement = if (tool == AssistTool.LUT) stringResource(R.string.settings_pinned) else null,
-                visibilityLabel = stringResource(R.string.settings_toolbar_visibility, title),
-                visibilityValue = stringResource(if (visible) R.string.status_visible else R.string.status_hidden),
-                reorderLabel = stringResource(R.string.settings_reorder_position, title, index + 1),
-                moveEarlierLabel = stringResource(R.string.settings_move_earlier, title),
-                moveLaterLabel = stringResource(R.string.settings_move_later, title),
-                positionLabel = stringResource(R.string.settings_position_number, index + 1),
-                positionDescription = stringResource(R.string.settings_position, index + 1),
-                toggle = if (tool == AssistTool.LUT) null else ({
-                    settings.toggleAssistToolbarToolVisibility(tool)
-                    onInteraction()
-                }))
-        }, move = { id, target -> AssistTool.entries.firstOrNull { it.name == id }?.let {
-            settings.moveAssistToolbarTool(it, target)
-        } })
 
 @Composable
 private fun displayOrder(settings: OperatorSettings, onInteraction: () -> Unit): MonitorDisplayOrderGroup =
@@ -140,14 +114,8 @@ private fun displayOrder(settings: OperatorSettings, onInteraction: () -> Unit):
 
 /** Thin domain adapter retained for native tests and focused compositions. */
 @Composable
-internal fun AssistToolbarOrderList(settings: OperatorSettings, onInteraction: () -> Unit,
+internal fun DisplayModeOrderList(settings: OperatorSettings, onInteraction: () -> Unit,
     parentScrollState: ScrollState? = null, viewportBounds: Rect? = null) {
-    val order = assistOrder(settings, onInteraction)
-    MonitorDisplayOrderList(order.items, order.move, onInteraction, parentScrollState, viewportBounds)
-}
-
-@Composable
-internal fun DisplayModeOrderList(settings: OperatorSettings, onInteraction: () -> Unit) {
     val order = displayOrder(settings, onInteraction)
-    MonitorDisplayOrderList(order.items, order.move, onInteraction)
+    MonitorDisplayOrderList(order.items, order.move, onInteraction, parentScrollState, viewportBounds)
 }

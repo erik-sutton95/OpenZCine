@@ -66,8 +66,8 @@ of drawing a guessed level.
 
 ## Scopes and exposure assists
 
-Tap an assist to toggle it; long-press it to open its configuration. Reorder or
-hide tools in Settings.
+Tap an assist to toggle it; long-press it to open its configuration. The bar
+keeps your most used tools out and folds the rest behind its chevron.
 
 - **Waveform, RGB parade, histogram and vectorscope** run live beside the
   picture. Waveform and parade brightness runs 0 to 200%.

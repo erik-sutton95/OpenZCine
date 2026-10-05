@@ -12,6 +12,12 @@ struct NikonMonitorShell: View {
     let context: LiveViewLayoutContext
     @State private var railExpanded = false
 
+    /// The palette folds away under the lock, an open panel, clean view or the chrome editor.
+    private var paletteCollapses: Bool {
+        model.interfaceLocked || model.activePanel != nil || model.displayMode == .clean
+            || model.chromeEditorMode != nil
+    }
+
     private var sourceAspect: Double {
         let raw: Double
         if model.videoSource == .hdmiCapture, let image = model.liveFrameImage,
@@ -146,20 +152,21 @@ struct NikonMonitorShell: View {
                         x: layout.picture.midX, y: layout.picture.maxY + 16 + min(184, room) / 2)
             }
             if model.chromeSectionMounts(.assistToolbar) {
-                let railHeight = railExpanded ? min(280, layout.viewport.height * 0.5) : 44
-                MonitorAssistStrip(
-                    axis: .vertical, collapsible: true,
-                    feedHeight: min(280, layout.viewport.height * 0.5), expanded: $railExpanded
+                let tools = model.liveAssistPaletteTools
+                let (metrics, frame) = MonitorAssistPaletteLayout.fieldMonitor(
+                    layout, toolCount: tools.count, safeTop: context.feedSafeArea.top)
+                NikonAssistPalette(
+                    tools: tools, context: .liveView, layout: metrics, expanded: $railExpanded,
+                    onOptions: { model.presentAssistOptions($0) }
                 )
-                .frame(
-                    width: MonitorAssistStrip.expandedWidth,
-                    height: railHeight, alignment: .bottom
-                )
-                .position(x: layout.assists.midX, y: layout.assists.maxY - railHeight / 2)
                 .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
                 .liveViewGuideAnchor(.viewAssist)
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .allowsHitTesting(!model.interfaceLocked)
+                .position(x: frame.midX, y: frame.midY)
+                .onChange(of: paletteCollapses) { _, collapse in
+                    if collapse { railExpanded = false }
+                }
             }
             if model.showsMFDriveScrub {
                 MFDriveVerticalScrub().frame(height: min(280, layout.viewport.height * 0.55))
@@ -179,7 +186,7 @@ struct NikonMonitorShell: View {
                 }.position(x: layout.focusReset.midX, y: layout.focusReset.midY)
             }
             if LUTResolution.showsSplitComparisonKey(
-                visibleTools: model.renderedLiveAssistTools, preferences: model.preferences),
+                visibleTools: model.renderedLiveAssistTools, enabled: model.assist.splitComparison),
                 !model.interfaceLocked, model.chromeEditorMode == nil
             {
                 SplitComparisonKey().position(
@@ -299,12 +306,10 @@ private struct NikonMonitorPower: View {
         ) {
             BatteryIndicator(
                 percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: "iphone", isCamera: false, isCharging: model.phoneBatteryCharging,
-                layout: .pillRow)
+                deviceSystemName: "iphone", isCamera: false, isCharging: model.phoneBatteryCharging)
             BatteryIndicator(
                 percent: model.cameraState.cameraBatteryPercent,
-                deviceSystemName: "camera", isCamera: true, isCharging: model.cameraBatteryCharging,
-                layout: .pillRow)
+                deviceSystemName: "camera", isCamera: true, isCharging: model.cameraBatteryCharging)
         }
     }
 }
@@ -555,287 +560,6 @@ private struct NikonCommandControls: View {
         .position(x: layout.picture.midX, y: layout.picture.midY + 12)
         .opacity(model.interfaceLocked ? 0.4 : 1)
         .allowsHitTesting(!model.interfaceLocked && !model.relayControlSurrendered)
-    }
-}
-
-struct MonitorAssistStrip: View {
-    @Environment(NativeAppModel.self) private var model
-    var axis: Axis
-    /// Documents intent at call sites; `collapsible` always co-varies with `axis` today
-    /// (horizontal → false, vertical → true), so the body branches on `axis` alone.
-    var collapsible: Bool
-    /// Horizontal-only: packs the default tool set into the reduced classic-notch lane.
-    var compactHorizontal: Bool
-    /// Vertical-only: height of the feed zone the rail should span when expanded.
-    var feedHeight: CGFloat = 0
-    /// Vertical-only: expand/collapse state, owned by the parent (`MonitorShell` sizes around it).
-    @Binding var expanded: Bool
-    /// Horizontal-only: which edges fade out to signal more to scroll that way. Defaults to the
-    /// resting right-only fade (toolbar scrolled to its start).
-    @State private var edgeFades = ScrollEdgeFades(leading: false, trailing: true)
-
-    init(
-        axis: Axis, collapsible: Bool, compactHorizontal: Bool = false, feedHeight: CGFloat = 0,
-        expanded: Binding<Bool> = .constant(false)
-    ) {
-        self.axis = axis
-        self.collapsible = collapsible
-        self.compactHorizontal = compactHorizontal
-        self.feedHeight = feedHeight
-        self._expanded = expanded
-    }
-
-    var body: some View {
-        if axis == .horizontal {
-            horizontalBody
-        } else {
-            verticalBody
-        }
-    }
-
-    // MARK: - axis: .horizontal, collapsible: false (former `BottomAssistToolsModule`)
-
-    private var horizontalBody: some View {
-        GlassPanel(
-            padding: EdgeInsets(top: 0, leading: 7, bottom: 0, trailing: 14)
-        ) {
-            scroller
-                .mask(edgeFades.gradient)
-                // Fill the bar height so the glass matches the capture pill; GlassPanel hugs its
-                // content, so the row-height frame alone would only centre a short panel.
-                .frame(maxHeight: .infinity)
-        }
-        // Gold chevrons at each edge when there are more tools to scroll that way (mockup `.tb-chev`).
-        .overlay(alignment: .leading) { scrollChevron(.leading) }
-        .overlay(alignment: .trailing) { scrollChevron(.trailing) }
-        .animation(.easeInOut(duration: 0.18), value: edgeFades)
-        // Report the toolbar's global frame; assist popups right-align to its trailing edge.
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { model.assistToolbarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        model.assistToolbarFrame = frame
-                    }
-                    // See MonitorCaptureStrip's matching reset: this landscape-only view unmounts
-                    // on rotation to portrait, so clear the frame rather than let it go stale for
-                    // AssistOptionsPopupAnchor's hasToolbar check.
-                    .onDisappear { model.assistToolbarFrame = .zero }
-            }
-        }
-    }
-
-    /// A small accent chevron hinting at off-screen tools; fades in only when that edge can scroll.
-    private func scrollChevron(_ edge: HorizontalEdge) -> some View {
-        Image(systemName: edge == .leading ? "chevron.left" : "chevron.right")
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(LiveDesign.accent)
-            .shadow(color: .black.opacity(0.65), radius: 4)
-            .padding(.horizontal, 5)
-            .opacity((edge == .leading ? edgeFades.leading : edgeFades.trailing) ? 1 : 0)
-            .allowsHitTesting(false)
-    }
-
-    @ViewBuilder private var scroller: some View {
-        if #available(iOS 18.0, *) {
-            toolScroll
-                .onScrollGeometryChange(for: ScrollEdgeFades.self) { geometry in
-                    // The reported content width carries ~21px of slack (the panel's leading +
-                    // trailing padding), so the last tool sits flush while ~23px of "scroll" still
-                    // remains. Use a wide trailing tolerance so the chevron clears at the real end;
-                    // the leading edge has no such slack, so a tiny tolerance suffices there.
-                    let remaining =
-                        geometry.contentSize.width - geometry.containerSize.width
-                        - geometry.contentOffset.x
-                    return ScrollEdgeFades(
-                        leading: geometry.contentOffset.x > 6,
-                        trailing: remaining > 28
-                    )
-                } action: { _, fades in
-                    edgeFades = fades
-                }
-        } else {
-            // Older systems can't observe scroll geometry cheaply; fade both edges constantly.
-            toolScroll
-                .onAppear { edgeFades = ScrollEdgeFades(leading: true, trailing: true) }
-        }
-    }
-
-    private var toolScroll: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            toolRow
-                .fixedSize(horizontal: true, vertical: false)
-        }
-        // Size to visible tools when short; accept parent width cap and scroll when tools overflow.
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-    }
-
-    private var toolRow: some View {
-        HStack(spacing: compactHorizontal ? 2 : 4) {
-            ForEach(
-                Array(visibleToolbarTools.enumerated()),
-                id: \.element.id
-            ) { index, tool in
-                if index > 0 && index.isMultiple(of: 3) {
-                    assistDivider
-                }
-                AssistToolButtonRow(tool: tool, compact: compactHorizontal)
-            }
-            // Audio monitoring rides in its own section at the end of the strip, separated from
-            // the exposure-tool groups regardless of how the groups-of-three chunking lands.
-            if audioMetersButtonVisible {
-                if !visibleToolbarTools.isEmpty {
-                    assistDivider
-                }
-                AssistToolButtonRow(tool: .audioMeters, compact: compactHorizontal)
-            }
-        }
-    }
-
-    /// Photography narrows the toolbar to the stills-relevant tools (the cinema scopes,
-    /// LUT and audio monitoring drop out), which also frees bar width for the photo strip.
-    private var isPhotographyToolset: Bool {
-        StillCapturePolicy.prefersPhotographyChrome(
-            selector: model.cameraPropertySnapshot.captureSelector)
-    }
-
-    private var visibleToolbarTools: [MonitorAssistTool] {
-        let regular = model.preferences.assistToolbarOrder.filter {
-            // Audio meters render as their own trailing section (above), not inside the groups.
-            $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
-                && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
-        }
-        return MonitorAssistStrip.frontPinned(regular, photography: isPhotographyToolset)
-    }
-
-    private var audioMetersButtonVisible: Bool {
-        model.preferences.isAssistToolbarButtonVisible(.audioMeters) && !isPhotographyToolset
-    }
-
-    /// Thin vertical rule separating assist tools into groups of three.
-    private var assistDivider: some View {
-        Rectangle()
-            .fill(LiveDesign.hairlineStrong)
-            .frame(width: 1, height: 28)
-            .padding(.horizontal, compactHorizontal ? 3 : 4)
-    }
-
-    // MARK: - axis: .vertical, collapsible: true (former `PortraitAssistRail`)
-
-    /// Expanded-rail width — wide enough for `AssistToolButtonRow`'s icon + label. Also used by
-    /// `MonitorShell`'s portrait branch for the outer frame it sizes around this view.
-    static let expandedWidth: CGFloat = 60
-    /// Collapsed-pill diameter, exposed so the photo rail can centre the pill on the lock row.
-    static let collapsedPillSize: CGFloat = 44
-
-    /// Front-pins the between-shots tools: photography leads with instant playback then the
-    /// EV meter; video keeps its leading tool and seats the EV meter second.
-    static func frontPinned(
-        _ tools: [MonitorAssistTool], photography: Bool
-    ) -> [MonitorAssistTool] {
-        var rest = tools
-        if photography {
-            let pins = [MonitorAssistTool.instantReview, .evMeter].filter { rest.contains($0) }
-            rest.removeAll { pins.contains($0) }
-            return pins + rest
-        }
-        guard let evIndex = rest.firstIndex(of: .evMeter), evIndex > 1 else { return rest }
-        let ev = rest.remove(at: evIndex)
-        rest.insert(ev, at: 1)
-        return rest
-    }
-    /// Height of the bottom scroll-fade so the last tool row never hard-clips mid-glyph.
-    private static let bottomFadeHeight: CGFloat = 40
-
-    private var tools: [MonitorAssistTool] {
-        // Audio monitoring stays last — the vertical rail's counterpart of the horizontal strip's
-        // trailing audio section.
-        let regular = model.preferences.assistToolbarOrder.filter {
-            $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
-                && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
-        }
-        let ordered = MonitorAssistStrip.frontPinned(regular, photography: isPhotographyToolset)
-        return ordered + (audioMetersButtonVisible ? [.audioMeters] : [])
-    }
-
-    private var verticalBody: some View {
-        Group {
-            if expanded {
-                expandedRail
-            } else {
-                collapsedPill
-            }
-        }
-        .animation(.easeInOut(duration: 0.18), value: expanded)
-    }
-
-    private var collapsedPill: some View {
-        Button {
-            expanded = true
-        } label: {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(LiveDesign.text.opacity(0.86))
-                .frame(width: Self.collapsedPillSize, height: Self.collapsedPillSize)
-                .liquidGlass(in: Circle())
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    private var expandedRail: some View {
-        VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 4) {
-                        ForEach(tools) { tool in
-                            AssistToolButtonRow(tool: tool)
-                        }
-                    }
-                    .padding(.top, 10)
-                    // The last row must be able to scroll fully clear of the bottom fade —
-                    // without this it parks half-faded against the collapse footer.
-                    .padding(.bottom, Self.bottomFadeHeight + 10)
-                    .padding(.horizontal, 6)
-                }
-                // Mirrors MediaBrowser's `portraitGridControlsBand` fade shape: rows scroll UNDER
-                // a bottom gradient so the last tool never hard-clips mid-glyph — the fade itself
-                // is the scroll affordance. The gradient reaches near-opaque well before the
-                // scroller's end so a row is fully swallowed by the time it meets the footer.
-                LinearGradient(
-                    stops: [
-                        .init(color: LiveDesign.background.opacity(0), location: 0),
-                        .init(color: LiveDesign.background.opacity(0.85), location: 0.55),
-                        .init(color: LiveDesign.background.opacity(0.98), location: 1),
-                    ],
-                    startPoint: .top, endPoint: .bottom
-                )
-                .frame(height: Self.bottomFadeHeight)
-                .allowsHitTesting(false)
-            }
-            // The collapse chevron is a fixed footer below the scroller: always visible at the
-            // rail's bottom end, never scrolled away with the tools.
-            collapseHandle
-                .padding(.bottom, 6)
-        }
-        .frame(width: Self.expandedWidth, height: feedHeight)
-        // Rows must never draw outside the rail's rounded silhouette — the scroll view clips
-        // to its rectangular bounds, which lets content poke past the rounded corners.
-        .clipShape(RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-    }
-
-    /// Collapses the rail without hunting for the pill (which is gone while expanded).
-    private var collapseHandle: some View {
-        Button {
-            expanded = false
-        } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(LiveDesign.muted)
-                .frame(width: 44, height: 32)
-        }
-        .buttonStyle(.zcTapTarget)
     }
 }
 

@@ -1,6 +1,7 @@
 import Testing
 
 @testable import OpenZCineCore
+import OpenCineMedia
 
 @Suite("Scope display scale")
 struct ScopeDisplayScaleTests {
@@ -93,5 +94,21 @@ struct ScopeDisplayScaleTests {
         #expect(display[Int((0.95 * 255).rounded())] >= 3)
         #expect(display[255] == 2)
         #expect(display.reduce(0, +) == 9)
+    }
+
+    @Test("The shared scope axis carries this placement: shelves on 5/95 IRE, grey fixed")
+    func sharedScopeAxis() {
+        let mapping = ExposureSignalMapping(curve: curve, clipNative: 180)
+        let axis = mapping.scopeLevelAxis
+        let floor = Int(ScopeDisplayScale.logBlackFloorCode(curve: curve).rounded())
+        #expect(abs(Double(axis.table[floor]) - 5) < 0.6)
+        #expect(abs(Double(axis.table[180]) - 95) < 1e-4)
+        #expect(axis.middleGrayIRE == ScopeDisplayScale.middleGrayLevel(curve: curve) * 100)
+        var histogram = [Int](repeating: 0, count: 256)
+        histogram[floor] = 4
+        histogram[180] = 3
+        histogram[255] = 2
+        #expect(axis.remapHistogram(histogram).map(Double.init)
+            == ScopeDisplayScale.remapHistogram(histogram, mapping: mapping))
     }
 }

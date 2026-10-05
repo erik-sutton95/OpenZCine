@@ -1,5 +1,6 @@
 import CoreImage
 import OpenCineApple
+import enum OpenCineMedia.MonitorZebraPaint
 import OpenZCineCore
 import UIKit
 import XCTest
@@ -14,7 +15,7 @@ import XCTest
             CIContext(options: [.workingFormat: format, .workingColorSpace: NSNull(),
                 .outputColorSpace: NSNull(), .cacheIntermediates: false])
         }
-        let colors: [AssistConfiguration.Zebra.StripeColor] = [.white, .amber, .red, .cyan, .green]
+        let colors: [MonitorZebraPaint] = [.white, .amber, .red, .cyan, .green]
         var changedChannels = 0
         for context in contexts {
             let plain = pixels(source, context: context)

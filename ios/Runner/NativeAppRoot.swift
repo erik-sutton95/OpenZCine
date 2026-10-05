@@ -177,7 +177,6 @@ enum PreferencesStore {
         guard let data = UserDefaults.standard.data(forKey: preferencesKey),
             var decoded = try? JSONDecoder().decode(OperatorPreferences.self, from: data)
         else { return .defaults }
-        decoded.reconcileAssistTools()
         decoded.reconcileDispOrder()
         return decoded
     }
@@ -210,6 +209,9 @@ enum PreferencesStore {
         guard let data = try? JSONEncoder().encode(commandGridOrder) else { return }
         UserDefaults.standard.set(data, forKey: commandGridOrderKey)
     }
+
+    static let assistToolUsage = MonitorToolUsagePreferences(
+        storage: .standard, key: "assistToolUsage.v1")
 
     private static let commandGridOrderKey = "commandGridOrder.v1"
     private static let mediaSortOrderKey = "mediaSortOrder.v1"
@@ -772,7 +774,6 @@ final class NativeAppModel {
     enum ActivePanel: Identifiable, Equatable {
         case picker(CameraPicker)
         case assist(MonitorAssistTool)
-        case assistLibrary
         case media
         case settings
 
@@ -780,7 +781,6 @@ final class NativeAppModel {
             switch self {
             case .picker(let picker): "picker-\(picker.id)"
             case .assist(let tool): "assist-\(tool.id)"
-            case .assistLibrary: "assist-library"
             case .media: "media"
             case .settings: "settings"
             }
@@ -801,7 +801,7 @@ final class NativeAppModel {
         /// edge-to-edge, while picker/assist popups keep the rails (and feed) visible.
         var coversFullScreen: Bool {
             switch self {
-            case .settings, .media, .assistLibrary: return true
+            case .settings, .media: return true
             case .picker, .assist: return false
             }
         }
@@ -977,6 +977,7 @@ final class NativeAppModel {
     var displayMode: DispMode = .live {
         didSet {
             guard displayMode != oldValue else { return }
+            assist.clean = displayMode == .clean
             // Entering clean sweeps in-flight pop-ups (#256): a picker or assist drawer opened in
             // DISP 1 must not ride into the bare image. Controls clean itself mounts still open
             // theirs — presentation follows the tapped control, never the mode. Full-screen
@@ -2183,10 +2184,20 @@ final class NativeAppModel {
     var displayedFeedRotation: PTPLiveViewRotation {
         liveFeedRotation.displayed(autoRotateEnabled: preferences.autoRotateFeedEnabled)
     }
-    /// Latest scope sample plus derived traffic-light readings — one publish per throttle tick.
-    var scopeAssist: ScopeAssistBundle = .empty
-    /// Convenience accessor for scope panels that only need bins / points.
-    var scopeSamples: OpenZCineCore.ScopeSamples { scopeAssist.samples }
+    /// Latest scope bundle, published per throttle tick on the shared sample bus of the
+    /// current picture source. A replaced or retired source clears it.
+    var scopeAssist: ScopeAssistBundle { nativePictureBus.bundle }
+    /// Publishes one bundle for the current picture source; a stale source is rejected.
+    func publishLiveScopeBundle(_ bundle: ScopeAssistBundle) {
+        nativePictureBus.publish(nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
+    }
+    /// A still sampled with no live picture (the demo's mock feed) opens the live source the
+    /// frame loop would, or the bus drops its scopes.
+    func openStillScopeSource() {
+        guard nativePictureSource == nil else { return }
+        nativePictureOwner = .local
+        nativePictureSource = nativePictureBus.openSource(.live)
+    }
     /// Operator-dragged centres for the movable scopes / false-colour reference, keyed by panel id
     /// (in the live-canvas coordinate space). Session cache; persisted copy lives in
     /// `movablePanelPositions`. Absent in both = the default corner.
@@ -2197,9 +2208,6 @@ final class NativeAppModel {
     {
         didSet { PreferencesStore.saveMovablePanelPositions(movablePanelPositions) }
     }
-    /// Live frames of the currently-shown movable panels (same live-canvas space), so other floating
-    /// chrome (the recenter button) can dodge them. Reported by each `MovablePanel`; absent = hidden.
-    var movablePanelFrames: [String: CGRect] = [:]
     /// Capture settings the camera refuses to change (body "Control lock"; `MovieTVLockSetting`
     /// can report shutter locked independently). Set when the body rejects a write or the lock
     /// property reads engaged; cleared when a write succeeds or the poll reports unlocked. The bar
@@ -2324,9 +2332,6 @@ final class NativeAppModel {
     /// Global frame of the bottom capture-settings bar. The exposure picker right-aligns to this
     /// bar's right edge and rises just above it, mirroring the mockup's `.pk-card` placement.
     var captureBarFrame: CGRect = .zero
-    /// Global frame of the view-assist toolbar (LUT, peaking, waveform, …). Assist quick-settings
-    /// popups right-align to this bar's trailing edge and rise just above it on the left side.
-    var assistToolbarFrame: CGRect = .zero
     /// Global frame of each capture-setting readout, keyed by its label, so a tap landing on a
     /// different setting while a picker is open can blend straight to that setting's picker.
     var captureSettingFrames: [String: CGRect] = [:]
@@ -2373,11 +2378,16 @@ final class NativeAppModel {
     init(
         liveViewGuideStore: LiveViewGuideStore = LiveViewGuideStore(),
         lutFileStore: LUTFileStore = LUTFileStore(),
-        mediaClipStore: MediaClipStore = MediaClipStore()
+        mediaClipStore: MediaClipStore = MediaClipStore(),
+        assist: NikonAssistState? = nil,
+        scopePanels: NikonScopePanels? = nil
     ) {
         self.liveViewGuideStore = liveViewGuideStore
         self.lutFileStore = lutFileStore
         self.mediaClipStore = mediaClipStore
+        self.assist = assist ?? .restore()
+        self.scopePanels = scopePanels ?? NikonScopePanels()
+        self.assist.looks.selection = assistConfiguration.selectedLUT
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -2391,9 +2401,22 @@ final class NativeAppModel {
             }
         }
     }
-    /// Per-tool assist-overlay configuration (guides, grid, level, …), also persisted.
+    /// The shared Pocket / Insta assist state: which tools are on (live and playback), the clean
+    /// view pins and every shared option. Persists itself.
+    let assist: NikonAssistState
+    /// The shared scope panel stores: each scope's options, size and place.
+    let scopePanels: NikonScopePanels
+    /// How often each palette tool is used: the shared ranking that orders live and playback.
+    var assistToolUsage = PreferencesStore.assistToolUsage.value {
+        didSet { PreferencesStore.assistToolUsage.value = assistToolUsage }
+    }
+    /// The Nikon-only assist settings (LUT catalog pick, level style, zebra units, instant review,
+    /// scope panels), also persisted.
     var assistConfiguration = PreferencesStore.loadAssistConfiguration() {
-        didSet { PreferencesStore.save(assistConfiguration) }
+        didSet {
+            PreferencesStore.save(assistConfiguration)
+            assist.looks.selection = assistConfiguration.selectedLUT
+        }
     }
     /// Operator-chosen order of the command-monitor primary grid tiles (drag to reorder), persisted.
     var commandGridOrder = PreferencesStore.loadCommandGridOrder() {
@@ -7905,7 +7928,7 @@ final class NativeAppModel {
     /// `image` must be the clean decoded camera frame — never the assist-baked display frame.
     private func sampleLiveScopeAssist(
         image: UIImage, visibleScopes: Set<MonitorAssistTool>, thermalTier: ThermalTier
-    ) async -> OpenZCineCore.ScopeSamples {
+    ) async -> OpenCineMedia.ScopeSamples {
         // ONE sampler for every surface — the same 200px/stride-2 CPU pipeline playback uses;
         // binning the full-resolution frame reads subtly differently from the shared downsampled
         // tap. [1:1 live/playback invariant]
@@ -8652,7 +8675,7 @@ final class NativeAppModel {
         // seconds behind the meter. The lit-state gate refreshes on a slow stride, and
         // recording keeps its sparse health poll untouched.
         if !isRecording,
-            preferences.liveViewVisibleAssistTools.contains(.evMeter),
+            assist.liveTools.contains(.evMeter),
             session.supportsProperty(.exposureIndicateStatus)
         {
             evFastPollTick &+= 1
@@ -9236,13 +9259,6 @@ final class NativeAppModel {
         if next != commandGridOrder { commandGridOrder = next }
     }
 
-    /// Reorders assist-toolbar tools (drag-to-reorder in Operator Setup). Persisted via `didSet`.
-    func moveAssistToolbar(from source: IndexSet, to destination: Int) {
-        var order = preferences.assistToolbarOrder
-        order.move(fromOffsets: source, toOffset: destination)
-        preferences.assistToolbarOrder = order
-    }
-
     /// Reorders DISP modes (drag-to-reorder in Operator Setup). Persisted via `didSet`.
     func moveDispOrder(from source: IndexSet, to destination: Int) {
         var order = preferences.dispOrder
@@ -9261,45 +9277,9 @@ final class NativeAppModel {
         reconcileDisplayModeAfterDispPreferenceChange()
     }
 
-    func toggleExposureBarVisibility(_ tool: MonitorAssistTool) {
-        preferences.toggleExposureBarControl(tool)
-    }
-
-    func toggleFramingBarVisibility(_ tool: MonitorAssistTool) {
-        preferences.toggleFramingBarControl(tool)
-    }
-
-    /// Toggles monitor-bar visibility for exposure and framing assist tools (Display settings).
-    func toggleAssistToolbarVisibility(_ tool: MonitorAssistTool) {
-        if MonitorAssistTool.exposureBarTools.contains(tool) {
-            toggleExposureBarVisibility(tool)
-        } else if MonitorAssistTool.framingBarTools.contains(tool) {
-            toggleFramingBarVisibility(tool)
-        }
-    }
-
-    /// Whether `toggleAssistToolbarVisibility` can act on `tool` — Display settings renders the eye
-    /// only where it can.
-    ///
-    /// The exposure and framing sets are the whole of what the preferences store. LUT is
-    /// deliberately permanent, and the photography tools (EV meter, instant review) belong to
-    /// neither set, so the toggle above falls through both branches while
-    /// `isAssistToolbarButtonVisible` still answers a flat `true`: the eye was drawn lit and did
-    /// nothing when tapped.
-    func canToggleAssistToolbarVisibility(_ tool: MonitorAssistTool) -> Bool {
-        MonitorAssistTool.exposureBarTools.contains(tool)
-            || MonitorAssistTool.framingBarTools.contains(tool)
-    }
-
-    /// Toggles whether a tool keeps rendering in clean view (DISP 2) — off for all 17 by default
-    /// so clean is a bare image out of the box (#256).
+    /// Toggles whether a tool keeps rendering in clean view (DISP 2).
     func toggleCleanViewPin(_ tool: MonitorAssistTool) {
-        preferences.toggleCleanViewPin(tool)
-    }
-
-    /// Clears the clean-view keep list, restoring the stock bare image (Display settings).
-    func resetCleanViewPins() {
-        preferences.cleanViewPinnedTools = OperatorPreferences.defaults.cleanViewPinnedTools
+        assist.toggleCleanViewPin(tool.selection)
     }
 
     /// Restores one DISP mode's chrome on one capture side to stock (Display settings).
@@ -9329,23 +9309,6 @@ final class NativeAppModel {
         reconcileDisplayModeAfterDispPreferenceChange()
         operatorSettingsTab = .display
         activePanel = .settings
-    }
-
-    func resetExposureBarVisibility() {
-        preferences.exposureBarVisibleControls =
-            OperatorPreferences.defaults.exposureBarVisibleControls
-    }
-
-    func resetFramingBarVisibility() {
-        preferences.framingBarVisibleControls =
-            OperatorPreferences.defaults.framingBarVisibleControls
-    }
-
-    /// Restores assist-toolbar order and per-button visibility to defaults (Display settings).
-    func resetAssistToolbarPreferences() {
-        preferences.assistToolbarOrder = OperatorPreferences.defaults.assistToolbarOrder
-        resetExposureBarVisibility()
-        resetFramingBarVisibility()
     }
 
     private func reconcileDisplayModeAfterDispPreferenceChange() {
@@ -9548,7 +9511,7 @@ final class NativeAppModel {
         // Normalising against the frame put the camera coordinate off by the squeeze — the same
         // error `liveFocusBoxRect` used to draw with. Off-picture taps clamp to the edge.
         let presented = desqueezedRect(
-            CGRect(origin: .zero, size: feedSize), assistConfiguration.desqueeze)
+            CGRect(origin: .zero, size: feedSize), liveDesqueeze)
         // A mirrored feed is a mirrored tap: what the operator touched on the left of the picture
         // is on the camera's right. Undo the flip here rather than anywhere downstream — the
         // camera's coordinate space never mirrors, only the monitor does.
@@ -9653,31 +9616,6 @@ final class NativeAppModel {
             coordinateWidth: coordinateWidth,
             coordinateHeight: coordinateHeight
         )
-    }
-
-    /// Lifts the recenter-focus button above any movable assist panel (scope / false-colour
-    /// reference) that would overlap its bottom-left corner spot, so e.g. a waveform dropped there
-    /// pushes it up to the next clear slot. Climbs panel-by-panel (lowest first) until nothing
-    /// overlaps. Called by `MonitorShell`'s landscape chrome since it only reads
-    /// `movablePanelFrames`, not view-local state.
-    func focusResetButtonClearY(centerX: CGFloat, baseY: CGFloat, size: CGFloat) -> CGFloat {
-        let half = size / 2
-        let gap: CGFloat = 10
-        let panels = movablePanelFrames.values.sorted { $0.maxY > $1.maxY }
-        var y = baseY
-        var moved = true
-        var iterations = 0
-        while moved && iterations < 8 {
-            moved = false
-            iterations += 1
-            let buttonRect = CGRect(x: centerX - half, y: y - half, width: size, height: size)
-            for frame in panels where buttonRect.intersects(frame.insetBy(dx: -gap, dy: -gap)) {
-                y = frame.minY - gap - half
-                moved = true
-            }
-        }
-        // Never climb off the top of the feed.
-        return max(y, 44)
     }
 
     /// True when `location` (feed space) lands on the camera's current AF / subject box, with a
@@ -10114,7 +10052,7 @@ final class NativeAppModel {
         guard let session = cameraSession,
             StillCapturePolicy.prefersPhotographyChrome(
                 selector: cameraPropertySnapshot.captureSelector),
-            preferences.liveViewVisibleAssistTools.contains(.instantReview)
+            assist.instantReview
         else { return }
         Task { [weak self] in
             for (storageID, _) in await session.readAllStorageInfo() {
@@ -10131,7 +10069,7 @@ final class NativeAppModel {
     /// RAW-only quality has no streamable full image, so the review sits out.
     /// [verify-on-HW: enumeration lag per body]
     private func scheduleInstantReview(session: NativeCameraSession) {
-        guard preferences.liveViewVisibleAssistTools.contains(.instantReview) else { return }
+        guard assist.instantReview else { return }
         guard cameraPropertySnapshot.compression?.contains("JPEG") == true else { return }
         instantReviewFetchTask?.cancel()
         instantReviewFetchTask = Task { [weak self] in
@@ -10740,7 +10678,7 @@ final class NativeAppModel {
                 // Demo instant playback: the staged feed still (or the mock-feed asset the
                 // raster falls back to) stands in for the card's just-captured object so the
                 // review overlay is verifiable without a body.
-                if preferences.liveViewVisibleAssistTools.contains(.instantReview),
+                if assist.instantReview,
                     let image = liveFrameImage ?? UIImage(named: "MockFeed")
                 {
                     presentInstantReview(image)
@@ -11014,8 +10952,8 @@ final class NativeAppModel {
     /// the cinema-only overlays (video scopes, audio meters, …); the persisted set stays untouched
     /// for the flip back to video, and for the return to DISP 1.
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
-        var tools = MonitorChromePolicy.visibleTools(
-            mode: displayMode, preferences: preferences)
+        guard displayMode != .command else { return [] }
+        var tools = Set(MonitorAssistTool.activeCases.filter { assist.isVisible($0.selection) })
         // The camera's audio meter rides in the live-view frame header, and there is no substitute
         // — the phone's microphone is not what the camera is recording. On any other picture source
         // the meter leaves rather than holding its last reading, which would look live.
@@ -11033,11 +10971,21 @@ final class NativeAppModel {
         renderedLiveAssistTools.contains(.mirror)
     }
 
+    /// The de-squeeze the live picture presents (DISP mode and photography applied).
+    var liveDesqueeze: NikonDesqueeze {
+        assist.desqueeze(visible: renderedLiveAssistTools.contains(.desqueeze))
+    }
+
+    /// The de-squeeze playback and stills present.
+    var playbackDesqueeze: NikonDesqueeze {
+        assist.desqueeze(visible: assist.playbackTools.contains(.desqueeze))
+    }
+
     /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
     /// photography toolset — the recency selection itself stays in the core preferences.
     var renderedFitScopes: [MonitorAssistTool] {
         let rendered = renderedLiveAssistTools
-        return preferences.displayedFitScopes.filter { rendered.contains($0) }
+        return preferences.displayedFitScopes(on: assist.liveTools).filter { rendered.contains($0) }
     }
 
     /// Runs the target the operator confirmed. It used to recompute `!isRecording` here, so a take
@@ -12301,7 +12249,7 @@ final class NativeAppModel {
     /// Count of live-view-active scope tools (waveform/parade/histogram/traffic lights).
     var activeScopeCount: Int {
         MonitorAssistTool.scopeTools.filter {
-            preferences.liveViewVisibleAssistTools.contains($0)
+            assist.liveTools.contains($0)
         }.count
     }
 
@@ -12319,19 +12267,15 @@ final class NativeAppModel {
     /// cap is engaged). Deactivating an already-active scope is never blocked.
     func isScopeCapBlocked(_ tool: MonitorAssistTool) -> Bool {
         scopeCapActive && MonitorAssistTool.scopeTools.contains(tool)
-            && !preferences.liveViewVisibleAssistTools.contains(tool)
+            && !assist.liveTools.contains(tool)
     }
 
     func toggleAssist(_ tool: MonitorAssistTool, context: ViewAssistContext = .liveView) {
-        guard !interfaceLocked else { return }
-        if context == .liveView, isScopeCapBlocked(tool) {
-            scopeCapNotice += 1
-            return
-        }
-        AssistToolActivation.toggle(
-            tool, context: context, preferences: &preferences, configuration: &assistConfiguration)
+        setAssist(tool, visible: !assist.tools(for: context).contains(tool), context: context)
     }
 
+    /// The Nikon guards around the shared toggle: the interface lock, and the portrait-fit cap
+    /// that refuses a third live scope. Live scopes also record their recency for that cap.
     func setAssist(
         _ tool: MonitorAssistTool, visible: Bool, context: ViewAssistContext = .liveView
     ) {
@@ -12340,9 +12284,8 @@ final class NativeAppModel {
             scopeCapNotice += 1
             return
         }
-        AssistToolActivation.set(
-            tool, visible: visible, context: context, preferences: &preferences,
-            configuration: &assistConfiguration)
+        assist.set(tool, visible: visible, context: context)
+        if context == .liveView { preferences.recordScopeActivation(tool, on: visible) }
         // Switching the tool off cannot leave the feed punched in: the button goes with the tool,
         // so an armed transform would have no visible control explaining it. `Magnification`
         // states the rule; this is the only place the tool can be turned off.
@@ -13301,31 +13244,6 @@ struct PickerMode: Equatable, Sendable {
 }
 
 extension MonitorAssistTool {
-    var icon: String {
-        switch self {
-        case .lut: "camera.filters"
-        case .peaking: "mountain.2"
-        case .falseColor: "circle.lefthalf.filled"
-        case .zebra: "line.diagonal"
-        case .waveform: "waveform.path"
-        case .parade: "chart.bar.xaxis"
-        case .histogram: "waveform"
-        case .vectorscope: "circle.grid.cross"
-        case .trafficLights: "light.beacon.max"
-        case .audioMeters: "slider.vertical.3"
-        case .guides: "rectangle.dashed"
-        case .grid: "grid"
-        case .crosshair: "plus"
-        case .level: "gyroscope"
-        case .evMeter: "plusminus"
-        case .desqueeze: "arrow.left.and.right"
-        // The system's own mirror glyph, and the one every camera app uses for this.
-        case .mirror: "arrow.left.and.right.righttriangle.left.righttriangle.right"
-        case .magnification: "plus.magnifyingglass"
-        case .instantReview: "photo.badge.checkmark"
-        }
-    }
-
     var title: String {
         switch self {
         case .lut: "LUT"

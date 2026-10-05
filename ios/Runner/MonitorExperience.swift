@@ -58,7 +58,7 @@ struct MonitorExperience: View {
             // record start/stop. (Value wheels add their own per-detent feedback.)
             .sensoryFeedback(.selection, trigger: model.activePanel)
             .sensoryFeedback(.selection, trigger: model.displayMode)
-            .sensoryFeedback(.selection, trigger: model.preferences.liveViewVisibleAssistTools)
+            .sensoryFeedback(.selection, trigger: model.assist.liveTools)
             .sensoryFeedback(.impact(weight: .heavy), trigger: model.isRecording)
             // Confirm the focus-point app-lock on release — a firm thump locking, a light tap freeing.
             .sensoryFeedback(trigger: model.focusPointLocked) { _, locked in
@@ -191,7 +191,7 @@ struct LiveViewLayoutContext {
     /// True when the viewport is taller than it is wide — drives the portrait monitor shell.
     let isPortrait: Bool
     /// Full PHYSICAL viewport height for the portrait zone layout. The GeometryReader reports the
-    /// safe-area frame, but the shell renders edge-to-edge and `MonitorPortraitLayout.zones`
+    /// safe-area frame, but the shell renders edge-to-edge and the shared `FieldMonitorLayout`
     /// subtracts the insets itself — restore them here (as `MonitorLiveViewViewport.fullWidth` does
     /// horizontally). Passing the safe-area height double-counts the insets: ~96pt dead band.
     let viewportHeight: Double
@@ -701,7 +701,7 @@ private struct LiveFrameRaster: View {
     /// mirroring it would be wrong. The AF boxes DO describe positions in the picture and are
     /// handled where they are drawn.
     private var feedScale: CGSize {
-        let squeeze = desqueezeScale(model.assistConfiguration.desqueeze)
+        let squeeze = desqueezeScale(model.liveDesqueeze)
         guard model.liveFeedMirrored else { return squeeze }
         return CGSize(width: -squeeze.width, height: squeeze.height)
     }
@@ -887,9 +887,9 @@ private struct LiveFeedFocusOverlay: View {
             LiveFocusBoxOverlay(
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
                 mirrored: model.liveFeedMirrored,
-                // The raster's own value, not the rendered-tool set: the box has to register with
-                // the picture as `LiveFrameRaster.feedScale` actually presents it.
-                desqueeze: model.assistConfiguration.desqueeze
+                // The raster's own value: the box has to register with the picture as
+                // `LiveFrameRaster.feedScale` actually presents it.
+                desqueeze: model.liveDesqueeze
             )
             .equatable()
             // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
@@ -920,7 +920,7 @@ private struct LiveFeedFocusOverlay: View {
                 // rather than on where an unmirrored, un-de-squeezed one would have been.
                 if let rect = liveFocusBoxRect(
                     box, focus: focus, in: proxy.size,
-                    desqueeze: model.assistConfiguration.desqueeze,
+                    desqueeze: model.liveDesqueeze,
                     mirrored: model.liveFeedMirrored)
                 {
                     Color.clear
@@ -991,7 +991,7 @@ struct InstantReviewOverlay: View {
                     // with the image instead of leaving them on the squeezed geometry.
                     let fitted = Self.fittedRect(
                         image: desqueezedSize(
-                            review.image.size, model.assistConfiguration.desqueeze),
+                            review.image.size, model.liveDesqueeze),
                         container: proxy.size)
                     // The stand-in thumb shows blurred; the upgrade animates the blur away
                     // as the full image swaps underneath, reading as one continuous sharpen.
@@ -1342,7 +1342,7 @@ func liveFocusBoxRect(
     _ box: PTPLiveViewAFBox,
     focus: PTPLiveViewFocusInfo,
     in size: CGSize,
-    desqueeze: AssistConfiguration.Desqueeze,
+    desqueeze: NikonDesqueeze,
     mirrored: Bool
 ) -> CGRect? {
     guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return nil }
@@ -1374,7 +1374,7 @@ struct LiveFocusBoxOverlay: View, Equatable {
     /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
     var mirrored: Bool = false
     /// The de-squeeze the raster below is presenting with — see ``liveFocusBoxRect``.
-    var desqueeze = AssistConfiguration.Desqueeze()
+    var desqueeze = NikonDesqueeze.off
 
     nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
         // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
@@ -1488,118 +1488,6 @@ struct FeedGrain: View {
         .drawingGroup()
         .allowsHitTesting(false)
     }
-}
-
-extension View {
-    /// Positions a view at an absolute `MonitorModuleFrame` (viewport coordinates). Internal:
-    /// `MonitorSystemCluster` / `MonitorShell` (MonitorUnified.swift) place rail slots with it.
-    func monitorModuleFrame(_ frame: MonitorModuleFrame, alignment: Alignment = .center)
-        -> some View
-    {
-        self
-            .frame(width: CGFloat(frame.width), height: CGFloat(frame.height), alignment: alignment)
-            .position(x: CGFloat(frame.midX), y: CGFloat(frame.midY))
-    }
-}
-
-struct BatteryRailModule: View {
-    @Environment(NativeAppModel.self) private var model
-    let safeArea: MonitorEdgeInsets
-    let phoneTopClearance: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            let layout = MonitorBatteryRailLayout.fit(
-                railHeight: Double(proxy.size.height),
-                safeArea: safeArea,
-                phoneTopClearance: phoneTopClearance
-            )
-
-            ZStack {
-                if layout.usesBatteryPill {
-                    // Anchored in the rail zone's own width, nudged toward the screen edge —
-                    // the zone ends short of the feed frame, which keeps the gauges off the
-                    // image.
-                    batteryPill
-                        .chromeEditable(
-                            .batteryIndicators, editing: model.chromeEditorMode
-                        )
-                        .position(x: proxy.size.width / 2 - 6, y: CGFloat(layout.pillCenterY))
-                } else {
-                    phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
-                        .chromeEditable(
-                            .batteryIndicators, editing: model.chromeEditorMode
-                        )
-                        .position(
-                            x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
-                    cameraBatteryIndicator
-                        .chromeEditable(
-                            .batteryIndicators, editing: model.chromeEditorMode
-                        )
-                        .position(
-                            x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-        }
-    }
-
-    private var batteryPill: some View { BatteryGaugeStack() }
-
-    private func phoneBatteryIndicator(compact: Bool) -> some View {
-        BatteryIndicator(
-            percent: model.cameraState.phoneBatteryPercent,
-            deviceSystemName: "iphone",
-            isCamera: false,
-            isCharging: model.phoneBatteryCharging,
-            layout: compact ? .compactRail : .rail
-        )
-    }
-
-    private var cameraBatteryIndicator: some View {
-        BatteryIndicator(
-            percent: model.cameraState.cameraBatteryPercent,
-            deviceSystemName: "camera",
-            isCamera: true,
-            isCharging: model.cameraBatteryCharging
-        )
-    }
-}
-
-/// The combined battery gauges (Dynamic-Island rails, and the iPad's inline cluster): two bare
-/// rows, each a device icon beside a battery-shaped outline with the number inside — narrow
-/// enough to sit inside the rail lane without touching the feed.
-struct BatteryGaugeStack: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            BatteryIndicator(
-                percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: deviceSymbol,
-                isCamera: false,
-                isCharging: model.phoneBatteryCharging,
-                layout: .pillRow
-            )
-            BatteryIndicator(
-                percent: model.cameraState.cameraBatteryPercent,
-                deviceSystemName: "camera",
-                isCamera: true,
-                isCharging: model.cameraBatteryCharging,
-                layout: .pillRow
-            )
-        }
-    }
-
-    private var deviceSymbol: String {
-        UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
-    }
-}
-
-/// Inline phone + camera battery cluster for width-constrained (4:3-ish iPad) landscape layouts,
-/// mounted beside the lock button at the zone map's `.batteryInline` cluster frame.
-struct BatteryInlineCluster: View {
-    var body: some View { BatteryGaugeStack() }
 }
 
 /// A single tappable exposure readout (label + value) that opens its picker above the capture bar.
@@ -1750,7 +1638,7 @@ struct CaptureSettingButton: View {
                     .onChange(of: proxy.frame(in: .global)) { _, frame in
                         model.captureSettingFrames[value.label] = frame
                     }
-                    // Same landscape-unmount staleness as captureBarFrame/assistToolbarFrame above:
+                    // Same landscape-unmount staleness as captureBarFrame above:
                     // drop this entry so handleBackdropTap can't hit-test a stale landscape frame
                     // after rotating to portrait.
                     .onDisappear { model.captureSettingFrames[value.label] = nil }
@@ -1759,308 +1647,15 @@ struct CaptureSettingButton: View {
     }
 }
 
-/// An assist-bar tool: a single tap toggles it, a long-press opens its options. The press builds
-/// escalating haptics so the operator feels the action arming, then a firm tap when it fires. Each
-/// button keeps its own press state, so it lives in its own view.
-struct AssistToolButtonRow: View {
-    @Environment(NativeAppModel.self) private var model
-    let tool: MonitorAssistTool
-    var context: ViewAssistContext = .liveView
-    var compact = false
-    /// When set, long-press routes here instead of the live-monitor assist popup (e.g. media playback).
-    var onConfigure: ((MonitorAssistTool) -> Void)? = nil
-    @State private var buildup: Task<Void, Never>?
-
-    var body: some View {
-        AssistToolButton(
-            tool: tool,
-            isOn: model.preferences.visibleAssistTools(for: context).contains(tool),
-            compact: compact
-        )
-        // Fit-mode scope cap (R7): a scope that can't activate renders grayed but stays tappable —
-        // the tap routes to `toggleAssist`, which refuses and fires the toast. Inert in landscape
-        // (`monitorIsPortrait == false` ⇒ never blocked) and for non-scope tools.
-        .opacity(context == .liveView && model.isScopeCapBlocked(tool) ? 0.35 : 1)
-        .animation(.easeInOut(duration: 0.18), value: model.isScopeCapBlocked(tool))
-        .minTapTarget()
-        .onTapGesture { model.toggleAssist(tool, context: context) }
-        .onLongPressGesture(minimumDuration: 0.25) {
-            cancelBuildup()
-            guard tool.hasConfiguration else { return }
-            if model.preferences.hapticsEnabled {
-                AssistHaptics.confirm()
-            }
-            if let onConfigure {
-                onConfigure(tool)
-            } else {
-                model.presentAssistOptions(tool)
-            }
-        } onPressingChanged: { pressing in
-            guard tool.hasConfiguration, model.preferences.hapticsEnabled else { return }
-            if pressing {
-                buildup = AssistHaptics.buildup()
-            } else {
-                cancelBuildup()
-            }
-        }
-    }
-
-    private func cancelBuildup() {
-        buildup?.cancel()
-        buildup = nil
-    }
-}
-
-/// Escalating haptics that signal a long-press is building toward its action.
-private enum AssistHaptics {
-    /// Three soft taps of rising intensity over ~0.16s, leading into the press's completion.
-    @MainActor static func buildup() -> Task<Void, Never> {
-        Task { @MainActor in
-            let generator = UIImpactFeedbackGenerator(style: .soft)
-            for intensity in [0.4, 0.65, 0.9] as [CGFloat] {
-                generator.prepare()
-                generator.impactOccurred(intensity: intensity)
-                try? await Task.sleep(for: .seconds(0.08))
-                if Task.isCancelled { return }
-            }
-        }
-    }
-
-    /// A firm tap confirming the long-press has fired.
-    @MainActor static func confirm() {
-        let generator = UIImpactFeedbackGenerator(style: .rigid)
-        generator.prepare()
-        generator.impactOccurred(intensity: 1.0)
-    }
-}
-
-/// Keeps a ``ScrollEdgeFades`` in step with a horizontal scroller's real position.
-///
-/// The tolerances are not arbitrary. A `GlassPanel`'s leading and trailing padding is reported as
-/// content width, so a row sitting flush at its end still claims ~23pt of scrollable slack — a
-/// trailing chevron would never clear. The leading edge carries no such slack, so a few points is
-/// enough there. Below iOS 18 there is no cheap way to observe scroll geometry, so both edges hint
-/// permanently: a chevron that over-promises beats a row that looks complete when it is not.
-struct ScrollEdgeReporter: ViewModifier {
-    @Binding var edges: ScrollEdgeFades
-
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
-            content
-                .onScrollGeometryChange(for: ScrollEdgeFades.self) { geometry in
-                    let remaining =
-                        geometry.contentSize.width - geometry.containerSize.width
-                        - geometry.contentOffset.x
-                    return ScrollEdgeFades(
-                        leading: geometry.contentOffset.x > 6,
-                        trailing: remaining > 28
-                    )
-                } action: { _, fades in
-                    edges = fades
-                }
-        } else {
-            content.onAppear { edges = ScrollEdgeFades(leading: true, trailing: true) }
-        }
-    }
-}
-
-/// Tracks which edges of the assist toolbar fade out to hint at off-screen tools.
-struct ScrollEdgeFades: Equatable {
-    var leading: Bool
-    var trailing: Bool
-
-    /// A horizontal mask gradient that fades only the active edges (≈6% inset each).
-    var gradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: leading ? .clear : .black, location: 0),
-                .init(color: .black, location: leading ? 0.06 : 0),
-                .init(color: .black, location: trailing ? 0.94 : 1),
-                .init(color: trailing ? .clear : .black, location: 1),
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-}
-
-struct AssistToolButton: View {
-    let tool: MonitorAssistTool
-    let isOn: Bool
-    var compact = false
-
-    var body: some View {
-        // Mirrors the mockup's `.tool` box model; the 52pt floor keeps comfortable touch targets
-        // while wide labels (PARADE) still grow.
-        VStack(spacing: 3) {
-            AssistToolIcon(tool: tool, size: 19)
-                .frame(height: 23)
-            Text(tool.rawValue)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(0.9)
-                .lineLimit(1)
-        }
-        .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
-        .padding(.vertical, 5)
-        .padding(.horizontal, compact ? 5 : 8)
-        .frame(minWidth: compact ? 48 : 52)
-        // `.tool.on`: a dim-accent fill and a same-tone dim border (no bright outline) —
-        // only the icon and label read as full gold. No drop shadow: a glow would extend
-        // past the frame and get clipped hard by the scroll container at the leading edge.
-        .background {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .fill(isOn ? LiveDesign.accentDim : Color.clear)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .strokeBorder(isOn ? LiveDesign.accentDim : Color.clear, lineWidth: 1)
-        }
-    }
-}
-
-/// Three parallel diagonal stripes — the classic video "zebra" exposure mark. As a `Shape`, its
-/// stroked form fills with the surrounding `foregroundStyle`, so it tints exactly like the SF
-/// Symbols beside it (gold when on, muted when off).
-struct ZebraStripesShape: Shape {
-    var count = 3
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let side = min(rect.width, rect.height)
-        let originX = rect.midX
-        let originY = rect.midY
-        let diag = CGFloat(0.5).squareRoot()  // 1/√2 — projects each 45° stripe onto the axes
-        let halfLen = side * 0.40 / 2  // half a stripe's length
-        let step = side * 0.27  // perpendicular gap between stripes
-        for index in 0..<count {
-            let offset = CGFloat(index) - CGFloat(count - 1) / 2
-            let centerX = originX + offset * step * diag
-            let centerY = originY + offset * step * diag
-            path.move(to: CGPoint(x: centerX - halfLen * diag, y: centerY + halfLen * diag))
-            path.addLine(to: CGPoint(x: centerX + halfLen * diag, y: centerY - halfLen * diag))
-        }
-        return path
-    }
-}
-
-/// The glyph for an assist tool. Every tool uses its SF Symbol except ZEBRA, which gets the custom
-/// diagonal-stripe mark — no SF Symbol reads as exposure "zebras" (the nearest are a single
-/// `line.diagonal` or a phone-shaped hatch). Sized explicitly so it matches the symbol it replaces.
-struct AssistToolIcon: View {
-    let tool: MonitorAssistTool
-    var size: CGFloat = 19
-
-    var body: some View {
-        if tool == .zebra {
-            ZebraStripesShape()
-                .stroke(
-                    style: StrokeStyle(
-                        lineWidth: max(1.6, size * 0.13), lineCap: .round, lineJoin: .round)
-                )
-                .frame(width: size, height: size)
-        } else {
-            Image(systemName: tool.icon)
-                .font(.system(size: size, weight: .regular))
-        }
-    }
-}
-
-struct AssetCircleButton: View {
-    let assetName: String
-    let systemName: String
-    let size: CGFloat
-
-    var body: some View {
-        Image(assetName)
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size * 0.44, height: size * 0.44)
-            .foregroundStyle(LiveDesign.text.opacity(0.86))
-            .frame(width: size, height: size)
-            .liquidGlass(in: Circle())
-    }
-}
-
-struct RecordButton: View {
-    let isRecording: Bool
-
-    // Drawn at the rail's record-button diameter; inner shapes keep their original proportions.
-    private var diameter: CGFloat { CGFloat(MonitorSideRailControlLayout.recordButtonSize) }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color(red: 0.88, green: 0.28, blue: 0.30),
-                            LiveDesign.rec,
-                        ],
-                        center: .top,
-                        startRadius: 4,
-                        endRadius: diameter * (48.0 / 72.0)
-                    )
-                )
-                .overlay(Circle().stroke(.white.opacity(0.17), lineWidth: 3))
-                .shadow(color: .black.opacity(0.50), radius: 20, x: 0, y: 12)
-                .shadow(color: isRecording ? LiveDesign.rec.opacity(0.50) : .clear, radius: 16)
-            if isRecording {
-                // Stop icon — rounded square, not panel chrome (see `DesignTokens` exceptions).
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LiveDesign.rec)
-                    .frame(width: diameter * (25.0 / 72.0), height: diameter * (25.0 / 72.0))
-            } else {
-                Circle()
-                    .fill(LiveDesign.rec)
-                    .frame(width: diameter * (58.0 / 72.0), height: diameter * (58.0 / 72.0))
-            }
-        }
-        .frame(width: diameter, height: diameter)
-    }
-}
-
+/// One compact battery row (icon · glyph · number) inside the combined gauge pill.
 struct BatteryIndicator: View {
-    /// `.rail`: 3-row landscape rail. `.compactRail`: battery + percentage between a classic
-    /// notch and lock button. `.inline`: single-row portrait/iPad presentation. `.pillRow`:
-    /// one compact row (icon · glyph · number) inside the combined rail pill.
-    enum Layout {
-        case rail, compactRail, inline, pillRow
-    }
-
     let percent: Int
     let deviceSystemName: String
     let isCamera: Bool
     var isCharging: Bool = false
-    var layout: Layout = .rail
 
     /// Drives the exhausted gauge's pulse. Only ever set while ``batteryPulses``.
     @State private var batteryPulsePhase = false
-
-    /// Standard SF battery glyph whose fill reflects the charge percent. The Nikon ZR reports
-    /// battery as discrete steps (1/20/40/60/80/100 %), so the camera readout naturally lands on
-    /// 20/40/60/80/100 % (and 1 % when critical) rather than a misleadingly precise figure.
-    private var batterySymbol: String {
-        // Camera: pick the glyph from the bar count so the icon and the readout cannot disagree.
-        if let cameraGauge {
-            switch cameraGauge.filledBars {
-            case 0: return "battery.0percent"
-            case 1: return "battery.25percent"
-            case 2: return "battery.25percent"
-            case 3: return "battery.50percent"
-            case 4: return "battery.75percent"
-            default: return "battery.100percent"
-            }
-        }
-        let bucket = percent
-        switch bucket {
-        case ..<13: return "battery.0percent"
-        case ..<38: return "battery.25percent"
-        case ..<63: return "battery.50percent"
-        case ..<88: return "battery.75percent"
-        default: return "battery.100percent"
-        }
-    }
 
     /// The camera's gauge, as the body reports it (nil for the phone, which is a real percentage).
     private var cameraGauge: CameraBatteryGauge? {
@@ -2148,19 +1743,10 @@ struct BatteryIndicator: View {
     /// "nearly out", a pulsing one is "the shutter is already disabled".
     private var batteryPulses: Bool { cameraGauge?.pulses ?? false }
 
-    var body: some View {
-        switch layout {
-        case .rail: railBody
-        case .compactRail: compactRailBody
-        case .inline: inlineBody
-        case .pillRow: pillRowBody
-        }
-    }
-
     /// One compact gauge row: device icon beside a battery-shaped outline with the bare
     /// number inside (the tight lane drops the % sign — the context is unambiguous). The
     /// outline's stroke carries the state tint; a bolt precedes the number while charging.
-    private var pillRowBody: some View {
+    var body: some View {
         HStack(spacing: 5) {
             Image(systemName: deviceSystemName)
                 .font(.system(size: 10, weight: .medium))
@@ -2188,68 +1774,6 @@ struct BatteryIndicator: View {
                     .frame(width: 1.6, height: 6)
                     .offset(x: 3)
             }
-        }
-    }
-
-    /// A charging bolt sits over the battery body when plugged in, legible against the fill via
-    /// a dark glyph with a thin light outline. Shared by both presentations.
-    private var chargingOverlay: some View {
-        Group {
-            if isCharging {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 9, weight: .black))
-                    .foregroundStyle(LiveDesign.background)
-                    .shadow(color: LiveDesign.text.opacity(0.9), radius: 0.5)
-                    .offset(x: -1)
-            }
-        }
-    }
-
-    private var railBody: some View {
-        VStack(spacing: 4) {
-            Image(systemName: batterySymbol)
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(batteryTint)
-                .overlay { chargingOverlay }
-            gaugeReadout(size: 8)
-            Image(systemName: deviceSystemName)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(LiveDesign.muted)
-        }
-        .frame(
-            width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
-            height: CGFloat(MonitorBatteryRailLayout.indicatorHeight)
-        )
-    }
-
-    private var compactRailBody: some View {
-        VStack(spacing: 1) {
-            Image(systemName: batterySymbol)
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(batteryTint)
-                .overlay { chargingOverlay }
-            gaugeReadout(size: 6.5)
-        }
-        .frame(
-            width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
-            height: CGFloat(MonitorBatteryRailLayout.compactPhoneIndicatorHeight)
-        )
-        .accessibilityLabel("iPhone battery")
-        .accessibilityValue(readout)
-    }
-
-    /// Portrait top-bar presentation (R2): one row, battery glyph / percent / device glyph,
-    /// reusing the rail's exact symbol/readout/color/charging logic.
-    private var inlineBody: some View {
-        HStack(spacing: 5) {
-            Image(systemName: batterySymbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(batteryTint)
-                .overlay { chargingOverlay }
-            gaugeReadout(size: 10)
-            Image(systemName: deviceSystemName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(LiveDesign.muted)
         }
     }
 }

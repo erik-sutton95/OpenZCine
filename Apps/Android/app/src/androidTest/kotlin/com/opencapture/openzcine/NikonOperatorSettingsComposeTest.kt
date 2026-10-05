@@ -1,6 +1,14 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import android.content.SharedPreferences
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorParadeMode
+import com.opencapture.monitorui.MonitorVectorscopeZoom
+import com.opencapture.monitorui.MonitorWaveformMode
+import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.opencine.media.MonitorCrushClipCompensation
+import com.opencapture.opencine.media.MonitorPeakingSense
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
@@ -226,24 +234,24 @@ class NikonOperatorSettingsComposeTest {
         val preferences = context.getSharedPreferences("z2-settings-assist-menus", Context.MODE_PRIVATE)
         preferences.edit().clear().putString("unrelated.operator.choice", "retained").commit()
         val settings = OperatorSettings(preferences)
+        val stores = assistStores("z2-settings-assist-menus")
+        val assist = restoreAssists(stores).shared
         val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "settings-assists"))
         runBlocking { session.connect() }
-        val originalParade = settings.scopeAssistConfiguration.paradeMode
-        show(settings, OperatorSettingsTab.ASSIST, session)
+        val originalParade = assist.paradeMode
+        show(settings, OperatorSettingsTab.ASSIST, session, assists = restoreAssists(stores).also { assistsShown = it })
         fun choose(card: String, text: String) {
             composeRule.onNode(hasText(text) and hasAnyAncestor(hasTestTag("settings.assist.$card")))
                 .performScrollTo().performClick()
         }
         choose("waveform", "Luma")
-        composeRule.runOnIdle { assertEquals(originalParade, settings.scopeAssistConfiguration.paradeMode) }
+        composeRule.runOnIdle { assertEquals(originalParade, assistsShown.shared.paradeMode) }
         choose("parade", "YRGB")
         composeRule.onNode(hasContentDescription("Reset to defaults") and hasAnyAncestor(hasTestTag("settings.assist.waveform")))
             .performScrollTo().performClick()
         composeRule.runOnIdle {
-            assertEquals(com.opencapture.openzcine.settings.ScopeAssistConfiguration().waveformMode,
-                settings.scopeAssistConfiguration.waveformMode)
-            assertEquals(com.opencapture.openzcine.settings.ScopeParadeMode.YRGB,
-                settings.scopeAssistConfiguration.paradeMode)
+            assertEquals(MonitorWaveformMode.RGB, assistsShown.shared.waveMode)
+            assertEquals(MonitorParadeMode.YRGB, assistsShown.shared.paradeMode)
         }
         choose("waveform", "Luma")
         choose("vectorscope", "4x")
@@ -253,9 +261,9 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNode(hasContentDescription("Reset to defaults") and hasAnyAncestor(hasTestTag("settings.assist.histogram")))
             .performScrollTo().performClick()
         composeRule.runOnIdle {
-            assertEquals(com.opencapture.openzcine.settings.ScopeCrushClipCompensation.QUARTER,
-                settings.scopeCrushClipCompensation)
-            assertEquals(FeedPeakingSensitivity.HIGH, settings.feedEffectsConfiguration.peakingSensitivity)
+            // The histogram reset takes the shared default (coordinator decision adopt-shared).
+            assertEquals(MonitorCrushClipCompensation.ZERO, assistsShown.shared.crushClipCompensation)
+            assertEquals(MonitorPeakingSense.HIGH, assistsShown.shared.peakingSensitivity)
         }
         composeRule.onNode(hasContentDescription("1.0") and hasAnyAncestor(hasTestTag("settings.assist.trafficLights")))
             .performScrollTo().performClick()
@@ -272,15 +280,16 @@ class NikonOperatorSettingsComposeTest {
             assertTrue("$label must clear the key's bottom inset", caption.bottom <= key.bottom - 7f * density + 1f)
         }
         composeRule.runOnIdle {
-            val reloaded = OperatorSettings(preferences)
-            assertEquals(com.opencapture.openzcine.settings.ScopeWaveformMode.LUMA, reloaded.scopeAssistConfiguration.waveformMode)
-            assertEquals(com.opencapture.openzcine.settings.ScopeParadeMode.YRGB, reloaded.scopeAssistConfiguration.paradeMode)
-            assertEquals(com.opencapture.openzcine.settings.ScopeVectorscopeZoom.X4, reloaded.scopeAssistConfiguration.vectorscopeZoom)
-            assertEquals(FeedPeakingSensitivity.HIGH, reloaded.feedEffectsConfiguration.peakingSensitivity)
-            assertEquals(com.opencapture.openzcine.settings.ScopeCrushClipCompensation.ONE, reloaded.scopeCrushClipCompensation)
+            val reloaded = restoreAssists(stores).shared
+            assertEquals(MonitorWaveformMode.LUMA, reloaded.waveMode)
+            assertEquals(MonitorParadeMode.YRGB, reloaded.paradeMode)
+            assertEquals(MonitorVectorscopeZoom.X4, reloaded.vectorZoom)
+            assertEquals(MonitorPeakingSense.HIGH, reloaded.peakingSensitivity)
+            assertEquals(MonitorCrushClipCompensation.ONE, reloaded.crushClipCompensation)
             assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
         }
         preferences.edit().clear().commit()
+        stores.forEach { it.edit().clear().commit() }
     }
 
     @Test fun actualZebraEditorClampsOnDoneAndKeepsKnownNativeConversion() {
@@ -288,13 +297,15 @@ class NikonOperatorSettingsComposeTest {
         val preferences = context.getSharedPreferences("z2-settings-number", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
         val settings = OperatorSettings(preferences)
+        val assists = idleNikonAssists()
+        val zebra = { assists.shared.zebraHighlightIRE.toFloat() }
         val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "settings-number"))
         runBlocking { session.connect() }
         val properties = session.cameraProperties.value
         val input = ExposureAssistCameraInput(codec = properties.codec, iso = properties.iso, baseIso = properties.baseIso)
         assertTrue("Actual numeric page requires the packaged Swift core", SwiftCore.isAvailable)
-        assertNotNull(zebraEditorValue(input, FeedZebraUnit.IRE, settings.feedEffectsConfiguration.zebraHighlightIre))
-        show(settings, OperatorSettingsTab.ASSIST, session)
+        assertNotNull(zebraEditorValue(input, FeedZebraUnit.IRE, zebra()))
+        show(settings, OperatorSettingsTab.ASSIST, session, assists = assists)
         composeRule.onNodeWithTag("settings.zebra.threshold.Highlight", useUnmergedTree = true)
             .assertExists(composeRule.onRoot(useUnmergedTree = true).printToString())
         val threshold = hasAnyAncestor(hasTestTag("settings.zebra.threshold.Highlight"))
@@ -308,23 +319,23 @@ class NikonOperatorSettingsComposeTest {
             composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true).assertDoesNotExist()
         }
         enterAndFinish("999")
-        composeRule.runOnIdle { assertEquals(100f, settings.feedEffectsConfiguration.zebraHighlightIre) }
+        composeRule.runOnIdle { assertEquals(100f, zebra()) }
         composeRule.runOnIdle {
-            settings.feedEffectsConfiguration = settings.feedEffectsConfiguration.copy(zebraUnit = FeedZebraUnit.NATIVE)
+            assists.shared.updateZebraUnit(MonitorZebraUnit.NATIVE)
         }
         enterAndFinish("999")
         composeRule.runOnIdle {
             assertEquals(zebraMonitorPercent(input, FeedZebraUnit.NATIVE, 255f),
-                settings.feedEffectsConfiguration.zebraHighlightIre)
+                zebra())
         }
         enterAndFinish("128")
         composeRule.runOnIdle {
             assertEquals(zebraMonitorPercent(input, FeedZebraUnit.NATIVE, 128f),
-                settings.feedEffectsConfiguration.zebraHighlightIre)
+                zebra())
         }
-        val retained = settings.feedEffectsConfiguration.zebraHighlightIre
+        val retained = zebra()
         enterAndFinish("")
-        composeRule.runOnIdle { assertEquals(retained, settings.feedEffectsConfiguration.zebraHighlightIre) }
+        composeRule.runOnIdle { assertEquals(retained, zebra()) }
         composeRule.onNode(threshold and hasClickAction(), useUnmergedTree = true).performClick()
         composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true).performTextReplacement("120")
         val midtone = hasAnyAncestor(hasTestTag("settings.zebra.threshold.Midtone"))
@@ -334,7 +345,7 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true).assertDoesNotExist()
         composeRule.runOnIdle {
             assertEquals(zebraMonitorPercent(input, FeedZebraUnit.NATIVE, 120f),
-                settings.feedEffectsConfiguration.zebraHighlightIre)
+                zebra())
         }
         composeRule.onNode(midtone and hasSetTextAction(), useUnmergedTree = true).performImeAction()
         preferences.edit().clear().commit()
@@ -396,8 +407,9 @@ class NikonOperatorSettingsComposeTest {
         val preferences = context.getSharedPreferences("z2-display-pins", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
         val settings = OperatorSettings(preferences)
-        val kept = AssistTool.entries.filter(settings::isPinnedToCleanView)
-        show(settings, OperatorSettingsTab.DISPLAY)
+        val stores = assistStores("z2-display-pins")
+        val kept = restoreAssists(stores).shared.pinned
+        show(settings, OperatorSettingsTab.DISPLAY, assists = restoreAssists(stores))
         composeRule.onNodeWithText("DISP 2 · Clean").performScrollTo().performClick()
         for (tool in kept) {
             composeRule.onNodeWithTag("monitor.settings.display.toggle.${tool.name}")
@@ -409,16 +421,17 @@ class NikonOperatorSettingsComposeTest {
         }
         composeRule.runOnIdle {
             val reloaded = OperatorSettings(preferences)
-            assertTrue(AssistTool.entries.none(reloaded::isPinnedToCleanView))
+            assertTrue(restoreAssists(stores).shared.pinned.isEmpty())
             assertEquals(setOf(MonitorDisplayMode.COMMAND), reloaded.enabledDisplayModes)
             assertEquals(setOf(MonitorDisplayMode.COMMAND), settings.enabledDisplayModes)
         }
         preferences.edit().clear().commit()
+        stores.forEach { it.edit().clear().commit() }
     }
 
     private fun show(
         settings: OperatorSettings, initial: OperatorSettingsTab, session: CameraSession? = null,
-        actions: SystemSettingsActions = NoExternalActions,
+        actions: SystemSettingsActions = NoExternalActions, assists: NikonAssists = idleNikonAssists(),
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val guide = LiveViewGuideController(context.getSharedPreferences("z2-settings-guide", Context.MODE_PRIVATE))
@@ -426,7 +439,7 @@ class NikonOperatorSettingsComposeTest {
         composeRule.setContent {
             OpenZCineTheme {
                 OperatorSettingsScreen(
-                    session = session, assistState = AssistState(FeedEffects.NONE, null),
+                    session = session, assists = assists,
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,
                     bugReportSubmitter = BugReportSubmitter { error("This page fixture never submits a report") },
@@ -436,6 +449,17 @@ class NikonOperatorSettingsComposeTest {
             }
         }
     }
+
+    private lateinit var assistsShown: NikonAssists
+
+    private fun assistStores(name: String): List<SharedPreferences> {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        return listOf("assist", "operator", "playback").map {
+            context.getSharedPreferences("$name.$it", Context.MODE_PRIVATE).apply { edit().clear().commit() }
+        }
+    }
+
+    private fun restoreAssists(stores: List<SharedPreferences>) = restoreNikonAssists(stores[0], stores[1], stores[2])
 
     private object NoExternalActions : SystemSettingsActions {
         override fun openSupport(): Boolean = false

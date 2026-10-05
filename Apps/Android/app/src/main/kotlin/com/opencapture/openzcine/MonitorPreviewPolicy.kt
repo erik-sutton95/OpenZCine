@@ -2,7 +2,6 @@ package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.LiveFrameSource
-import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.ChromeSection
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 
@@ -39,107 +38,6 @@ internal fun monitorTimecodeFrameSource(source: LiveFrameSource?): LiveFrameSour
  */
 internal fun monitorAllowsPopups(mode: MonitorDisplayMode): Boolean =
     mode != MonitorDisplayMode.CLEAN
-
-/**
- * Whether [tool] renders right now, given the DISP [mode], the operator's
- * clean-view pins, and whether the body is in [photography]. Mirrors
- * `MonitorChromePolicy.isToolVisible` plus iOS `renderedLiveAssistTools`: live
- * shows everything switched on, clean shows only pinned tools, command shows
- * none (its dashboard replaces the feed entirely). Callers still apply the
- * tool's own on/off state — this only filters by mode.
- *
- * The [photography] filter is one gate for every render path rather than a test
- * at each call site, because the paths that forgot it diverged: a cinema-only
- * tool left on in video rode straight into the photo feed. The LUT is the one
- * that shows: the stills live view is already display-referred, so a Log→709
- * look lands on an image that has been graded once already and the frame reads
- * as broken — and the photo toolbar cannot even switch it off. Stored state is
- * untouched, so flipping back to video restores the set exactly.
- */
-internal fun assistToolRendersInMode(
-    tool: AssistTool,
-    mode: MonitorDisplayMode,
-    pinnedToCleanView: Set<AssistTool>,
-    photography: Boolean,
-): Boolean {
-    if (photography && !tool.appliesToPhotography) return false
-    return when (mode) {
-        MonitorDisplayMode.LIVE -> true
-        MonitorDisplayMode.CLEAN -> tool in pinnedToCleanView
-        MonitorDisplayMode.COMMAND -> false
-    }
-}
-
-/** The [AssistTool] whose pin governs this scope panel. */
-internal val ScopeKind.assistTool: AssistTool
-    get() =
-        when (this) {
-            ScopeKind.WAVEFORM -> AssistTool.WAVE
-            ScopeKind.PARADE -> AssistTool.PARADE
-            ScopeKind.HISTOGRAM -> AssistTool.HISTO
-            ScopeKind.VECTORSCOPE -> AssistTool.VECTOR
-            ScopeKind.TRAFFIC_LIGHTS -> AssistTool.LIGHTS
-        }
-
-/** The scope panels [mode] lets through. */
-internal fun renderedScopes(
-    selected: Set<ScopeKind>,
-    mode: MonitorDisplayMode,
-    pinnedToCleanView: Set<AssistTool>,
-    photography: Boolean,
-): Set<ScopeKind> =
-    selected.filterTo(mutableSetOf()) {
-        assistToolRendersInMode(it.assistTool, mode, pinnedToCleanView, photography)
-    }
-
-/** The feed effects the GPU chain should bake — clean bakes only pinned looks. */
-internal fun renderedFeedEffects(
-    effects: FeedEffects,
-    mode: MonitorDisplayMode,
-    pinnedToCleanView: Set<AssistTool>,
-    photography: Boolean,
-): FeedEffects {
-    fun keeps(tool: AssistTool) =
-        assistToolRendersInMode(tool, mode, pinnedToCleanView, photography)
-    if (keeps(AssistTool.LUT) && keeps(AssistTool.FALSE) && keeps(AssistTool.PEAK) &&
-        keeps(AssistTool.ZEBRA)
-    ) {
-        return effects
-    }
-    return FeedEffects(
-        lut = effects.lut?.takeIf { keeps(AssistTool.LUT) },
-        falseColor = effects.falseColor?.takeIf { keeps(AssistTool.FALSE) },
-        peaking = effects.peaking && keeps(AssistTool.PEAK),
-        zebra = effects.zebra && keeps(AssistTool.ZEBRA),
-        // Carried through untouched: `activeSplitComparison` already follows the LUT, so dropping
-        // the look above drops the split, the divider and the labels with it.
-        splitComparison = effects.splitComparison,
-    )
-}
-
-/** The framing aids the feed overlays should draw — clean draws only pinned ones. */
-internal fun renderedFramingAssists(
-    configuration: LocalFramingAssistConfiguration,
-    mode: MonitorDisplayMode,
-    pinnedToCleanView: Set<AssistTool>,
-    photography: Boolean,
-): LocalFramingAssistConfiguration {
-    // Photography drops the cinema-only aids (guides, crosshair) even in LIVE, so the
-    // early return has to be conditional on it — otherwise they ride into the photo feed.
-    if (mode == MonitorDisplayMode.LIVE && !photography) return configuration
-    fun keeps(tool: AssistTool) =
-        assistToolRendersInMode(tool, mode, pinnedToCleanView, photography)
-    return configuration.copy(
-        guidesVisible = configuration.guidesVisible && keeps(AssistTool.GUIDES),
-        gridVisible = configuration.gridVisible && keeps(AssistTool.GRID),
-        centerCrosshairEnabled =
-            configuration.centerCrosshairEnabled && keeps(AssistTool.CROSS),
-        levelEnabled = configuration.levelEnabled && keeps(AssistTool.LEVEL),
-        evMeterEnabled = configuration.evMeterEnabled && keeps(AssistTool.EV),
-        desqueezeEnabled = configuration.desqueezeEnabled && keeps(AssistTool.DESQ),
-        mirrorEnabled = configuration.mirrorEnabled && keeps(AssistTool.MIRROR),
-    )
-}
 
 /**
  * Recording inputs for preview policy use confirmed camera state. A start is

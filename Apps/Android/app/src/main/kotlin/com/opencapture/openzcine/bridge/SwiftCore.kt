@@ -123,41 +123,6 @@ object SwiftCore {
     /** Resolves an upload MIME family through the shared Frame.io core policy. */
     external fun frameioMediaTypeForFilename(filename: String): String
 
-
-    /**
-     * Monitor zone map from the shared core's `MonitorZoneLayout.map` — the
-     * exact frames the iOS shell lays chrome out with. Flat records of
-     * `[kind, style, x, y, width, height]` (see [MonitorZones.parse] and the
-     * Swift mirror `MonitorZoneMapWire`). All dimensions are dp.
-     *
-     * @param mode DispMode ordinal: 0 live, 1 clean, 2 command.
-     * @param aspectFill portrait feed aspect; false = fit 16:9.
-     * @param mirrored true for the mirrored landscape-right chrome.
-     * @param portraitFeedAspectRatio fit-mode feed content ratio: photography
-     *   passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders
-     *   whole under the top bar; video passes 16:9. Ignored in fill.
-     * @param canDriveCamera `MonitorDataAvailability.canDriveCamera`. False for a
-     *   relay watcher without the control token, which owns the band the capture
-     *   strip would have taken: the core then centres the assist strip and drops
-     *   DISP into the trailing corner, exactly as on iOS.
-     */
-    external fun monitorZoneMap(
-        viewportWidth: Float,
-        viewportHeight: Float,
-        safeTop: Float,
-        safeLeading: Float,
-        safeBottom: Float,
-        safeTrailing: Float,
-        mode: Int,
-        isPortrait: Boolean,
-        aspectFill: Boolean,
-        scopeCount: Int,
-        mirrored: Boolean,
-        bottomBarHeight: Float,
-        portraitFeedAspectRatio: Float,
-        canDriveCamera: Boolean,
-    ): FloatArray
-
     /**
      * Registers [listener] and has Swift push a canned connection-phase
      * sequence from a background thread — the callback shape session events
@@ -165,82 +130,29 @@ object SwiftCore {
      */
     external fun startConnectionDemo(listener: ConnectionPhaseListener)
 
-    // ── Scopes (anchored axis math + sampling in the Swift core) ──
+    // ── Scopes (camera axis and Traffic Lights in the Swift core; sampling and plots shared) ──
 
     /**
-     * Fixed scope-axis anchors and vectorscope graticule targets for a tone
-     * curve ([curve]: 0 = RED Log3G10, 1 = Nikon N-Log):
-     * `[crushLine, midGrayLevel, clipLine, (cb, cr) × 6 targets]` — see
-     * [ScopeAnchors.parse] and the Swift mirror `ScopeFrameWire.anchors`.
-     * Static per curve; call once.
+     * The shared scopes' level axis for this camera: `[256 code-to-IRE levels,
+     * middle-grey IRE]` (Swift `ScopeFrameWire.levelAxis`). Black lands on the
+     * crush line, mid grey at its fixed per-curve level and [clipNative] (the
+     * camera-resolved warning endpoint) on the clip line. Call once per mapping.
      */
-    external fun scopeAnchors(curve: Int): FloatArray
+    external fun scopeLevelAxis(curve: Int, clipNative: Float): FloatArray
 
     /**
-     * Samples one downsampled RGBA frame for the waveform / parade /
-     * histogram scopes: `[N, (x, luma, r, g, b) × N, 4 × 256 display bins]`
-     * with all levels already on the core's 3-anchor display axis — see
-     * [ScopeTraces.parse] and the Swift mirror `ScopeFrameWire.traces`.
-     * [clipNative] is a camera-resolved warning endpoint returned by the
-     * Swift exposure facade, keeping the scope axis aligned with false colour
-     * and zebras. [crushClipCompensationRaw] is the persisted raw value for
-     * Swift's `AssistConfiguration.CrushClipCompensation`; Swift alone
-     * applies it when measuring the additive Traffic Lights trailer.
-     * [includePoints] is false for histogram/Traffic-Lights-only demand so
-     * Swift skips point allocation and the JNI payload carries only bins and
-     * the derived meter record.
-     * Blocking (one CPU sampling pass); call from a background dispatcher.
+     * The core Traffic Lights meter on the shared sampler's four 256-bin
+     * histograms (luma, red, green, blue, concatenated): `(level, clip, crush)
+     * × RGB` (Swift `ScopeFrameWire.trafficLights`). [crushClipCompensationRaw]
+     * is the persisted raw `AssistConfiguration.CrushClipCompensation`; Swift
+     * alone applies it.
      */
-    external fun scopeTraces(
-        rgba: ByteArray,
-        width: Int,
-        height: Int,
-        bytesPerRow: Int,
+    external fun scopeTrafficLights(
+        histograms: FloatArray,
         curve: Int,
         clipNative: Float,
         crushClipCompensationRaw: Int,
-        includePoints: Boolean,
     ): FloatArray
-
-    /**
-     * Samples one downsampled RGBA frame for the vectorscope: a 128×128
-     * consecutive 128×128 premultiplied-RGBA density images of the BT.709
-     * chroma plane (1.1-bin Gaussian soft pass, then crisp source), computed
-     * from the clean points pushed through the active registered monitor LUT
-     * (`ScopeFrameWire.vectorPixels`). [lutHandle] comes from
-     * [registerScopeVectorLut] and avoids copying a 33–64³ cube on each tick.
-     * [zoom] is the stable Swift-owned
-     * trace-gain ordinal (0 = 1×, 1 = 2×, 2 = 4×); [brightness] is the
-     * persisted 0…200 trace percentage and is applied while Swift produces
-     * premultiplied pixels. Empty when the frame yields no samples. Blocking;
-     * call from a background dispatcher.
-     */
-    external fun scopeVector(
-        rgba: ByteArray,
-        width: Int,
-        height: Int,
-        bytesPerRow: Int,
-        curve: Int,
-        zoom: Int,
-        brightness: Int,
-        lutHandle: Long,
-    ): ByteArray
-
-    /**
-     * Registers the vectorscope's active monitor look once per selection.
-     * [lookOrdinal] uses [com.opencapture.openzcine.FeedLut.wireOrdinal]; a
-     * negative value decodes [packedRgba] as a [cubeSize]³ stored cube. Returns
-     * a positive handle or `-1` for a malformed record. Blocking; call off the
-     * main dispatcher.
-     */
-    external fun registerScopeVectorLut(
-        lookOrdinal: Int,
-        packedRgba: ByteArray?,
-        cubeSize: Int,
-    ): Long
-
-    /** Releases a positive handle returned by [registerScopeVectorLut]. */
-    external fun unregisterScopeVectorLut(handle: Long)
 
     // ── Feed effects (colour math baked in the core, uploaded by Kotlin) ──
 

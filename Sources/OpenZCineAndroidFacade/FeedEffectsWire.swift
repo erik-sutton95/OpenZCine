@@ -1,6 +1,6 @@
 // Baked feed-effect payloads crossing the JNI seam.
 //
-// Like `MonitorZoneMapWire`, this file compiles on every platform so the baking
+// This file compiles on every platform so the baking
 // is exercised by `just native-check` on macOS against the exact colour math
 // the iOS shell renders with. The Kotlin consumer is
 // `Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/FeedEffectsRenderer.kt`.
@@ -10,6 +10,7 @@
 // the result as textures/uniforms and interpolates. No colour math is re-derived
 // in Kotlin or AGSL.
 
+import enum OpenCineMedia.MonitorZebraPaint
 import OpenZCineCore
 
 /// Bakes monitor looks, false-colour cubes, and assist thresholds into flat
@@ -314,8 +315,8 @@ public enum FeedEffectsWire {
             mapping.signalNative(monitorPercent: min(max(highlightIRE, 0), 100)) / 255
         let midtoneCode = mapping.signalNative(monitorPercent: min(max(midtoneIRE, 0), 100)) / 255
         let peak = peakingColor.rgb
-        let highlight = zebraRGB(highlightColor)
-        let midtone = zebraRGB(midtoneColor)
+        let highlight = highlightColor.rgb
+        let midtone = midtoneColor.rgb
         let deLog = (0...4).map { index in
             Float(
                 ExposureScale.referenceIRE(
@@ -389,7 +390,7 @@ public enum FeedEffectsWire {
         }
     }
 
-    private static func zebraColor(_ ordinal: Int) -> AssistConfiguration.Zebra.StripeColor? {
+    private static func zebraColor(_ ordinal: Int) -> MonitorZebraPaint? {
         switch ordinal {
         case 0: .white
         case 1: .amber
@@ -397,18 +398,6 @@ public enum FeedEffectsWire {
         case 3: .cyan
         case 4: .green
         default: nil
-        }
-    }
-
-    private static func zebraRGB(
-        _ color: AssistConfiguration.Zebra.StripeColor
-    ) -> (Double, Double, Double) {
-        switch color {
-        case .white: (1, 1, 1)
-        case .amber: (1, 0.72, 0.2)
-        case .red: (1, 0.15, 0.15)
-        case .cyan: (0, 0.85, 0.9)
-        case .green: (0.2, 0.9, 0.35)
         }
     }
 

@@ -68,7 +68,7 @@ class NikonMonitorHostLifetimeComposeTest {
                 if (mounted.value) Box(Modifier.requiredSize(
                     if (landscape.value) 840.dp else 400.dp, if (landscape.value) 400.dp else 840.dp)) {
                     MonitorScreen(session = session, frameSource = source, commonSession = common, commonControl = control,
-                        assist = AssistState(FeedEffects.NONE, null), operatorSettings = settings,
+                        assists = idleNikonAssists(), operatorSettings = settings,
                         isMonitorFront = front.value, liveViewEnabled = true, sessionRecoveryEnabled = false, glassTierOverride = "flat")
                 }
             }

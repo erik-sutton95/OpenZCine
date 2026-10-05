@@ -2,6 +2,7 @@
 import CoreImage
 import Foundation
 import OpenCineApple
+import enum OpenCineMedia.MonitorZebraPaint
 import OpenZCineCore
 import os
 
@@ -462,7 +463,7 @@ enum FrozenNikonRuntimeEffects {
     }
 
     private static func blendStripedZebra(
-        over base: CIImage, mask: CIImage, color: AssistConfiguration.Zebra.StripeColor,
+        over base: CIImage, mask: CIImage, color: MonitorZebraPaint,
         extent: CGRect
     ) -> CIImage {
         let stripes =
@@ -492,7 +493,7 @@ enum FrozenNikonRuntimeEffects {
             .cropped(to: extent)
     }
 
-    private static func zebraRGB(_ color: AssistConfiguration.Zebra.StripeColor) -> (
+    private static func zebraRGB(_ color: MonitorZebraPaint) -> (
         Double, Double, Double
     ) {
         switch color {

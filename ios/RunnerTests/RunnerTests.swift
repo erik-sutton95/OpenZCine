@@ -5,6 +5,7 @@ import MonitorUI
 import Network
 import OpenCineApple
 import OpenCineCore
+import OpenCineMedia
 import Observation
 import SwiftUI
 import Testing
@@ -262,7 +263,7 @@ final class RunnerTests: XCTestCase {
 
     @MainActor
     func testActualZebraRowsUseCommonNumberPadClampAndDoneWithNativeConversion() async throws {
-        let model = NativeAppModel()
+        let model = NativeAppModel(assist: .scratch())
         let original = model.preferences
         let originalAssist = model.assistConfiguration
         model.preferences = OperatorPreferences.defaults
@@ -316,7 +317,7 @@ final class RunnerTests: XCTestCase {
         let clampedIRE = try await enterAndFinish("999")
         XCTAssertEqual(clampedIRE, "100")
         XCTAssertEqual(threshold.text, "100")
-        XCTAssertEqual(model.assistConfiguration.zebra.highlightIRE, 100)
+        XCTAssertEqual(model.assist.zebraHighlightIRE, 100)
         model.assistConfiguration.zebra.unit = .native
         for _ in 0..<200 {
             host.view.layoutIfNeeded()
@@ -325,24 +326,24 @@ final class RunnerTests: XCTestCase {
         let clampedNative = try await enterAndFinish("999")
         XCTAssertEqual(clampedNative, "255")
         XCTAssertEqual(
-            model.assistConfiguration.zebra.highlightIRE,
+            model.assist.zebraHighlightIRE,
             model.exposureSignalMapping.monitorPercent(signalNative: 255), accuracy: 0.0001)
         // Codes above the tone curve's clipping point map to the existing normalized maximum.
         // After committing, the real binding displays that converted threshold again.
         XCTAssertEqual(
             threshold.text,
             String(
-                model.assistConfiguration.zebra.displayValue(
-                    for: model.assistConfiguration.zebra.highlightIRE,
+                model.assistConfiguration.zebra.unit.displayValue(
+                    for: model.assist.zebraHighlightIRE,
                     mapping: model.exposureSignalMapping)))
         _ = try await enterAndFinish("128")
         XCTAssertEqual(
-            model.assistConfiguration.zebra.highlightIRE,
+            model.assist.zebraHighlightIRE,
             model.exposureSignalMapping.monitorPercent(signalNative: 128), accuracy: 0.0001)
-        let retained = model.assistConfiguration.zebra.highlightIRE
+        let retained = model.assist.zebraHighlightIRE
         _ = try await enterAndFinish("")
         XCTAssertEqual(threshold.text, "128")
-        XCTAssertEqual(model.assistConfiguration.zebra.highlightIRE, retained)
+        XCTAssertEqual(model.assist.zebraHighlightIRE, retained)
     }
 
     @MainActor
@@ -1069,9 +1070,9 @@ final class RunnerTests: XCTestCase {
 
     @MainActor
     func testFalseColorCurveAlwaysFollowsCodec() {
-        let model = NativeAppModel()
-        model.preferences.liveViewVisibleAssistTools = [.falseColor]
-        model.preferences.playbackVisibleAssistTools = [.falseColor]
+        let model = NativeAppModel(assist: .scratch())
+        model.assist.set(.falseColor, visible: true, context: .liveView)
+        model.assist.set(.falseColor, visible: true, context: .playback)
         let cases: [(codec: String, curve: ExposureToneCurve)] = [
             ("R3D NE", .redLog3G10),
             ("N-RAW", .nikonNLog),
@@ -1196,7 +1197,7 @@ final class RunnerTests: XCTestCase {
     }
 
     func testFalseColorReferenceUsesCompactProportionalScales() {
-        XCTAssertEqual(FalseColorReference.panelSize, CGSize(width: 264, height: 52))
+        XCTAssertEqual(MonitorFalseColorReference.panelSize, CGSize(width: 264, height: 52))
         let mapping = ExposureSignalMapping(curve: .redLog3G10)
         let ire = FalseColorReference.segments(scale: .ire, mapping: mapping)
 
@@ -1228,13 +1229,9 @@ final class RunnerTests: XCTestCase {
             accuracy: 0.0001)
     }
 
-    func testAudioMeterPanelUsesQuarterOriginalWidthAndFormatsSensitivity() {
-        XCTAssertEqual(AudioMetersPanelMini.panelSize.width, 28)
-        XCTAssertEqual(AudioMetersPanelMini.panelSize.height, 168)
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity("Auto"), "AUTO")
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity("12"), "12")
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity("  "), "—")
-        XCTAssertEqual(AudioMetersPanelMini.displayedSensitivity(nil), "—")
+    func testAudioMeterPanelUsesQuarterOriginalWidth() {
+        XCTAssertEqual(MonitorAudioMetrics.panelSize.width, 28)
+        XCTAssertEqual(MonitorAudioMetrics.panelSize.height, 168)
     }
 
     /// Live view samples the feed JPEG's raw codes straight through UIKit; playback taps the
@@ -1267,9 +1264,11 @@ final class RunnerTests: XCTestCase {
         // Path A — live view: straight UIKit decode into the untagged sampling context.
         let live = try XCTUnwrap(
             FrameSampling.rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: 256))
-        let liveSamples = ScopeSampler.sample(
-            rgba: live.data, width: live.width, height: live.height,
-            bytesPerRow: live.bytesPerRow, stride: ScopeAssistSampling.pointStride)
+        let liveSamples = OpenCineMedia.ScopeSampler.sampleRaw(
+            bytes: live.data, width: live.width, height: live.height,
+            bytesPerRow: live.bytesPerRow, transfer: .rec709, includePoints: true, layout: .rgba,
+            stride: ScopeAssistSampling.pointStride, includeSampleCoordinates: true,
+            requireCompleteRows: true)
 
         // Path B — playback: through the composition render context (working sRGB) with the
         // BT.709 output space, exactly like the player's scope tap.
@@ -1280,9 +1279,11 @@ final class RunnerTests: XCTestCase {
                 colorSpace: FrameSampling.cameraFileColorSpace))
         let playback = try XCTUnwrap(
             FrameSampling.rgbaBuffer(from: UIImage(cgImage: rendered), maxWidth: 256))
-        let playbackSamples = ScopeSampler.sample(
-            rgba: playback.data, width: playback.width, height: playback.height,
-            bytesPerRow: playback.bytesPerRow, stride: ScopeAssistSampling.pointStride)
+        let playbackSamples = OpenCineMedia.ScopeSampler.sampleRaw(
+            bytes: playback.data, width: playback.width, height: playback.height,
+            bytesPerRow: playback.bytesPerRow, transfer: .rec709, includePoints: true,
+            layout: .rgba, stride: ScopeAssistSampling.pointStride,
+            includeSampleCoordinates: true, requireCompleteRows: true)
 
         XCTAssertEqual(
             liveSamples.histogramLuma.reduce(0, +), playbackSamples.histogramLuma.reduce(0, +),
@@ -1308,55 +1309,50 @@ final class RunnerTests: XCTestCase {
     }
 
     func testScopeBundleKeepsRawSamples() {
-        let point = ScopePoint(xRatio: 0.5, red: 112, green: 68, blue: 62, luma: 82)
-        let samples = ScopeSamples(
-            histogramLuma: Array(repeating: 0, count: 256),
+        let point = OpenCineMedia.ScopePoint(
+            xRatio: 0.5, yRatio: 0, red: 112, green: 68, blue: 62, luma: 82)
+        var luma = Array(repeating: 0, count: 256)
+        luma[82] = 1
+        let samples = OpenCineMedia.ScopeSamples(
+            histogramLuma: luma,
             histogramRed: Array(repeating: 0, count: 256),
             histogramGreen: Array(repeating: 0, count: 256),
             histogramBlue: Array(repeating: 0, count: 256),
             points: [point])
+        let mapping = ExposureSignalMapping(curve: .redLog3G10)
 
         let bundle = ScopeAssistSampling.bundle(
             samples: samples,
             trafficLightsCrushClip: .quarter,
-            mapping: ExposureSignalMapping(curve: .redLog3G10))
+            mapping: mapping)
         // Every scope — vectorscope included — reads the untouched source/log points.
         XCTAssertEqual(bundle.samples, samples)
+        XCTAssertEqual(bundle.revision, 1)
+        // The shared histogram is drawn on this camera's axis, not a shared transfer curve.
+        XCTAssertEqual(
+            bundle.histogramDisplay,
+            OpenCineMedia.ScopeSampler.histogramDisplay(
+                samples: samples, previous: .empty, axis: mapping.scopeLevelAxis))
+        let next = ScopeAssistSampling.bundle(
+            samples: samples, trafficLightsCrushClip: .quarter, mapping: mapping,
+            previous: bundle)
+        XCTAssertEqual(next.revision, 2)
+        XCTAssertEqual(next.trailSamples, samples)
     }
 
     func testWaveformAndParadePaletteUsesCalibratedBrightness() {
-        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 0), 0)
-        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 100), 0.25)
-        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 200), 0.5)
-    }
-
-    func testVectorscopeDensityRasterUsesRGBAAndFlipsPositiveCrUp() {
-        let bins = VectorscopeBins(
-            binCount: 2,
-            counts: [1, 0, 0, 1],
-            redSums: [255, 0, 0, 0],
-            greenSums: [0, 0, 0, 0],
-            blueSums: [0, 0, 0, 255])
-        XCTAssertEqual(
-            VectorscopeDensityRasterizer.premultipliedRGBA(bins: bins, brightness: 100),
-            [
-                0, 0, 0, 0, 0, 0, 255, 255,
-                255, 0, 0, 255, 0, 0, 0, 0,
-            ])
-
-        let neutral = VectorscopeBins(
-            binCount: 1, counts: [1], redSums: [128], greenSums: [128], blueSums: [128])
-        XCTAssertEqual(
-            VectorscopeDensityRasterizer.premultipliedRGBA(bins: neutral, brightness: 50),
-            [127, 127, 127, 127])
-        XCTAssertNil(
-            VectorscopeDensityRasterizer.premultipliedRGBA(bins: .empty, brightness: 100))
+        // The intensity the Nikon scope plot hands the shared plots.
+        XCTAssertEqual(NikonScopePlot.traceIntensity(0), 0)
+        XCTAssertEqual(NikonScopePlot.traceIntensity(100), 0.25)
+        XCTAssertEqual(NikonScopePlot.traceIntensity(200), 0.5)
+        // The vectorscope keeps its unity baseline.
+        XCTAssertEqual(MonitorScopeGeometry.vectorscopeIntensity(100), 1)
     }
 
     @MainActor
     func testVectorscopeAloneActivatesScopeSampling() {
-        let model = NativeAppModel()
-        model.preferences.liveViewVisibleAssistTools = [.vectorscope]
+        let model = NativeAppModel(assist: .scratch())
+        model.assist.set(.vectorscope, visible: true, context: .liveView)
         XCTAssertTrue(model.scopesActive)
     }
 
@@ -2577,34 +2573,6 @@ extension RunnerTests {
 
     // MARK: - Controls that must be able to act
 
-    /// The eye in Display ▸ assist-toolbar order may only render where the model can actually flip
-    /// something. Only the two bar sets are stored, so a tool outside both — LUT, and the
-    /// photography tools — would have shown a lit eye that did nothing when tapped.
-    @MainActor
-    func testAssistToolbarEyeOnlyOffersToolsTheToggleCanReach() {
-        let model = NativeAppModel()
-        // The model seeds `preferences` from the device's persisted set and writes back on every
-        // change, so pin it — and put it back, or the flip below leaves zebra hidden for good.
-        model.preferences = OperatorPreferences.defaults
-        defer { model.preferences = OperatorPreferences.defaults }
-        for tool in MonitorAssistTool.activeCases {
-            let inABarSet =
-                MonitorAssistTool.exposureBarTools.contains(tool)
-                || MonitorAssistTool.framingBarTools.contains(tool)
-            XCTAssertEqual(
-                model.canToggleAssistToolbarVisibility(tool), inABarSet,
-                "\(tool.rawValue)'s eye disagrees with what the toggle can reach")
-        }
-        // The three the audit found: an eye on any of these was inert.
-        for tool: OpenZCineCore.MonitorAssistTool in [.lut, .evMeter, .instantReview] {
-            XCTAssertFalse(model.canToggleAssistToolbarVisibility(tool))
-        }
-        // And a flip actually flips for one that does offer the eye.
-        XCTAssertTrue(model.preferences.isAssistToolbarButtonVisible(.zebra))
-        model.toggleAssistToolbarVisibility(.zebra)
-        XCTAssertFalse(model.preferences.isAssistToolbarButtonVisible(.zebra))
-    }
-
     /// The photography strip's WB tile reads the STILLS white balance. `WhiteBalance` (0x5005) and
     /// `MovWhiteBalance` are different camera settings sharing one decode table, so reading the
     /// movie one put a value the still never uses on the stills strip.
@@ -2633,12 +2601,12 @@ extension RunnerTests {
             boxes: [PTPLiveViewAFBox(centerX: 750, centerY: 500, width: 100, height: 100)])
         let box = try XCTUnwrap(focus.boxes.first)
         let size = CGSize(width: 800, height: 400)
-        let squeezed = AssistConfiguration.Desqueeze(enabled: true, ratio: .x2)
+        // Nikon's pillarboxing squeeze: the shared vertical direction.
+        let squeezed = NikonDesqueeze(factor: 2, horizontal: false)
 
         let plain = try XCTUnwrap(
             liveFocusBoxRect(
-                box, focus: focus, in: size, desqueeze: AssistConfiguration.Desqueeze(),
-                mirrored: false))
+                box, focus: focus, in: size, desqueeze: .off, mirrored: false))
         XCTAssertEqual(plain.midX, 600, accuracy: 0.01)
         // 2× horizontal: the picture is the middle 400pt, so 75% across it sits at 200 + 300.
         let desqueezed = try XCTUnwrap(
@@ -3039,7 +3007,9 @@ struct NikonSettingsScrollTests {
         let original = model.preferences
         model.preferences = OperatorPreferences.defaults
         defer { model.preferences = original }
-        model.beginChromeEditing(.live)
+        // DISP 2 returns to its section with the clean-view pin list open, a page tall enough for
+        // these offsets now that DISP 1 has no toolbar order list.
+        model.beginChromeEditing(.clean)
         model.endChromeEditing()
         model.operatorSettingsScrollOffsets = ["Display": 180]
         let host = UIHostingController(
