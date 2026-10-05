@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
 import androidx.activity.compose.BackHandler
 import com.opencapture.opencine.appkit.MonitorControlModel
@@ -1423,10 +1424,11 @@ private fun PickerPanelBody(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PadlockGlyph(
-                    tint = LiveDesign.accent.copy(alpha = 0.9f),
-                    filled = true,
-                    modifier = Modifier.size(11.dp, 14.dp),
+                MonitorIcon(
+                    MonitorIcon.LOCK,
+                    null,
+                    Modifier.size(14.dp),
+                    LiveDesign.accent.copy(alpha = 0.9f),
                 )
                 Text(
                     banner,

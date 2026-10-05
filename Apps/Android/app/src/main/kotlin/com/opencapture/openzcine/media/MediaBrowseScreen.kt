@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorClipCard
 import com.opencapture.monitorui.MonitorCatalogDisplayControls
 import com.opencapture.monitorui.MonitorCatalogHeader
@@ -111,7 +112,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.ExposureAssistCameraInput
-import com.opencapture.openzcine.FilmGlyph
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.R
@@ -2426,7 +2426,7 @@ private fun ClipArtwork(
             contentScale = ContentScale.Crop,
         )
     } else {
-        FilmGlyph(LiveDesign.faint, Modifier.size(34.dp, 30.dp))
+        MonitorIcon(MonitorIcon.FILM, null, Modifier.size(30.dp), LiveDesign.faint)
     }
 }
 
@@ -2500,7 +2500,7 @@ private fun ListingState(source: MediaLibrarySource) {
 @Composable
 private fun EmptyState(source: MediaLibrarySource) {
     CenteredState {
-        FilmGlyph(LiveDesign.faint, Modifier.size(44.dp, 40.dp))
+        MonitorIcon(MonitorIcon.FILM, null, Modifier.size(40.dp), LiveDesign.faint)
         Text(
             if (source == MediaLibrarySource.CAMERA) "No clips yet" else "No complete cached media",
             style = chromeStyle(15f, FontWeight.Medium),

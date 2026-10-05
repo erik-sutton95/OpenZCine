@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorIcon
 import android.os.Build
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
@@ -2443,9 +2444,11 @@ internal fun MonitorScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            DotViewfinderGlyph(
-                                tint = LiveDesign.text.copy(alpha = 0.28f),
-                                modifier = Modifier.size(28.dp),
+                            MonitorIcon(
+                                MonitorIcon.FOCUS,
+                                null,
+                                Modifier.size(28.dp),
+                                LiveDesign.text.copy(alpha = 0.28f),
                             )
                             Text(
                                 text = stringResource(R.string.monitor_waiting_live_view),
@@ -2589,9 +2592,9 @@ internal fun MonitorScreen(
                     navigationHidden = false, interactive = accepts,
                     lock = { enabled -> LockButton(locked) { if (enabled) locked = !locked } },
                     settings = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenSettings() } },
-                        contentDescription = stringResource(R.string.a11y_monitor_settings)) { glyphModifier, tint -> GearGlyph(tint, glyphModifier) } },
+                        contentDescription = stringResource(R.string.a11y_monitor_settings)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.SETTINGS, null, glyphModifier, tint) } },
                     media = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenMedia() } },
-                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint -> MediaStackGlyph(tint, glyphModifier) } },
+                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.FILM, null, glyphModifier, tint) } },
                     record = { enabled ->
                         if (isPhotographyMode) PhotographyShutterButton(stillCapturing, enabled = enabled && !controlsSurrendered,
                             timerRemaining = photoTimerRemaining, bodyShutterPulse = bodyShutterPulse,
@@ -2798,10 +2801,11 @@ internal fun MonitorScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 // iOS full-screen arrows in a 40pt black circle.
-                FullScreenArrowsGlyph(
+                MonitorIcon(
+                    if (fillsViewport) MonitorIcon.MINIMIZE else MonitorIcon.MAXIMIZE,
+                    null,
+                    Modifier.size(15.dp),
                     LiveDesign.text,
-                    expand = !fillsViewport,
-                    modifier = Modifier.size(15.dp),
                 )
             }
         }
@@ -2853,10 +2857,7 @@ internal fun MonitorScreen(
                     )
                 } else {
                     // iOS uses `dot.viewfinder` in a 40pt black circle.
-                    DotViewfinderGlyph(
-                        LiveDesign.text,
-                        Modifier.size(17.dp),
-                    )
+                    MonitorIcon(MonitorIcon.FOCUS, null, Modifier.size(17.dp), LiveDesign.text)
                 }
             }
         }
@@ -3163,90 +3164,6 @@ internal fun MonitorScreen(
                 onSelect = { label -> applyCameraControl(request, label) },
                 onDismiss = { activeCommandControl = null },
             )
-        }
-    }
-}
-
-@Composable
-private fun DotViewfinderGlyph(
-    tint: androidx.compose.ui.graphics.Color,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.foundation.Canvas(modifier) {
-        val stroke = size.minDimension * 0.09f
-        val corner = size.minDimension * 0.26f
-        // Center dot.
-        drawCircle(tint, radius = size.minDimension * 0.14f, center = center)
-        // Four open viewfinder corners.
-        val w = size.width
-        val h = size.height
-        fun cornerPath(
-            startX: Float, startY: Float, midX: Float, midY: Float, endX: Float, endY: Float,
-        ) {
-            val path = androidx.compose.ui.graphics.Path().apply {
-                moveTo(startX, startY)
-                lineTo(midX, midY)
-                lineTo(endX, endY)
-            }
-            drawPath(
-                path,
-                tint,
-                style =
-                    androidx.compose.ui.graphics.drawscope.Stroke(
-                        width = stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    ),
-            )
-        }
-        cornerPath(corner, 0f, 0f, 0f, 0f, corner)
-        cornerPath(w - corner, 0f, w, 0f, w, corner)
-        cornerPath(w, h - corner, w, h, w - corner, h)
-        cornerPath(corner, h, 0f, h, 0f, h - corner)
-    }
-}
-
-/**
- * The portrait Fit/Fill key's glyph: iOS `arrow.up.left.and.arrow.down.right` when [expand] is
- * true (fit, tapping fills), `arrow.down.right.and.arrow.up.left` otherwise.
- */
-@Composable
-private fun FullScreenArrowsGlyph(
-    tint: androidx.compose.ui.graphics.Color,
-    expand: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.foundation.Canvas(modifier) {
-        val stroke = size.minDimension * 0.11f
-        val head = size.minDimension * 0.26f
-        val inset = size.minDimension * 0.06f
-        val mid = size.minDimension * 0.42f
-        fun arrow(tipX: Float, tipY: Float, tailX: Float, tailY: Float) {
-            val path = androidx.compose.ui.graphics.Path().apply {
-                moveTo(tailX, tailY)
-                lineTo(tipX, tipY)
-                // L-shaped barbs run back toward the tail along each axis.
-                moveTo(tipX + (if (tailX > tipX) head else -head), tipY)
-                lineTo(tipX, tipY)
-                lineTo(tipX, tipY + (if (tailY > tipY) head else -head))
-            }
-            drawPath(
-                path,
-                tint,
-                style =
-                    androidx.compose.ui.graphics.drawscope.Stroke(
-                        width = stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    ),
-            )
-        }
-        val w = size.width
-        val h = size.height
-        if (expand) {
-            arrow(inset, inset, mid, mid)
-            arrow(w - inset, h - inset, w - mid, h - mid)
-        } else {
-            arrow(mid, mid, inset, inset)
-            arrow(w - mid, h - mid, w - inset, h - inset)
         }
     }
 }

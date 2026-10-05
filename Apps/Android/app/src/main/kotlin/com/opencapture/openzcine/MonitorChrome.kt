@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorIcon
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -32,12 +33,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -285,8 +283,8 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
                 .semantics { contentDescription = "Return to Multicam" },
             contentAlignment = Alignment.Center,
         ) {
-            com.opencapture.monitorui.MonitorIcon(
-                com.opencapture.monitorui.MonitorIcon.LAYOUT_GRID, null,
+            MonitorIcon(
+                MonitorIcon.LAYOUT_GRID, null,
                 Modifier.size(17.dp), tint = LiveDesign.accent,
             )
         }
@@ -322,7 +320,7 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
                 },
         contentAlignment = Alignment.Center,
     ) {
-        PadlockGlyph(tint = tint, filled = locked, modifier = Modifier.size(13.dp, 17.dp))
+        MonitorIcon(MonitorIcon.LOCK, null, Modifier.size(17.dp), tint)
     }
 }
 
@@ -506,9 +504,9 @@ private fun BatteryOutlineRow(percent: Int?, isCamera: Boolean, externalPower: B
     ) {
         Box(Modifier.width(12.dp), contentAlignment = Alignment.Center) {
             if (isCamera) {
-                CameraGlyph(tint = LiveDesign.muted, modifier = Modifier.size(12.dp, 10.dp))
+                MonitorIcon(MonitorIcon.CAMERA, null, Modifier.size(12.dp), LiveDesign.muted)
             } else {
-                PhoneGlyph(tint = LiveDesign.muted, modifier = Modifier.size(7.dp, 11.dp))
+                MonitorIcon(MonitorIcon.SMARTPHONE, null, Modifier.size(11.dp), LiveDesign.muted)
             }
         }
         BatteryOutlineReadout(
@@ -554,7 +552,7 @@ private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean)
             horizontalArrangement = Arrangement.spacedBy(1.5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (charging) BoltGlyph(tint, Modifier.size(5.dp, 9.dp))
+            if (charging) MonitorIcon(MonitorIcon.ZAP, null, Modifier.size(8.dp), tint)
             val gaugeBars = label.count { it == FILLED_BAR || it == EMPTY_BAR }
             if (gaugeBars > 0) {
                 // DRAWN segments, not the block characters this used to print. Glyphs carry the
@@ -589,87 +587,7 @@ private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean)
     }
 }
 
-/** Solid charging bolt for the outline readout (no fill behind it to fight). */
-@Composable
-private fun BoltGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val bolt =
-            Path().apply {
-                moveTo(size.width * 0.52f, 0f)
-                lineTo(0f, size.height * 0.54f)
-                lineTo(size.width * 0.43f, size.height * 0.54f)
-                lineTo(size.width * 0.17f, size.height)
-                lineTo(size.width, size.height * 0.40f)
-                lineTo(size.width * 0.57f, size.height * 0.40f)
-                close()
-            }
-        drawPath(bolt, tint)
-    }
-}
-
 // MARK: - Canvas glyphs (SF Symbol approximations)
-
-/** SF `iphone` outline. */
-@Composable
-fun PhoneGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        drawRoundRect(
-            tint,
-            topLeft = Offset.Zero,
-            size = size,
-            cornerRadius = CornerRadius(size.width * 0.25f),
-            style = Stroke(1.2.dp.toPx()),
-        )
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.35f, size.height - 2.2.dp.toPx()),
-            end = Offset(size.width * 0.65f, size.height - 2.2.dp.toPx()),
-            strokeWidth = 1.dp.toPx(),
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-/** SF `camera` outline. */
-@Composable
-fun CameraGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.2.dp.toPx()
-        val bodyTop = size.height * 0.22f
-        drawRoundRect(
-            tint,
-            topLeft = Offset(0f, bodyTop),
-            size = Size(size.width, size.height - bodyTop),
-            cornerRadius = CornerRadius(size.height * 0.18f),
-            style = Stroke(stroke),
-        )
-        // Viewfinder hump.
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.32f, bodyTop),
-            end = Offset(size.width * 0.42f, 0.5f * stroke),
-            strokeWidth = stroke,
-        )
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.42f, 0.5f * stroke),
-            end = Offset(size.width * 0.58f, 0.5f * stroke),
-            strokeWidth = stroke,
-        )
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.58f, 0.5f * stroke),
-            end = Offset(size.width * 0.68f, bodyTop),
-            strokeWidth = stroke,
-        )
-        drawCircle(
-            tint,
-            radius = size.height * 0.22f,
-            center = Offset(size.width / 2, bodyTop + (size.height - bodyTop) / 2),
-            style = Stroke(stroke),
-        )
-    }
-}
 
 /** SF `cellularbars` with `variableValue` (filled bars vs dim bars). */
 @Composable
@@ -689,127 +607,3 @@ fun SignalBarsGlyph(bars: Int, tint: Color, modifier: Modifier = Modifier.size(1
     }
 }
 
-/** SF `film` (frame + sprocket columns). */
-@Composable
-fun FilmGlyph(tint: Color, modifier: Modifier = Modifier.size(12.dp, 11.dp)) {
-    Canvas(modifier) {
-        val stroke = 1.1.dp.toPx()
-        drawRoundRect(
-            tint,
-            topLeft = Offset.Zero,
-            size = size,
-            cornerRadius = CornerRadius(size.height * 0.14f),
-            style = Stroke(stroke),
-        )
-        val inset = size.width * 0.22f
-        drawLine(tint, Offset(inset, 0f), Offset(inset, size.height), stroke)
-        drawLine(
-            tint,
-            Offset(size.width - inset, 0f),
-            Offset(size.width - inset, size.height),
-            stroke,
-        )
-        drawLine(
-            tint,
-            Offset(inset, size.height / 2),
-            Offset(size.width - inset, size.height / 2),
-            stroke * 0.8f,
-        )
-    }
-}
-
-/** SF `lock` / `lock.fill` (shackle + body). */
-@Composable
-fun PadlockGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.6.dp.toPx()
-        // SF proportions: near-square body on the lower ~55%, a tall narrow
-        // shackle on top.
-        val bodyTop = size.height * 0.45f
-        val bodyInset = size.width * 0.08f
-        val shackleWidth = size.width * 0.48f
-        drawArc(
-            tint,
-            startAngle = 180f,
-            sweepAngle = 180f,
-            useCenter = false,
-            topLeft = Offset((size.width - shackleWidth) / 2, stroke / 2),
-            size = Size(shackleWidth, (bodyTop - stroke / 2) * 2f),
-            style = Stroke(stroke),
-        )
-        val bodyRect = Rect(bodyInset, bodyTop, size.width - bodyInset, size.height)
-        drawRoundRect(
-            tint,
-            topLeft = bodyRect.topLeft,
-            size = bodyRect.size,
-            cornerRadius = CornerRadius(size.width * 0.16f),
-            style = if (filled) androidx.compose.ui.graphics.drawscope.Fill else Stroke(stroke),
-        )
-    }
-}
-
-/** iOS `IconSettings` (gearshape) stand-in. */
-@Composable
-fun GearGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 2.dp.toPx()
-        val center = Offset(size.width / 2, size.height / 2)
-        val outer = size.minDimension / 2 - stroke / 2
-        val ring = outer * 0.68f
-        drawCircle(tint, radius = ring, center = center, style = Stroke(stroke))
-        drawCircle(tint, radius = ring * 0.4f, center = center, style = Stroke(stroke * 0.85f))
-        repeat(8) { index ->
-            val angle = Math.toRadians(index * 45.0 + 22.5)
-            val dir = Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat())
-            drawLine(
-                tint,
-                start = center + dir * (ring - stroke / 2),
-                end = center + dir * outer,
-                strokeWidth = stroke * 1.6f,
-                cap = StrokeCap.Round,
-            )
-        }
-    }
-}
-
-/** iOS `IconMedia` (film-frame) stand-in: rounded frame + sprocket columns. */
-@Composable
-fun MediaStackGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.8.dp.toPx()
-        drawRoundRect(
-            tint,
-            topLeft = Offset(stroke / 2, stroke / 2),
-            size = Size(size.width - stroke, size.height - stroke),
-            cornerRadius = CornerRadius(size.height * 0.2f),
-            style = Stroke(stroke),
-        )
-        // Sprocket columns: two filled holes down each side.
-        val holeW = size.width * 0.12f
-        val holeH = size.height * 0.16f
-        for (side in listOf(size.width * 0.16f, size.width * 0.84f - holeW)) {
-            for (row in listOf(size.height * 0.24f, size.height * 0.6f)) {
-                drawRoundRect(
-                    tint,
-                    topLeft = Offset(side, row),
-                    size = Size(holeW, holeH),
-                    cornerRadius = CornerRadius(holeW * 0.4f),
-                )
-            }
-        }
-        // Center pane divider lines framing the picture area.
-        val paneInset = size.width * 0.34f
-        drawLine(
-            tint,
-            Offset(paneInset, stroke),
-            Offset(paneInset, size.height - stroke),
-            stroke * 0.8f,
-        )
-        drawLine(
-            tint,
-            Offset(size.width - paneInset, stroke),
-            Offset(size.width - paneInset, size.height - stroke),
-            stroke * 0.8f,
-        )
-    }
-}
