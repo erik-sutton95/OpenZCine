@@ -2191,6 +2191,13 @@ final class NativeAppModel {
     func publishLiveScopeBundle(_ bundle: ScopeAssistBundle) {
         nativePictureBus.publish(nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
     }
+    /// A still sampled with no live picture (the demo's mock feed) opens the live source the
+    /// frame loop would, or the bus drops its scopes.
+    func openStillScopeSource() {
+        guard nativePictureSource == nil else { return }
+        nativePictureOwner = .local
+        nativePictureSource = nativePictureBus.openSource(.live)
+    }
     /// Operator-dragged centres for the movable scopes / false-colour reference, keyed by panel id
     /// (in the live-canvas coordinate space). Session cache; persisted copy lives in
     /// `movablePanelPositions`. Absent in both = the default corner.
@@ -2375,12 +2382,14 @@ final class NativeAppModel {
         liveViewGuideStore: LiveViewGuideStore = LiveViewGuideStore(),
         lutFileStore: LUTFileStore = LUTFileStore(),
         mediaClipStore: MediaClipStore = MediaClipStore(),
-        assist: NikonAssistState? = nil
+        assist: NikonAssistState? = nil,
+        scopePanels: NikonScopePanels? = nil
     ) {
         self.liveViewGuideStore = liveViewGuideStore
         self.lutFileStore = lutFileStore
         self.mediaClipStore = mediaClipStore
         self.assist = assist ?? .restore()
+        self.scopePanels = scopePanels ?? NikonScopePanels()
         self.assist.looks.selection = assistConfiguration.selectedLUT
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
@@ -2398,6 +2407,8 @@ final class NativeAppModel {
     /// The shared Pocket / Insta assist state: which tools are on (live and playback), the clean
     /// view pins and every shared option. Persists itself.
     let assist: NikonAssistState
+    /// The shared scope panel stores: each scope's options, size and place.
+    let scopePanels: NikonScopePanels
     /// How often each palette tool is used: the shared ranking that orders live and playback.
     var assistToolUsage = PreferencesStore.assistToolUsage.value {
         didSet { PreferencesStore.assistToolUsage.value = assistToolUsage }

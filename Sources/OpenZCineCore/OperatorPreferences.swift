@@ -828,31 +828,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         public var factor: Factor
     }
 
-    public struct TrafficLights: Codable, Equatable, Sendable {
-        public static let scaleRange: ClosedRange<Double> = Scopes.scaleRange
-        public static let defaultScale = 1.0
-
-        public static func clampedScale(_ value: Double) -> Double {
-            min(max(value, scaleRange.lowerBound), scaleRange.upperBound)
-        }
-
-        public init(scale: Double = defaultScale) {
-            self.scale = Self.clampedScale(scale)
-        }
-
-        public var scale: Double
-
-        enum CodingKeys: String, CodingKey {
-            case scale
-        }
-
-        public init(from decoder: any Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            scale = Self.clampedScale(
-                try c.decodeIfPresent(Double.self, forKey: .scale) ?? Self.defaultScale)
-        }
-    }
-
     /// How the zebra thresholds read in the editor. The thresholds themselves live on the shared
     /// assist state's normalized monitoring axis; the unit only changes what the operator types.
     public struct Zebra: Codable, Equatable, Sendable {
@@ -886,230 +861,13 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         public var unit: Unit
     }
 
-    /// Per-scope display options (footprint scale, plot mode, trace brightness, reference guide
-    /// lines, histogram traffic lights). Honoured by the Canvas scope plots.
-    public struct Scopes: Codable, Equatable, Sendable {
-        /// Uniform footprint multiplier on a scope's base dimensions. The operator sets it directly by
-        /// dragging the scope's corner resize handle, so it's a continuous value within these bounds
-        /// rather than a preset. ponytail: the bounds are a UX knob — widen if operators want extremes.
-        public static let scaleRange: ClosedRange<Double> = 0.6...1.6
-        public static let defaultScale = 1.0
-        public static func clampedScale(_ value: Double) -> Double {
-            min(max(value, scaleRange.lowerBound), scaleRange.upperBound)
-        }
-
-        /// Operator-facing trace brightness. Waveform/parade use a calibrated quarter-strength
-        /// baseline (`100` = the former `25`); vectorscope retains its original unity baseline.
-        public static let brightnessRange: ClosedRange<Int> = 0...200
-        public static let defaultBrightness = 100
-        private static let waveformParadeBrightnessCalibrationVersion = 2
-        public static func clampedBrightness(_ value: Int) -> Int {
-            min(max(value, brightnessRange.lowerBound), brightnessRange.upperBound)
-        }
-        /// Original unity-based multiplier retained for vectorscope trace intensity.
-        public static func brightnessMultiplier(_ percent: Int) -> Double {
-            Double(clampedBrightness(percent)) / 100.0
-        }
-        /// Calibrated waveform/parade multiplier (`100%` = the former `25%`, `200%` = former `50%`).
-        public static func waveformParadeBrightnessMultiplier(_ percent: Int) -> Double {
-            Double(clampedBrightness(percent)) / 400.0
-        }
-
-        private static func decodedWaveformParadeBrightness(
-            storedValue: Int?, calibrationVersion: Int?
-        ) -> Int {
-            guard let storedValue else { return defaultBrightness }
-            guard (calibrationVersion ?? 0) < waveformParadeBrightnessCalibrationVersion else {
-                return clampedBrightness(storedValue)
-            }
-            let (migrated, overflowed) = storedValue.multipliedReportingOverflow(by: 4)
-            if overflowed {
-                return storedValue < 0 ? brightnessRange.lowerBound : brightnessRange.upperBound
-            }
-            return clampedBrightness(migrated)
-        }
-
-        public enum WaveformMode: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
-            case luma = "Luma"
-            case rgb = "RGB"
-            public var id: String { rawValue }
-        }
-
-        public enum ParadeMode: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
-            case rgb = "RGB"
-            case yrgb = "YRGB"
-            public var id: String { rawValue }
-        }
-
-        /// Vectorscope trace gain (graticule stays at unity). Higher gains read the near-neutral
-        /// chroma a log-encoded feed meters — the unity trace hugs the centre on Log3G10, so 2x/4x
-        /// open it up like a hardware scope's trace-gain control.
-        public enum VectorscopeZoom: String, CaseIterable, Codable, Equatable, Sendable,
-            Identifiable
-        {
-            case x1 = "1x"
-            case x2 = "2x"
-            case x4 = "4x"
-            public var id: String { rawValue }
-
-            /// Multiplier applied to the plotted chroma before binning.
-            public var gain: Double {
-                switch self {
-                case .x1: 1
-                case .x2: 2
-                case .x4: 4
-                }
-            }
-        }
-
-        /// Reference guide lines a waveform/parade draws (clip at the top, mid grey at centre, crush
-        /// at the bottom). Named `GuideLines` to keep it apart from the aspect-ratio frame guides.
-        public struct GuideLines: Codable, Equatable, Sendable {
-            public var clip: Bool
-            public var crush: Bool
-            public var middle: Bool
-            public init(clip: Bool = true, crush: Bool = true, middle: Bool = true) {
-                self.clip = clip
-                self.crush = crush
-                self.middle = middle
-            }
-        }
-
-        public init(
-            waveformScale: Double = defaultScale,
-            waveformMode: WaveformMode = .rgb,
-            waveformGuides: GuideLines = GuideLines(),
-            waveformBrightness: Int = defaultBrightness,
-            paradeScale: Double = defaultScale,
-            paradeMode: ParadeMode = .rgb,
-            paradeGuides: GuideLines = GuideLines(),
-            paradeBrightness: Int = defaultBrightness,
-            vectorscopeScale: Double = defaultScale,
-            vectorscopeZoom: VectorscopeZoom = .x1,
-            vectorscopeBrightness: Int = defaultBrightness,
-            histogramScale: Double = defaultScale,
-            histogramTrafficLights: Bool = true
-        ) {
-            self.waveformScale = Self.clampedScale(waveformScale)
-            self.waveformMode = waveformMode
-            self.waveformGuides = waveformGuides
-            self.waveformBrightness = Self.clampedBrightness(waveformBrightness)
-            self.paradeScale = Self.clampedScale(paradeScale)
-            self.paradeMode = paradeMode
-            self.paradeGuides = paradeGuides
-            self.paradeBrightness = Self.clampedBrightness(paradeBrightness)
-            self.vectorscopeScale = Self.clampedScale(vectorscopeScale)
-            self.vectorscopeZoom = vectorscopeZoom
-            self.vectorscopeBrightness = Self.clampedBrightness(vectorscopeBrightness)
-            self.histogramScale = Self.clampedScale(histogramScale)
-            self.histogramTrafficLights = histogramTrafficLights
-        }
-
-        public var waveformScale: Double
-        public var waveformMode: WaveformMode
-        public var waveformGuides: GuideLines
-        public var waveformBrightness: Int
-        public var paradeScale: Double
-        public var paradeMode: ParadeMode
-        public var paradeGuides: GuideLines
-        public var paradeBrightness: Int
-        public var vectorscopeScale: Double
-        public var vectorscopeZoom: VectorscopeZoom
-        public var vectorscopeBrightness: Int
-        public var histogramScale: Double
-        public var histogramTrafficLights: Bool
-
-        enum CodingKeys: String, CodingKey {
-            case waveformScale, waveformMode, waveformGuides, waveformBrightness, paradeScale,
-                paradeMode, paradeGuides, paradeBrightness,
-                vectorscopeScale, vectorscopeZoom, vectorscopeBrightness,
-                histogramScale, histogramTrafficLights, waveformParadeBrightnessCalibrationVersion
-        }
-
-        /// Removed settings — decoded and discarded so older saved configs still load.
-        private enum LegacyCodingKeys: String, CodingKey {
-            case waveformSkinTone
-        }
-
-        private struct DiscardedWaveformSkinTone: Decodable, Sendable {
-            var enabled: Bool?
-            var color: String?
-        }
-
-        public func encode(to encoder: any Encoder) throws {
-            var c = encoder.container(keyedBy: CodingKeys.self)
-            try c.encode(waveformScale, forKey: .waveformScale)
-            try c.encode(waveformMode, forKey: .waveformMode)
-            try c.encode(waveformGuides, forKey: .waveformGuides)
-            try c.encode(waveformBrightness, forKey: .waveformBrightness)
-            try c.encode(paradeScale, forKey: .paradeScale)
-            try c.encode(paradeMode, forKey: .paradeMode)
-            try c.encode(paradeGuides, forKey: .paradeGuides)
-            try c.encode(paradeBrightness, forKey: .paradeBrightness)
-            try c.encode(vectorscopeScale, forKey: .vectorscopeScale)
-            try c.encode(vectorscopeZoom, forKey: .vectorscopeZoom)
-            try c.encode(vectorscopeBrightness, forKey: .vectorscopeBrightness)
-            try c.encode(histogramScale, forKey: .histogramScale)
-            try c.encode(histogramTrafficLights, forKey: .histogramTrafficLights)
-            try c.encode(
-                Self.waveformParadeBrightnessCalibrationVersion,
-                forKey: .waveformParadeBrightnessCalibrationVersion)
-        }
-
-        // Every field decodes with a default so a partial or older blob still loads — including one
-        // saved while scopes used the now-removed Small/Medium/Large size preset (those keys are just
-        // ignored and the scale falls back to 1.0). Scales are clamped in case a stored value drifted.
-        public init(from decoder: any Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            waveformScale = Self.clampedScale(
-                try c.decodeIfPresent(Double.self, forKey: .waveformScale) ?? Self.defaultScale)
-            waveformMode = try c.decodeIfPresent(WaveformMode.self, forKey: .waveformMode) ?? .rgb
-            waveformGuides =
-                try c.decodeIfPresent(GuideLines.self, forKey: .waveformGuides) ?? GuideLines()
-            let brightnessCalibrationVersion = try c.decodeIfPresent(
-                Int.self, forKey: .waveformParadeBrightnessCalibrationVersion)
-            waveformBrightness = Self.decodedWaveformParadeBrightness(
-                storedValue: try c.decodeIfPresent(Int.self, forKey: .waveformBrightness),
-                calibrationVersion: brightnessCalibrationVersion)
-            paradeScale = Self.clampedScale(
-                try c.decodeIfPresent(Double.self, forKey: .paradeScale) ?? Self.defaultScale)
-            paradeMode = try c.decodeIfPresent(ParadeMode.self, forKey: .paradeMode) ?? .rgb
-            paradeGuides =
-                try c.decodeIfPresent(GuideLines.self, forKey: .paradeGuides) ?? GuideLines()
-            paradeBrightness = Self.decodedWaveformParadeBrightness(
-                storedValue: try c.decodeIfPresent(Int.self, forKey: .paradeBrightness),
-                calibrationVersion: brightnessCalibrationVersion)
-            // Vectorscope settings postdate most saved blobs — absent keys take the defaults. The
-            // retired Monitor/Source selection's key is simply ignored: the vectorscope always
-            // plots the source/log signal now.
-            vectorscopeScale = Self.clampedScale(
-                try c.decodeIfPresent(Double.self, forKey: .vectorscopeScale) ?? Self.defaultScale)
-            vectorscopeZoom =
-                (try? c.decode(VectorscopeZoom.self, forKey: .vectorscopeZoom)) ?? .x1
-            vectorscopeBrightness = Self.clampedBrightness(
-                try c.decodeIfPresent(Int.self, forKey: .vectorscopeBrightness)
-                    ?? Self.defaultBrightness)
-            histogramScale = Self.clampedScale(
-                try c.decodeIfPresent(Double.self, forKey: .histogramScale) ?? Self.defaultScale)
-            histogramTrafficLights =
-                try c.decodeIfPresent(Bool.self, forKey: .histogramTrafficLights) ?? true
-            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
-            _ = try legacy.decodeIfPresent(
-                DiscardedWaveformSkinTone.self, forKey: .waveformSkinTone)
-        }
-    }
-
     public init(
         level: Level = Level(),
         zebra: Zebra = Zebra(),
-        trafficLights: TrafficLights = TrafficLights(),
-        scopes: Scopes = Scopes(),
         selectedLUT: LUTSelection = .builtIn(.log3G10Rec709)
     ) {
         self.level = level
         self.zebra = zebra
-        self.trafficLights = trafficLights
-        self.scopes = scopes
         self.selectedLUT = selectedLUT
     }
 
@@ -1117,15 +875,15 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     public var level: Level
     public var magnification: Magnification = Magnification()
     public var zebra: Zebra
-    public var trafficLights: TrafficLights
     public var instantReviewSeconds: Int = 5
     public var instantReviewShowsFocusPoint: Bool = true
     public var instantReviewShowsCaptureInfo: Bool = true
-    public var scopes: Scopes
     public var selectedLUT: LUTSelection
 
+    /// The retired `scopes` and `trafficLights` keys are ignored: the app's shared scope panel
+    /// stores own those options now, and copied them once on upgrade.
     private enum CodingKeys: String, CodingKey {
-        case level, magnification, zebra, trafficLights, scopes, selectedLUT,
+        case level, magnification, zebra, selectedLUT,
             instantReviewSeconds, instantReviewShowsFocusPoint, instantReviewShowsCaptureInfo
     }
 
@@ -1137,9 +895,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         magnification =
             try c.decodeIfPresent(Magnification.self, forKey: .magnification) ?? Magnification()
         zebra = try c.decodeIfPresent(Zebra.self, forKey: .zebra) ?? Zebra()
-        trafficLights =
-            try c.decodeIfPresent(TrafficLights.self, forKey: .trafficLights) ?? TrafficLights()
-        scopes = try c.decodeIfPresent(Scopes.self, forKey: .scopes) ?? Scopes()
         selectedLUT =
             try c.decodeIfPresent(LUTSelection.self, forKey: .selectedLUT)
             ?? .builtIn(.log3G10Rec709)
@@ -1156,8 +911,6 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         try c.encode(level, forKey: .level)
         try c.encode(magnification, forKey: .magnification)
         try c.encode(zebra, forKey: .zebra)
-        try c.encode(trafficLights, forKey: .trafficLights)
-        try c.encode(scopes, forKey: .scopes)
         try c.encode(selectedLUT, forKey: .selectedLUT)
         try c.encode(instantReviewSeconds, forKey: .instantReviewSeconds)
         try c.encode(instantReviewShowsFocusPoint, forKey: .instantReviewShowsFocusPoint)

@@ -1968,83 +1968,38 @@ struct AccentDrumWheel: View {
             paint: assist.binding(highlight ? \.zebraHighlightColor : \.zebraMidtoneColor))
     }
 
-    var waveform: MonitorScopeTraceMenu<AssistConfiguration.Scopes.WaveformMode> {
-        MonitorScopeTraceMenu(
-            modes: AssistConfiguration.Scopes.WaveformMode.allCases,
-            mode: Binding(
-                get: { model.assistConfiguration.scopes.waveformMode },
-                set: { model.assistConfiguration.scopes.waveformMode = $0 }),
+    var waveform: MonitorScopeTraceMenu<MonitorWaveformMode> {
+        let options = model.scopePanels.waveform.optionsBinding
+        return MonitorScopeTraceMenu(
+            modes: MonitorWaveformMode.allCases, mode: options.mode,
             brightness: Binding(
-                get: { model.assistConfiguration.scopes.waveformBrightness },
-                set: {
-                    model.assistConfiguration.scopes.waveformBrightness = AssistConfiguration.Scopes
-                        .clampedBrightness($0)
-                }),
-            guides: scopeGuides(parade: false), title: { $0.rawValue },
+                get: { options.wrappedValue.brightness },
+                set: { options.wrappedValue.brightness = MonitorWaveformOptions.clampedBrightness($0) }),
+            guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity when the preview is dark or low contrast.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
     }
 
-    var parade: MonitorScopeTraceMenu<AssistConfiguration.Scopes.ParadeMode> {
-        MonitorScopeTraceMenu(
-            modes: AssistConfiguration.Scopes.ParadeMode.allCases,
-            mode: Binding(
-                get: { model.assistConfiguration.scopes.paradeMode },
-                set: { model.assistConfiguration.scopes.paradeMode = $0 }),
+    var parade: MonitorScopeTraceMenu<MonitorParadeMode> {
+        let options = model.scopePanels.parade.optionsBinding
+        return MonitorScopeTraceMenu(
+            modes: MonitorParadeMode.allCases, mode: options.mode,
             brightness: Binding(
-                get: { model.assistConfiguration.scopes.paradeBrightness },
-                set: {
-                    model.assistConfiguration.scopes.paradeBrightness = AssistConfiguration.Scopes
-                        .clampedBrightness($0)
-                }),
-            guides: scopeGuides(parade: true), title: { $0.rawValue },
+                get: { options.wrappedValue.brightness },
+                set: { options.wrappedValue.brightness = MonitorParadeOptions.clampedBrightness($0) }),
+            guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity for the separated channel lanes.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
     }
 
-    private func scopeGuides(parade: Bool) -> Binding<MonitorScopeGuides> {
-        Binding(
-            get: {
-                let guides =
-                    parade
-                    ? model.assistConfiguration.scopes.paradeGuides
-                    : model.assistConfiguration.scopes.waveformGuides
-                return MonitorScopeGuides(
-                    clip: guides.clip, crush: guides.crush, middle: guides.middle)
-            },
-            set: {
-                let guides = AssistConfiguration.Scopes.GuideLines(
-                    clip: $0.clip, crush: $0.crush, middle: $0.middle)
-                if parade {
-                    model.assistConfiguration.scopes.paradeGuides = guides
-                } else {
-                    model.assistConfiguration.scopes.waveformGuides = guides
-                }
-            })
-    }
-
     var vectorscope: MonitorVectorscopeMenu {
-        MonitorVectorscopeMenu(
-            zoom: Binding(
-                get: {
-                    switch model.assistConfiguration.scopes.vectorscopeZoom {
-                    case .x1: .x1
-                    case .x2: .x2
-                    case .x4: .x4
-                    }
-                },
-                set: {
-                    switch $0 {
-                    case .x1: model.assistConfiguration.scopes.vectorscopeZoom = .x1
-                    case .x2: model.assistConfiguration.scopes.vectorscopeZoom = .x2
-                    case .x4: model.assistConfiguration.scopes.vectorscopeZoom = .x4
-                    }
-                }),
+        let options = model.scopePanels.vectorscope.optionsBinding
+        return MonitorVectorscopeMenu(
+            zoom: options.zoom,
             brightness: Binding(
-                get: { model.assistConfiguration.scopes.vectorscopeBrightness },
+                get: { options.wrappedValue.brightness },
                 set: {
-                    model.assistConfiguration.scopes.vectorscopeBrightness = AssistConfiguration
-                        .Scopes.clampedBrightness($0)
+                    options.wrappedValue.brightness = MonitorVectorscopeOptions.clampedBrightness($0)
                 }),
             zoomHelp:
                 "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the monitor image after its active LUT or display tone map.",
@@ -2058,9 +2013,7 @@ struct AccentDrumWheel: View {
 
     var histogram: MonitorHistogramMenu {
         MonitorHistogramMenu(
-            trafficLights: Binding(
-                get: { model.assistConfiguration.scopes.histogramTrafficLights },
-                set: { model.assistConfiguration.scopes.histogramTrafficLights = $0 }),
+            trafficLights: model.scopePanels.histogram.optionsBinding.trafficLights,
             compensation: compensation,
             trafficHelp: "Show small RGB edge blocks for crushed and clipped channels.",
             compensationHelp:
@@ -4510,27 +4463,26 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetWaveform() {
-        let defaults = AssistConfiguration.defaults.scopes
-        model.assistConfiguration.scopes.waveformMode = defaults.waveformMode
-        model.assistConfiguration.scopes.waveformGuides = defaults.waveformGuides
-        model.assistConfiguration.scopes.waveformBrightness = defaults.waveformBrightness
+        let store = model.scopePanels.waveform, base = MonitorWaveformOptions.default
+        store.options.mode = base.mode
+        store.options.guides = base.guides
+        store.options.brightness = base.brightness
     }
 
     private func resetParade() {
-        let defaults = AssistConfiguration.defaults.scopes
-        model.assistConfiguration.scopes.paradeMode = defaults.paradeMode
-        model.assistConfiguration.scopes.paradeGuides = defaults.paradeGuides
-        model.assistConfiguration.scopes.paradeBrightness = defaults.paradeBrightness
+        let store = model.scopePanels.parade, base = MonitorParadeOptions.default
+        store.options.mode = base.mode
+        store.options.guides = base.guides
+        store.options.brightness = base.brightness
     }
 
     private func resetHistogram() {
-        let defaults = AssistConfiguration.defaults.scopes
-        model.assistConfiguration.scopes.histogramTrafficLights = defaults.histogramTrafficLights
+        model.scopePanels.histogram.options.trafficLights = MonitorHistogramOptions.default.trafficLights
         model.assist.resetOptions(.histogram)
     }
 
     private func resetTrafficLights() {
-        model.assistConfiguration.trafficLights = AssistConfiguration.defaults.trafficLights
+        model.scopePanels.trafficLights.setScale(1)
         model.assist.resetOptions(.trafficLights)
     }
 
@@ -4539,9 +4491,9 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetVectorscope() {
-        let defaults = AssistConfiguration.defaults.scopes
-        model.assistConfiguration.scopes.vectorscopeZoom = defaults.vectorscopeZoom
-        model.assistConfiguration.scopes.vectorscopeBrightness = defaults.vectorscopeBrightness
+        let store = model.scopePanels.vectorscope, base = MonitorVectorscopeOptions.default
+        store.options.zoom = base.zoom
+        store.options.brightness = base.brightness
     }
 }
 

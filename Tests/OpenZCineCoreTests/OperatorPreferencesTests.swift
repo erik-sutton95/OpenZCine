@@ -586,7 +586,7 @@ import Testing
     let data = try JSONEncoder().encode(stored)
     var dict = try #require(
         try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    for key in ["level", "zebra", "scopes", "trafficLights", "instantReviewSeconds"] {
+    for key in ["level", "zebra", "instantReviewSeconds"] {
         dict.removeValue(forKey: key)
     }
     let stripped = try JSONSerialization.data(withJSONObject: dict)
@@ -595,7 +595,6 @@ import Testing
     #expect(decoded.selectedLUT == .builtIn(.nLogRec709))
     #expect(decoded.level.style == .horizon)
     #expect(decoded.zebra.unit == .ire)
-    #expect(decoded.scopes == AssistConfiguration.Scopes())
     #expect(decoded.instantReviewSeconds == 5)
 }
 
@@ -633,83 +632,20 @@ import Testing
     #expect(reencoded["falseColorCurve"] == nil)
 }
 
-@Test func scopeDecodeIgnoresLegacyWaveformSkinToneKey() throws {
-    let legacy =
-        #"{"waveformSkinTone":{"enabled":true,"color":"Rose"},"waveformMode":"RGB"}"#
+@Test func assistConfigurationIgnoresTheRetiredScopeKeys() throws {
+    // The app's shared scope panel stores own these now; an older blob still decodes and drops
+    // them on its next save.
+    let data = try JSONEncoder().encode(AssistConfiguration.defaults)
+    var dict = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    dict["scopes"] = ["waveformMode": "Luma", "waveformScale": 1.4]
+    dict["trafficLights"] = ["scale": 1.2]
     let decoded = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(legacy.utf8))
-    #expect(decoded.waveformMode == .rgb)
-    #expect(decoded.waveformGuides == AssistConfiguration.Scopes.GuideLines())
-}
-
-@Test func scopeSettingsRoundTripThroughJSON() throws {
-    var configuration = AssistConfiguration.defaults
-    configuration.scopes.waveformMode = .rgb
-    configuration.scopes.waveformScale = 1.4
-    configuration.scopes.waveformGuides.crush = false
-    configuration.scopes.waveformBrightness = 150
-    configuration.scopes.paradeMode = .yrgb
-    configuration.scopes.paradeGuides.middle = false
-    configuration.scopes.paradeBrightness = 80
-    configuration.scopes.histogramScale = 0.7
-    configuration.scopes.histogramTrafficLights = false
-
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.self, from: try JSONEncoder().encode(configuration))
-    #expect(decoded.scopes == configuration.scopes)
-    #expect(decoded.scopes.waveformMode == .rgb)
-    #expect(decoded.scopes.waveformScale == 1.4)
-    #expect(!decoded.scopes.waveformGuides.crush)
-    #expect(decoded.scopes.waveformGuides.clip)  // untouched flags stay on
-    #expect(decoded.scopes.waveformBrightness == 150)
-    #expect(decoded.scopes.paradeBrightness == 80)
-    #expect(!decoded.scopes.histogramTrafficLights)
-}
-
-@Test func scopeBrightnessClampsToRangeOnInitAndDecode() throws {
-    let range = AssistConfiguration.Scopes.brightnessRange
-    let clamped = AssistConfiguration.Scopes(waveformBrightness: 999, paradeBrightness: -10)
-    #expect(clamped.waveformBrightness == range.upperBound)
-    #expect(clamped.paradeBrightness == range.lowerBound)
-
-    let json = #"{"waveformBrightness": 999, "paradeBrightness": -5}"#
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(json.utf8))
-    #expect(decoded.waveformBrightness == range.upperBound)
-    #expect(decoded.paradeBrightness == range.lowerBound)
-
-    let legacy = #"{"waveformMode":"RGB"}"#
-    let defaults = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(legacy.utf8))
-    #expect(defaults.waveformBrightness == AssistConfiguration.Scopes.defaultBrightness)
-    #expect(defaults.paradeBrightness == AssistConfiguration.Scopes.defaultBrightness)
-}
-
-@Test func legacyWaveformAndParadeBrightnessMigratesToCalibratedScale() throws {
-    let json =
-        #"{"waveformBrightness":25,"paradeBrightness":50,"vectorscopeBrightness":25}"#
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(json.utf8))
-
-    #expect(decoded.waveformBrightness == 100)
-    #expect(decoded.paradeBrightness == 200)
-    #expect(decoded.vectorscopeBrightness == 25)
-}
-
-@Test func legacyWaveformAndParadeBrightnessAboveNewVisualMaximumClamps() throws {
-    let json = #"{"waveformBrightness":51,"paradeBrightness":200}"#
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(json.utf8))
-
-    #expect(decoded.waveformBrightness == 200)
-    #expect(decoded.paradeBrightness == 200)
-}
-
-@Test func calibratedWaveformAndParadeBrightnessMultiplierUsesQuarterStrengthBaseline() {
-    #expect(AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(0) == 0)
-    #expect(AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(100) == 0.25)
-    #expect(AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(200) == 0.5)
-    #expect(AssistConfiguration.Scopes.brightnessMultiplier(100) == 1)
+        AssistConfiguration.self, from: try JSONSerialization.data(withJSONObject: dict))
+    #expect(decoded == AssistConfiguration.defaults)
+    let saved = try #require(
+        try JSONSerialization.jsonObject(with: try JSONEncoder().encode(decoded)) as? [String: Any])
+    #expect(saved["scopes"] == nil)
+    #expect(saved["trafficLights"] == nil)
 }
 
 @Test func operatorPreferencesIgnoreAStoredToolbarOrderAndBarVisibility() throws {
@@ -729,33 +665,6 @@ import Testing
     #expect(saved["assistToolbarOrder"] == nil)
     #expect(saved["exposureBarVisibleControls"] == nil)
     #expect(saved["framingBarVisibleControls"] == nil)
-}
-
-@Test func scopeScaleClampsToRangeOnInitAndDecode() throws {
-    let range = AssistConfiguration.Scopes.scaleRange
-    // The init clamps absurd values into the usable band.
-    let clamped = AssistConfiguration.Scopes(waveformScale: 99, histogramScale: 0.01)
-    #expect(clamped.waveformScale == range.upperBound)
-    #expect(clamped.histogramScale == range.lowerBound)
-
-    // A persisted out-of-range value is pulled back in on decode too.
-    let json = #"{"waveformScale": 99, "paradeScale": -5}"#
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(json.utf8))
-    #expect(decoded.waveformScale == range.upperBound)
-    #expect(decoded.paradeScale == range.lowerBound)
-    #expect(decoded.histogramScale == AssistConfiguration.Scopes.defaultScale)  // missing → default
-}
-
-@Test func scopeDecodeIgnoresRemovedSizePresetKeys() throws {
-    // A config saved while scopes still used the Small/Medium/Large size preset must still load —
-    // the old size keys are ignored and the scale falls back to the default.
-    let legacy = #"{"waveformSize":"Large","paradeSize":"Small","waveformMode":"RGB"}"#
-    let decoded = try JSONDecoder().decode(
-        AssistConfiguration.Scopes.self, from: Data(legacy.utf8))
-    #expect(decoded.waveformScale == AssistConfiguration.Scopes.defaultScale)
-    #expect(decoded.paradeScale == AssistConfiguration.Scopes.defaultScale)
-    #expect(decoded.waveformMode == .rgb)  // a still-valid key is honoured
 }
 
 @Test func operatorPreferencesBluetoothShutterDefaultsOnAndRoundTrips() throws {

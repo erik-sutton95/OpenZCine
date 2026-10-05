@@ -48,52 +48,13 @@ struct FeedAssistOverlayModule: View {
                 trailing: 0)
             ZStack(alignment: .topLeading) {
                 // Guides/grid/crosshair/level draw on the feed image itself (`FeedAlignedAssists`);
-                // the scopes and false-colour reference float here, each draggable via
-                // `MovablePanel` — skipped in portrait (see `suppressFloatingScopes`).
+                // the shared scope panels, audio meters and false-colour reference float here,
+                // skipped in portrait (see `suppressFloatingScopes`).
                 if !suppressFloatingScopes {
-                    let scopes = model.assistConfiguration.scopes
-                    if visible.contains(.waveform) {
-                        LiveWaveformScopePanel(
-                            feedRect: feedRect,
-                            screenBounds: screenBounds,
-                            chromeClearance: chromeClearance,
-                            scopes: scopes)
-                    }
-                    if visible.contains(.parade) {
-                        LiveParadeScopePanel(
-                            feedRect: feedRect,
-                            screenBounds: screenBounds,
-                            chromeClearance: chromeClearance,
-                            scopes: scopes)
-                    }
-                    if visible.contains(.vectorscope) {
-                        LiveVectorscopePanel(
-                            feedRect: feedRect,
-                            screenBounds: screenBounds,
-                            chromeClearance: chromeClearance,
-                            scopes: scopes)
-                    }
-                    if visible.contains(.histogram) {
-                        let base = CGSize(width: 250, height: 77)
-                        let size = scopeSize(base, scopes.histogramScale)
-                        MovablePanel(
-                            id: "histo", size: size,
-                            defaultCenter: feedOutsideCenter(
-                                feedRect, size, .bottomTrailing,
-                                bounds: screenBounds, chromeClearance: chromeClearance),
-                            bounds: screenBounds,
-                            resize: .init(
-                                scale: scopes.histogramScale,
-                                range: AssistConfiguration.Scopes.scaleRange,
-                                baseSize: base,
-                                onChange: { model.assistConfiguration.scopes.histogramScale = $0 })
-                        ) {
-                            ScopeMini(
-                                title: "Histo", systemImage: "chart.xyaxis.line", style: .histogram,
-                                assist: model.scopeAssist, scopes: scopes,
-                                mapping: model.exposureSignalMapping)
-                        }
-                    }
+                    NikonScopeOverlay(
+                        tools: visible, bundle: model.scopeAssist,
+                        mapping: model.exposureSignalMapping, canvas: screenBounds,
+                        clearance: chromeClearance, onOptions: { model.presentAssistOptions($0) })
                     if visible.contains(.audioMeters) {
                         let size = AudioMetersPanelMini.panelSize
                         MovablePanel(
@@ -106,26 +67,6 @@ struct FeedAssistOverlayModule: View {
                             AudioMetersPanelMini(
                                 levels: model.liveAudioLevels,
                                 sensitivity: model.commandMicrophoneSensLabel)
-                        }
-                    }
-                    if visible.contains(.trafficLights) {
-                        let lights = model.assistConfiguration.trafficLights
-                        let base = CGSize(width: 74, height: 168)
-                        let size = scopeSize(base, lights.scale)
-                        MovablePanel(
-                            id: "traffic-lights", size: size,
-                            defaultCenter: feedOutsideCenter(
-                                feedRect, size, .bottomLeading,
-                                bounds: screenBounds, chromeClearance: chromeClearance),
-                            bounds: screenBounds,
-                            resize: .init(
-                                scale: lights.scale,
-                                range: AssistConfiguration.Scopes.scaleRange,
-                                baseSize: base,
-                                onChange: { model.assistConfiguration.trafficLights.scale = $0 })
-                        ) {
-                            MonitorTrafficLightsMeter(
-                                reading: model.scopeAssist.traffic)
                         }
                     }
                     if visible.contains(.falseColor)
@@ -153,129 +94,6 @@ struct FeedAssistOverlayModule: View {
             )
             .offset(x: CGFloat(canvasOffsetX))
         }
-    }
-
-    /// A scope's base footprint scaled by its operator-set resize factor.
-    private func scopeSize(_ base: CGSize, _ scale: Double) -> CGSize {
-        CGSize(
-            width: (base.width * scale).rounded(),
-            height: (base.height * scale).rounded())
-    }
-}
-
-/// Waveform scope panel — reads only scope sample / scatter-frame properties, not `liveFrameImage`.
-private struct LiveWaveformScopePanel: View {
-    @Environment(NativeAppModel.self) private var model
-    let feedRect: CGRect
-    let screenBounds: CGRect
-    let chromeClearance: EdgeInsets
-    let scopes: AssistConfiguration.Scopes
-
-    var body: some View {
-        let base = CGSize(width: 250, height: 153)
-        let size = scopeSize(base, scopes.waveformScale)
-        MovablePanel(
-            id: "wave", size: size,
-            defaultCenter: feedOutsideCenter(
-                feedRect, size, .topLeading,
-                bounds: screenBounds, chromeClearance: chromeClearance),
-            bounds: screenBounds,
-            resize: .init(
-                scale: scopes.waveformScale,
-                range: AssistConfiguration.Scopes.scaleRange,
-                baseSize: base,
-                onChange: { model.assistConfiguration.scopes.waveformScale = $0 })
-        ) {
-            // On the GPU-scopes path the scatter view draws from `frame` alone — reading
-            // `scopeSamples` here would re-invalidate this panel on every histogram publish.
-            ScopeMini(
-                title: "Wave", systemImage: "waveform.path.ecg", style: .waveform,
-                assist: model.scopeAssist, scopes: scopes,
-                mapping: model.exposureSignalMapping)
-        }
-    }
-
-    private func scopeSize(_ base: CGSize, _ scale: Double) -> CGSize {
-        CGSize(
-            width: (base.width * scale).rounded(),
-            height: (base.height * scale).rounded())
-    }
-}
-
-/// Parade scope panel — isolated from per-frame feed publishes like the waveform panel.
-private struct LiveParadeScopePanel: View {
-    @Environment(NativeAppModel.self) private var model
-    let feedRect: CGRect
-    let screenBounds: CGRect
-    let chromeClearance: EdgeInsets
-    let scopes: AssistConfiguration.Scopes
-
-    var body: some View {
-        let base = CGSize(width: 250, height: 153)
-        let size = scopeSize(base, scopes.paradeScale)
-        MovablePanel(
-            id: "parade", size: size,
-            defaultCenter: feedOutsideCenter(
-                feedRect, size, .topTrailing,
-                bounds: screenBounds, chromeClearance: chromeClearance),
-            bounds: screenBounds,
-            resize: .init(
-                scale: scopes.paradeScale, range: AssistConfiguration.Scopes.scaleRange,
-                baseSize: base,
-                onChange: { model.assistConfiguration.scopes.paradeScale = $0 })
-        ) {
-            // Same isolation as the waveform panel: scatter draws from `frame`, not the bins.
-            ScopeMini(
-                title: "Parade", systemImage: "chart.bar.xaxis", style: .parade,
-                assist: model.scopeAssist, scopes: scopes,
-                mapping: model.exposureSignalMapping)
-        }
-    }
-
-    private func scopeSize(_ base: CGSize, _ scale: Double) -> CGSize {
-        CGSize(
-            width: (base.width * scale).rounded(),
-            height: (base.height * scale).rounded())
-    }
-}
-
-/// Vectorscope panel — isolated from per-frame feed publishes like the waveform/parade panels.
-/// Always reads `scopeSamples`: the CbCr bins accumulate from CPU point samples on every render
-/// path (there is no GPU scatter equivalent for the chroma plot).
-private struct LiveVectorscopePanel: View {
-    @Environment(NativeAppModel.self) private var model
-    let feedRect: CGRect
-    let screenBounds: CGRect
-    let chromeClearance: EdgeInsets
-    let scopes: AssistConfiguration.Scopes
-
-    var body: some View {
-        let base = CGSize(width: 190, height: 190)
-        let size = scopeSize(base, scopes.vectorscopeScale)
-        MovablePanel(
-            id: "vector", size: size,
-            defaultCenter: feedOutsideCenter(
-                feedRect, size, .topTrailing,
-                bounds: screenBounds, chromeClearance: chromeClearance),
-            bounds: screenBounds,
-            resize: .init(
-                scale: scopes.vectorscopeScale,
-                range: AssistConfiguration.Scopes.scaleRange,
-                baseSize: base,
-                onChange: { model.assistConfiguration.scopes.vectorscopeScale = $0 })
-        ) {
-            ScopeMini(
-                title: "Vector", systemImage: "circle.grid.cross", style: .vectorscope,
-                assist: model.scopeAssist,
-                scopes: scopes,
-                mapping: model.exposureSignalMapping)
-        }
-    }
-
-    private func scopeSize(_ base: CGSize, _ scale: Double) -> CGSize {
-        CGSize(
-            width: (base.width * scale).rounded(),
-            height: (base.height * scale).rounded())
     }
 }
 
@@ -323,6 +141,7 @@ struct PlaybackAssistOverlayModule: View {
     let videoRect: CGRect
     /// Metered playback audio; absent before a real sample or when the tool is off.
     var audioLevels: AudioMeterLevels?
+    let onOptions: (MonitorAssistTool) -> Void
 
     var body: some View {
         let visible = model.assist.playbackTools
@@ -330,67 +149,10 @@ struct PlaybackAssistOverlayModule: View {
             let screenBounds = CGRect(origin: .zero, size: proxy.size)
             let feedRect = videoRect
             ZStack(alignment: .topLeading) {
-                let scopes = model.assistConfiguration.scopes
-                if visible.contains(.waveform) {
-                    let base = CGSize(width: 250, height: 153)
-                    let size = scopeSize(base, scopes.waveformScale)
-                    MovablePanel(
-                        id: "playback-wave", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .topLeading, bounds: screenBounds),
-                        bounds: screenBounds,
-                        resize: .init(
-                            scale: scopes.waveformScale,
-                            range: AssistConfiguration.Scopes.scaleRange,
-                            baseSize: base,
-                            onChange: { model.assistConfiguration.scopes.waveformScale = $0 })
-                    ) {
-                        ScopeMini(
-                            title: "Wave", systemImage: "waveform.path.ecg", style: .waveform,
-                            assist: scopeAssist, scopes: scopes,
-                            mapping: model.playbackExposureSignalMapping)
-                    }
-                }
-                if visible.contains(.parade) {
-                    let base = CGSize(width: 250, height: 153)
-                    let size = scopeSize(base, scopes.paradeScale)
-                    MovablePanel(
-                        id: "playback-parade", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .topTrailing, bounds: screenBounds),
-                        bounds: screenBounds,
-                        resize: .init(
-                            scale: scopes.paradeScale, range: AssistConfiguration.Scopes.scaleRange,
-                            baseSize: base,
-                            onChange: { model.assistConfiguration.scopes.paradeScale = $0 })
-                    ) {
-                        ScopeMini(
-                            title: "Parade", systemImage: "chart.bar.xaxis", style: .parade,
-                            assist: scopeAssist, scopes: scopes,
-                            mapping: model.playbackExposureSignalMapping)
-                    }
-                }
-                if visible.contains(.vectorscope) {
-                    let base = CGSize(width: 190, height: 190)
-                    let size = scopeSize(base, scopes.vectorscopeScale)
-                    MovablePanel(
-                        id: "playback-vector", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .topTrailing, bounds: screenBounds),
-                        bounds: screenBounds,
-                        resize: .init(
-                            scale: scopes.vectorscopeScale,
-                            range: AssistConfiguration.Scopes.scaleRange,
-                            baseSize: base,
-                            onChange: { model.assistConfiguration.scopes.vectorscopeScale = $0 })
-                    ) {
-                        ScopeMini(
-                            title: "Vector", systemImage: "circle.grid.cross", style: .vectorscope,
-                            assist: scopeAssist,
-                            scopes: scopes,
-                            mapping: model.playbackExposureSignalMapping)
-                    }
-                }
+                NikonScopeOverlay(
+                    tools: visible, bundle: scopeAssist,
+                    mapping: model.playbackExposureSignalMapping, canvas: screenBounds,
+                    onOptions: onOptions)
                 if visible.contains(.audioMeters) {
                     let size = AudioMetersPanelMini.panelSize
                     MovablePanel(
@@ -400,44 +162,6 @@ struct PlaybackAssistOverlayModule: View {
                         bounds: screenBounds
                     ) {
                         AudioMetersPanelMini(levels: audioLevels, sensitivity: nil)
-                    }
-                }
-                if visible.contains(.histogram) {
-                    let base = CGSize(width: 250, height: 77)
-                    let size = scopeSize(base, scopes.histogramScale)
-                    MovablePanel(
-                        id: "playback-histo", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .bottomTrailing, bounds: screenBounds),
-                        bounds: screenBounds,
-                        resize: .init(
-                            scale: scopes.histogramScale,
-                            range: AssistConfiguration.Scopes.scaleRange,
-                            baseSize: base,
-                            onChange: { model.assistConfiguration.scopes.histogramScale = $0 })
-                    ) {
-                        ScopeMini(
-                            title: "Histo", systemImage: "chart.xyaxis.line", style: .histogram,
-                            assist: scopeAssist, scopes: scopes,
-                            mapping: model.playbackExposureSignalMapping)
-                    }
-                }
-                if visible.contains(.trafficLights) {
-                    let lights = model.assistConfiguration.trafficLights
-                    let base = CGSize(width: 74, height: 168)
-                    let size = scopeSize(base, lights.scale)
-                    MovablePanel(
-                        id: "playback-traffic-lights", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .bottomLeading, bounds: screenBounds),
-                        bounds: screenBounds,
-                        resize: .init(
-                            scale: lights.scale,
-                            range: AssistConfiguration.Scopes.scaleRange,
-                            baseSize: base,
-                            onChange: { model.assistConfiguration.trafficLights.scale = $0 })
-                    ) {
-                        MonitorTrafficLightsMeter(reading: scopeAssist.traffic)
                     }
                 }
                 if visible.contains(.falseColor)
@@ -458,12 +182,6 @@ struct PlaybackAssistOverlayModule: View {
             }
         }
         .allowsHitTesting(true)
-    }
-
-    private func scopeSize(_ base: CGSize, _ scale: Double) -> CGSize {
-        CGSize(
-            width: (base.width * scale).rounded(),
-            height: (base.height * scale).rounded())
     }
 }
 
@@ -1392,98 +1110,6 @@ struct FalseColorReference: View {
         case .ire: "IRE"
         case .limits: "Limits"
         }
-    }
-}
-
-/// RED-style RGB goal-post meter — slim vertical columns, centre-anchored single-sided level fill,
-/// clip/crush dots at the highlight and shadow edges.
-/// Floating scope chrome around the shared MonitorUI plots, drawn on this camera's exposure axis.
-struct ScopeMini: View {
-    enum Style {
-        case waveform
-        case parade
-        case histogram
-        case vectorscope
-    }
-
-    let title: String
-    let systemImage: String
-    let style: Style
-    /// Samples, monitor-domain vectorscope points, and the phosphor trail — one bundle per tick.
-    let assist: ScopeAssistBundle
-    var scopes: AssistConfiguration.Scopes = AssistConfiguration.Scopes()
-    var mapping = ExposureSignalMapping(curve: .redLog3G10)
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            GeometryReader { proxy in scopePlot(size: proxy.size) }
-            HStack(spacing: 4) {
-                Text(title.uppercased())
-                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.66))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                Spacer(minLength: 2)
-                Text(chip)
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.58))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 4)
-        }
-        .background(MonitorScopePalette.panelFill)
-        .clipShape(RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.34), radius: 16, x: 0, y: 12)
-    }
-
-    private var chip: String {
-        switch style {
-        case .waveform: scopes.waveformMode.rawValue.uppercased()
-        case .parade: scopes.paradeMode.rawValue.uppercased()
-        case .histogram: "RGBL"
-        case .vectorscope:
-            "MON · \(scopes.vectorscopeZoom.rawValue.uppercased())"
-        }
-    }
-
-    @ViewBuilder private func scopePlot(size: CGSize) -> some View {
-        switch style {
-        case .waveform:
-            MonitorWaveformScopePlot(
-                samples: assist.samples, trail: assist.trailSamples,
-                mode: .waveform(MonitorWaveformMode(rawValue: scopes.waveformMode.rawValue) ?? .luma),
-                axis: mapping.scopeLevelAxis, revision: assist.revision,
-                intensity: AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(
-                    scopes.waveformBrightness),
-                guides: Self.guides(scopes.waveformGuides), size: size)
-        case .parade:
-            MonitorWaveformScopePlot(
-                samples: assist.samples, trail: assist.trailSamples,
-                mode: .parade(MonitorParadeMode(rawValue: scopes.paradeMode.rawValue) ?? .rgb),
-                axis: mapping.scopeLevelAxis, revision: assist.revision,
-                intensity: AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(
-                    scopes.paradeBrightness),
-                guides: Self.guides(scopes.paradeGuides), size: size)
-        case .histogram:
-            MonitorHistogramScopePlot(
-                display: assist.histogramDisplay, traffic: assist.traffic,
-                showTrafficLights: scopes.histogramTrafficLights)
-        case .vectorscope:
-            MonitorVectorscopeScopePlot(
-                points: assist.vectorscopePoints, trail: assist.trailVectorscopePoints,
-                zoom: MonitorVectorscopeZoom(rawValue: scopes.vectorscopeZoom.rawValue) ?? .x1,
-                brightness: scopes.vectorscopeBrightness, revision: assist.revision)
-        }
-    }
-
-    private static func guides(_ lines: AssistConfiguration.Scopes.GuideLines) -> MonitorScopeGuides {
-        MonitorScopeGuides(clip: lines.clip, crush: lines.crush, middle: lines.middle)
     }
 }
 

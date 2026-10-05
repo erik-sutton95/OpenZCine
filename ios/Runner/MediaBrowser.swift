@@ -2262,7 +2262,6 @@ struct MediaPlayerView: View {
     }
 
     private var playbackScopeDerivationConfiguration: PlaybackScopeDerivationConfiguration {
-        let scopes = model.assistConfiguration.scopes
         // Playback scopes measure source/log on the same anchored axis as live view; clips don't
         // persist a per-clip tone mode yet, so the mapping follows current camera state. The
         // vectorscope reads the monitor image through the look the player bakes (LUT tool + LUT).
@@ -2302,7 +2301,7 @@ struct MediaPlayerView: View {
                     if playbackScopesActive || playbackAudioMetersActive {
                         PlaybackAssistOverlayModule(
                             scopeAssist: playbackScopeAssist, videoRect: rect,
-                            audioLevels: playbackAudioLevels)
+                            audioLevels: playbackAudioLevels, onOptions: { assistOptionsTool = $0 })
                             .frame(width: size.width, height: size.height)
                     }
                 }, tools: { context in playbackTools(context) })

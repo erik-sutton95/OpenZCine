@@ -1,3 +1,4 @@
+import MonitorPresentation
 import Network
 import SwiftUI
 import UIKit
@@ -482,37 +483,35 @@ enum DemoHarness {
                     model.preferences.portraitFeedAspect = aspect
                 }
                 if let raw = env["ZC_DEMO_PARADE_MODE"],
-                    let mode = AssistConfiguration.Scopes.ParadeMode(rawValue: raw.uppercased())
+                    let mode = MonitorParadeMode(rawValue: raw.uppercased())
                 {
                     // Demo/screenshot affordance: seed the parade lane mode (rgb/yrgb) so the GPU
                     // and CPU parade scopes can be captured in YRGB without a manual toggle.
-                    model.assistConfiguration.scopes.paradeMode = mode
+                    model.scopePanels.parade.options.mode = mode
                 }
                 if let raw = env["ZC_DEMO_WAVE_MODE"],
-                    let mode = AssistConfiguration.Scopes.WaveformMode(
+                    let mode = MonitorWaveformMode(
                         rawValue: raw.capitalized == "Rgb" ? "RGB" : raw.capitalized)
                 {
                     // Demo/screenshot affordance: seed the waveform trace mode (luma/rgb).
-                    model.assistConfiguration.scopes.waveformMode = mode
+                    model.scopePanels.waveform.options.mode = mode
                 }
                 if let raw = env["ZC_DEMO_WAVE_BRIGHTNESS"], let percent = Int(raw) {
-                    // Demo/screenshot affordance: waveform trace brightness percent (0–200).
-                    model.assistConfiguration.scopes.waveformBrightness =
-                        AssistConfiguration.Scopes.clampedBrightness(percent)
+                    // Demo/screenshot affordance: waveform trace brightness percent (0 to 200).
+                    model.scopePanels.waveform.options.brightness =
+                        MonitorWaveformOptions.clampedBrightness(percent)
                 }
                 if let raw = env["ZC_DEMO_VECTOR_ZOOM"],
-                    let zoom = AssistConfiguration.Scopes.VectorscopeZoom(
-                        rawValue: raw.lowercased())
+                    let zoom = MonitorVectorscopeZoom(rawValue: raw.lowercased())
                 {
-                    model.assistConfiguration.scopes.vectorscopeZoom = zoom
+                    model.scopePanels.vectorscope.options.zoom = zoom
                 }
                 if let raw = env["ZC_DEMO_VECTOR_BRIGHTNESS"], let percent = Int(raw) {
-                    model.assistConfiguration.scopes.vectorscopeBrightness =
-                        AssistConfiguration.Scopes.clampedBrightness(percent)
+                    model.scopePanels.vectorscope.options.brightness =
+                        MonitorVectorscopeOptions.clampedBrightness(percent)
                 }
                 if let raw = env["ZC_DEMO_VECTOR_SCALE"], let scale = Double(raw) {
-                    model.assistConfiguration.scopes.vectorscopeScale =
-                        AssistConfiguration.Scopes.clampedScale(scale)
+                    model.scopePanels.vectorscope.setScale(scale)
                 }
                 if env["ZC_DEMO_GUIDES_MASK"] == "1" {
                     // Demo/screenshot affordance: darken outside the selected guide frames.
@@ -541,9 +540,15 @@ enum DemoHarness {
                         guard parts.count == 2 else { continue }
                         let coords = parts[1].split(separator: ",").compactMap { Double($0) }
                         guard coords.count == 2 else { continue }
-                        model.movablePanelPositions[String(parts[0])] = MovablePanelStoredCenter(
-                            center: CGPoint(x: coords[0], y: coords[1]),
-                            in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                        let center = CGPoint(x: coords[0], y: coords[1])
+                        let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
+                        if let tool = NikonScopePanels.legacyPanelIDs[String(parts[0])] {
+                            // The unit square counts as landscape, the slot the demo stages.
+                            model.scopePanels.slot(for: tool).store(center: center, in: unit)
+                        } else {
+                            model.movablePanelPositions[String(parts[0])] =
+                                MovablePanelStoredCenter(center: center, in: unit)
+                        }
                     }
                 }
                 if let raw = env["ZC_DEMO_CLEAN_PIN"] {

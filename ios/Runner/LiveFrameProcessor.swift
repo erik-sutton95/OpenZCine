@@ -348,6 +348,7 @@ extension NativeAppModel {
     /// surfaces that don't register as assist tools (e.g. the portrait scopes frame).
     func refreshScopes(from image: UIImage, full: Bool = false) async {
         guard let buffer = FrameSampling.rgbaBuffer(from: image, maxWidth: 200) else { return }
+        openStillScopeSource()
         let visible = renderedLiveAssistTools
         let includePoints =
             full || ScopeAssistSampling.needsPointSamples(visible: visible)

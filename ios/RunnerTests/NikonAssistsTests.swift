@@ -224,6 +224,8 @@ final class NikonAssistsTests: XCTestCase {
 
     func testPlaybackToolsDoNotTouchTheScopeOrder() {
         let model = NativeAppModel(assist: .restore(storage: defaults))
+        // The preferences live in the host app's defaults, which a demo launch may have written.
+        model.preferences.scopeActivationOrder = []
         model.setAssist(.waveform, visible: true, context: .playback)
         XCTAssertTrue(model.preferences.scopeActivationOrder.isEmpty)
     }
@@ -405,5 +407,163 @@ final class NikonAssistsTests: XCTestCase {
             try crushClip([
                 "scopes": ["crushClipCompensation": 0, "histogramCrushClipCompensation": 10]
             ]), .zero)
+    }
+
+    // MARK: - Scope panels on the shared stores
+
+    /// Writes the Nikon scope blobs a pre-migration build left behind, then launches once.
+    private func scopePanels(
+        scopes: Any = [String: Any](), trafficLights: Any? = nil, positions: Any? = nil
+    ) throws -> NikonScopePanels {
+        var configuration: [String: Any] = ["scopes": scopes]
+        configuration["trafficLights"] = trafficLights
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: configuration),
+            forKey: NikonScopePanels.legacyConfigurationKey)
+        if let positions {
+            defaults.set(
+                try JSONSerialization.data(withJSONObject: positions),
+                forKey: NikonScopePanels.legacyPositionsKey)
+        }
+        return NikonScopePanels(storage: defaults)
+    }
+
+    func testAFreshInstallTakesTheSharedScopeDefaults() {
+        let panels = NikonScopePanels(storage: defaults)
+        XCTAssertEqual(panels.waveform.options, .default)
+        XCTAssertEqual(panels.parade.options, .default)
+        XCTAssertEqual(panels.vectorscope.options, .default)
+        XCTAssertEqual(panels.histogram.options, .default)
+        XCTAssertEqual(panels.trafficLights.scale, 1)
+        XCTAssertNil(panels.trafficLights.position)
+    }
+
+    func testScopeMigrationCopiesTheOperatorsSettingsOnce() throws {
+        let panels = try scopePanels(scopes: [
+            "waveformMode": "RGB", "waveformScale": 1.4,
+            "waveformGuides": ["clip": true, "crush": false, "middle": true],
+            "waveformBrightness": 150, "paradeMode": "YRGB",
+            "paradeGuides": ["clip": true, "crush": true, "middle": false],
+            "paradeBrightness": 80, "histogramScale": 0.7, "histogramTrafficLights": false,
+            "vectorscopeZoom": "2x", "waveformParadeBrightnessCalibrationVersion": 2,
+        ])
+        XCTAssertEqual(panels.waveform.options.mode, .rgb)
+        XCTAssertEqual(panels.waveform.options.scale, 1.4)
+        XCTAssertTrue(panels.waveform.options.hasCustomScale)
+        XCTAssertFalse(panels.waveform.options.guides.crush)
+        XCTAssertTrue(panels.waveform.options.guides.clip)  // untouched flags stay on
+        XCTAssertEqual(panels.waveform.options.brightness, 150)
+        XCTAssertEqual(panels.parade.options.mode, .yrgb)
+        XCTAssertFalse(panels.parade.options.guides.middle)
+        XCTAssertEqual(panels.parade.options.brightness, 80)
+        XCTAssertEqual(panels.vectorscope.options.zoom, .x2)
+        XCTAssertEqual(panels.histogram.options.scale, 0.7)
+        XCTAssertFalse(panels.histogram.options.trafficLights)
+
+        // The shared stores now exist, so a later launch never re-reads the Nikon blob.
+        panels.waveform.options.mode = .luma
+        XCTAssertEqual(NikonScopePanels(storage: defaults).waveform.options.mode, .luma)
+        XCTAssertEqual(NikonScopePanels(storage: defaults).parade.options.brightness, 80)
+    }
+
+    func testScopeMigrationRaisesPreCalibrationTraceBrightness() throws {
+        let panels = try scopePanels(scopes: [
+            "waveformBrightness": 25, "paradeBrightness": 50, "vectorscopeBrightness": 25,
+        ])
+        XCTAssertEqual(panels.waveform.options.brightness, 100)
+        XCTAssertEqual(panels.parade.options.brightness, 200)
+        XCTAssertEqual(panels.vectorscope.options.brightness, 25)
+    }
+
+    func testScopeMigrationClampsBrightnessToTheVisualMaximum() throws {
+        let raised = try scopePanels(scopes: ["waveformBrightness": 51, "paradeBrightness": 200])
+        XCTAssertEqual(raised.waveform.options.brightness, 200)
+        XCTAssertEqual(raised.parade.options.brightness, 200)
+
+        reinstall()
+        let calibrated = try scopePanels(scopes: [
+            "waveformBrightness": 999, "paradeBrightness": -5,
+            "waveformParadeBrightnessCalibrationVersion": 2,
+        ])
+        XCTAssertEqual(calibrated.waveform.options.brightness, 200)
+        XCTAssertEqual(calibrated.parade.options.brightness, 0)
+
+        reinstall()
+        let unset = try scopePanels(scopes: ["waveformMode": "RGB"])
+        XCTAssertEqual(unset.waveform.options.brightness, MonitorWaveformOptions.defaultBrightness)
+        XCTAssertEqual(unset.parade.options.brightness, MonitorParadeOptions.defaultBrightness)
+    }
+
+    func testScopeMigrationClampsScaleAndLeavesAnUnsavedOneAutomatic() throws {
+        let panels = try scopePanels(scopes: ["waveformScale": 99, "paradeScale": -5])
+        XCTAssertEqual(panels.waveform.options.scale, 1.6)
+        XCTAssertEqual(panels.parade.options.scale, 0.6)
+        XCTAssertEqual(panels.histogram.options.scale, MonitorHistogramOptions.defaultScale)
+        XCTAssertFalse(panels.histogram.options.hasCustomScale)
+    }
+
+    func testScopeMigrationIgnoresRetiredScopeKeys() throws {
+        // Skin tone and the Small/Medium/Large size presets predate the continuous scale.
+        let panels = try scopePanels(scopes: [
+            "waveformSkinTone": ["enabled": true, "color": "Rose"],
+            "waveformSize": "Large", "paradeSize": "Small", "waveformMode": "RGB",
+        ])
+        XCTAssertEqual(panels.waveform.options.mode, .rgb)  // a still-valid key is honoured
+        XCTAssertEqual(panels.waveform.options.guides, .default)
+        XCTAssertEqual(panels.waveform.options.scale, MonitorWaveformOptions.defaultScale)
+        XCTAssertEqual(panels.parade.options.scale, MonitorParadeOptions.defaultScale)
+    }
+
+    func testScopeMigrationPlacesSavedPanelsInTheLandscapeSlot() throws {
+        let panels = try scopePanels(
+            trafficLights: ["scale": 1.2],
+            positions: [
+                "wave": ["xFraction": 0.25, "yFraction": 0.3],
+                "traffic-lights": ["xFraction": 0.08, "yFraction": 0.58],
+                "audio": ["xFraction": 0.9, "yFraction": 0.9],
+            ])
+        XCTAssertEqual(
+            panels.waveform.options.storedCenter,
+            MonitorScopeStoredCenter(xFraction: 0.25, yFraction: 0.3))
+        XCTAssertNil(panels.waveform.options.storedCenterPortrait)
+        XCTAssertNil(panels.parade.options.storedCenter)
+        XCTAssertEqual(
+            panels.trafficLights.position, MonitorScopeStoredCenter(xFraction: 0.08, yFraction: 0.58))
+        XCTAssertEqual(panels.trafficLights.scale, 1.2)
+    }
+
+    func testScopeMigrationSurvivesMalformedValues() throws {
+        let panels = try scopePanels(
+            scopes: [
+                "waveformMode": "Sparkle", "waveformBrightness": "bright", "vectorscopeZoom": 3,
+                "waveformGuides": "on", "histogramTrafficLights": "yes",
+            ],
+            trafficLights: ["scale": "big"], positions: ["wave": "left"])
+        XCTAssertEqual(panels.waveform.options.mode, .rgb)
+        XCTAssertEqual(panels.waveform.options.brightness, MonitorWaveformOptions.defaultBrightness)
+        XCTAssertEqual(panels.waveform.options.guides, .default)
+        XCTAssertNil(panels.waveform.options.storedCenter)
+        XCTAssertEqual(panels.vectorscope.options.zoom, .x1)
+        XCTAssertTrue(panels.histogram.options.trafficLights)
+        XCTAssertEqual(panels.trafficLights.scale, 1)
+    }
+
+    func testAMovedPanelSavesToTheSlotForItsOrientation() {
+        let panels = NikonScopePanels(storage: defaults)
+        let portrait = CGRect(x: 0, y: 0, width: 400, height: 800)
+        panels.slot(for: .waveform).store(center: CGPoint(x: 100, y: 200), in: portrait)
+        panels.slot(for: .trafficLights).store(center: CGPoint(x: 200, y: 400), in: portrait)
+        let stored = MonitorScopeStoredCenter(xFraction: 0.25, yFraction: 0.25)
+        XCTAssertEqual(panels.waveform.options.storedCenterPortrait, stored)
+        XCTAssertNil(panels.waveform.options.storedCenter)
+        XCTAssertEqual(
+            panels.trafficLights.positionPortrait,
+            MonitorScopeStoredCenter(xFraction: 0.5, yFraction: 0.5))
+        XCTAssertNil(panels.trafficLights.position)
+        let relaunched = NikonScopePanels(storage: defaults)
+        XCTAssertEqual(relaunched.waveform.options.storedCenterPortrait, stored)
+        XCTAssertEqual(
+            relaunched.trafficLights.positionPortrait,
+            MonitorScopeStoredCenter(xFraction: 0.5, yFraction: 0.5))
     }
 }

@@ -6,7 +6,7 @@ import OpenZCineCore
 /// canonical order (`[.waveform, .parade, .histogram, .trafficLights]` ∩ visible), each panel
 /// filling an equal vertical share of the zone. No tap-to-swap — what's enabled is what shows.
 ///
-/// Reuses the exact plots the landscape floating panels use (`ScopeMini` for
+/// Reuses the exact plots the landscape floating panels use (`NikonScopePlot` for
 /// waveform/parade/histogram, shared `MonitorTrafficLightsMeter` for traffic lights) and the same sample
 /// sources (`model.scopeAssist`). Because the shown kinds are exactly
 /// the live tools switched on in the shared assist state, the frame-loop sampler already meters
@@ -31,34 +31,15 @@ struct PortraitScopesStack: View {
     }
 
     @ViewBuilder private func panel(for kind: MonitorAssistTool) -> some View {
-        let scopes = model.assistConfiguration.scopes
-        switch kind {
-        case .waveform:
-            ScopeMini(
-                title: "Wave", systemImage: "waveform.path.ecg", style: .waveform,
-                assist: model.scopeAssist, scopes: scopes,
-                mapping: model.exposureSignalMapping)
-        case .parade:
-            ScopeMini(
-                title: "Parade", systemImage: "chart.bar.xaxis", style: .parade,
-                assist: model.scopeAssist, scopes: scopes,
-                mapping: model.exposureSignalMapping)
-        case .histogram:
-            // Verbatim from the histogram `MovablePanel` (MonitorOverlays.swift:64) — no GPU path.
-            ScopeMini(
-                title: "Histo", systemImage: "chart.xyaxis.line", style: .histogram,
-                assist: model.scopeAssist, scopes: scopes,
-                mapping: model.exposureSignalMapping)
-        case .vectorscope:
-            // CbCr bins always accumulate from CPU point samples — no GPU scatter path.
-            ScopeMini(
-                title: "Vector", systemImage: "circle.grid.cross", style: .vectorscope,
-                assist: model.scopeAssist,
-                scopes: scopes,
-                mapping: model.exposureSignalMapping)
-        default:
-            // `.trafficLights` — the portrait stack is full-width, so spread + widen the bars.
+        if kind == .trafficLights {
+            // The portrait stack is full-width, so spread and widen the bars.
             MonitorTrafficLightsMeter(reading: model.scopeAssist.traffic, fillsWidth: true)
+        } else {
+            GeometryReader { proxy in
+                NikonScopePlot(
+                    tool: kind, panels: model.scopePanels, bundle: model.scopeAssist,
+                    mapping: model.exposureSignalMapping, size: proxy.size)
+            }
         }
     }
 }

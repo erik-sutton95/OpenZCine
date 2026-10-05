@@ -1345,11 +1345,12 @@ final class RunnerTests: XCTestCase {
     }
 
     func testWaveformAndParadePaletteUsesCalibratedBrightness() {
-        // The intensity ScopeMini hands the shared plots.
-        typealias Scopes = AssistConfiguration.Scopes
-        XCTAssertEqual(Scopes.waveformParadeBrightnessMultiplier(0), 0)
-        XCTAssertEqual(Scopes.waveformParadeBrightnessMultiplier(100), 0.25)
-        XCTAssertEqual(Scopes.waveformParadeBrightnessMultiplier(200), 0.5)
+        // The intensity the Nikon scope plot hands the shared plots.
+        XCTAssertEqual(NikonScopePlot.traceIntensity(0), 0)
+        XCTAssertEqual(NikonScopePlot.traceIntensity(100), 0.25)
+        XCTAssertEqual(NikonScopePlot.traceIntensity(200), 0.5)
+        // The vectorscope keeps its unity baseline.
+        XCTAssertEqual(MonitorScopeGeometry.vectorscopeIntensity(100), 1)
     }
 
     @MainActor
