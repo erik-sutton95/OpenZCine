@@ -11330,7 +11330,7 @@ final class NativeAppModel {
         case .stillSize: stillSizeAreaDisplay ?? ""
         case .stillQuality: cameraPropertySnapshot.compression ?? ""
         case .stillPicture: cameraPropertySnapshot.pictureControl ?? ""
-        default: cameraState.values.first(where: { $0.label == picker.valueLabel })?.value ?? ""
+        default: shownCameraValue(picker.valueLabel) ?? ""
         }
     }
 
@@ -12604,7 +12604,8 @@ final class NativeAppModel {
     }
 }
 
-// Compatibility projection of camera observations; command and receipt ownership is shared.
+// The shared shell's app composition. Command, receipt and pending-edit ownership is shared: the
+// capture readouts read the control's pending targets directly instead of copying them.
 extension NativeAppModel {
     func makeShellModel() -> ShellModel {
         let shell = ShellModel(cameras: cameras)
@@ -12612,21 +12613,35 @@ extension NativeAppModel {
             if active { self?.enterForeground() } else { self?.enterBackground() }
         }
         shell.control.onNote = { [weak self] in self?.showMonitorNotice($0) }
-        shell.control.onChange = { [weak self, weak shell] in
-            guard let self, let control = shell?.control else { return }
-            publishCameraDisplayState()
-            for (_, value) in control.pending {
-                guard let (setting, label) = NikonCameraSession.settingValue(for: value) else {
-                    continue
-                }
-                applyLocalPickerValue(label, for: CameraPicker(setting))
-            }
-            if !control.recordPending, let recording = control.isRecording {
-                isRecording = recording
-                cameraState = cameraState.updating(recordState: recording ? .recording : .standby)
-            }
-        }
         return shell
+    }
+
+    /// The movie capture values as shown: an unfinished common edit (the shared control's pending
+    /// target) over the camera's reported value.
+    var shownCameraValues: [CameraValue] {
+        Self.showing(shell.control.pending, over: cameraState.values)
+    }
+
+    func shownCameraValue(_ label: String) -> String? {
+        shownCameraValues.first { $0.label == label }?.value
+    }
+
+    static func showing(_ pending: [SettingKey: SettingValue], over values: [CameraValue])
+        -> [CameraValue]
+    {
+        guard !pending.isEmpty else { return values }
+        var shown: [String: String] = [:]
+        for value in pending.values {
+            guard let (setting, label) = NikonCameraSession.settingValue(for: value) else {
+                continue
+            }
+            shown[CameraPicker(setting).valueLabel] = label
+        }
+        return values.map { item in
+            shown[item.label].map {
+                CameraValue(label: item.label, value: $0, isSettable: item.isSettable)
+            } ?? item
+        }
     }
 
     private func bindMonitorRuntime(_ session: NativeCameraSession) {

@@ -321,7 +321,7 @@ private struct NikonCaptureControls: View {
     @State private var preview: MonitorReadoutValue<MonitorCaptureField>?
     private var values: [CameraValue] {
         model.isPhotographyMode
-            ? model.cameraPropertySnapshot.photographyCaptureValues : model.cameraState.values
+            ? model.cameraPropertySnapshot.photographyCaptureValues : model.shownCameraValues
     }
     var body: some View {
         MonitorControlGrid(columns: columns, spacing: 6, equalColumns: columns < values.count) {
