@@ -1,8 +1,8 @@
 import Foundation
 import ImageIO
+import OpenZCineCore
 import Testing
 import UniformTypeIdentifiers
-import OpenZCineCore
 
 @testable import Runner
 
@@ -13,7 +13,8 @@ struct ExternalBetaDiagnosticsTests {
         appVersion: "0.2.0",
         buildNumber: "200",
         deviceClass: "iPhone",
-        operatingSystem: "iOS 18.0"
+        osName: "iOS",
+        osVersion: "18.0"
     )
 
     @Test("Support destinations retain account-backed GitHub forms and use the report relay")
@@ -143,6 +144,22 @@ struct ExternalBetaDiagnosticsTests {
         #expect(report.contains("Wi-Fi details"))
         #expect(report.contains("Connect attempt trace"))
         #expect(report.contains("No MetricKit payloads"))
+        // No VPN probe on this app yet: the report must not claim the tunnel is off.
+        #expect(report.contains("vpn: unknown"))
+    }
+
+    @Test("The report passes through the shared privacy redactor")
+    func renderedReportRedactsPersonalText() {
+        let payload = #"{"path":"/Users/alex/Library/Logs/x","contact":"alex@example.com"}"#
+        let report = DiagnosticEventStore.renderReport(
+            metadata: metadata,
+            events: [],
+            payloads: [(name: "diagnostic-1.json", data: Data(payload.utf8))]
+        )
+        #expect(report.contains("metrickit-diagnostic-1.json"))
+        #expect(!report.contains("alex"))
+        #expect(report.contains("/Users/<redacted>"))
+        #expect(report.contains("<email>"))
     }
 
     @Test("Event compaction keeps the newest complete records")
@@ -168,7 +185,9 @@ struct ExternalBetaDiagnosticsTests {
         let url = try await store.makeReport(metadata: metadata)
         let report = try String(contentsOf: url, encoding: .utf8)
         #expect(report.contains("connection.connected"))
-        #expect(report.contains("OpenZCine 0.2.0 (build 200)"))
+        #expect(report.hasPrefix("OpenZCine diagnostic report\n"))
+        #expect(report.contains("app: 0.2.0 (200)"))
+        #expect(report.contains("os: iOS 18.0"))
         #expect(report.contains("body=z6iii"))
         #expect(report.contains("Connect attempt trace"))
         let anonymous = await store.anonymousActivityLog()

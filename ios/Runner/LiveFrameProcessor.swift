@@ -1,9 +1,9 @@
 import CoreImage
-import UIKit
-import os
-import OpenZCineCore
 import OpenCineApple
 import OpenCineMedia
+import OpenZCineCore
+import UIKit
+import os
 
 /// Process-wide memo of generated/parsed LUT cubes, keyed by `LUTSelection.cacheKey` (or a
 /// false-colour scale key). The log-look cubes run ~10⁵ `pow`/`exp` calls to build, so generating
@@ -175,11 +175,13 @@ struct ZebraSettings: Equatable, Sendable {
 enum FrameSampling {
     static let cameraFileColorSpace = MonitorImageSampling.fileCodeColorSpace
     static func rgbaBuffer(from pixelBuffer: CVPixelBuffer, maxWidth: Int)
-        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)? {
+        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)?
+    {
         MonitorImageSampling.rgbaBuffer(from: pixelBuffer, maxWidth: maxWidth)
     }
     static func rgbaBuffer(from image: UIImage, maxWidth: Int)
-        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)? {
+        -> (data: [UInt8], width: Int, height: Int, bytesPerRow: Int)?
+    {
         MonitorImageSampling.rgbaBuffer(from: image, maxWidth: maxWidth)
     }
 }
@@ -287,12 +289,6 @@ extension NativeAppModel {
             || visible.contains(.trafficLights)
     }
 
-    /// Whether a scope assist that only needs histogram bins is on (GPU path samples for these).
-    var histogramScopeActive: Bool {
-        let visible = renderedLiveAssistTools
-        return visible.contains(.histogram) || visible.contains(.trafficLights)
-    }
-
     /// Whether the horizon level overlay is visible — gates per-frame virtual-horizon updates.
     var levelAssistActive: Bool {
         renderedLiveAssistTools.contains(.level)
@@ -356,7 +352,8 @@ extension NativeAppModel {
         let samples = OpenCineMedia.ScopeSampler.sampleRaw(
             bytes: buffer.data, width: buffer.width, height: buffer.height,
             bytesPerRow: buffer.bytesPerRow, transfer: .rec709, includePoints: includePoints,
-            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true)
+            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true
+        )
         await publishScopeAssist(samples: samples)
     }
 }
@@ -371,7 +368,9 @@ final class LiveFrameProcessor {
     init(fileStore: LUTFileStore) { self.fileStore = fileStore }
 
     func render(_ image: UIImage, effects: LiveImageEffects) -> UIImage {
-        native.render(image, settings: effects, identity: effects.isIdentity) { graph(for: effects) }
+        native.render(image, settings: effects, identity: effects.isIdentity) {
+            graph(for: effects)
+        }
     }
 
     func evictRenderCache() { native.evictRenderCache() }
@@ -389,7 +388,8 @@ final class LiveFrameProcessor {
         }
         if let falseColor = effects.falseColor, falseColor.scale == .limits {
             let mappingKey = "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
-            graph.look = .limits(grade: grade, splitVertical: split,
+            graph.look = .limits(
+                grade: grade, splitVertical: split,
                 paint: request(key: "limitsPaint:\(mappingKey)") {
                     FalseColorMap.limitsPaintCube(mapping: falseColor.mapping)
                 },
@@ -397,19 +397,27 @@ final class LiveFrameProcessor {
                     FalseColorMap.limitsWeightCube(mapping: falseColor.mapping)
                 })
         } else if let falseColor = effects.falseColor {
-            graph.look = .replacement(request(
-                key: "false:\(falseColor.scale.rawValue):\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)") {
+            graph.look = .replacement(
+                request(
+                    key:
+                        "false:\(falseColor.scale.rawValue):\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
+                ) {
                     FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
                 })
-        } else if let grade { graph.look = .grade(grade, splitVertical: split) }
+        } else if let grade {
+            graph.look = .grade(grade, splitVertical: split)
+        }
         graph.smoothing = effects.blockSmoothing.map {
-            MonitorBlockSmoothing(radius: $0.radius, gateLevels: $0.gateLevels, strength: $0.strength)
+            MonitorBlockSmoothing(
+                radius: $0.radius, gateLevels: $0.gateLevels, strength: $0.strength)
         }
         graph.dither = effects.blockDither.map { MonitorBlockDither(levels: $0.levels) }
         graph.peaking = effects.peaking.map {
             _ = ImageEffectsCompositor.fusedPeakingAvailable
-            return MonitorPeakingOverlay(color: MonitorRGB($0.color.rgb),
-                sensitivity: MonitorPeakingSensitivity(ratioThreshold: $0.sensitivity.ratioThreshold,
+            return MonitorPeakingOverlay(
+                color: MonitorRGB($0.color.rgb),
+                sensitivity: MonitorPeakingSensitivity(
+                    ratioThreshold: $0.sensitivity.ratioThreshold,
                     noiseGate: $0.sensitivity.noiseGate), gateScale: $0.gateScale,
                 fusedWindowPolicy: .admittedKernel)
         }
@@ -417,9 +425,13 @@ final class LiveFrameProcessor {
         return graph
     }
 
-    private func request(key: String, makeCube: @escaping () -> CubeLUT?) -> MonitorNativeCubeRequest {
+    private func request(key: String, makeCube: @escaping () -> CubeLUT?)
+        -> MonitorNativeCubeRequest
+    {
         MonitorNativeCubeRequest(key: LUTCubeCache.versionedKey(forKey: key)) {
-            guard let cube = LUTCubeCache.cube(forKey: key, makeCube)?.preparedForRenderer() else { return nil }
+            guard let cube = LUTCubeCache.cube(forKey: key, makeCube)?.preparedForRenderer() else {
+                return nil
+            }
             return (cube.size, cube.rgbaComponents.withUnsafeBytes { Data($0) })
         }
     }
@@ -427,7 +439,8 @@ final class LiveFrameProcessor {
     private func cube(for selection: LUTSelection) -> CubeLUT? {
         switch selection {
         case .builtIn(let look): return look.cube()
-        case .stored(let category, let fileName): return fileStore.cube(category: category, fileName: fileName)
+        case .stored(let category, let fileName):
+            return fileStore.cube(category: category, fileName: fileName)
         }
     }
 }

@@ -36,7 +36,6 @@ struct NikonAppGalleryProjection {
                 photoSizes: Set(photoSizes.map(\.rawValue)), dateWindow: dateWindow?.rawValue,
                 storage: storage.map(String.init), requireLocal: requireLocal), policy: policy)
     }
-    var categoryClips: [MediaClip] { result.categoryIDs.compactMap { rowsByID[$0] } }
     var gridClips: [MediaClip] { result.gridIDs.compactMap { rowsByID[$0] } }
     var filterOptions: MediaFilterOptions {
         .init(

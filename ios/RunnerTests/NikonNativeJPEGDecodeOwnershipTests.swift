@@ -29,7 +29,8 @@ final class NikonNativeJPEGDecodeOwnershipTests: XCTestCase {
     }
 
     private func decodedJPEG() throws -> Data {
-        let width = 96, height = 64
+        let width = 96
+        let height = 64
         var bytes = [UInt8](repeating: 255, count: width * height * 4)
         for y in 0..<height {
             for x in 0..<width {
@@ -40,19 +41,21 @@ final class NikonNativeJPEGDecodeOwnershipTests: XCTestCase {
             }
         }
         let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
-        let raster = try XCTUnwrap(CGImage(
-            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
-            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
-        ))
+        let raster = try XCTUnwrap(
+            CGImage(
+                width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+            ))
         return try XCTUnwrap(UIImage(cgImage: raster).jpegData(compressionQuality: 0.95))
     }
 
     func testQueuedSourceReplacementRefusesOldDecodeAndAdmitsSuccessor() async throws {
         let jpeg = try decodedJPEG()
         let decoder = MonitorJPEGImageDecoder()
-        let oldOwner = InputOwner(), successor = InputOwner()
+        let oldOwner = InputOwner()
+        let successor = InputOwner()
         let old = try XCTUnwrap(decoder.source(oldOwner))
         let current = try XCTUnwrap(decoder.source(successor))
         let retired = await decoder.decode(jpeg, source: old, preferHardware: false)
@@ -74,7 +77,8 @@ final class NikonNativeJPEGDecodeOwnershipTests: XCTestCase {
         let oldOwner = InputOwner()
         let old = try XCTUnwrap(decoder.source(oldOwner))
         let retired = await decoder.decode(jpeg, source: old)
-        XCTAssertEqual(gate.lock.withLock { gate.didEnter }, 1, "real native decode must reach preparation")
+        XCTAssertEqual(
+            gate.lock.withLock { gate.didEnter }, 1, "real native decode must reach preparation")
         XCTAssertNil(retired)
         let current = try XCTUnwrap(gate.lock.withLock { gate.successorSource })
         let successor = await decoder.decode(jpeg, source: current, preferHardware: false)
@@ -120,4 +124,3 @@ final class NikonNativeJPEGDecodeOwnershipTests: XCTestCase {
         XCTAssertNil(closed)
     }
 }
-

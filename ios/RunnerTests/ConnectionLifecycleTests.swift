@@ -1,7 +1,7 @@
 import Foundation
 import ImageCaptureCore
-import Testing
 import OpenZCineCore
+import Testing
 
 @testable import Runner
 

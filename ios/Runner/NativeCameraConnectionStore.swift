@@ -44,25 +44,6 @@ final class NativeCameraConnectionStore {
         return resolvedGUID
     }
 
-    func pairedHosts() -> [String] {
-        knownPairedCameras().map(\.host)
-    }
-
-    func isPaired(host: String) -> Bool {
-        PTPIPSavedCameraRecords.canonicalized(knownPairedCameras()).contains {
-            $0.host == PTPIPPairedHosts.normalizedHost(host)
-        }
-    }
-
-    func markPaired(host: String) {
-        upsertKnownPairedCamera(
-            host: host,
-            displayName: "",
-            transport: "Wi-Fi",
-            lastSeenAt: Date()
-        )
-    }
-
     func upsertSavedCamera(
         host: String, displayName: String, transport: String,
         onCameraAccessPoint: Bool? = nil,

@@ -1,3 +1,4 @@
+import MonitorUI
 import SwiftUI
 
 enum LiveViewGuideStep: String, CaseIterable, Sendable {
@@ -174,7 +175,7 @@ struct LiveViewGuideOverlay: View {
                 Button("Skip") { model.skipLiveViewGuide() }
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LiveDesign.muted)
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
                     .accessibilityIdentifier("liveGuide.skip")
                 Spacer()
                 Button(step.next == nil ? "Done" : "Next") {
@@ -185,7 +186,7 @@ struct LiveViewGuideOverlay: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
                 .background(LiveDesign.accent, in: Capsule())
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityIdentifier("liveGuide.next")
             }
         }

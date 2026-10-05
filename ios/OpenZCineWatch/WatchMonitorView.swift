@@ -1,6 +1,6 @@
+import OpenZCineCore
 import SwiftUI
 import WatchKit
-import OpenZCineCore
 
 /// Wrist monitor: a full-width timecode top bar, a 16:9 preview feed with a REC tally border, and
 /// a bottom row with storage · Record button · camera battery. All camera control stays on the

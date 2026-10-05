@@ -1,5 +1,5 @@
-import SwiftUI
 import OpenZCineCore
+import SwiftUI
 
 /// System-rail still shutter (replaces the red record control in photography mode).
 /// The strip itself reuses the cinema capture bar (`MonitorCaptureStrip`) with

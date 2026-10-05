@@ -1,6 +1,6 @@
 import MonitorUI
-import SwiftUI
 import OpenZCineCore
+import SwiftUI
 
 /// Stacked scope panels for the portrait v2 shell. Renders the first ≤2 enabled scope tools in
 /// canonical order (`[.waveform, .parade, .histogram, .trafficLights]` ∩ visible), each panel
@@ -41,59 +41,5 @@ struct PortraitScopesStack: View {
                     mapping: model.exposureSignalMapping, size: proxy.size)
             }
         }
-    }
-}
-
-/// REC options quick-access for the portrait v2 shell: a glass button over the feed's top-right
-/// (below the overlaid top bar) that opens a compact two-item popup — Resolution·Framerate and
-/// Codec — each routing straight into the existing camera pickers via `model.showPicker`.
-struct PortraitRecOptionsButton: View {
-    @Environment(NativeAppModel.self) private var model
-    @State private var popoverOpen = false
-
-    var body: some View {
-        Button {
-            popoverOpen = true
-        } label: {
-            Image(systemName: "video.badge.waveform")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(LiveDesign.text.opacity(0.86))
-                .frame(width: 40, height: 40)
-                .liquidGlass(in: Circle())
-        }
-        .buttonStyle(.zcTapTarget)
-        .popover(isPresented: $popoverOpen, attachmentAnchor: .point(.bottomTrailing)) {
-            recOptionsMenu
-                .presentationCompactAdaptation(.popover)
-        }
-    }
-
-    private var recOptionsMenu: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            menuItem(title: "Resolution · Framerate") {
-                model.showPicker(.resolution)
-            }
-            Divider().overlay(LiveDesign.hairline)
-            menuItem(title: "Codec") {
-                model.showPicker(.codec)
-            }
-        }
-        .frame(width: 220)
-        .background(LiveDesign.glass)
-    }
-
-    private func menuItem(title: String, action: @escaping () -> Void) -> some View {
-        Button {
-            popoverOpen = false
-            action()
-        } label: {
-            Text(title)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(LiveDesign.text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-        }
-        .buttonStyle(.plain)
     }
 }

@@ -20,12 +20,4 @@ enum LiveViewSignposts {
     static func endMetalFeedPresent() {
         os_signpost(.end, log: log, name: "MetalFeedPresent")
     }
-
-    static func beginScopeScatterPresent() {
-        os_signpost(.begin, log: log, name: "ScopeScatterPresent")
-    }
-
-    static func endScopeScatterPresent() {
-        os_signpost(.end, log: log, name: "ScopeScatterPresent")
-    }
 }

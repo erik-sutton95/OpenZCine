@@ -1,8 +1,8 @@
 import AVFAudio
 import MonitorUI
 import Network
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCore
 import OpenCineFrameIO
 import OpenCineMedia
@@ -270,13 +270,6 @@ enum PreferencesStore {
 
     private static let movablePanelPositionsKey = "movablePanelPositions.v1"
     private static let proactiveWiFiJoinUserDeniedAtKey = "proactiveWiFiJoinUserDeniedAt.v1"
-
-    /// When the operator last denied the system camera Wi‑Fi join sheet.
-    static func loadProactiveWiFiJoinUserDeniedAt() -> Date? {
-        let interval = UserDefaults.standard.double(forKey: proactiveWiFiJoinUserDeniedAtKey)
-        guard interval > 0 else { return nil }
-        return Date(timeIntervalSince1970: interval)
-    }
 
     static func saveProactiveWiFiJoinUserDeniedAt(_ date: Date) {
         UserDefaults.standard.set(
@@ -559,9 +552,6 @@ final class NativeAppModel {
             }
         }
 
-        /// Title of the card this path appears on.
-        var cardTitle: String { FirstPairCard.card(for: self).title }
-
         /// Short label for the nested option pills inside the Cable Link card.
         var optionTitle: String {
             switch self {
@@ -663,8 +653,6 @@ final class NativeAppModel {
             case .discoverAndPair: "Find and pair"
             }
         }
-
-        var stepNumber: Int { rawValue + 1 }
 
         static var stepCount: Int { allCases.count }
 
@@ -833,7 +821,9 @@ final class NativeAppModel {
 
     /// The app's own connect (the wizard's, a camera-AP join, a setup watch armed here, the
     /// internet-hop rejoin) is running outside a shared-flow attempt: the pair page shows it.
-    var showsAppConnectProgress: Bool { isConnectionProgressPresented && !connectionProgressUsesCard }
+    var showsAppConnectProgress: Bool {
+        isConnectionProgressPresented && !connectionProgressUsesCard
+    }
 
     /// Builds the local diagnostics report for the share sheet.
     func shareDiagnostics() {
@@ -842,7 +832,8 @@ final class NativeAppModel {
         Task {
             defer { isPreparingDiagnostics = false }
             do {
-                diagnosticsShareItem = DiagnosticsShareItem(url: try await AppDiagnostics.shared.makeReport())
+                diagnosticsShareItem = DiagnosticsShareItem(
+                    url: try await AppDiagnostics.shared.makeReport())
             } catch {
                 diagnosticsErrorMessage = error.localizedDescription
             }
@@ -1927,8 +1918,10 @@ final class NativeAppModel {
         liveFPS = state.liveFPS
     }
 
-    private func applyRelayFrame(metadata: MonitorRelayFrameMetadata, image: Data,
-        client: MonitorRelayClient) {
+    private func applyRelayFrame(
+        metadata: MonitorRelayFrameMetadata, image: Data,
+        client: MonitorRelayClient
+    ) {
         guard relayClient === client, videoSource == .relay else { return }
         applyRelayFrameReadings(metadata)
         if metadata.codec == MonitorRelayProtocol.FrameCodec.hevc {
@@ -1944,7 +1937,9 @@ final class NativeAppModel {
         }
         guard let decodeSource = frameDecoder.source(client) else { return }
         Task { [weak self] in
-            guard let self, let decoded = await self.frameDecoder.decode(image, source: decodeSource) else { return }
+            guard let self,
+                let decoded = await self.frameDecoder.decode(image, source: decodeSource)
+            else { return }
             self.presentRelayFrame(decoded, client: client)
         }
     }
@@ -2121,7 +2116,10 @@ final class NativeAppModel {
             case (.relaySource(let source), .relaySource(let other)):
                 guard let source = source.value else { return false }
                 return source === other.value
-            case (.captureSource(let source, let generation), .captureSource(let other, let otherGeneration)):
+            case (
+                .captureSource(let source, let generation),
+                .captureSource(let other, let otherGeneration)
+            ):
                 guard let source = source.value else { return false }
                 return source === other.value && generation == otherGeneration
             default: return false
@@ -2134,8 +2132,10 @@ final class NativeAppModel {
     private(set) var liveFrameSource: LiveFrameSampleBus.Source?
     var liveFrameImage: UIImage? {
         didSet {
-            if liveFrameImage == nil { retireNativePictureSource(); liveFrameSource = nil }
-            else if nativePictureSource == nil {
+            if liveFrameImage == nil {
+                retireNativePictureSource()
+                liveFrameSource = nil
+            } else if nativePictureSource == nil {
                 nativePictureOwner = .local
                 nativePictureSource = nativePictureBus.openSource(.live)
                 liveFrameSource = nativePictureSource
@@ -2189,7 +2189,8 @@ final class NativeAppModel {
     var scopeAssist: ScopeAssistBundle { nativePictureBus.bundle }
     /// Publishes one bundle for the current picture source; a stale source is rejected.
     func publishLiveScopeBundle(_ bundle: ScopeAssistBundle) {
-        nativePictureBus.publish(nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
+        nativePictureBus.publish(
+            nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
     }
     /// A still sampled with no live picture (the demo's mock feed) opens the live source the
     /// frame loop would, or the bus drops its scopes.
@@ -2221,7 +2222,9 @@ final class NativeAppModel {
             } else {
                 commonEditor = nil
             }
-            if oldValue == .media, activePanel != .media, !isStandaloneMediaLibraryPresented { closeMediaBrowse() }
+            if oldValue == .media, activePanel != .media, !isStandaloneMediaLibraryPresented {
+                closeMediaBrowse()
+            }
             switch activePanel {
             case .settings: shell.open(.settings)
             case .media: shell.open(.media)
@@ -2438,14 +2441,20 @@ final class NativeAppModel {
         get { mediaLibrary?.records.map(\.payload) ?? unopenedMediaRows }
         set {
             guard let owner = mediaLibrary, let codec = mediaLibraryCodec else {
-                unopenedMediaRows = newValue; return
+                unopenedMediaRows = newValue
+                return
             }
             let token = owner.actionToken
             do {
                 let records = try newValue.map(codec.record)
-                try owner.applyLocalRecords(.init(resetLibrary: true, upserts: records,
-                    sourceFavoriteKeys: Set(newValue.filter(\.isFavorite).map(\.id))), token: token)
-            } catch { /* A retired gallery cannot replace its successor's local metadata. */ }
+                try owner.applyLocalRecords(
+                    .init(
+                        resetLibrary: true, upserts: records,
+                        sourceFavoriteKeys: Set(newValue.filter(\.isFavorite).map(\.id))),
+                    token: token)
+            } catch {
+                // A retired gallery cannot replace its successor's local metadata.
+            }
         }
     }
     var mediaSelectionIsSelecting: Bool {
@@ -2453,18 +2462,26 @@ final class NativeAppModel {
         set { mediaLibrary?.selecting = newValue }
     }
     var mediaSelectedClipIDs: Set<String> {
-        get { Set(mediaLibrary?.records.filter { mediaLibrary?.selectedIDs.contains($0.asset.id) == true }
-            .map { $0.payload.id } ?? []) }
+        get {
+            Set(
+                mediaLibrary?.records.filter {
+                    mediaLibrary?.selectedIDs.contains($0.asset.id) == true
+                }
+                .map { $0.payload.id } ?? [])
+        }
         set {
             guard let owner = mediaLibrary else { return }
-            owner.selectedIDs = Set(owner.records.filter { newValue.contains($0.payload.id) }.map { $0.asset.id })
+            owner.selectedIDs = Set(
+                owner.records.filter { newValue.contains($0.payload.id) }.map { $0.asset.id })
         }
     }
     /// The last grid pass owns its admitted group IDs; current payload lookup preserves native actions.
     @ObservationIgnored private var mediaProjectionSnapshot: NikonAppGalleryProjection?
     var mediaFetchInProgress: Bool { mediaLibrary?.fetching ?? false }
     /// Movie clips discovered so far during an in-flight `fetchClipsFromCamera` listing pass.
-    var mediaFetchListedCount: Int { mediaFetchInProgress ? mediaProducer?.service.listedCount ?? 0 : 0 }
+    var mediaFetchListedCount: Int {
+        mediaFetchInProgress ? mediaProducer?.service.listedCount ?? 0 : 0
+    }
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
     var mediaDownloadProgress: [String: Double] = [:]
     @ObservationIgnored private var mediaDownloadInFlight: Set<String> = []
@@ -2837,15 +2854,6 @@ final class NativeAppModel {
         else { return false }
         return NativeCameraConnectionStore.shared.knownPairedCameras()
             .contains { $0.host == host }
-    }
-
-    var selectedDiscoveredCamera: DiscoveredCamera? {
-        if let selectedDiscoveredCameraID,
-            let selected = discoveredCameras.first(where: { $0.id == selectedDiscoveredCameraID })
-        {
-            return selected
-        }
-        return discoveredCameras.first
     }
 
     var selectedPairingDiscoveryCamera: DiscoveredCamera? {
@@ -3392,12 +3400,6 @@ final class NativeAppModel {
         startRelayBrowsing()
     }
 
-    /// Skips informational wizard steps and opens camera discovery.
-    func skipToFirstPairDiscovery() {
-        guard shouldShowFirstPairWizard else { return }
-        enterFirstPairDiscoveryStep()
-    }
-
     private func enterFirstPairDiscoveryStep() {
         firstPairWizardStep = .discoverAndPair
         discoveryTransportFilter = firstPairTransportMethod.isCableLink ? .usbC : .wiFi
@@ -3592,11 +3594,6 @@ final class NativeAppModel {
         connectionFailureDetail = ""
         connectionPhase = .handshaking
         isConnectionProgressPresented = true
-    }
-
-    func showPairingHelp() {
-        connectionMessage =
-            "On the camera, open the network menu and turn on Connect to PC. When your camera appears below, tap it and follow the prompts on both screens."
     }
 
     /// True while a connection is being established — single-flights `connectToCamera` so overlapping
@@ -4208,12 +4205,6 @@ final class NativeAppModel {
         return StartupConnectionCopy.friendly(baseError, path: connectionProgressPathKind)
     }
 
-    func forgetPairingForCurrentHost() {
-        let host = cameraHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty else { return }
-        forgetPairing(host: host)
-    }
-
     func forgetPairing(host: String) {
         if connectedIdentity?.host == PTPIPPairedHosts.normalizedHost(host) {
             disconnectCameraSession(resetConnection: false)
@@ -4590,18 +4581,28 @@ final class NativeAppModel {
     private var cameraSession: NativeCameraSession? {
         didSet { if oldValue !== cameraSession { retireMediaProducer() } }
     }
-    @ObservationIgnored private var mediaProducer: (io: NikonMediaCatalogAdapter, service: NikonMediaService)?
+    @ObservationIgnored private var mediaProducer:
+        (io: NikonMediaCatalogAdapter, service: NikonMediaService)?
 
     private func retireMediaProducer() {
-        mediaLibrary?.bind(nil); mediaLibrary?.close(); mediaLibraryBytes?.retire()
-        mediaProducer?.service.retire(); mediaProducer = nil
+        mediaLibrary?.bind(nil)
+        mediaLibrary?.close()
+        mediaLibraryBytes?.retire()
+        mediaProducer?.service.retire()
+        mediaProducer = nil
     }
     private func currentMediaService() -> NikonMediaService? {
-        guard let native = cameraSession, let common = controlSession, isConnected else { return nil }
-        if let owner = mediaProducer, owner.io.native === native, owner.io.common === common { return owner.service }
+        guard let native = cameraSession, let common = controlSession, isConnected else {
+            return nil
+        }
+        if let owner = mediaProducer, owner.io.native === native, owner.io.common === common {
+            return owner.service
+        }
         retireMediaProducer()
-        let io = NikonMediaCatalogAdapter(native: native, common: common, namespace: mediaBucketID) { [weak self] in
-            self?.cameraSession === native && self?.controlSession === common && self?.isConnected == true
+        let io = NikonMediaCatalogAdapter(native: native, common: common, namespace: mediaBucketID)
+        { [weak self] in
+            self?.cameraSession === native && self?.controlSession === common
+                && self?.isConnected == true
         }
         let service = NikonMediaService(session: common.id, io: io)
         mediaProducer = (io, service)
@@ -4620,26 +4621,37 @@ final class NativeAppModel {
         mediaLibrary?.close()
     }
 
-    private func prepareMediaLibrary(rows: [MediaClip], bucket: String, service: NikonMediaService?) {
-        if let owner = mediaLibrary, mediaLibraryBucket == bucket, mediaLibraryCodec?.service === service {
+    private func prepareMediaLibrary(rows: [MediaClip], bucket: String, service: NikonMediaService?)
+    {
+        if let owner = mediaLibrary, mediaLibraryBucket == bucket,
+            mediaLibraryCodec?.service === service
+        {
             mediaClips = rows
             return
         }
-        mediaLibrary?.close(); mediaLibraryBytes?.retire()
-        let codec = NikonMediaLibraryCodec(store: mediaClipStore, bucket: bucket, service: service) { [weak self] in
+        mediaLibrary?.close()
+        mediaLibraryBytes?.retire()
+        let codec = NikonMediaLibraryCodec(store: mediaClipStore, bucket: bucket, service: service)
+        { [weak self] in
             self?.isClipDownloaded($0) == true
         }
-        let bytes = NikonMediaLibraryByteStore(store: mediaClipStore, bucket: bucket) { [weak self] in
+        let bytes = NikonMediaLibraryByteStore(store: mediaClipStore, bucket: bucket) {
+            [weak self] in
             self?.mediaLibraryBucket == bucket && self?.mediaLibraryCodec === codec
         }
-        mediaLibraryCodec = codec; mediaLibraryBytes = bytes; mediaLibraryBucket = bucket
-        let cache = MonitorMediaCache(directory: .init(root: mediaClipStore.root), codec: codec,
+        mediaLibraryCodec = codec
+        mediaLibraryBytes = bytes
+        mediaLibraryBucket = bucket
+        let cache = MonitorMediaCache(
+            directory: .init(root: mediaClipStore.root), codec: codec,
             eligibility: .minimumFraction(numerator: 1, denominator: 1),
             catalogAddress: mediaClipStore.directory(for: bucket).lastPathComponent + "/index.json",
             preservedMetadata: [], catalogStore: bytes)
-        let favorites = NikonMediaLibraryFavorites(store: mediaClipStore,
+        let favorites = NikonMediaLibraryFavorites(
+            store: mediaClipStore,
             buckets: Array(Set(rows.map(\.cameraID) + [bucket])))
-        let owner = MonitorMediaLibraryModel(cache: cache, favorites: favorites, service: service,
+        let owner = MonitorMediaLibraryModel(
+            cache: cache, favorites: favorites, service: service,
             cacheScanning: .background, catalogBase: .freshListing,
             initialCatalog: .init(), initialRecords: (try? rows.map(codec.record)) ?? [])
         owner.visibility = .allRecords
@@ -4647,35 +4659,51 @@ final class NativeAppModel {
     }
 
     func captureMediaLibraryAction(_ clips: [MediaClip]) -> NikonMediaLibraryAction? {
-        let owner = mediaLibrary, bytes = mediaLibraryBytes
-        let codec = mediaLibraryCodec ?? NikonMediaLibraryCodec(store: mediaClipStore,
-            bucket: clips.first?.cameraID ?? mediaBucketID, service: nil, downloaded: { _ in false })
+        let owner = mediaLibrary
+        let bytes = mediaLibraryBytes
+        let codec =
+            mediaLibraryCodec
+            ?? NikonMediaLibraryCodec(
+                store: mediaClipStore,
+                bucket: clips.first?.cameraID ?? mediaBucketID, service: nil,
+                downloaded: { _ in false })
         let root = mediaClipStore.root.absoluteString
-        let generation = mediaActionStoreGeneration, connection = connectionGeneration
-        return NikonMediaLibraryAction(owner: owner, store: mediaClipStore, codec: codec, bytes: bytes,
-            clips: clips) { [weak self] in
-                guard let self else { return false }
-                return self.mediaLibrary === owner && self.mediaLibraryBytes === bytes
-                    && self.mediaClipStore.root.absoluteString == root
-                    && self.mediaActionStoreGeneration == generation && self.connectionGeneration == connection
-            }
+        let generation = mediaActionStoreGeneration
+        let connection = connectionGeneration
+        return NikonMediaLibraryAction(
+            owner: owner, store: mediaClipStore, codec: codec, bytes: bytes,
+            clips: clips
+        ) { [weak self] in
+            guard let self else { return false }
+            return self.mediaLibrary === owner && self.mediaLibraryBytes === bytes
+                && self.mediaClipStore.root.absoluteString == root
+                && self.mediaActionStoreGeneration == generation
+                && self.connectionGeneration == connection
+        }
     }
 
     /// Native callers and deterministic tests use the same delayed result/persistence completion.
-    func performCapturedMediaRating(for clip: MediaClip, operation: () async -> Int?) async -> Int? {
-        await performCapturedMediaRating(for: clip, action: captureMediaLibraryAction([clip]), operation: operation)
+    func performCapturedMediaRating(for clip: MediaClip, operation: () async -> Int?) async -> Int?
+    {
+        await performCapturedMediaRating(
+            for: clip, action: captureMediaLibraryAction([clip]), operation: operation)
     }
 
-    private func performCapturedMediaRating(for clip: MediaClip, action: NikonMediaLibraryAction?,
-        operation: () async -> Int?) async -> Int? {
+    private func performCapturedMediaRating(
+        for clip: MediaClip, action: NikonMediaLibraryAction?,
+        operation: () async -> Int?
+    ) async -> Int? {
         guard let stars = await operation() else { return nil }
         if let action {
             guard action.canMutate(clip) else { return stars }
             mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
-                $0.starRating = stars; $0.isFavorite = stars >= 1
+                $0.starRating = stars
+                $0.isFavorite = stars >= 1
             }
             action.publish()
-        } else { mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars) }
+        } else {
+            mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars)
+        }
         return stars
     }
 
@@ -4951,7 +4979,10 @@ final class NativeAppModel {
     func reloadSavedCameraRecords() {
         let before = savedCameras
         let after = NativeCameraConnectionStore.shared.savedCameras()
-        let remainingSSIDs = Set(after.filter { $0.pathKind == .cameraAccessPoint }.compactMap { CameraWiFiSSID.resolve(for: $0) })
+        let remainingSSIDs = Set(
+            after.filter { $0.pathKind == .cameraAccessPoint }.compactMap {
+                CameraWiFiSSID.resolve(for: $0)
+            })
         for record in before where record.pathKind == .cameraAccessPoint {
             if let ssid = CameraWiFiSSID.resolve(for: record), !remainingSSIDs.contains(ssid) {
                 clearCameraWiFiCredential(forForgottenSSID: ssid)
@@ -4962,7 +4993,9 @@ final class NativeAppModel {
 
     var sharedConnection: NikonConnection? {
         guard isConnected, let controlSession, let connectedIdentity else { return nil }
-        return NikonConnection(session: controlSession, host: connectedIdentity.host, path: activeSessionPath?.kind, services: currentMediaServices())
+        return NikonConnection(
+            session: controlSession, host: connectedIdentity.host, path: activeSessionPath?.kind,
+            services: currentMediaServices())
     }
 
     /// The shared flow wants sightings again (a session ended, the cameras page shows). Never
@@ -4970,7 +5003,9 @@ final class NativeAppModel {
     func startDiscoveryForSharedFlow() {
         guard !shouldShowFirstPairWizard || firstPairWizardStep == .discoverAndPair else { return }
         // Never before the first render either: the USB browser must not start that early.
-        guard didPrepareStartup, !isConnectionProgressPresented, !isEstablishingConnection else { return }
+        guard didPrepareStartup, !isConnectionProgressPresented, !isEstablishingConnection else {
+            return
+        }
         startDiscoveryLoop(resetResults: false)
     }
 
@@ -6104,14 +6139,6 @@ final class NativeAppModel {
         }
     }
 
-    private func preferredJoinCameraWiFiSSID() -> String? {
-        guard let camera = preferredJoinCameraWiFiSavedCamera() else { return nil }
-        return CameraWiFiJoinPolicy.resolvedSSID(
-            savedCamera: camera,
-            discoveredCamera: nil
-        )
-    }
-
     private func performWiFiJoinIfNeeded(
         transportKind: CameraTransportKind,
         savedCamera: PTPIPSavedCameraRecord?,
@@ -6547,7 +6574,7 @@ final class NativeAppModel {
                 requestPairing: requestPairing,
                 onPairingChallenge: onPairingChallenge,
                 onEstablishmentDiagnostic: onEstablishmentDiagnostic,
-                    onLiveViewObject: DemoHarness.captureLiveViewObject
+                onLiveViewObject: DemoHarness.captureLiveViewObject
             )
         } catch {
             // An adopted warm session can be a stale corpse (camera slept, ICC housekeeping) that
@@ -6573,7 +6600,7 @@ final class NativeAppModel {
                 requestPairing: requestPairing,
                 onPairingChallenge: onPairingChallenge,
                 onEstablishmentDiagnostic: onEstablishmentDiagnostic,
-                    onLiveViewObject: DemoHarness.captureLiveViewObject
+                onLiveViewObject: DemoHarness.captureLiveViewObject
             )
         }
     }
@@ -6630,23 +6657,6 @@ final class NativeAppModel {
         pendingPairingSaveCandidate = PendingPairingSaveCandidate(
             host: candidate.host, displayName: name, transport: candidate.transport,
             serialNumber: candidate.serialNumber)
-    }
-
-    private func confirmPairing(_ challenge: PTPIPPairingChallenge) async -> Bool {
-        adoptPairingChallengeName(challenge)
-        return await withCheckedContinuation { continuation in
-            pairingContinuation?.resume(returning: false)
-            pairingContinuation = continuation
-            pendingPairingChallenge = challenge
-            connection = .pairing(pin: challenge.pin ?? "VERIFY")
-            connectionPhase = .pairing
-            if let pin = challenge.pin {
-                connectionMessage = "Confirm code \(pin) on the camera, then tap Pair here."
-            } else {
-                connectionMessage = "Confirm the pairing request on the camera, then tap Pair here."
-            }
-            logConnection("pairing alert shown")
-        }
     }
 
     private func finishPairing(accepted: Bool) {
@@ -7214,7 +7224,8 @@ final class NativeAppModel {
                 guard let handoff = await renderer.image(from: lease),
                     source.fence.isCurrent(lease.generation)
                 else { continue }
-                await self.presentHDMIFrame(handoff.image, source: source, generation: lease.generation)
+                await self.presentHDMIFrame(
+                    handoff.image, source: source, generation: lease.generation)
             }
         }
         Task { await source.start() }
@@ -7233,13 +7244,17 @@ final class NativeAppModel {
     }
 
     /// Displays one captured frame, and feeds the scope tap and watch relay from it.
-    private func presentHDMIFrame(_ image: UIImage, source: UVCVideoSource,
-        generation: StreamGeneration) async {
+    private func presentHDMIFrame(
+        _ image: UIImage, source: UVCVideoSource,
+        generation: StreamGeneration
+    ) async {
         guard videoSource == .hdmiCapture, uvcSource === source,
-            source.fence.isCurrent(generation) else { return }
+            source.fence.isCurrent(generation)
+        else { return }
         guard let display = await displayReadyLiveFrame(from: image) else { return }
         guard videoSource == .hdmiCapture, uvcSource === source,
-            source.fence.isCurrent(generation) else { return }
+            source.fence.isCurrent(generation)
+        else { return }
         // One line per size change: the #115 crop hunt. Every SwiftUI link reads
         // aspect-correct statically, so the witness is which size actually arrives here
         // versus what the capture readout claims.
@@ -7290,15 +7305,6 @@ final class NativeAppModel {
             liveFPS = "—"
         }
     }
-
-    /// How often the control pump runs its safe point.
-    ///
-    /// Deliberately a frame-like cadence rather than something faster: the safe point's internal
-    /// throttles (device-event polls every 4th call, the property round-robin's poll stride) are
-    /// written against a per-frame counter, so ticking at roughly the live-view rate reproduces
-    /// exactly the command pattern the camera saw before — minus the JPEG pulls, which is the
-    /// whole point of moving the picture off the camera.
-    private static let controlPumpInterval: Duration = .milliseconds(40)
 
     /// Services camera control when the camera's own frame loop isn't running.
     ///
@@ -7408,12 +7414,6 @@ final class NativeAppModel {
     private var streamsHeaderOnly: Bool {
         MonitorChromePolicy.streamsHeaderOnly(in: displayMode) && !activePanelHidesLiveFeed
     }
-
-    /// How long the loop waits between header-only pulls in Command mode — the same cadence the
-    /// mode's property polling already ran at, so the dashboard's transaction load is unchanged
-    /// apart from one small image fetch per tick. The camera keeps encoding at its own rate either
-    /// way: our pull rate does not change camera heat, the frame *size* does.
-    private static let commandHeaderPullInterval: Duration = .milliseconds(250)
 
     /// The `LiveViewImageSize` byte to request right now: the operator's preset, capped smaller when
     /// the phone is thermally stressed, the camera reports an overheat warning, or a take is in
@@ -7661,7 +7661,8 @@ final class NativeAppModel {
     /// Pauses both an admitted cursor and an open request that has not returned a binding yet.
     @discardableResult func pauseMediaListingForBackground() -> Bool {
         guard let owner = mediaLibrary,
-            owner.fetching || (owner.browsing && owner.binding == nil) else { return false }
+            owner.fetching || (owner.browsing && owner.binding == nil)
+        else { return false }
         mediaProducer?.service.cancelCatalog()
         owner.close()
         mediaFetchInterruptedByBackground = true
@@ -7785,19 +7786,6 @@ final class NativeAppModel {
         seconds >= 1 ? "\(Int(seconds))s" : "\(Int(seconds * 1000))ms"
     }
 
-    private func runLiveViewControlSafePoint(
-        session: NativeCameraSession,
-        frameCounter: Int
-    ) async {
-        await runControlSafePoint(
-            session: session, pollEveryCall: false, frameCounter: frameCounter)
-    }
-
-    /// Services queued writes and property polls while live view is paused in command mode.
-    private func runCommandModeSafePoint(session: NativeCameraSession) async {
-        await runControlSafePoint(session: session, pollEveryCall: true)
-    }
-
     /// Shared safe point for live-view frames and command-mode maintenance.
     private func runControlSafePoint(
         session: NativeCameraSession,
@@ -7884,8 +7872,11 @@ final class NativeAppModel {
         // stride turned into a visible periodic hitch (see `LiveViewPollPacing`).
         let framePeriodMilliseconds = 1000 / max(1, Double(cameraPropertySnapshot.fps ?? 30))
         let measuredRoundTrip = session.readLastCommandRoundTripMilliseconds()
-        monitorRuntime?.pollDeviceEventsAtSafePoint(frameCounter: frameCounter,
-            framePeriodMilliseconds: framePeriodMilliseconds, roundTripMilliseconds: measuredRoundTrip) { [weak self] event in
+        monitorRuntime?.pollDeviceEventsAtSafePoint(
+            frameCounter: frameCounter,
+            framePeriodMilliseconds: framePeriodMilliseconds,
+            roundTripMilliseconds: measuredRoundTrip
+        ) { [weak self] event in
             guard let self, self.cameraSession === session else { return }
             self.handlePolledDeviceEvent(event, session: session)
         }
@@ -7982,8 +7973,10 @@ final class NativeAppModel {
     ///
     /// The identity and equality checks below are the only filtering that remains, and they
     /// suppress redundant observable writes rather than frames.
-    private func publishLiveFrameDisplay(image: UIImage, focus: PTPLiveViewFocusInfo?,
-        session: NativeCameraSession) {
+    private func publishLiveFrameDisplay(
+        image: UIImage, focus: PTPLiveViewFocusInfo?,
+        session: NativeCameraSession
+    ) {
         publishNativeFrame(image, owner: .camera(session))
         if liveViewFocus != focus {
             dismissInstantReviewIfAutofocusEngaged(previous: liveViewFocus, next: focus)
@@ -9618,21 +9611,6 @@ final class NativeAppModel {
         )
     }
 
-    /// True when `location` (feed space) lands on the camera's current AF / subject box, with a
-    /// touch-friendly margin — the gate for the double-tap-to-reset gesture.
-    func isLocationOnFocusBox(_ location: CGPoint, feedSize: CGSize) -> Bool {
-        guard let focus = liveViewFocus, feedSize.width > 0, feedSize.height > 0 else {
-            return false
-        }
-        return focus.boxIndex(
-            containingX: Double(location.x),
-            y: Double(location.y),
-            feedWidth: Double(feedSize.width),
-            feedHeight: Double(feedSize.height),
-            padding: 22
-        ) != nil
-    }
-
     /// Applies an AF point at the given camera-space coordinate: in the demo it drops the on-screen
     /// box; on a live camera it queues a `ChangeAfArea` for the next safe point.
     private func applyFocusPoint(
@@ -10476,8 +10454,10 @@ final class NativeAppModel {
         await deleteMediaClips(clips, deleteLocation: nil)
     }
 
-    func deleteMediaClips(_ clips: [MediaClip],
-        deleteLocation: ((MediaObjectHandle) async -> Bool)?) async -> Int {
+    func deleteMediaClips(
+        _ clips: [MediaClip],
+        deleteLocation: ((MediaObjectHandle) async -> Bool)?
+    ) async -> Int {
         // A camera list enumerated before the deletions would re-add the rows when it
         // lands — cancel it up front and re-list fresh once the deletions are done.
         mediaProducer?.service.cancelCatalog()
@@ -10502,9 +10482,13 @@ final class NativeAppModel {
                 var survivors: [MediaObjectHandle] = []
                 for location in doomed {
                     let removed: Bool
-                    if let deleteLocation { removed = await deleteLocation(location) }
-                    else if let session { removed = (try? await session.deleteObject(handle: location.handle)) != nil }
-                    else { removed = false }
+                    if let deleteLocation {
+                        removed = await deleteLocation(location)
+                    } else if let session {
+                        removed = (try? await session.deleteObject(handle: location.handle)) != nil
+                    } else {
+                        removed = false
+                    }
                     if !removed { survivors.append(location) }
                 }
                 guard action?.canMutate(clip) != false else { continue }
@@ -10580,8 +10564,10 @@ final class NativeAppModel {
         await setMediaStarRating(stars, for: clip, action: captureMediaLibraryAction([clip]))
     }
 
-    private func setMediaStarRating(_ stars: Int, for clip: MediaClip,
-        action: NikonMediaLibraryAction?) async -> RatingWriteOutcome {
+    private func setMediaStarRating(
+        _ stars: Int, for clip: MediaClip,
+        action: NikonMediaLibraryAction?
+    ) async -> RatingWriteOutcome {
         guard let handle = clip.handle, let session = cameraSession else { return .offline }
         AppDiagnostics.shared.record(.ratingWriteAttempted)
         let value = StillCapturePolicy.ratingValue(forStars: stars)
@@ -10598,11 +10584,15 @@ final class NativeAppModel {
         if let action {
             if action.canMutate(clip) {
                 mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
-                    $0.starRating = confirmed; $0.isFavorite = confirmed >= 1
+                    $0.starRating = confirmed
+                    $0.isFavorite = confirmed >= 1
                 }
                 action.publish()
             }
-        } else { mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: confirmed) }
+        } else {
+            mirrorRatingIntoIndex(
+                cameraID: clip.cameraID, filename: clip.filename, stars: confirmed)
+        }
         AppDiagnostics.shared.record(.ratingWriteConfirmed)
         return .confirmed(confirmed)
     }
@@ -12306,16 +12296,6 @@ final class NativeAppModel {
         preferences.toggleChrome(section, for: mode, capture: capture ?? captureLayoutMode)
     }
 
-    func cycleStreamPreset() {
-        preferences.streamPreset = preferences.streamPreset.next
-        restartLiveViewForQualityChange()
-    }
-
-    func cycleQualityBias() {
-        preferences.qualityBias = preferences.qualityBias.next
-        restartLiveViewForQualityChange()
-    }
-
     func setStreamPreset(_ preset: OperatorPreferences.StreamPreset) {
         guard preferences.streamPreset != preset else { return }
         preferences.streamPreset = preset
@@ -12678,7 +12658,8 @@ extension NativeAppModel {
                     }
                 })
         else { return }
-        let camera = ConnectedCamera(saved: saved, session: controlSession, services: currentMediaServices())
+        let camera = ConnectedCamera(
+            saved: saved, session: controlSession, services: currentMediaServices())
         if multicam.lentMember != nil {
             shell.borrow(camera) { [weak self] in self?.returnToMulticam() }
         } else {
@@ -13276,7 +13257,7 @@ struct NativeAppRoot: View {
 
     var body: some View {
         ZStack {
-            ZCBackground()
+            MonitorTheme.background.ignoresSafeArea()
             if model.isMonitorPresented {
                 MonitorExperience()
                     .environment(model)
@@ -13376,7 +13357,7 @@ struct NativeAppRoot: View {
             .environment(model)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ZCBackground().ignoresSafeArea())
+        .background(MonitorTheme.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
         .task {
@@ -13534,20 +13515,15 @@ extension NativeAppModel {
         mediaClipStore.listAllCachedClips().contains { isClipDownloaded($0) }
     }
 
-    /// Clips in the active browser source bucket before chip/tab filters.
-    var mediaBrowserSourceClips: [MediaClip] {
-        mediaClips
-    }
-
-    /// The category and chip options come from the same captured neutral projection pass.
-    var mediaCategoryTabClips: [MediaClip] { mediaProjectionPass.categoryClips }
     var mediaFilterOptions: MediaFilterOptions { mediaProjectionPass.filterOptions }
     var filteredMediaClips: [MediaClip] {
         let pass = mediaProjectionPass
         mediaProjectionSnapshot = pass
         return pass.gridClips
     }
-    func burstSeries(for clip: MediaClip) -> BurstSeries? { mediaProjectionSnapshot?.series(for: clip) }
+    func burstSeries(for clip: MediaClip) -> BurstSeries? {
+        mediaProjectionSnapshot?.series(for: clip)
+    }
     func burstMembers(of clip: MediaClip) -> [MediaClip] {
         mediaProjectionSnapshot?.members(of: clip, current: mediaClips) ?? []
     }
@@ -13560,28 +13536,11 @@ extension NativeAppModel {
         NikonAppGalleryProjection.rawSibling(of: clip, in: mediaClips)
     }
 
-    /// On-disk cache size for the active browser source bucket.
-    var mediaBrowserCacheByteCount: UInt64 {
-        let bucket =
-            mediaBrowserSource == .camera ? mediaBucketID : MediaClipStore.localBucketID
-        return mediaClipStore.cachedByteCount(cameraID: bucket)
-    }
-
     /// Short transport label for the Media browser status readout.
     var mediaBrowserTransportLabel: String {
         if isDemoSession { return "DEMO" }
         guard isConnected else { return "OFFLINE" }
         return "WIFI"
-    }
-
-    /// Storage fragment for the status line (card free space or iPhone cache size).
-    var mediaBrowserStorageStatusLabel: String {
-        if mediaBrowserSource == .camera, let status = cameraState.mediaStatus {
-            return "\(status.gigabytesFree) GB"
-        }
-        let freeAcrossSlots = mediaStorageSlots.reduce(0) { $0 + $1.freeGigabytes }
-        if freeAcrossSlots > 0 { return "\(freeAcrossSlots) GB" }
-        return MediaClipFormatting.byteLabel(mediaBrowserCacheByteCount)
     }
 
     /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.
@@ -13643,22 +13602,31 @@ extension NativeAppModel {
 
     /// Preserves the original per-appearance storage read through the actual source producer.
     func refreshMediaStorageSlots() async {
-        guard let service = currentMediaService() else { mediaStorageSlots = []; return }
+        guard let service = currentMediaService() else {
+            mediaStorageSlots = []
+            return
+        }
         do {
             try await service.refreshStorage()
             guard mediaProducer?.service === service, isConnected else { return }
             mediaStorageSlots = NikonMediaCatalogAdapter.displayStorage(
                 service.storageRecords, cameraName: cameraState.cameraName)
-        } catch { /* A retired source cannot update successor capacity cards. */ }
+        } catch {
+            // A retired source cannot update successor capacity cards.
+        }
     }
 
     /// Reloads the library list from the on-disk cache + index for the active browser bucket.
     func refreshMediaClips() {
         let bucket = mediaBrowserSource == .camera ? mediaBucketID : MediaClipStore.localBucketID
         let rows: [MediaClip]
-        if !isConnected, mediaBrowserSource == .camera { rows = mediaClipStore.listAllCachedClips() }
-        else { rows = mediaClipStore.list(cameraID: bucket) }
-        prepareMediaLibrary(rows: rows, bucket: bucket,
+        if !isConnected, mediaBrowserSource == .camera {
+            rows = mediaClipStore.listAllCachedClips()
+        } else {
+            rows = mediaClipStore.list(cameraID: bucket)
+        }
+        prepareMediaLibrary(
+            rows: rows, bucket: bucket,
             service: isConnected && mediaBrowserSource == .camera ? currentMediaService() : nil)
     }
 
@@ -13669,10 +13637,14 @@ extension NativeAppModel {
         guard let service = currentMediaService() else { return }
         let bucket = mediaBucketID
         let cached = mediaClipStore.list(cameraID: bucket)
-        service.configure(.init(cached: NikonMediaCatalogAdapter.records(cached),
-            pairing: NikonMediaCatalogAdapter.pairingRecords(cached),
-            category: mediaCategoryTab.nikonMediaCategory, identityProbeBudget: identityProbeBudget,
-            retainedLocalFilenames: Set(cached.filter { self.isClipDownloaded($0) }.map(\.filename))))
+        service.configure(
+            .init(
+                cached: NikonMediaCatalogAdapter.records(cached),
+                pairing: NikonMediaCatalogAdapter.pairingRecords(cached),
+                category: mediaCategoryTab.nikonMediaCategory,
+                identityProbeBudget: identityProbeBudget,
+                retainedLocalFilenames: Set(
+                    cached.filter { self.isClipDownloaded($0) }.map(\.filename))))
         prepareMediaLibrary(rows: cached, bucket: bucket, service: service)
         guard let owner = mediaLibrary else { return }
         if owner.browsing { owner.refresh() } else { owner.begin() }
@@ -13694,7 +13666,6 @@ extension NativeAppModel {
         }
     }
 
-
     /// Total cached clip bytes across every camera bucket on disk (Settings → Storage readout).
     func totalMediaCacheByteCount() -> UInt64 {
         mediaClipStore.allBucketIDs().reduce(0) { total, bucket in
@@ -13709,37 +13680,14 @@ extension NativeAppModel {
         mediaActionStoreGeneration &+= 1
         cancelClipStream()
         mediaProducer?.service.cancelCatalog()
-        mediaLibrary?.close(); mediaLibraryBytes?.retire()
+        mediaLibrary?.close()
+        mediaLibraryBytes?.retire()
         mediaDownloadProgress.removeAll()
         for bucket in mediaClipStore.allBucketIDs() where bucket != MediaClipStore.localBucketID {
             mediaClipStore.clearCache(cameraID: bucket, preservingIndex: false)
         }
         refreshMediaClips()
         if mediaBrowserSource == .camera, cameraSession != nil {
-            scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
-        }
-    }
-
-    /// Clears on-disk clip cache for the active Media browser source bucket. Cancels any in-flight
-    /// stream first; `index.json` metadata (favorites, handles, Frame.io/export flags) is preserved.
-    func clearMediaCache() {
-        mediaActionStoreGeneration &+= 1
-        cancelClipStream()
-        // An in-flight enumeration would repopulate the freshly cleared index from its own
-        // older snapshot; the generation bump makes its late writes fall on the floor.
-        mediaProducer?.service.cancelCatalog()
-        mediaLibrary?.close(); mediaLibraryBytes?.retire()
-        mediaDownloadProgress.removeAll()
-
-        let clearingCameraBucket = mediaBrowserSource == .camera
-        let bucket = clearingCameraBucket ? mediaBucketID : MediaClipStore.localBucketID
-        // A camera bucket's index is CACHE — the camera re-enumerates the truth. Preserving it
-        // is what kept a formatted card's ghosts alive through every clear (#296). The local
-        // library keeps its index: there is no camera to rebuild it from.
-        mediaClipStore.clearCache(cameraID: bucket, preservingIndex: !clearingCameraBucket)
-        refreshMediaClips()
-        // Connected and looking at the camera → rebuild authoritatively right away.
-        if clearingCameraBucket, cameraSession != nil {
             scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
         }
     }
@@ -14003,8 +13951,10 @@ extension NativeAppModel {
         _ = toggleClipFavorite(clip, ratingOperation: nil)
     }
 
-    @discardableResult func toggleClipFavorite(_ clip: MediaClip,
-        ratingOperation: ((Int, MediaClip) async -> Int?)?) -> Task<Void, Never>? {
+    @discardableResult func toggleClipFavorite(
+        _ clip: MediaClip,
+        ratingOperation: ((Int, MediaClip) async -> Int?)?
+    ) -> Task<Void, Never>? {
         let action = captureMediaLibraryAction([clip])
         let captured = action?.capturedClip(clip) ?? clip
         var stars = captured.isFavorite ? 0 : max(captured.starRating ?? 0, 1)
@@ -14019,8 +13969,12 @@ extension NativeAppModel {
         guard clip.handle != nil else { return nil }
         return Task {
             if let ratingOperation {
-                _ = await performCapturedMediaRating(for: clip, action: action) { await ratingOperation(stars, clip) }
-            } else { _ = await setMediaStarRating(stars, for: clip, action: action) }
+                _ = await performCapturedMediaRating(for: clip, action: action) {
+                    await ratingOperation(stars, clip)
+                }
+            } else {
+                _ = await setMediaStarRating(stars, for: clip, action: action)
+            }
         }
     }
 

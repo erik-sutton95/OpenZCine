@@ -1,10 +1,12 @@
-@testable import Runner
 import CoreImage
 import Foundation
 import OpenCineApple
-import enum OpenCineMedia.MonitorZebraPaint
 import OpenZCineCore
 import os
+
+import enum OpenCineMedia.MonitorZebraPaint
+
+@testable import Runner
 
 /// Shared Core Image pipeline for monitor analysis effects (false colour, LUT, peaking, zebra).
 /// Used by the live-view renderer and media-playback `AVVideoComposition` so both paths share the

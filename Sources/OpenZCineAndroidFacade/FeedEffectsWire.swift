@@ -10,8 +10,9 @@
 // the result as textures/uniforms and interpolates. No colour math is re-derived
 // in Kotlin or AGSL.
 
-import enum OpenCineMedia.MonitorZebraPaint
 import OpenZCineCore
+
+import enum OpenCineMedia.MonitorZebraPaint
 
 /// Bakes monitor looks, false-colour cubes, and assist thresholds into flat
 /// byte/float payloads for the Android GPU effect chain.

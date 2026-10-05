@@ -1,6 +1,7 @@
+import MonitorUI
+import OpenZCineCore
 import SwiftUI
 import WebKit
-import OpenZCineCore
 
 /// Presents RED's real IPP2 Output Presets page so the operator accepts RED's terms and triggers
 /// RED's own download. We **present, we do not bypass**: the bytes come from RED, terms are
@@ -115,7 +116,7 @@ struct RedDownloadView: View {
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white.opacity(0.9), .black.opacity(0.4))
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .padding(12)
             }
         }
@@ -233,7 +234,7 @@ struct RedDownloadView: View {
                     .padding(.vertical, 12)
                     .background(LiveDesign.accentDim, in: Capsule())
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .padding(.top, 6)
         }
         .multilineTextAlignment(.center)
@@ -284,7 +285,7 @@ struct RedDownloadView: View {
                         .padding(.vertical, 12)
                         .background(LiveDesign.accentDim, in: Capsule())
                     }
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
                     .padding(.top, 6)
 
                     Text(
@@ -311,7 +312,7 @@ struct RedDownloadView: View {
                             ? LiveDesign.accentDim : LiveDesign.glass,
                         in: Capsule())
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .padding(.top, model.internetHopActive ? 6 : 0)
         }
         .multilineTextAlignment(.center)
@@ -410,7 +411,7 @@ private struct DownloadStatusView: View {
                 .padding(.vertical, 12)
                 .background(LiveDesign.accentDim, in: Capsule())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .padding(.top, 6)
     }
 }

@@ -1,6 +1,7 @@
 import CoreImage
 import OpenZCineCore
 import UIKit
+
 @testable import Runner
 
 final class FrozenNikonUIImageGraphProcessor {

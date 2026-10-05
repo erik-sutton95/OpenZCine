@@ -1,7 +1,7 @@
 import Foundation
 import Network
-import os
 import OpenZCineCore
+import os
 
 private let relayLogger = Logger(subsystem: "com.opencapture.openzcine", category: "relay")
 

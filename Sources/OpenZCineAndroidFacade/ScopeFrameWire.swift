@@ -6,8 +6,9 @@
 // every platform so `just native-check` exercises it on macOS.
 
 import Foundation
-import enum OpenCineMedia.MonitorCrushClipCompensation
 import OpenZCineCore
+
+import enum OpenCineMedia.MonitorCrushClipCompensation
 
 public enum ScopeFrameWire {
     /// Bins per histogram channel in ``trafficLights``.

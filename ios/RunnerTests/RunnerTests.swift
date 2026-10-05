@@ -3,10 +3,10 @@ import MetalKit
 import MonitorPresentation
 import MonitorUI
 import Network
+import Observation
 import OpenCineApple
 import OpenCineCore
 import OpenCineMedia
-import Observation
 import SwiftUI
 import Testing
 import UIKit
@@ -238,7 +238,8 @@ final class RunnerTests: XCTestCase {
             units: ["Native", "IRE"], unit: .constant("IRE"), title: { $0 },
             unitsTitle: "Units", unitsHelp: "SIMULATED missing calibration", highlightHelp: "",
             midtoneHelp: "", highlight: absent, midtone: absent, compact: true)
-        let host = UIHostingController(rootView: MonitorViewAssistSettings(sections: [.zebra(content)]))
+        let host = UIHostingController(
+            rootView: MonitorViewAssistSettings(sections: [.zebra(content)]))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
         window.rootViewController = host
         window.makeKeyAndVisible()
@@ -259,7 +260,6 @@ final class RunnerTests: XCTestCase {
             "Unknown calibration cannot manufacture a numeric field or zero threshold")
         XCTAssertGreaterThan(host.view.bounds.width, 0)
     }
-
 
     @MainActor
     func testActualZebraRowsUseCommonNumberPadClampAndDoneWithNativeConversion() async throws {
@@ -2966,17 +2966,20 @@ struct NikonSettingsScrollTests {
             selection: Binding(get: { state.tab }, set: { state.tab = $0 }),
             isLive: false, phaseLabel: "SIMULATED settings",
             scrollOffsets: Binding(get: { state.offsets }, set: { state.offsets = $0 }),
-            onClose: {}, disconnect: {}
-        ) { _ in
-            ForEach(0..<50, id: \.self) { index in
-                Text("SIMULATED setting \(index)").frame(height: 44)
-            }
-        }
+            onClose: {}, disconnect: {},
+            rows: { _ in
+                ForEach(0..<50, id: \.self) { index in
+                    Text("SIMULATED setting \(index)").frame(height: 44)
+                }
+            })
         let host = UIHostingController(rootView: AnyView(page))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
         window.rootViewController = host
         window.isHidden = false
-        defer { window.isHidden = true; window.rootViewController = nil }
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
 
         let display = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 180) < 1 })
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
@@ -3068,17 +3071,20 @@ struct NikonSettingsScrollTests {
             selection: Binding(get: { state.tab }, set: { state.tab = $0 }),
             isLive: false, phaseLabel: "SIMULATED settings",
             scrollOffsets: Binding(get: { state.offsets }, set: { state.offsets = $0 }),
-            onClose: {}, disconnect: {}
-        ) { _ in
-            ForEach(0..<12, id: \.self) { index in
-                Text("SIMULATED setting \(index)").frame(height: 44)
-            }
-        }
+            onClose: {}, disconnect: {},
+            rows: { _ in
+                ForEach(0..<12, id: \.self) { index in
+                    Text("SIMULATED setting \(index)").frame(height: 44)
+                }
+            })
         let host = UIHostingController(rootView: AnyView(page))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
         window.rootViewController = host
         window.isHidden = false
-        defer { window.isHidden = true; window.rootViewController = nil }
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
         let view = try await scroll(in: host) { view in
             let maximum = max(0, view.contentSize.height - view.bounds.height)
             return maximum > 0 && abs(view.contentOffset.y - maximum) < 1
@@ -3089,7 +3095,8 @@ struct NikonSettingsScrollTests {
 
     private func settingsScroll(in view: UIView) -> UIScrollView? {
         // The real content viewport is wider than the 188-point navigation rail.
-        if let scroll = view as? UIScrollView, scroll.bounds.height > 100, scroll.bounds.width > 200 {
+        if let scroll = view as? UIScrollView, scroll.bounds.height > 100, scroll.bounds.width > 200
+        {
             return scroll
         }
         for child in view.subviews {
@@ -3114,8 +3121,14 @@ struct NikonSettingsScrollTests {
             await Task.yield()
             if predicate() { return }
         }
-        let observed = settingsScroll(in: host.view).map { "offset=\($0.contentOffset.y) size=\($0.contentSize) bounds=\($0.bounds)" } ?? "missing scroll"
-        #expect(predicate(), "The actual shared settings scroll did not reach the expected native state: \(observed)")
+        let observed =
+            settingsScroll(in: host.view).map {
+                "offset=\($0.contentOffset.y) size=\($0.contentSize) bounds=\($0.bounds)"
+            } ?? "missing scroll"
+        #expect(
+            predicate(),
+            "The actual shared settings scroll did not reach the expected native state: \(observed)"
+        )
     }
 }
 

@@ -1,7 +1,7 @@
 import Foundation
 import OpenCineMedia
-import os
 import OpenZCineCore
+import os
 
 /// Media library diagnostics (Media page cache). Filter Console for subsystem `OpenZCine`, category
 /// `media-store`.
@@ -139,13 +139,6 @@ enum MediaBrowserLayout: String, CaseIterable, Codable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
-    var toggleIcon: String {
-        switch self {
-        case .grid: "list.bullet"
-        case .list: "square.grid.2x2"
-        }
-    }
-
     var accessibilityLabel: String {
         switch self {
         case .grid: "List view"
@@ -161,15 +154,6 @@ enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
     case name
     /// Highest camera star first — clusters favorited/rated shots at the top for culling.
     case rating
-
-    var menuLabel: String {
-        switch self {
-        case .newest: "Newest"
-        case .oldest: "Oldest"
-        case .name: "Name"
-        case .rating: "Rating"
-        }
-    }
 
     var pillLabel: String { "SORT" }
 
@@ -192,14 +176,6 @@ extension MediaFormatChip {
 }
 
 extension MediaClip {
-    /// The per-object facts the shared chip derivation needs.
-    var filterItem: MediaFilterItem {
-        MediaFilterItem(
-            filename: filename,
-            pixelWidth: pixelWidth,
-            sourcePixelWidth: sourcePixelWidth,
-            captureDate: captureDate)
-    }
 
     /// Inferred from filename — videos are playable proxies; stills use `MediaClipFilename.isPhoto`.
     var mediaKind: MediaKind {
@@ -224,24 +200,11 @@ extension MediaClip {
         MediaClipFilename.formatChip(for: filename) == .nef
     }
 
-    /// True for JPEG stills — the display side of a RAW+JPEG pair (NEF has no quicklook-decodable
-    /// full preview, so the JPEG carries the grid cell and opens the viewer).
-    var isJPEGPhoto: Bool {
-        MediaClipFilename.formatChip(for: filename) == .jpeg
-    }
-
     /// Favorited for the Media page: the local heart OR any camera star (≥1). Rating writes
     /// (viewer + instant playback) mirror the body's star into `starRating`, so a shot starred
     /// during the shoot lands under the Favorites tab without a per-cell camera round-trip.
     var isFavorited: Bool {
         isFavorite || (starRating ?? 0) >= 1
-    }
-
-    /// Same-shot pair identity: bucket + storage slot + case-insensitive stem. The slot is part of
-    /// the key on purpose — split recording writes RAW and JPEG to different cards, and those must
-    /// stay separate items.
-    var rawPairKey: String {
-        "\(cameraID)/\(storageID.map(String.init) ?? "-")/\(MediaClipFilename.stem(of: filename))"
     }
 
     /// This clip as a burst-detection frame: capture identity plus a format/dimensions signature

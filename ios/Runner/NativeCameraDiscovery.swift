@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
 import NetworkExtension
-import os
 import OpenZCineCore
+import os
 
 /// The app's side of OpenCineNikon's `NikonDiscovery` (SHELL-02): the listening sources
 /// (Bonjour, USB-C), the phone's interfaces, the connection log, and the presence line of the
@@ -10,8 +10,11 @@ import OpenZCineCore
 /// runs `.passive` (never the PTP/IP control port, never a PTP byte), pairing and an armed setup
 /// watch run `.active`.
 enum NativeNikonDiscovery {
-    static let dialer = PosixNikonDialer(presencePort: MonitorRelayProtocol.presenceTCPPort) { line in
-        RelayPresence.decode(line).map { NikonPresence(deviceName: $0.n, servedCamera: $0.ch, line: line) }
+    static let dialer = PosixNikonDialer(presencePort: MonitorRelayProtocol.presenceTCPPort) {
+        line in
+        RelayPresence.decode(line).map {
+            NikonPresence(deviceName: $0.n, servedCamera: $0.ch, line: line)
+        }
     }
 
     static let shared = NikonDiscovery(dialer: dialer, sources: Sources())
@@ -29,7 +32,8 @@ enum NativeNikonDiscovery {
         }
 
         func bonjour(timeout: Duration) async -> [DiscoveredCamera] {
-            let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
+            let seconds =
+                Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
             return await BonjourPTPBrowser().discover(timeout: seconds)
         }
 

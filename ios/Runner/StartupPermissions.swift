@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import MonitorUI
 import Network
 import SwiftUI
 import UIKit
@@ -309,10 +310,10 @@ struct StartupWizardPermissionsStep: View {
                 }
             }
             .background(
-                StartupColors.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                StartupColors.card, in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                RoundedRectangle(cornerRadius: MonitorTheme.radius)
                     .stroke(StartupColors.border.opacity(0.12), lineWidth: 1)
             )
 

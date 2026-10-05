@@ -1,8 +1,8 @@
 import AVFoundation
 import ImageIO
-import OSLog
 import MonitorPresentation
 import MonitorUI
+import OSLog
 import OpenCineAppKit
 import OpenCineMedia
 import OpenZCineCore
@@ -558,7 +558,7 @@ struct MediaBrowserView: View {
                 } label: {
                     MediaStorageCard(slot: slot, isActive: active, compact: true)
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
     }
@@ -610,7 +610,7 @@ struct MediaBrowserView: View {
                     .padding(.vertical, 8)
                     .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .disabled(selectedClipIDs.isEmpty)
             .confirmationDialog(
                 // Context-aware: pair/master/backup notes appear only when this selection
@@ -643,7 +643,7 @@ struct MediaBrowserView: View {
                     )
                     .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .disabled(selectedClipIDs.isEmpty)
             .background {
                 GeometryReader { proxy in
@@ -766,7 +766,7 @@ struct MediaBrowserView: View {
             .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
             .opacity(model.mediaFetchInProgress ? 0.5 : 1)
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .disabled(model.mediaFetchInProgress)
         .accessibilityLabel("Refresh camera media")
     }
@@ -1033,10 +1033,10 @@ private struct MediaStorageCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             isActive ? LiveDesign.accentDim : LiveDesign.surface.opacity(0.55),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+            in: RoundedRectangle(cornerRadius: MonitorTheme.radius, style: .continuous)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: MonitorTheme.radius, style: .continuous)
                 .stroke(
                     isActive ? LiveDesign.accent.opacity(0.5) : LiveDesign.hairline, lineWidth: 1)
         )
@@ -1663,7 +1663,7 @@ struct MediaPhotoViewer: View {
                         CircleIconButton(systemName: "xmark", size: 34)
                             .contentShape(Circle())
                     }
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
                     Text(displayClip.filename)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(LiveDesign.text)
@@ -1683,7 +1683,7 @@ struct MediaPhotoViewer: View {
                             .padding(.horizontal, 12).padding(.vertical, 8)
                             .liquidGlass(in: Capsule(), interactive: true)
                         }
-                        .buttonStyle(.zcTapTarget)
+                        .buttonStyle(.monitorTapTarget)
                     }
                     deleteButton
                     shareButton
@@ -1755,7 +1755,7 @@ struct MediaPhotoViewer: View {
             CircleIconButton(systemName: "trash", size: 34)
                 .contentShape(Circle())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .confirmationDialog(
             model.deletionConfirmMessage(for: [clip]),
             isPresented: $isDeleteConfirmPresented,
@@ -1803,7 +1803,7 @@ struct MediaPhotoViewer: View {
                     .contentShape(Circle())
             }
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel("Share photo")
     }
 
@@ -1831,7 +1831,7 @@ struct MediaPhotoViewer: View {
                 .padding(.vertical, 6)
                 .background(isActive ? LiveDesign.accentDim : Color.clear, in: Capsule())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
     /// Switches the viewer to the other side of the pair and loads/streams that file.
@@ -1983,7 +1983,9 @@ private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
     let mapping: ExposureSignalMapping
     let vectorscopeCube: CubeLUT?
 
-    func bundle(samples: OpenCineMedia.ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
+    func bundle(samples: OpenCineMedia.ScopeSamples, previous: ScopeAssistBundle)
+        -> ScopeAssistBundle
+    {
         ScopeAssistSampling.bundle(
             samples: samples,
             trafficLightsCrushClip: trafficLightsCrushClip,
@@ -2010,7 +2012,7 @@ struct StarRatingRow: View {
                         .font(.system(size: 19, weight: .medium))
                         .foregroundStyle(star <= stars ? LiveDesign.accent : LiveDesign.muted)
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
         .padding(.horizontal, 16)
@@ -2177,8 +2179,10 @@ struct MediaPlayerView: View {
             loopAvailable: false, shareEnabled: canShareActiveClip)
     }
 
-    private func admitted(_ item: MonitorPlaybackItemToken,
-        _ action: (MonitorMediaPlaybackModel<MediaClip, String>) -> Void) {
+    private func admitted(
+        _ item: MonitorPlaybackItemToken,
+        _ action: (MonitorMediaPlaybackModel<MediaClip, String>) -> Void
+    ) {
         guard let playback, playback.isActive, playback.token == item else { return }
         action(playback)
     }
@@ -2193,14 +2197,19 @@ struct MediaPlayerView: View {
             loop: { _, _ in },
             conform: { item, target in admitted(item) { $0.setConformTarget(target) } },
             adjacent: { item, offset in admitted(item) { _ in goToAdjacentClip(offset: offset) } },
-            favorite: { item in admitted(item) { _ in
-                model.toggleClipFavorite(activeClip); isFavorite.toggle()
-            } },
-            share: { item in admitted(item) { _ in
-                guard canShareActiveClip else { return }
-                deliveryPause = session?.pauseForDelivery(playing: isPlaying)
-                deliveryPresentation = MediaDeliveryPresentation(clip: activeClip)
-            } },
+            favorite: { item in
+                admitted(item) { _ in
+                    model.toggleClipFavorite(activeClip)
+                    isFavorite.toggle()
+                }
+            },
+            share: { item in
+                admitted(item) { _ in
+                    guard canShareActiveClip else { return }
+                    deliveryPause = session?.pauseForDelivery(playing: isPlaying)
+                    deliveryPresentation = MediaDeliveryPresentation(clip: activeClip)
+                }
+            },
             beginScrub: { item in
                 guard let playback, playback.isActive, playback.token == item else { return nil }
                 return playback.beginScrub()
@@ -2281,12 +2290,13 @@ struct MediaPlayerView: View {
                 onBarFrame: { playbackBarFrame = $0 },
                 slots: MonitorPlaybackPageSlots(
                     headerAccessory: {
-                        AnyView(VStack(spacing: 0) {
-                            if ratingShadeMounts {
-                                ratingShadeHandle
-                                if ratingShadeOpen { ratingStarRow }
-                            }
-                        })
+                        AnyView(
+                            VStack(spacing: 0) {
+                                if ratingShadeMounts {
+                                    ratingShadeHandle
+                                    if ratingShadeOpen { ratingStarRow }
+                                }
+                            })
                     },
                     onShareButtonFrame: { shareButtonFrame = $0 }),
                 picture: {
@@ -2294,15 +2304,17 @@ struct MediaPlayerView: View {
                         .scaleEffect(desqueezeScale(model.playbackDesqueeze), anchor: .center)
                 },
                 feedAssists: { rect in
-                    FeedAlignedAssists(clean: false, feed: rect,
+                    FeedAlignedAssists(
+                        clean: false, feed: rect,
                         excludeTools: [.level], usePlaybackContext: true)
                 },
                 canvasAssists: { size, rect in
                     if playbackScopesActive || playbackAudioMetersActive {
                         PlaybackAssistOverlayModule(
                             scopeAssist: playbackScopeAssist, videoRect: rect,
-                            audioLevels: playbackAudioLevels, onOptions: { assistOptionsTool = $0 })
-                            .frame(width: size.width, height: size.height)
+                            audioLevels: playbackAudioLevels, onOptions: { assistOptionsTool = $0 }
+                        )
+                        .frame(width: size.width, height: size.height)
                     }
                 }, tools: { context in playbackTools(context) })
             if deliveryCoordinator.showsLocalOverlay,
@@ -2350,7 +2362,9 @@ struct MediaPlayerView: View {
             let item = playback?.token
             let captured = activeClip
             let stars = await model.mediaStarRating(for: captured)
-            guard !Task.isCancelled, item == playback?.token, captured.id == activeClip.id else { return }
+            guard !Task.isCancelled, item == playback?.token, captured.id == activeClip.id else {
+                return
+            }
             playerRatingStars = stars
         }
         .animation(.easeInOut(duration: 0.28), value: activeClip.id)
@@ -2438,44 +2452,6 @@ struct MediaPlayerView: View {
 
     // MARK: Bottom bar (playback transport or inline view-assist)
 
-    /// Compact playback chrome — primary controls use 44pt hit targets via `ZCTapTargetButtonStyle`.
-    ///
-    /// Sized so the full transport row fits the narrowest supported width. It grew to eight
-    /// controls when the conform preview landed and silently overflowed: an HStack of fixed-size
-    /// children does not compress, so the row widened the whole chrome stack and pushed the TOP
-    /// bar's back and favourite buttons off both screen edges. Visual size only — `.zcTapTarget`
-    /// keeps every hit target at 44pt regardless.
-    enum PlaybackChrome {
-        static let barPaddingH: CGFloat = 10
-        static let barPaddingV: CGFloat = 9
-        static let transportRowSpacing: CGFloat = 5
-        static let scrubberRowSpacing: CGFloat = 5
-        static let transportButtonSize = CGSize(width: 38, height: 36)
-        static let actionButtonSize = CGSize(width: 32, height: 36)
-        static let transportIconSize: CGFloat = 18
-        static let primaryTransportIconSize: CGFloat = 22
-        static let actionIconSize: CGFloat = 16
-
-        /// Narrowest screen the app ships on (iPhone SE class), in points. The row is checked
-        /// against this in `RunnerTests` so the next control added here fails a test rather than
-        /// silently shoving the top bar off the screen.
-        static let narrowestScreenWidth: CGFloat = 375
-        /// Horizontal padding the chrome stack applies outside the bar.
-        static let chromeHorizontalPadding: CGFloat = 16
-
-        /// Width the transport row needs: three transport buttons, five actions, the gaps between
-        /// them, the bar's own padding, and the minimum spacer.
-        static func transportRowWidth(
-            transportCount: Int = 3, actionCount: Int = 5, minimumSpacer: CGFloat = 6
-        ) -> CGFloat {
-            let buttons =
-                transportButtonSize.width * CGFloat(transportCount)
-                + actionButtonSize.width * CGFloat(actionCount)
-            let gaps = transportRowSpacing * CGFloat(transportCount + actionCount - 1)
-            return buttons + gaps + barPaddingH * 2 + minimumSpacer
-        }
-    }
-
     /// Star rating, pulled down from the top edge and left there until pushed back up.
     ///
     /// It used to sit above the transport, where it cost a permanent band of picture for a control
@@ -2545,7 +2521,7 @@ struct MediaPlayerView: View {
             .liquidGlass(in: Capsule(), interactive: true)
             .opacity(0.9)
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
     }
 
@@ -2680,10 +2656,14 @@ struct MediaPlayerView: View {
     /// Starts playback at the conform rate. Setting a non-zero `rate` IS play, so this replaces
     /// `player.play()` everywhere — calling `play()` would snap back to 1x and silently drop the
     /// conform the operator selected.
-    private func restartPlayback() { tailPresentation.reset(); playback?.restart() }
+    private func restartPlayback() {
+        tailPresentation.reset()
+        playback?.restart()
+    }
 
     private func seek(by seconds: Double) {
-        tailPresentation.seeking(to: min(max(0, currentTime + seconds), duration), duration: duration)
+        tailPresentation.seeking(
+            to: min(max(0, currentTime + seconds), duration), duration: duration)
         playback?.seek(by: seconds)
     }
 
@@ -2722,7 +2702,6 @@ struct MediaPlayerView: View {
 // MARK: - Supporting views
 
 /// Draggable playback timeline — drag to scrub in real time, release for a precise seek.
-
 
 /// Hosts an `AVPlayerLayer` with no native transport chrome, so the LiveDesign controls are the UI.
 private struct PlayerLayerView: UIViewRepresentable {

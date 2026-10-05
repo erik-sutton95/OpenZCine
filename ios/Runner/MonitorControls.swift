@@ -1,7 +1,7 @@
 import MonitorUI
+import OpenZCineCore
 import SwiftUI
 import UIKit
-import OpenZCineCore
 
 /// Light selection tap for operator-setup controls; respects the Controls-tab haptics preference.
 enum OperatorSettingsHaptics {
@@ -27,56 +27,6 @@ enum OperatorSettingsHaptics {
         let generator = UIImpactFeedbackGenerator(style: .rigid)
         generator.prepare()
         generator.impactOccurred(intensity: 1.0)
-    }
-}
-
-struct StatusReadout: View {
-    let label: String
-    let value: String
-    var isInteractive: Bool = false
-    var isActive: Bool = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 3) {
-                Text(label)
-                    .font(.system(size: 9, weight: .bold, design: .default))
-                    .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.faint)
-                    .textCase(.uppercase)
-                if isInteractive {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.faint)
-                }
-            }
-            Text(value)
-                .font(.system(size: 15, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-    }
-}
-
-struct RecordChip: View {
-    let state: RecordState
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(state == .recording ? LiveDesign.rec : LiveDesign.faint)
-                .frame(width: 9, height: 9)
-            Text(state.label)
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(state == .recording ? LiveDesign.text : LiveDesign.muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        // Top-bar chips must never wrap to two lines under deck compression.
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .glassCapsule()
     }
 }
 
@@ -121,63 +71,6 @@ struct FPSChip: View {
     }
 }
 
-struct BatteryPill: View {
-    let percent: Int
-    let icon: String
-
-    var body: some View {
-        VStack(spacing: 5) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-            Text("\(percent)%")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-        }
-        .foregroundStyle(.primary.opacity(0.82))
-        .frame(width: 36, height: 66)
-        .glassCapsule()
-    }
-}
-
-struct BaseISOCard: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(spacing: 3) {
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(LiveDesign.accent)
-            Text(value)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.muted)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-    }
-}
-
-struct SegmentedRow: View {
-    let items: [String]
-    let selected: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(items, id: \.self) { item in
-                Text(item)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(item == selected ? .blue : .secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        item == selected ? .blue.opacity(0.16) : .white.opacity(0.05), in: Capsule()
-                    )
-            }
-        }
-    }
-}
-
 struct SegmentedButtons: View {
     let items: [String]
     let selected: String
@@ -199,7 +92,7 @@ struct SegmentedButtons: View {
                             in: Capsule()
                         )
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
     }
@@ -230,138 +123,6 @@ struct GlassChoice: View {
     }
 }
 
-struct GridToggle: View {
-    let title: String
-    let isOn: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            GlassChoice(title: title, isSelected: isOn)
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-}
-
-struct ToggleRow: View {
-    let title: String
-    let isOn: Bool
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-            Spacer()
-            Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
-        }
-        .padding(14)
-        .background(
-            isOn ? LiveDesign.accentDim : LiveDesign.glassBright,
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-    }
-}
-
-struct SettingCard: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(LiveDesign.faint)
-            Text(value)
-                .font(.system(size: 17, weight: .medium, design: .default))
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(2)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
-        .padding(12)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
-    }
-}
-
-struct SettingActionCard: View {
-    let title: String
-    let value: String
-    var destructive = false
-    var isActive: Bool?
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(title)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LiveDesign.faint)
-                    Text(value)
-                        .font(.system(size: 17, weight: .medium, design: .default))
-                        .foregroundStyle(destructive ? LiveDesign.rec : LiveDesign.text)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.75)
-                }
-                Spacer(minLength: 0)
-                if let isActive {
-                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(LiveDesign.muted)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
-            .padding(12)
-            .background(
-                destructive ? LiveDesign.rec.opacity(0.10) : LiveDesign.glassBright,
-                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                    .stroke(
-                        destructive ? LiveDesign.rec.opacity(0.28) : LiveDesign.hairline,
-                        lineWidth: 1
-                    )
-            )
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-}
-
-/// Media delivery retains this help popover until its separate shared workflow adoption.
-struct HelpBadge: View {
-    let text: String
-    @State private var showing = false
-
-    var body: some View {
-        Button {
-            showing.toggle()
-        } label: {
-            Image(systemName: "questionmark")
-                .font(.system(size: 8.5, weight: .bold))
-                .foregroundStyle(LiveDesign.faint)
-                .frame(width: 16, height: 16)
-                .background(LiveDesign.background.opacity(0.5), in: Circle())
-                .overlay(Circle().stroke(LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-        .popover(isPresented: $showing) {
-            Text(text)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(LiveDesign.text)
-                .padding(12)
-                .frame(width: 248)
-                .fixedSize(horizontal: false, vertical: true)
-                .presentationCompactAdaptation(.popover)
-        }
-    }
-}
-
 /// Converts the existing source-owned selection callback into a common binding.
 struct NikonSettingsChoices: View {
     @Environment(NativeAppModel.self) private var model
@@ -372,13 +133,15 @@ struct NikonSettingsChoices: View {
     let onSelect: (String) -> Void
 
     var body: some View {
-        MonitorSegmentedControl(options: options,
+        MonitorSegmentedControl(
+            options: options,
             selection: Binding(get: { selected }, set: onSelect),
             compact: compact, stacked: stacked, title: { $0 },
             onSelectionFeedback: {
                 OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-            })
-            .buttonStyle(MonitorSettingsButtonStyle())
+            }
+        )
+        .buttonStyle(MonitorSettingsButtonStyle())
     }
 }
 
@@ -393,9 +156,12 @@ struct NikonSettingsSwitch: View {
     let action: () -> Void
 
     var body: some View {
-        MonitorSettingsSwitchInlineRow(title: title, help: help,
+        MonitorSettingsSwitchInlineRow(
+            title: title, help: help,
             showTopDivider: showTopDivider, stacked: stacked, isOn: isOn,
-            feedback: { OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled) },
+            feedback: {
+                OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+            },
             action: action)
     }
 }
@@ -528,7 +294,7 @@ struct CloseButton: View {
                 .frame(width: size, height: size)
                 .glassCircle(interactive: true)
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 }
 
@@ -636,7 +402,7 @@ struct WhiteBalanceTintPad: View {
                 .frame(width: 28, height: 28)
                 .background(LiveDesign.glassBright, in: Circle())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel("Shift toward \(label)")
     }
 
@@ -815,7 +581,7 @@ struct ChromeEditBadge: View {
                 .background(on ? LiveDesign.accent : Color.black.opacity(0.9), in: Circle())
                 .overlay(Circle().strokeBorder(LiveDesign.text.opacity(0.55), lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         // A 26pt disc is well under the 44pt minimum, and these sit over live chrome where a near
         // miss would otherwise fall through to the element behind.
         .minTapTarget()
@@ -900,7 +666,7 @@ struct ChromeEditBanner: View {
                     .padding(.vertical, 6)
                     .background(LiveDesign.accent, in: Capsule())
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityIdentifier("monitor.chromeEdit.done")
         }
         .padding(.leading, 12)

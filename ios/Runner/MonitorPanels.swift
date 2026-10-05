@@ -1,8 +1,8 @@
-import OpenCineApple
-import OpenCineMedia
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineApple
+import OpenCineMedia
 import OpenCineNikon
 import OpenZCineCore
 import PhotosUI
@@ -507,7 +507,7 @@ struct CommandSmallTile: View {
                     .stroke(LiveDesign.hairline, lineWidth: 1)
             )
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .disabled(picker == nil)
     }
 }
@@ -920,47 +920,65 @@ struct PickerPanel: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if let field = commonCaptureField {
                     let offered = currentOptions.compactMap { label in
-                        picker.nikonControlSetting.flatMap { NikonCameraSession.setting($0, label: label) }
+                        picker.nikonControlSetting.flatMap {
+                            NikonCameraSession.setting($0, label: label)
+                        }
                     }
                     MonitorCaptureDrum(
                         control: model.shell.control, field: field,
                         enabled: !isDrumInteractionLocked,
                         haptics: model.preferences.hapticsEnabled,
                         choices: field.choices.filter { offered.contains($0.value) },
-                        marked: markedValues)
-                        .id(selectedMode)
-                } else {
-                    AccentDrumWheel(
-                        options: currentOptions,
-                        selection: $selection,
-                        markedValues: markedValues,
-                        isInteractive: !isDrumInteractionLocked,
-                        // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
-                        // reuses the pair for the bit depths a body advertises for that codec.
-                        sideAdjust: !isKelvinMode
-                            ? codecDepthAdjust
-                            : DrumSideAdjust(
-                                minusEnabled: !isDrumInteractionLocked
-                                    && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                        from: selection,
-                                        delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
-                                plusEnabled: !isDrumInteractionLocked
-                                    && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                        from: selection,
-                                        delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
-                                onMinus: {
-                                    applyKelvinSideStep(
-                                        delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
-                                },
-                                onPlus: {
-                                    applyKelvinSideStep(
-                                        delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
-                                }
-                            )
+                        marked: markedValues
                     )
-                    // Fresh wheel per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
-                    // *and* the centred value at once, which `.scrollPosition` alone doesn't follow
-                    // reliably; re-identifying re-runs onAppear to land centred on the new value.
+                    .id(selectedMode)
+                } else {
+                    // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
+                    // reuses the pair for the bit depths a body advertises for that codec.
+                    let sideAdjust =
+                        !isKelvinMode
+                        ? codecDepthAdjust
+                        : DrumSideAdjust(
+                            minusEnabled: !isDrumInteractionLocked
+                                && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                    from: selection,
+                                    delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
+                            plusEnabled: !isDrumInteractionLocked
+                                && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                    from: selection,
+                                    delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
+                            onMinus: {
+                                applyKelvinSideStep(
+                                    delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
+                            },
+                            onPlus: {
+                                applyKelvinSideStep(
+                                    delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
+                            }
+                        )
+                    HStack(spacing: 8) {
+                        if let sideAdjust {
+                            DrumSideAdjustButton(
+                                title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
+                                selected: sideAdjust.minusSelected,
+                                label: sideAdjust.minusAccessibilityLabel,
+                                action: sideAdjust.onMinus)
+                        }
+                        MonitorValueDrum(
+                            options: currentOptions, selection: $selection,
+                            markedValues: markedValues, isInteractive: !isDrumInteractionLocked,
+                            haptics: model.preferences.hapticsEnabled)
+                        if let sideAdjust {
+                            DrumSideAdjustButton(
+                                title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
+                                selected: sideAdjust.plusSelected,
+                                label: sideAdjust.plusAccessibilityLabel,
+                                action: sideAdjust.onPlus)
+                        }
+                    }
+                    .accessibilityHint(sideAdjust?.hint ?? "")
+                    // Fresh drum per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
+                    // and the centred value at once.
                     .id(selectedMode)
                 }
                 if picker == .stillDrive, selectedMode == 1 || selectedMode == 2 {
@@ -1223,7 +1241,7 @@ struct PickerPanel: View {
                 .frame(width: 32, height: 32)
                 .liquidGlass(in: Circle())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .disabled(!enabled)
     }
 
@@ -1301,7 +1319,7 @@ struct PickerPanel: View {
                                 active ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
                     }
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .opacity(modeDisabled ? 0.35 : 1)
                 .disabled(modeDisabled)
                 // Full locks (shutter / R3D record) freeze tabs; Auto ISO only freezes the drum.
@@ -1338,16 +1356,6 @@ struct PickerPanel: View {
         return
             "Manual ISO needs exposure mode M. "
             + "The camera is setting sensitivity."
-    }
-
-    private var currentValue: String {
-        switch picker {
-        case .resolution: model.cameraState.resolutionFrameRate
-        case .codec: model.cameraState.codec
-        case .mode: model.commandExposureMode
-        default:
-            model.cameraState.values.first(where: { $0.label == picker.valueLabel })?.value ?? ""
-        }
     }
 
     /// The drum's options for the active mode. IRIS is restricted to the mounted lens's reachable
@@ -1421,7 +1429,7 @@ struct PickerPanel: View {
 
 /// Stabilization picker (movie VR + electronic VR) for the command monitor's VR tile. Unlike the
 /// other settings, VR and e-VR are two independent on/off-style toggles rather than one value wheel,
-/// so this renders its own row-of-buttons layout instead of `PickerPanel`'s `AccentDrumWheel`.
+/// so this renders its own row-of-buttons layout instead of `PickerPanel`'s value drum.
 struct StabilizationPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
     /// Bumped when the operator taps the disabled e-VR row, to flash the "unavailable in RAW" toast.
@@ -1560,13 +1568,15 @@ struct QualityPickerPanel: View {
                 }
                 HStack(alignment: .top, spacing: 16) {
                     column(caption: "RAW") {
-                        AccentDrumWheel(
-                            options: Self.rawOptions, selection: $rawSelection, wheelHeight: 112)
+                        MonitorValueDrum(
+                            options: Self.rawOptions, selection: $rawSelection,
+                            haptics: model.preferences.hapticsEnabled)
                         nefRows
                     }
                     column(caption: "JPEG · HEIF") {
-                        AccentDrumWheel(
-                            options: Self.tierOptions, selection: $tierSelection, wheelHeight: 112)
+                        MonitorValueDrum(
+                            options: Self.tierOptions, selection: $tierSelection,
+                            haptics: model.preferences.hapticsEnabled)
                         starToggle
                     }
                 }
@@ -1665,7 +1675,7 @@ struct QualityPickerPanel: View {
                         .stroke(active ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1)
                 }
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
     private func seed() {
@@ -1688,20 +1698,16 @@ struct QualityPickerPanel: View {
     }
 }
 
+/// The vertical LUT wheel (Pocket and Insta keep the same wheel as `LUTDrumWheel`).
 struct AccentDrumWheel: View {
     let options: [String]
     @Binding var selection: String
-    /// Options to flag with small stars (e.g. native base ISO values).
+    /// Options to flag with small stars (the recommended RED LUT).
     var markedValues: Set<String> = []
-    /// When false the wheel is dimmed and non-scrollable (camera control lock engaged).
-    var isInteractive: Bool = true
-
     /// Overall wheel height; callers can shrink it (e.g. the LUT picker, to leave room for tabs).
     var wheelHeight: CGFloat = 176
     /// Optional native long-press action for removable values. Omit it for protected wheels.
     var onDeleteOption: ((String) -> Void)? = nil
-    /// −10 / +10 on either side of the selected row (Kelvin). Nil hides the controls.
-    var sideAdjust: DrumSideAdjust? = nil
 
     /// Row pitch — a good bit taller than the glyphs so there's clear spacing between options.
     private let rowHeight: CGFloat = 52
@@ -1721,8 +1727,6 @@ struct AccentDrumWheel: View {
             .scrollPosition(
                 id: Binding(get: { selection }, set: { if let value = $0 { selection = value } })
             )
-            .scrollDisabled(!isInteractive)
-            .opacity(isInteractive ? 1 : 0.55)
             // Symmetric margins let the first/last option reach the centre, so the snapped row sits
             // between the hairlines.
             .contentMargins(.vertical, (wheelHeight - rowHeight) / 2, for: .scrollContent)
@@ -1747,64 +1751,13 @@ struct AccentDrumWheel: View {
                 Rectangle().fill(LiveDesign.hairlineStrong).frame(height: 1)
                     .offset(y: rowHeight / 2)
             }
-            .overlay {
-                if let sideAdjust {
-                    HStack {
-                        sideAdjustButton(
-                            title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
-                            selected: sideAdjust.minusSelected,
-                            label: sideAdjust.minusAccessibilityLabel, action: sideAdjust.onMinus)
-                        Spacer(minLength: 0)
-                        sideAdjustButton(
-                            title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
-                            selected: sideAdjust.plusSelected,
-                            label: sideAdjust.plusAccessibilityLabel, action: sideAdjust.onPlus)
-                    }
-                    .padding(.horizontal, 4)
-                    .frame(height: rowHeight)
-                }
-            }
             // `scrollPosition` only reacts to *changes*, not the initial value, so place the wheel on
             // the current selection explicitly once the rows have laid out. (Switching tabs makes a
             // fresh wheel, so its own onAppear lands it on that tab's look.)
             .onAppear {
                 DispatchQueue.main.async { proxy.scrollTo(selection, anchor: .center) }
             }
-            .accessibilityHint(sideAdjust?.hint ?? "")
         }
-    }
-
-    /// One flanking button. `selected` fills it solid — the CODEC pair shows which bit depth the
-    /// body is on; Kelvin's relative steps never set it.
-    private func sideAdjustButton(
-        title: String, enabled: Bool, selected: Bool = false, label: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(
-                    selected
-                        ? LiveDesign.background : (enabled ? LiveDesign.accent : LiveDesign.faint)
-                )
-                .frame(width: 56, height: 40)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(selected ? LiveDesign.accent : LiveDesign.accentDim)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(
-                            enabled ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
-                )
-        }
-        // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
-        // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
-        .buttonStyle(.zcTapTarget)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.35)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     @ViewBuilder private func optionRow(_ option: String, isCentered: Bool) -> some View {
@@ -1846,6 +1799,44 @@ struct AccentDrumWheel: View {
         } else {
             row
         }
+    }
+}
+
+/// One button flanking a picker drum. `selected` fills it solid: the CODEC pair shows which bit
+/// depth the body is on; Kelvin's relative steps never set it.
+struct DrumSideAdjustButton: View {
+    let title: String
+    let enabled: Bool
+    var selected = false
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(
+                    selected
+                        ? LiveDesign.background : (enabled ? LiveDesign.accent : LiveDesign.faint)
+                )
+                .frame(width: 56, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(selected ? LiveDesign.accent : LiveDesign.accentDim)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(
+                            enabled ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
+                )
+        }
+        // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
+        // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
+        .buttonStyle(.monitorTapTarget)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 
@@ -1948,7 +1939,9 @@ struct AccentDrumWheel: View {
             modes: MonitorWaveformMode.allCases, mode: options.mode,
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
-                set: { options.wrappedValue.brightness = MonitorWaveformOptions.clampedBrightness($0) }),
+                set: {
+                    options.wrappedValue.brightness = MonitorWaveformOptions.clampedBrightness($0)
+                }),
             guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity when the preview is dark or low contrast.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
@@ -1960,7 +1953,9 @@ struct AccentDrumWheel: View {
             modes: MonitorParadeMode.allCases, mode: options.mode,
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
-                set: { options.wrappedValue.brightness = MonitorParadeOptions.clampedBrightness($0) }),
+                set: {
+                    options.wrappedValue.brightness = MonitorParadeOptions.clampedBrightness($0)
+                }),
             guides: options.guides, title: { $0.rawValue },
             brightnessHelp: "Raise trace intensity for the separated channel lanes.",
             compact: compact, modeFeedback: selectionFeedback, guideFeedback: selectionFeedback)
@@ -1973,7 +1968,8 @@ struct AccentDrumWheel: View {
             brightness: Binding(
                 get: { options.wrappedValue.brightness },
                 set: {
-                    options.wrappedValue.brightness = MonitorVectorscopeOptions.clampedBrightness($0)
+                    options.wrappedValue.brightness = MonitorVectorscopeOptions.clampedBrightness(
+                        $0)
                 }),
             zoomHelp:
                 "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the monitor image after its active LUT or display tone map.",
@@ -2177,7 +2173,7 @@ struct LUTPickerContent: View {
                         ? LiveDesign.accentDim : LiveDesign.glassBright,
                     in: Capsule())
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             if model.assist.splitComparison {
                 SegmentedButtons(
                     items: SplitComparisonOrientation.allCases.map(\.rawValue),
@@ -2308,7 +2304,7 @@ struct LUTPickerContent: View {
                         .padding(.vertical, 6)
                         .background(isOn ? LiveDesign.accentDim : LiveDesign.glass, in: Capsule())
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
         .frame(maxWidth: .infinity)
@@ -2404,7 +2400,7 @@ struct LUTPickerContent: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(LiveDesign.glassBright, in: Capsule())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
     @ViewBuilder private var customTab: some View {
@@ -2461,7 +2457,7 @@ struct LUTPickerContent: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(LiveDesign.glassBright, in: Capsule())
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .fileImporter(
             isPresented: $importing,
             allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data]
@@ -2602,28 +2598,6 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
     }
 }
 
-/// Four digits, committed as they complete; clearing commits an open broadcast. Local draft so
-/// half-typed codes never hit the wire.
-private struct RelayPasscodeField: View {
-    let code: String
-    let onCommit: (String) -> Void
-    @State private var draft = ""
-
-    var body: some View {
-        TextField("None", text: $draft)
-            .keyboardType(.numberPad)
-            .multilineTextAlignment(.trailing)
-            .font(.system(size: 15, weight: .semibold, design: .monospaced))
-            .frame(width: 96)
-            .onAppear { draft = code }
-            .onChange(of: draft) { _, next in
-                let digits = String(next.filter(\.isNumber).prefix(4))
-                if digits != next { draft = digits }
-                if digits.count == 4 || digits.isEmpty { onCommit(digits) }
-            }
-    }
-}
-
 /// The settings cover has its own presentation environment. Observe its containing window
 /// here so rotation cannot replace a physical cutout lane with child GeometryReader insets.
 private struct NikonSettingsViewport<Content: View>: View {
@@ -2661,6 +2635,8 @@ struct OperatorSettingsPanel: View {
     @State private var frameioSigningIn = false
     @State private var frameioSignInError: String?
     @State private var showFrameioHopConfirm = false
+    /// Digits typed so far; the model takes the passcode only at four digits or empty.
+    @State private var relayPasscodeDraft: String?
     @State private var cacheSizeBytes: UInt64?
     @State private var diagnosticsShareItem: DiagnosticsShareItem?
     @State private var diagnosticsErrorMessage: String?
@@ -2774,7 +2750,9 @@ struct OperatorSettingsPanel: View {
         OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
     }
 
-    private func preferenceBinding(_ keyPath: WritableKeyPath<OperatorPreferences, Bool>) -> Binding<Bool> {
+    private func preferenceBinding(_ keyPath: WritableKeyPath<OperatorPreferences, Bool>)
+        -> Binding<Bool>
+    {
         Binding(
             get: { model.preferences[keyPath: keyPath] },
             set: { model.preferences[keyPath: keyPath] = $0 }
@@ -2782,11 +2760,11 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var sharingRows: some View {
-        MonitorSettingsRowCard {
-            if model.videoSource == .relay {
-                // A watcher rebroadcasting would daisy-chain feeds — a second generation of
-                // encode, a second hop of latency, and a control-token tangle. Sharing is done
-                // from the device that holds the camera.
+        if model.videoSource == .relay {
+            // A watcher rebroadcasting would daisy-chain feeds: a second generation of
+            // encode, a second hop of latency, and a control-token tangle. Sharing is done
+            // from the device that holds the camera.
+            MonitorSettingsRowCard {
                 MonitorSettingsInlineRow(
                     title: "Watching",
                     help:
@@ -2795,98 +2773,90 @@ struct OperatorSettingsPanel: View {
                 ) {
                     MonitorSettingsValueText(value: model.cameraState.cameraName)
                 }
-            } else {
-                sharingBroadcasterRows
             }
+        } else {
+            sharingBroadcasterRows
         }
     }
 
     @ViewBuilder private var sharingBroadcasterRows: some View {
-        MonitorSettingsInlineRow(
-            title: "Share This Feed",
-            help:
-                "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi — its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
-            showTopDivider: false
-        ) {
-            NikonSettingsChoices(
-                options: ["Off", "On"],
-                selected: model.isRelayBroadcasting ? "On" : "Off"
-            ) { value in
-                model.setRelayBroadcasting(value == "On")
-            }
-        }
+        MonitorFeedSharingSettings(
+            sharing: Binding(
+                get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
+            passcode: Binding(
+                get: { relayPasscodeDraft ?? model.preferences.relayWatcherPasscode },
+                set: { relayPasscodeDraft = String($0.filter(\.isNumber).prefix(4)) }),
+            controlRequests: Binding(
+                get: { model.preferences.relayAllowsControlRequests },
+                set: { model.setRelayAllowsControlRequests($0) }),
+            priority: Binding(
+                get: { model.preferences.relayEncoderProfile.title },
+                set: { title in
+                    guard
+                        let profile = RelayEncoderProfile.allCases.first(where: {
+                            $0.title == title
+                        })
+                    else { return }
+                    model.setRelayEncoderProfile(profile)
+                }),
+            priorities: RelayEncoderProfile.allCases.map(\.title),
+            help: MonitorFeedSharingHelp(
+                sharing:
+                    "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device; this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi: its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
+                passcode:
+                    "Four digits watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
+                controlRequests:
+                    "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.",
+                priority:
+                    "Low latency is the tightest glass-to-glass path, the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
+            ),
+            // Watchers never join a Nikon access point (it drops the monitor), so no Wi-Fi code row.
+            showWiFiCode: nil,
+            passcodeChanged: { code in
+                if code.count == 4 || code.isEmpty { model.setRelayWatcherPasscode(code) }
+            },
+            feedback: settingsFeedback)
         if model.isRelayBroadcasting {
-            MonitorSettingsInlineRow(
-                title: "Watching",
-                help:
-                    "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control."
-            ) {
-                MonitorSettingsValueText(
-                    value: model.relayPeerCount == 1
-                        ? "1 device" : "\(model.relayPeerCount) devices")
-            }
-        }
-        MonitorSettingsInlineRow(
-            title: "Broadcast Priority",
-            help:
-                "Low latency is the tightest glass-to-glass path — the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
-        ) {
-            NikonSettingsChoices(
-                options: RelayEncoderProfile.allCases.map(\.title),
-                selected: model.preferences.relayEncoderProfile.title
-            ) { value in
-                guard
-                    let profile = RelayEncoderProfile.allCases.first(where: {
-                        $0.title == value
-                    })
-                else { return }
-                model.setRelayEncoderProfile(profile)
-            }
-        }
-        MonitorSettingsInlineRow(
-            title: "Watcher Passcode",
-            help:
-                "Watchers must enter this code once per device before they receive anything — no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave."
-        ) {
-            RelayPasscodeField(
-                code: model.preferences.relayWatcherPasscode,
-                onCommit: { model.setRelayWatcherPasscode($0) })
-        }
-        MonitorSettingsInlineRow(
-            title: "Control Requests",
-            help:
-                "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way."
-        ) {
-            NikonSettingsChoices(
-                options: ["Off", "On"],
-                selected: model.preferences.relayAllowsControlRequests ? "On" : "Off"
-            ) { value in
-                model.setRelayAllowsControlRequests(value == "On")
-            }
-        }
-        if let requester = model.relayPendingControlRequest {
-            MonitorSettingsInlineRow(
-                title: "Control Requested",
-                help:
-                    "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
-            ) {
-                HStack(spacing: 8) {
-                    MonitorSettingsActionPill(title: "Decline") { model.declineRelayControl() }
-                    MonitorSettingsActionPill(title: "Grant to \(requester)") {
-                        model.grantRelayControl()
+            MonitorSettingsRowCard(title: "Watchers") {
+                MonitorSettingsInlineRow(
+                    title: "Watching",
+                    help:
+                        "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control.",
+                    showTopDivider: false
+                ) {
+                    MonitorSettingsValueText(
+                        value: model.relayPeerCount == 1
+                            ? "1 device" : "\(model.relayPeerCount) devices")
+                }
+                if let requester = model.relayPendingControlRequest {
+                    MonitorSettingsInlineRow(
+                        title: "Control Requested",
+                        help:
+                            "A device watching this feed is asking to drive the camera. Granting it does not move the camera link: this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
+                    ) {
+                        HStack(spacing: 8) {
+                            MonitorSettingsActionPill(title: "Decline") {
+                                model.declineRelayControl()
+                            }
+                            MonitorSettingsActionPill(title: "Grant to \(requester)") {
+                                model.grantRelayControl()
+                            }
+                        }
                     }
                 }
-            }
-        }
-        if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
-            MonitorSettingsInlineRow(
-                title: "Camera Control",
-                help:
-                    "Take the camera back. This device holds the link, so it never has to ask."
-            ) {
-                HStack(spacing: 8) {
-                    MonitorSettingsValueText(value: holder)
-                    MonitorSettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
+                if let holder = model.relayControlHeldBy {
+                    MonitorSettingsInlineRow(
+                        title: "Camera Control",
+                        help:
+                            "Take the camera back. This device holds the link, so it never has to ask."
+                    ) {
+                        HStack(spacing: 8) {
+                            MonitorSettingsValueText(value: holder)
+                            MonitorSettingsActionPill(title: "Take back") {
+                                model.reclaimRelayControl()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2908,55 +2878,59 @@ struct OperatorSettingsPanel: View {
 
         MonitorConnectionSettings(
             transport: transportLabel,
-            transportHelp: "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
+            transportHelp:
+                "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
             phase: model.connection.label,
             phaseHelp: "The current connection state reported by this device."
         )
         if (selectableVideoSources.count > 1 && model.monitorAvailability.offersSourceSwitch)
-            || model.videoSource == .hdmiCapture || model.videoSource == .relay {
+            || model.videoSource == .hdmiCapture || model.videoSource == .relay
+        {
             MonitorSettingsRowCard(title: "Picture Source") {
-            // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
-            // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
-            // offering a single choice is a readout pretending to be a control. Stating the rule
-            // this way also means any future source that narrows the list hides it too.
-            if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
-                MonitorSettingsInlineRow(
-                    title: "Picture Source",
-                    help:
-                        "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
-                ) {
-                    NikonSettingsChoices(
-                        options: selectableVideoSources.map(\.title),
-                        selected: model.videoSource.title
-                    ) { value in
-                        guard
-                            let kind = selectableVideoSources.first(where: { $0.title == value })
-                        else { return }
-                        model.selectVideoSource(kind)
+                // Gated on the count, not on "is this an iPad". HDMI capture needs UVC, which iOS
+                // exposes only on iPad, so on a phone the list collapses to one entry — and a picker
+                // offering a single choice is a readout pretending to be a control. Stating the rule
+                // this way also means any future source that narrows the list hides it too.
+                if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
+                    MonitorSettingsInlineRow(
+                        title: "Picture Source",
+                        help:
+                            "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it."
+                    ) {
+                        NikonSettingsChoices(
+                            options: selectableVideoSources.map(\.title),
+                            selected: model.videoSource.title
+                        ) { value in
+                            guard
+                                let kind = selectableVideoSources.first(where: { $0.title == value }
+                                )
+                            else { return }
+                            model.selectVideoSource(kind)
+                        }
                     }
                 }
-            }
-            if model.videoSource == .hdmiCapture {
-                MonitorSettingsInlineRow(
-                    title: "Capture Device",
-                    help:
-                        "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR."
-                ) {
-                    MonitorSettingsValueText(value: model.hdmiCaptureState.shortStatus)
+                if model.videoSource == .hdmiCapture {
+                    MonitorSettingsInlineRow(
+                        title: "Capture Device",
+                        help:
+                            "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR."
+                    ) {
+                        MonitorSettingsValueText(value: model.hdmiCaptureState.shortStatus)
+                    }
                 }
-            }
-            if model.videoSource == .relay {
-                // The ask/give-back moved onto the live view itself (bottom centre) — control
-                // is exercised while watching, not inside a settings sheet. The readout stays.
-                MonitorSettingsInlineRow(
-                    title: "Held By",
-                    help: "Which device the camera is currently taking commands from."
-                ) {
-                    MonitorSettingsValueText(
-                        value: model.relayHoldsControl
-                            ? "This device" : (model.relayControlHolderName ?? "The broadcaster"))
+                if model.videoSource == .relay {
+                    // The ask/give-back moved onto the live view itself (bottom centre) — control
+                    // is exercised while watching, not inside a settings sheet. The readout stays.
+                    MonitorSettingsInlineRow(
+                        title: "Held By",
+                        help: "Which device the camera is currently taking commands from."
+                    ) {
+                        MonitorSettingsValueText(
+                            value: model.relayHoldsControl
+                                ? "This device"
+                                : (model.relayControlHolderName ?? "The broadcaster"))
+                    }
                 }
-            }
             }
         }
 
@@ -3074,9 +3048,11 @@ struct OperatorSettingsPanel: View {
         MonitorInputOrientationSettings(
             remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
             remoteTitle: "Bluetooth Remote Shutter",
-            remoteHelp: "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
+            remoteHelp:
+                "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
             autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
-            rotationHelp: "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected.",
+            rotationHelp:
+                "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected.",
             feedback: settingsFeedback
         )
     }
@@ -3186,7 +3162,9 @@ struct OperatorSettingsPanel: View {
         }
     }
 
-    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode) -> [MonitorDisplayToggle] {
+    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode)
+        -> [MonitorDisplayToggle]
+    {
         DisplayChromeVisibility.configurableSections(in: mode).map { section in
             MonitorDisplayToggle(
                 id: section.rawValue, title: section.title,
@@ -3209,30 +3187,42 @@ struct OperatorSettingsPanel: View {
     @ViewBuilder private var systemRows: some View {
         MonitorSupportSettings(
             reportTitle: "Report a Problem",
-            reportHelp: "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue.",
+            reportHelp:
+                "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue.",
             reportActionTitle: "Report",
             actions: [
-                MonitorSupportAction(id: "support.open", title: "Support",
-                    help: "Connection guides, camera controls, media workflows, and troubleshooting.",
-                    actionTitle: "Open", accessibilityLabel: "Open Support") {
-                        requestInternetDestination(.support)
-                    },
-                MonitorSupportAction(id: "support.feature", title: "Request a Feature",
+                MonitorSupportAction(
+                    id: "support.open", title: "Support",
+                    help:
+                        "Connection guides, camera controls, media workflows, and troubleshooting.",
+                    actionTitle: "Open", accessibilityLabel: "Open Support"
+                ) {
+                    requestInternetDestination(.support)
+                },
+                MonitorSupportAction(
+                    id: "support.feature", title: "Request a Feature",
                     help: "Start an idea in the project’s feature-request discussion category.",
-                    actionTitle: "Request", accessibilityLabel: "Request a Feature") {
-                        requestInternetDestination(.featureRequest)
-                    },
-                MonitorSupportAction(id: "support.diagnostics", title: "Share Diagnostics",
-                    help: "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
+                    actionTitle: "Request", accessibilityLabel: "Request a Feature"
+                ) {
+                    requestInternetDestination(.featureRequest)
+                },
+                MonitorSupportAction(
+                    id: "support.diagnostics", title: "Share Diagnostics",
+                    help:
+                        "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
                     actionTitle: isPreparingDiagnostics ? "Preparing…" : "Share",
-                    accessibilityLabel: "Share Diagnostics", enabled: !isPreparingDiagnostics) {
-                        prepareDiagnosticsReport()
-                    },
-                MonitorSupportAction(id: "support.guide", title: "Live View Guide",
-                    help: "Show the short control guide now when live view is open, or again on the next live view.",
-                    actionTitle: "Show Again", accessibilityLabel: "Show Live View Guide Again") {
-                        model.replayLiveViewGuide()
-                    },
+                    accessibilityLabel: "Share Diagnostics", enabled: !isPreparingDiagnostics
+                ) {
+                    prepareDiagnosticsReport()
+                },
+                MonitorSupportAction(
+                    id: "support.guide", title: "Live View Guide",
+                    help:
+                        "Show the short control guide now when live view is open, or again on the next live view.",
+                    actionTitle: "Show Again", accessibilityLabel: "Show Live View Guide Again"
+                ) {
+                    model.replayLiveViewGuide()
+                },
             ],
             report: { requestInternetDestination(.reportProblem) }
         )
@@ -3247,7 +3237,8 @@ struct OperatorSettingsPanel: View {
         MonitorAppInformationSettings(
             theme: "Warm Dark", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
             themeHelp: "Dark earth interface tuned for low reflection on set.",
-            protocolHelp: "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
+            protocolHelp:
+                "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
             versionHelp: "Current OpenZCine build from the native project metadata."
         )
     }
@@ -3320,64 +3311,33 @@ struct OperatorSettingsPanel: View {
     /// (standalone settings from the startup home) — sign in to Frame.io before a shoot, clear
     /// cache after one.
     @ViewBuilder private var storageRows: some View {
-        MonitorSettingsRowCard {
-            MonitorSettingsInlineRow(
-                title: "Frame.io",
-                help:
-                    "Sign in once here and the share sheet's Frame.io option unlocks everywhere. On the camera's Wi‑Fi, \"Sign in over internet\" hops to home Wi‑Fi or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.",
-                showTopDivider: false
-            ) {
-                if model.isFrameioConnected {
-                    Button {
-                        model.disconnectFrameio()
-                        frameioAccountStamp += 1
-                    } label: {
-                        Text("Log out")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(.systemRed))
-                    }
-                    .buttonStyle(.zcTapTarget)
-                } else if !model.isFrameioConfigured {
-                    MonitorSettingsValueText(value: "Not set up in this build")
-                } else if frameioSigningIn {
-                    ProgressView().tint(LiveDesign.accent)
-                } else if model.isOnCameraAccessPoint {
-                    Button {
-                        showFrameioHopConfirm = true
-                    } label: {
-                        Text("Sign in over internet")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(LiveDesign.accent)
-                    }
-                    .buttonStyle(.zcTapTarget)
+        MonitorAccountSettings(
+            title: "Frame.io",
+            help:
+                "Sign in once here and the share sheet's Frame.io option unlocks everywhere. On the camera's Wi‑Fi, signing in hops to home Wi‑Fi or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.",
+            state: frameioAccountState,
+            signIn: {
+                if model.isOnCameraAccessPoint {
+                    showFrameioHopConfirm = true
                 } else {
-                    Button {
-                        frameioSigningIn = true
-                        frameioSignInError = nil
-                        Task {
-                            do {
-                                try await model.connectFrameio()
-                            } catch {
-                                frameioSignInError = error.localizedDescription
-                            }
-                            frameioSigningIn = false
-                            frameioAccountStamp += 1
+                    frameioSigningIn = true
+                    frameioSignInError = nil
+                    Task {
+                        do {
+                            try await model.connectFrameio()
+                        } catch {
+                            frameioSignInError = error.localizedDescription
                         }
-                    } label: {
-                        Text("Sign in")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(LiveDesign.accent)
+                        frameioSigningIn = false
+                        frameioAccountStamp += 1
                     }
-                    .buttonStyle(.zcTapTarget)
                 }
+            },
+            signOut: {
+                model.disconnectFrameio()
+                frameioAccountStamp += 1
             }
-            if let frameioSignInError {
-                Text(frameioSignInError)
-                    .font(.system(size: 11))
-                    .foregroundStyle(LiveDesign.accent)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
+        )
         // Keychain-backed state isn't observable — the stamp forces the card to re-read
         // `isFrameioConnected` after sign-in/out.
         .id(frameioAccountStamp)
@@ -3389,16 +3349,30 @@ struct OperatorSettingsPanel: View {
                 "We'll hop to home Wi‑Fi or cellular so you can sign in to Frame.io, then reconnect to the camera automatically."
             )
         }
+        if let frameioSignInError {
+            Text(frameioSignInError)
+                .font(MonitorTheme.font(11.5))
+                .foregroundStyle(MonitorTheme.recording)
+                .fixedSize(horizontal: false, vertical: true)
+        }
 
         MonitorCacheSettings(
             sizeLabel: cacheSizeLabel,
-            scopeHelp: "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
-            clearHelp: "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
+            scopeHelp:
+                "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
+            clearHelp:
+                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
         ) {
             model.clearAllMediaCaches()
             cacheSizeBytes = model.totalMediaCacheByteCount()
         }
         .onAppear { cacheSizeBytes = model.totalMediaCacheByteCount() }
+    }
+
+    private var frameioAccountState: MonitorAccountState {
+        if model.isFrameioConnected { return .signedIn }
+        if !model.isFrameioConfigured { return .notConfigured }
+        return frameioSigningIn ? .connecting : .signedOut
     }
 
     private var cacheSizeLabel: String {
@@ -3600,7 +3574,7 @@ private struct BugReportPathChooserView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LiveDesign.text)
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityLabel("Close report options")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -3678,7 +3652,7 @@ private struct BugReportPathChooserView: View {
             }
             .font(.system(size: 11.5, weight: .semibold))
             .foregroundStyle(LiveDesign.accent)
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityLabel("Open private GitHub security advisory")
         }
         .padding(12)
@@ -3772,7 +3746,7 @@ private struct BugReportPathCard: View {
             .contentShape(
                 RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(accessibilityHint)
     }
@@ -3841,7 +3815,7 @@ struct BugReportFormView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LiveDesign.text)
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .accessibilityLabel("Close bug report")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -4002,7 +3976,7 @@ struct BugReportFormView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(LiveDesign.accent)
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Choose screenshots to attach")
                 .accessibilityHint(
                     "Selected images are re-rendered without embedded file metadata.")
@@ -4064,7 +4038,7 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Remove screenshot \(index + 1)")
             }
         }
@@ -4114,7 +4088,7 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Open private GitHub security advisory")
             }
         }
@@ -4157,7 +4131,7 @@ struct BugReportFormView: View {
                         in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
                     )
             }
-            .buttonStyle(.zcTapTarget)
+            .buttonStyle(.monitorTapTarget)
             .disabled(model.isSubmitting)
             .accessibilityLabel("Submit anonymous bug report")
         }
@@ -4192,7 +4166,7 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
                 .accessibilityLabel("Open public GitHub issue")
             }
 
@@ -4202,12 +4176,12 @@ struct BugReportFormView: View {
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
 
                 Button("Done", action: onDismiss)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LiveDesign.text)
-                    .buttonStyle(.zcTapTarget)
+                    .buttonStyle(.monitorTapTarget)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4412,14 +4386,54 @@ struct NikonViewAssistSettings: View {
     var body: some View {
         let menus = NikonAssistMenuAdapter(model: model, compact: true)
         MonitorViewAssistSettings(sections: [
-            .falseColor(menus.falseColor, reset: { resetFeedback(); resetFalseColor() }),
-            .zebra(menus.zebra, reset: { resetFeedback(); resetZebra() }),
-            .waveform(menus.waveform, reset: { resetFeedback(); resetWaveform() }),
-            .parade(menus.parade, reset: { resetFeedback(); resetParade() }),
-            .histogram(menus.histogram, reset: { resetFeedback(); resetHistogram() }),
-            .vectorscope(menus.vectorscope, reset: { resetFeedback(); resetVectorscope() }),
-            .peaking(menus.peaking, reset: { resetFeedback(); resetPeaking() }),
-            .trafficLights(menus.trafficLights, reset: { resetFeedback(); resetTrafficLights() }),
+            .falseColor(
+                menus.falseColor,
+                reset: {
+                    resetFeedback()
+                    resetFalseColor()
+                }),
+            .zebra(
+                menus.zebra,
+                reset: {
+                    resetFeedback()
+                    resetZebra()
+                }),
+            .waveform(
+                menus.waveform,
+                reset: {
+                    resetFeedback()
+                    resetWaveform()
+                }),
+            .parade(
+                menus.parade,
+                reset: {
+                    resetFeedback()
+                    resetParade()
+                }),
+            .histogram(
+                menus.histogram,
+                reset: {
+                    resetFeedback()
+                    resetHistogram()
+                }),
+            .vectorscope(
+                menus.vectorscope,
+                reset: {
+                    resetFeedback()
+                    resetVectorscope()
+                }),
+            .peaking(
+                menus.peaking,
+                reset: {
+                    resetFeedback()
+                    resetPeaking()
+                }),
+            .trafficLights(
+                menus.trafficLights,
+                reset: {
+                    resetFeedback()
+                    resetTrafficLights()
+                }),
         ])
     }
 
@@ -4437,21 +4451,24 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetWaveform() {
-        let store = model.scopePanels.waveform, base = MonitorWaveformOptions.default
+        let store = model.scopePanels.waveform
+        let base = MonitorWaveformOptions.default
         store.options.mode = base.mode
         store.options.guides = base.guides
         store.options.brightness = base.brightness
     }
 
     private func resetParade() {
-        let store = model.scopePanels.parade, base = MonitorParadeOptions.default
+        let store = model.scopePanels.parade
+        let base = MonitorParadeOptions.default
         store.options.mode = base.mode
         store.options.guides = base.guides
         store.options.brightness = base.brightness
     }
 
     private func resetHistogram() {
-        model.scopePanels.histogram.options.trafficLights = MonitorHistogramOptions.default.trafficLights
+        model.scopePanels.histogram.options.trafficLights =
+            MonitorHistogramOptions.default.trafficLights
         model.assist.resetOptions(.histogram)
     }
 
@@ -4465,7 +4482,8 @@ struct NikonViewAssistSettings: View {
     }
 
     private func resetVectorscope() {
-        let store = model.scopePanels.vectorscope, base = MonitorVectorscopeOptions.default
+        let store = model.scopePanels.vectorscope
+        let base = MonitorVectorscopeOptions.default
         store.options.zoom = base.zoom
         store.options.brightness = base.brightness
     }

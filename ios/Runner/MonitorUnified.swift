@@ -589,7 +589,7 @@ struct SplitComparisonKey: View {
                         model.splitComparisonMuted
                             ? LiveDesign.hairline : LiveDesign.accentDim, lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
         // Interactive glass ripples past the Button's real hit-test; every small round control
         // here carries this for the same reason.
         .minTapTarget()

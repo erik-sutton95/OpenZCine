@@ -1,6 +1,7 @@
+import MonitorUI
+import OpenZCineCore
 import SwiftUI
 import VisionKit
-import OpenZCineCore
 
 /// Apple-native modal that reads the camera's on-screen Connection wizard (SSID + Key) with the
 /// phone's rear camera and hands validated credentials back to the connect popup. VisionKit does
@@ -130,9 +131,9 @@ struct CameraWiFiScannerScreen: View {
         }
         .aspectRatio(4.0 / 3.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: MonitorTheme.radius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: MonitorTheme.radius, style: .continuous)
                 .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
         )
     }
