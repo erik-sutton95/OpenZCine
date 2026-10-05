@@ -104,6 +104,7 @@ import androidx.lifecycle.compose.currentStateAsState
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.opencine.core.SettingKey
+import com.opencapture.opencine.appkit.rememberPhoneBatteryReadout
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.MonitorCaptureField
 import com.opencapture.opencine.appkit.captureField
@@ -123,14 +124,11 @@ import com.opencapture.monitorui.MonitorStatusChrome
 import com.opencapture.monitorui.MonitorStatusPresentation
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
-import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
 import com.opencapture.opencine.nikon.SwiftLiveViewPreviewState
-import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.bridge.ZoneStyle
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlException
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
@@ -203,7 +201,7 @@ internal fun retainMonitorPickerForChrome(
         (mode == MonitorDisplayMode.LIVE && (cameraValuesVisible || isTopBarPicker))
 
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
-internal fun Modifier.zone(frame: ZoneFrame): Modifier =
+internal fun Modifier.zone(frame: MonitorRect): Modifier =
     offset(frame.x.dp, frame.y.dp).size(frame.width.dp, frame.height.dp)
 
 /**
@@ -242,8 +240,8 @@ private const val SPLIT_KEY_HEIGHT_DP = 30f
 
 /** Seats fail-closed feed feedback below any status deck mounted over the live image. */
 internal fun liveFeedColorNoticeTopInsetDp(
-    feed: ZoneFrame,
-    infoBar: ZoneFrame,
+    feed: MonitorRect,
+    infoBar: MonitorRect,
     statusBarVisible: Boolean,
 ): Float {
     val edgeGap = 8f
@@ -651,10 +649,10 @@ internal fun MonitorScreen(
         remember(appContext) { MonitorAnalysisPanelPlacementStore(appContext) }
     var analysisPanelPlacementRevision by remember { mutableIntStateOf(0) }
     val analysisPanelFrames =
-        remember { mutableStateMapOf<MonitorAnalysisPanelID, ZoneFrame>() }
+        remember { mutableStateMapOf<MonitorAnalysisPanelID, MonitorRect>() }
     val onAnalysisPanelFrameChanged =
         remember(analysisPanelFrames) {
-            { id: MonitorAnalysisPanelID, frame: ZoneFrame? ->
+            { id: MonitorAnalysisPanelID, frame: MonitorRect? ->
                 if (frame == null) {
                     analysisPanelFrames.remove(id)
                 } else {
@@ -678,10 +676,10 @@ internal fun MonitorScreen(
     var controlApplyLoopRunning by remember { mutableStateOf(false) }
     // iOS `captureBarFrame`: measured glass pill so the exposure picker
     // trailing-aligns to the content-hugging bar (not the wider zone slot).
-    var measuredCaptureBar by remember { mutableStateOf<ZoneFrame?>(null) }
+    var measuredCaptureBar by remember { mutableStateOf<MonitorRect?>(null) }
     // iOS `topBarPickerFrames`: measured deck pills so a popdown centres under
     // its own cell rather than the info bar's midpoint.
-    val measuredTopPills = remember { mutableStateMapOf<MonitorPickerKind, ZoneFrame>() }
+    val measuredTopPills = remember { mutableStateMapOf<MonitorPickerKind, MonitorRect>() }
     LaunchedEffect(effectiveDisplayMode) {
         if (displayMode != effectiveDisplayMode) displayMode = effectiveDisplayMode
     }
@@ -1603,28 +1601,18 @@ internal fun MonitorScreen(
                 liveFeedPresentation.sourceWidth.toFloat() / liveFeedPresentation.sourceHeight
             else if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f)
                 .let { if (isVerticalFeed) 1f / it else it }
-        // Shared presentation owns every common rectangle. Native assist and popup adapters
-        // receive a typed projection of that geometry, with no second zone-map computation.
+        // Shared presentation owns every common rectangle; native assist and popup adapters read
+        // it directly.
         val fieldLayout = MonitorLayoutPolicy.fieldMonitor(
             width = viewportWidth, height = viewportHeight,
             safeTop = safeTop, safeLeading = safeLeading, safeBottom = safeBottom, safeTrailing = safeTrailing,
             sourceAspect = portraitFeedAspectRatio, fill = isPortraitFill,
             showsValues = cameraValuesVisible, hasDisplayCutout = safeLeading > 0 || safeTrailing > 0,
         )
-        fun MonitorRect.zone(): ZoneFrame = ZoneFrame(x, y, width, height)
+        // Portrait fit stacks the scopes between the picture and the camera values.
         val scopeRoom = (fieldLayout.values.y - fieldLayout.picture.maxY - 32f).coerceAtLeast(0f).coerceAtMost(184f)
-        val zones = MonitorZones(
-            feed = fieldLayout.picture.zone(), infoBar = fieldLayout.status.zone(),
-            captureStrip = fieldLayout.values.zone(), assistStrip = fieldLayout.assists.zone(),
-            systemCluster = fieldLayout.system.zone(), lock = fieldLayout.lock.zone(),
-            disp = fieldLayout.display.zone(), record = fieldLayout.record.zone(),
-            media = fieldLayout.media.zone(), settings = fieldLayout.settings.zone(),
-            batteryCluster = fieldLayout.gauges.zone(), batteryStyle = ZoneStyle.BATTERY_INLINE,
-            batteryPhone = null, batteryCamera = null,
-            scopes = if (isPortrait && !isPortraitFill) ZoneFrame(fieldLayout.picture.x + 14f,
-                fieldLayout.picture.maxY + 16f, fieldLayout.picture.width - 28f, scopeRoom) else null,
-            controlsGrid = fieldLayout.values.zone(),
-        )
+        val scopeZone = if (isPortrait && !isPortraitFill) MonitorRect(fieldLayout.picture.x + 14f,
+            fieldLayout.picture.maxY + 16f, fieldLayout.picture.width - 28f, scopeRoom) else null
         // Local framing is deliberately read from the operator store rather
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
@@ -1646,8 +1634,8 @@ internal fun MonitorScreen(
         }
         val liveFeedColorNoticeTopInset =
             liveFeedColorNoticeTopInsetDp(
-                feed = zones.feed,
-                infoBar = zones.infoBar,
+                feed = fieldLayout.picture,
+                infoBar = fieldLayout.status,
                 statusBarVisible = statusBarVisible,
             )
         // The gauge is a HUD instrument, so its lower track must clear the
@@ -1659,14 +1647,14 @@ internal fun MonitorScreen(
         // seat the gauge under a bar that is on screen.
         val bottomChromeTop =
             listOfNotNull(
-                    zones.assistStrip?.takeIf { assistToolbarVisible }?.y,
-                    zones.captureStrip?.takeIf { cameraValuesVisible }?.y,
+                    fieldLayout.assists.takeIf { assistToolbarVisible }?.y,
+                    fieldLayout.values.takeIf { cameraValuesVisible }?.y,
                 )
                 .minOrNull()
         val levelGaugeBottomChromeInset =
             with(density) {
                 bottomChromeTop?.let { chromeTop ->
-                    maxOf(0f, zones.feed.y + zones.feed.height - chromeTop).dp.toPx()
+                    maxOf(0f, fieldLayout.picture.maxY - chromeTop).dp.toPx()
                 } ?: 0f
             }
 
@@ -1953,11 +1941,11 @@ internal fun MonitorScreen(
                     }
                 }
         }
-        val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
+        val physicalViewport = MonitorRect(0f, 0f, viewportWidth, viewportHeight)
         // Photography's landscape feed: the still image-area's shape centred in
         // the clear box between the chrome lanes — the rail and capture band
         // never overlap the image (iOS centered letterbox + reserved lanes).
-        val effectiveFeed = zones.feed
+        val effectiveFeed = fieldLayout.picture
         val analysisChromeMounts =
             remember(
                 isPortrait,
@@ -1980,7 +1968,7 @@ internal fun MonitorScreen(
             }
         val analysisPanelLayout =
             remember(
-                zones,
+                fieldLayout,
                 physicalViewport,
                 isPortrait,
                 isPortraitFill,
@@ -1988,7 +1976,7 @@ internal fun MonitorScreen(
                 analysisChromeMounts,
             ) {
                 monitorAnalysisPanelLayout(
-                    zones = zones,
+                    layout = fieldLayout,
                     physicalViewport = physicalViewport,
                     isPortrait = isPortrait,
                     isPortraitFill = isPortraitFill,
@@ -2508,6 +2496,10 @@ internal fun MonitorScreen(
             }
             },
             status = { accepts ->
+                val fpsReadout: @Composable () -> Unit = {
+                    if (mounts(ChromeSection.FPS_READOUT)) FpsChip(actualLinkHealth.presentation.signalBars,
+                        fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState))
+                }
                 MonitorStatusChrome(fieldLayout, commonStatus,
                     showsRecording = !isPhotographyMode && mounts(ChromeSection.REC_READOUT),
                     showsTimecode = !isPhotographyMode && mounts(ChromeSection.TIMECODE_READOUT),
@@ -2530,7 +2522,7 @@ internal fun MonitorScreen(
                                     modifier = Modifier.chromeClickable(accepts && commandControlsEnabled) { openSharedPicker(kind) }
                                         .onGloballyPositioned { coords ->
                                             val r = coords.boundsInRoot()
-                                            with(density) { measuredTopPills[kind] = ZoneFrame(r.left.toDp().value, r.top.toDp().value, r.width.toDp().value, r.height.toDp().value) }
+                                            with(density) { measuredTopPills[kind] = MonitorRect(r.left.toDp().value, r.top.toDp().value, r.width.toDp().value, r.height.toDp().value) }
                                         })
                             }
                             if (mounts(ChromeSection.CODEC_READOUT)) {
@@ -2541,8 +2533,9 @@ internal fun MonitorScreen(
                             }
                         }
                     },
-                    link = { if (mounts(ChromeSection.FPS_READOUT)) FpsChip(actualLinkHealth.presentation.signalBars,
-                        fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState)) })
+                    // The shared bar shows `link` only in portrait; Nikon main keeps the FPS readout in
+                    // the landscape bar too, behind the same Display toggle.
+                    mode = fpsReadout, link = fpsReadout)
             },
             power = { _ ->
                 BatteryRowStack(phoneBatteryReadout.percent, cameraReadouts.batteryPercent,
@@ -2555,7 +2548,7 @@ internal fun MonitorScreen(
                     modifier = Modifier.chromeEditable(ChromeSection.CAMERA_VALUES, chromeEditorMode, operatorSettings, recordChromeEditBounds)
                         .onGloballyPositioned { coords ->
                             val r = coords.boundsInRoot()
-                            with(density) { measuredCaptureBar = ZoneFrame(r.left.toDp().value, r.top.toDp().value, r.width.toDp().value, r.height.toDp().value) }
+                            with(density) { measuredCaptureBar = MonitorRect(r.left.toDp().value, r.top.toDp().value, r.width.toDp().value, r.height.toDp().value) }
                         },
                     itemModifier = { id ->
                         if (id == MonitorPickerKind.SHUTTER.name && !isPhotographyMode) {
@@ -2594,7 +2587,10 @@ internal fun MonitorScreen(
                     settings = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenSettings() } },
                         contentDescription = stringResource(R.string.a11y_monitor_settings)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.SETTINGS, null, glyphModifier, tint) } },
                     media = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenMedia() } },
-                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.FILM, null, glyphModifier, tint) } },
+                        contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint ->
+                            // Nikon main: a photo glyph reads as "media" on the stills side; cinema keeps film.
+                            MonitorIcon(if (isPhotographyMode) MonitorIcon.IMAGE else MonitorIcon.FILM, null, glyphModifier, tint)
+                        } },
                     record = { enabled ->
                         if (isPhotographyMode) PhotographyShutterButton(stillCapturing, enabled = enabled && !controlsSurrendered,
                             timerRemaining = photoTimerRemaining, bodyShutterPulse = bodyShutterPulse,
@@ -2609,7 +2605,7 @@ internal fun MonitorScreen(
             },
             tools = { accepts ->
                 if (isCommand) {
-                    val nativeBounds = ZoneFrame(fieldLayout.picture.x + 16f, fieldLayout.picture.y + 12f,
+                    val nativeBounds = MonitorRect(fieldLayout.picture.x + 16f, fieldLayout.picture.y + 12f,
                         fieldLayout.picture.width - 32f, (fieldLayout.picture.height - 24f).coerceAtLeast(44f))
                     if (isPortrait) {
                         Column(Modifier.zone(nativeBounds).verticalScroll(rememberScrollState()),
@@ -2635,7 +2631,7 @@ internal fun MonitorScreen(
                 } else if (assistToolbarVisible && configureTool == null) {
                     NikonAssistPalette(liveAssistChips, assists, playback = false, portrait = isPortrait,
                         locked = locked || !accepts,
-                        modifier = Modifier.zone(fieldLayout.assists.zone()))
+                        modifier = Modifier.zone(fieldLayout.assists))
                 }
                 // Focus-by-wire scrub strip: on the live view just left of the right system rail
                 // in an AF focus mode. The camera refuses a remote drive in MF (Invalid_Status) —
@@ -2668,7 +2664,7 @@ internal fun MonitorScreen(
                     assists.shared.configureTool == null
                 ) {
                     val rightRailLeading =
-                        minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)
+                        minOf(fieldLayout.record.x, fieldLayout.display.x, fieldLayout.media.x, fieldLayout.settings.x)
                     // Re-arm the relative position when the dial (re)appears.
                     DisposableEffect(Unit) {
                         mfDrive.resetDial()
@@ -2711,29 +2707,29 @@ internal fun MonitorScreen(
                 source = monitorFrameSource,
                 isPortrait = isPortrait,
                 portraitFloating = isPortraitFill,
-                scopeZone = zones.scopes,
+                scopeZone = scopeZone,
                 panelLayout = analysisPanelLayout,
                 hapticsEnabled = operatorSettings.hapticsEnabled.value,
                 onPanelFrameChanged = onAnalysisPanelFrameChanged,
             )
         }
         if (!isCommand && (!isPortrait || isPortraitFill) && renderedAudioMeters) {
-            val audioBounds = if (isPortraitFill) zones.feed else physicalViewport
+            val audioBounds = if (isPortraitFill) fieldLayout.picture else physicalViewport
             AudioMetersOverlay(
                 levels = liveAudioLevels,
                 sensitivity = cameraProperties.microphoneSensitivity,
-                feed = zones.feed,
+                feed = fieldLayout.picture,
                 viewport = audioBounds,
             )
         }
         // Match iOS z-order: the false-colour key is mounted after floating
         // scopes and audio so nothing can obscure or intercept its drag target.
         if (!isCommand && (!isPortrait || isPortraitFill) && renderedEffects.falseColor != null) {
-            val falseColorBounds = if (isPortraitFill) zones.feed else physicalViewport
+            val falseColorBounds = if (isPortraitFill) fieldLayout.picture else physicalViewport
             CompositionLocalProvider(LocalMonitorGlass provides glass) {
                 FalseColorReferenceOverlay(
                     effectsState = liveFeedEffectsPresentation,
-                    feed = zones.feed,
+                    feed = fieldLayout.picture,
                     viewport = falseColorBounds,
                     // Portrait fill owns a persistent assist rail at the
                     // feed's leading edge. Seat the movable reference at the
@@ -2771,7 +2767,7 @@ internal fun MonitorScreen(
             val fillsViewport = operatorSettings.portraitFeedAspect.fillsViewport
             val toggleFrame =
                 focusResetButtonBaseFrame(
-                    feed = zones.feed,
+                    feed = fieldLayout.picture,
                     isPortrait = true,
                     bottomChromeInset = bottomChromeInsetDp,
                 )
@@ -2928,23 +2924,17 @@ internal fun MonitorScreen(
                 if (isTopDropDown || isCommandCentre) {
                     monitorTopBarPickerFrame(
                         viewport = physicalViewport,
-                        zones = zones,
+                        layout = fieldLayout,
                         isCommandCenter = isCommandCentre,
                         kind = picker.kind,
                         anchorPill = measuredTopPills[picker.kind],
                     )
                 } else {
-                    val anchor =
-                        if (zones.captureStrip != null) {
-                            MonitorPickerAnchor.CAPTURE_STRIP
-                        } else {
-                            MonitorPickerAnchor.CONTROLS_GRID
-                        }
                     monitorPickerFrame(
                         viewport = physicalViewport,
-                        zones = zones,
+                        layout = fieldLayout,
                         isPortrait = isPortrait,
-                        anchor = anchor,
+                        anchor = MonitorPickerAnchor.CAPTURE_STRIP,
                         measuredCaptureBar = measuredCaptureBar,
                     )
                 }
@@ -3100,11 +3090,11 @@ internal fun MonitorScreen(
         }
         if (liveViewGuideVisible) {
             val guideController = requireNotNull(liveViewGuideController)
-            // The shared palette sits at zones.assistStrip in every orientation; its portrait
-            // form is the vertical slider, fit or fill.
+            // The shared palette sits at the layout's assists slot in every orientation; its
+            // portrait form is the vertical slider, fit or fill.
             LiveViewGuideOverlay(
                 controller = guideController,
-                zones = zones,
+                layout = fieldLayout,
                 isPortrait = isPortrait,
                 usesVerticalAssistRail = isPortrait,
             )
@@ -3134,7 +3124,7 @@ internal fun MonitorScreen(
                     if (isPortrait) {
                         effectiveFeed.y + effectiveFeed.height - 12f
                     } else {
-                        (zones.assistStrip?.y ?: (effectiveFeed.y + effectiveFeed.height)) - 18f
+                        fieldLayout.assists.y - 18f
                     },
                 onDone = {
                     operatorSettings.endChromeEditing()
@@ -3335,7 +3325,7 @@ private fun ChromeEditOverlay(
     boxes: Map<ChromeSection, Rect>,
     settings: OperatorSettings,
     /** The image area the banner centres on — not the screen; the rails sit outside it. */
-    feed: ZoneFrame,
+    feed: MonitorRect,
     /** Where the banner's bottom edge sits, in the same dp space as [feed]. */
     bannerBottomDp: Float,
     onDone: () -> Unit,

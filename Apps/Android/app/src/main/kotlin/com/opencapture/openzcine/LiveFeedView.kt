@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
 import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
 import com.opencapture.opencine.runtime.MonitorFrameDecodeWorker
 import com.opencapture.opencine.runtime.MonitorFramePacingStats
@@ -60,7 +61,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusInfo
@@ -292,14 +293,15 @@ public class LiveFeedEffectsPresentationState {
 }
 
 /**
- * Decodes the live-view JPEG stream into a small ring of reused [Bitmap]s.
+ * The live-view JPEG decode cap, for the shared ring decoder
+ * ([com.opencapture.opencine.runtime.MonitorJpegFrameDecoder]).
  *
  * Decode-path decision (OPE-28 spike), measured on the SM-A127F floor device:
  * - **Chosen: [BitmapFactory.decodeByteArray] + `inBitmap` reuse.** After the
  *   ring fills, the steady state is zero per-frame allocation — the JPEG is
  *   decoded straight into an existing buffer. Sustains the 25 fps stream with
  *   ~2/3 of the frame budget idle on the test device.
- * - **Subsample via [maxLongSide]**: full 1080p texture upload every frame was
+ * - **Subsample via the long-side cap**: full 1080p texture upload every frame was
  *   janking the UI thread on A12-class (gfxinfo ~50 ms draw), so the long side
  *   is capped. That cap was 960 against a 1080p source; against the **1024**-wide
  *   live-view frame it quietly cost a factor of four. `inSampleSize` is
@@ -321,13 +323,7 @@ public class LiveFeedEffectsPresentationState {
  * The ring is 3 deep so the bitmap being decoded into is never the one the
  * RenderThread may still be drawing (current frame + one in flight).
  */
-class JpegFrameDecoder(private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE) {
-    private val native = com.opencapture.opencine.runtime.MonitorJpegFrameDecoder(maxLongSide)
-    fun decode(jpeg: ByteArray): Bitmap? = native.decode(jpeg)
-    companion object {
-        const val DEFAULT_MAX_LONG_SIDE: Int = 1024
-    }
-}
+const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
 
 /**
  * Renders a [LiveFrameSource] as the monitor feed: decodes off the main
@@ -568,7 +564,7 @@ fun LiveFeedView(
         //
         // The same power-of-two trap already cost this path once, when a 960 cap carried over from
         // a 1080p source halved every frame on every device.
-        val decoder = JpegFrameDecoder(maxLongSide = JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE)
+        val decoder = MonitorJpegFrameDecoder(maxLongSide = LIVE_FEED_MAX_LONG_SIDE)
         val stats = MonitorFramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
         val decodeWorker = MonitorFrameDecodeWorker("zc-feed-decode")
         try {
@@ -727,8 +723,8 @@ internal fun LiveFeedColorModeNotice(
 @Composable
 internal fun FalseColorReferenceOverlay(
     effectsState: LiveFeedEffectsPresentationState,
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
+    feed: MonitorRect,
+    viewport: MonitorRect,
     modifier: Modifier = Modifier,
     placementStoreName: String = FalseColorReferencePlacementStore.STORE_NAME,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
@@ -737,7 +733,7 @@ internal fun FalseColorReferenceOverlay(
     placementStore: MonitorAnalysisPanelPlacementStore? = null,
     placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
+    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
 ) {
     val presentation = effectsState.falseColorReference ?: return
     val resolvedLayout =
@@ -758,11 +754,11 @@ internal fun FalseColorReferenceOverlay(
                 ?: FalseColorReferencePlacementStore(context, placementStoreName)
         }
     val panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE
-    fun resolvedFrame(): ZoneFrame =
+    fun resolvedFrame(): MonitorRect =
         placementStore?.resolve(panelID, default, resolvedLayout)
             ?: requireNotNull(legacyStore).resolve(default, resolvedLayout.safeBounds)
 
-    fun saveFrame(frame: ZoneFrame) {
+    fun saveFrame(frame: MonitorRect) {
         if (placementStore != null) {
             placementStore.save(panelID, frame, resolvedLayout)
         } else {
@@ -883,11 +879,11 @@ internal fun FalseColorReferenceOverlay(
 
 /** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
 internal fun controlSafeFalseColorReferenceDefaultFrame(
-    feed: ZoneFrame,
+    feed: MonitorRect,
     layout: MonitorAnalysisPanelLayout,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     horizontalFraction: Float = 0f,
-): ZoneFrame =
+): MonitorRect =
     clampScopeFrame(
         falseColorReferenceDefaultFrame(
             feed = feed,
@@ -900,11 +896,11 @@ internal fun controlSafeFalseColorReferenceDefaultFrame(
 
 /** iOS `feedOutsideCenter(.bottomLeading)` translated into the Android zone map. */
 internal fun falseColorReferenceDefaultFrame(
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
+    feed: MonitorRect,
+    viewport: MonitorRect,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     horizontalFraction: Float = 0f,
-): ZoneFrame {
+): MonitorRect {
     val feedBottom = feed.y + feed.height
     val outsideTop = feedBottom + FALSE_COLOR_REFERENCE_GAP
     val viewportBottom = viewport.y + viewport.height
@@ -918,7 +914,7 @@ internal fun falseColorReferenceDefaultFrame(
             ) - FALSE_COLOR_REFERENCE_GAP - FALSE_COLOR_REFERENCE_HEIGHT
         }
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x =
                 feed.x +
                     maxOf(0f, feed.width - min(FALSE_COLOR_REFERENCE_WIDTH, feed.width)) *
@@ -932,7 +928,7 @@ internal fun falseColorReferenceDefaultFrame(
 }
 
 /** Mirrors iOS `MovablePanel`'s fine 4-point position grid. */
-internal fun snapFalseColorReferenceFrame(frame: ZoneFrame): ZoneFrame =
+internal fun snapFalseColorReferenceFrame(frame: MonitorRect): MonitorRect =
     frame.copy(
         x = (frame.x / 4f).roundToInt() * 4f,
         y = (frame.y / 4f).roundToInt() * 4f,
@@ -942,7 +938,7 @@ internal fun snapFalseColorReferenceFrame(frame: ZoneFrame): ZoneFrame =
 private class FalseColorReferencePlacementStore(context: Context, name: String) {
     private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
-    fun resolve(default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
+    fun resolve(default: MonitorRect, bounds: MonitorRect): MonitorRect {
         if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
         val normalizedX = preferences.getFloat(CENTER_X_KEY, 0.5f)
         val normalizedY = preferences.getFloat(CENTER_Y_KEY, 0.5f)
@@ -956,7 +952,7 @@ private class FalseColorReferencePlacementStore(context: Context, name: String) 
         )
     }
 
-    fun save(frame: ZoneFrame, bounds: ZoneFrame) {
+    fun save(frame: MonitorRect, bounds: MonitorRect) {
         val centerX = (frame.x + frame.width / 2f - bounds.x) / maxOf(1f, bounds.width)
         val centerY = (frame.y + frame.height / 2f - bounds.y) / maxOf(1f, bounds.height)
         preferences.edit()

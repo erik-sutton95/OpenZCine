@@ -21,7 +21,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorAssistState
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -41,11 +41,11 @@ class MonitorAnalysisPanelComposeTest {
     fun scopeDragStoresTheSharedCentreReportsItsFrameAndKeepsTheFocusResetClear() {
         val assist = MonitorAssistState()
         val visible = mutableStateOf(true)
-        var reportedFrame: ZoneFrame? = null
+        var reportedFrame: MonitorRect? = null
         val layout =
             MonitorAnalysisPanelLayout(
-                viewport = ZoneFrame(0f, 0f, 400f, 300f),
-                safeBounds = ZoneFrame(20f, 20f, 360f, 260f),
+                viewport = MonitorRect(0f, 0f, 400f, 300f),
+                safeBounds = MonitorRect(20f, 20f, 360f, 260f),
             )
         composeRule.setContent {
             OpenZCineTheme {
@@ -68,10 +68,10 @@ class MonitorAnalysisPanelComposeTest {
         }
         val panel = composeRule.onNodeWithContentDescription("HISTO analysis panel, movable")
 
-        fun nodeFrame(): ZoneFrame {
+        fun nodeFrame(): MonitorRect {
             val root = composeRule.onNodeWithTag("panels").getBoundsInRoot()
             val bounds = panel.getBoundsInRoot()
-            return ZoneFrame(
+            return MonitorRect(
                 (bounds.left - root.left).value,
                 (bounds.top - root.top).value,
                 (bounds.right - bounds.left).value,
@@ -98,7 +98,7 @@ class MonitorAnalysisPanelComposeTest {
             assertNull(assist.centerFor(MonitorAssistTool.HISTO, portrait = true))
             assertTrue(moved.x > start.x && moved.y > start.y)
             assertTrue(moved.x + moved.width <= 380f + 0.5f && moved.y + moved.height <= 280f + 0.5f)
-            val base = ZoneFrame(moved.x, moved.y + moved.height - 44f, 44f, 44f)
+            val base = MonitorRect(moved.x, moved.y + moved.height - 44f, 44f, 44f)
             val reset = focusResetButtonClearFrame(base, listOf(moved), layout.viewport)
             assertTrue(reset.y + reset.height + FOCUS_RESET_PANEL_GAP_DP <= moved.y + 0.5f)
             visible.value = false
@@ -108,7 +108,7 @@ class MonitorAnalysisPanelComposeTest {
         composeRule.runOnIdle { assertFrameEquals(moved, requireNotNull(reportedFrame)) }
     }
 
-    private fun assertFrameEquals(expected: ZoneFrame, actual: ZoneFrame) {
+    private fun assertFrameEquals(expected: MonitorRect, actual: MonitorRect) {
         assertEquals(expected.x, actual.x, 0.5f)
         assertEquals(expected.y, actual.y, 0.5f)
         assertEquals(expected.width, actual.width, 0.5f)
@@ -137,11 +137,11 @@ class MonitorAnalysisPanelComposeTest {
                 stopMarkerFractions = floatArrayOf(),
             ),
         )
-        val viewport = ZoneFrame(0f, 0f, 360f, 240f)
+        val viewport = MonitorRect(0f, 0f, 360f, 240f)
         val layout =
             MonitorAnalysisPanelLayout(
                 viewport = viewport,
-                safeBounds = ZoneFrame(40f, 20f, 300f, 190f),
+                safeBounds = MonitorRect(40f, 20f, 300f, 190f),
             )
         composeRule.setContent {
             OpenZCineTheme {
@@ -176,7 +176,7 @@ class MonitorAnalysisPanelComposeTest {
                     layout = layout,
                 )
             assertEquals(
-                ZoneFrame(40f, 20f, default.width, default.height),
+                MonitorRect(40f, 20f, default.width, default.height),
                 store.resolve(
                     MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
                     default,
@@ -206,7 +206,7 @@ class MonitorAnalysisPanelComposeTest {
                     layout = layout,
                 )
             assertEquals(
-                ZoneFrame(72f, 128f, default.width, default.height),
+                MonitorRect(72f, 128f, default.width, default.height),
                 store.resolve(
                     MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
                     default,

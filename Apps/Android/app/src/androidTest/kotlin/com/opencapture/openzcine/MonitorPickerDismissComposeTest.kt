@@ -15,7 +15,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.CameraControl
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -35,7 +35,7 @@ class MonitorPickerDismissComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private val pickerFrame = ZoneFrame(x = 140f, y = 40f, width = 220f, height = 220f)
+    private val pickerFrame = MonitorRect(x = 140f, y = 40f, width = 220f, height = 220f)
 
     private fun focusPicker(): MonitorPickerPresentation {
         val request =

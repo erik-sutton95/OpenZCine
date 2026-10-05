@@ -19,9 +19,9 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
-import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.bridge.ZoneStyle
+import com.opencapture.monitorui.MonitorFieldLayout
+import com.opencapture.monitorui.MonitorLayoutPolicy
+import com.opencapture.monitorui.MonitorRect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -49,7 +49,7 @@ class LiveViewGuideComposeTest {
             OpenZCineTheme {
                 LiveViewGuideOverlay(
                     controller = controller,
-                    zones = testZones(),
+                    layout = testLayout(),
                     isPortrait = false,
                     usesVerticalAssistRail = false,
                 )
@@ -84,7 +84,7 @@ class LiveViewGuideComposeTest {
                     )
                     LiveViewGuideOverlay(
                         controller = controller,
-                        zones = testZones(),
+                        layout = testLayout(),
                         isPortrait = false,
                         usesVerticalAssistRail = false,
                     )
@@ -98,23 +98,17 @@ class LiveViewGuideComposeTest {
         compose.runOnIdle { assertEquals(0, commandCount.intValue) }
     }
 
-    private fun testZones(): MonitorZones =
-        MonitorZones(
-            feed = ZoneFrame(60f, 50f, 600f, 300f),
-            infoBar = ZoneFrame(210f, 10f, 300f, 40f),
-            captureStrip = ZoneFrame(220f, 340f, 280f, 44f),
-            assistStrip = ZoneFrame(60f, 340f, 150f, 44f),
-            systemCluster = ZoneFrame(660f, 50f, 60f, 300f),
-            lock = ZoneFrame(5f, 12f, 48f, 48f),
-            disp = ZoneFrame(665f, 65f, 48f, 48f),
-            record = ZoneFrame(660f, 130f, 58f, 58f),
-            media = ZoneFrame(665f, 205f, 48f, 48f),
-            settings = ZoneFrame(665f, 270f, 48f, 48f),
-            batteryCluster = null,
-            batteryStyle = ZoneStyle.BATTERY_RAIL,
-            batteryPhone = null,
-            batteryCamera = null,
-            scopes = null,
-            controlsGrid = null,
+    private fun testLayout(): MonitorFieldLayout =
+        MonitorLayoutPolicy.fieldMonitor(width = 720f, height = 393f).copy(
+            picture = MonitorRect(60f, 50f, 600f, 300f),
+            status = MonitorRect(210f, 10f, 300f, 40f),
+            values = MonitorRect(220f, 340f, 280f, 44f),
+            assists = MonitorRect(60f, 340f, 150f, 44f),
+            system = MonitorRect(660f, 50f, 60f, 300f),
+            lock = MonitorRect(5f, 12f, 48f, 48f),
+            display = MonitorRect(665f, 65f, 48f, 48f),
+            record = MonitorRect(660f, 130f, 58f, 58f),
+            media = MonitorRect(665f, 205f, 48f, 48f),
+            settings = MonitorRect(665f, 270f, 48f, 48f),
         )
 }

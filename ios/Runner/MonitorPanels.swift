@@ -209,7 +209,7 @@ struct CommandPrimaryGrid: View {
     }
 
     private func cameraValue(_ label: String, fallback: String) -> String {
-        model.cameraState.values.first(where: { $0.label == label })?.value ?? fallback
+        model.shownCameraValue(label) ?? fallback
     }
 }
 
@@ -405,7 +405,7 @@ struct CommandSideColumn: View {
     }
 
     private func cameraValue(_ label: String, fallback: String) -> String {
-        model.cameraState.values.first(where: { $0.label == label })?.value ?? fallback
+        model.shownCameraValue(label) ?? fallback
     }
 }
 

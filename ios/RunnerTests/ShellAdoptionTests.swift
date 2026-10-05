@@ -1,5 +1,6 @@
 import OpenCineAppKit
 import OpenCineCore
+import OpenZCineCore
 import Testing
 
 @testable import Runner
@@ -108,5 +109,19 @@ struct ShellAdoptionTests {
         model.activePanel = .settings
         model.leaveMonitorForInternetHop(rehostActivePanel: false)
         #expect(model.shell.cover == nil)
+    }
+
+    @Test("A pending common edit shows over the reported value without being written into it")
+    func pendingEditsShowOverTheReport() {
+        let reported = [
+            CameraValue(label: "ISO", value: "800", isSettable: true),
+            CameraValue(label: "WB", value: "5600K", isSettable: true),
+            CameraValue(label: "FOCUS", value: "AF-C", isSettable: true),
+        ]
+        #expect(NativeAppModel.showing([:], over: reported) == reported)
+        let shown = NativeAppModel.showing(
+            [.iso: .iso(.manual(1600)), .whiteBalance: .whiteBalance(.auto)], over: reported)
+        #expect(shown.map(\.value) == ["1600", "Auto", "AF-C"])
+        #expect(shown.map(\.label) == reported.map(\.label))
     }
 }
