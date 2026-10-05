@@ -139,7 +139,8 @@ struct MulticamStage: View {
                     member.recording == true ? "Stop recording" : "Start recording",
                     kind: .record, enabled: member.isLive),
                 MultiviewCameraAction(MulticamTileAction.reconnect, "Reconnect", closes: true),
-                MultiviewCameraAction(MulticamTileAction.remove, "Remove camera", kind: .destructive),
+                MultiviewCameraAction(
+                    MulticamTileAction.remove, "Remove camera", kind: .destructive),
             ],
             accessibilityValue: detail)
     }
@@ -225,12 +226,12 @@ struct MulticamStage: View {
                     detail: row.refusal ?? SavedCameraPathGroups.pathLabel(for: row.record),
                     enabled: row.refusal == nil)
             },
-            empty: MulticamCopy.emptyPicker, cancel: { addingSlot = nil }
-        ) { id in
-            guard let row = rows.first(where: { $0.id == id }) else { return }
-            addingSlot = nil
-            coordinator.add(row.record, reachable: true, slot: slot)
-        }
+            empty: MulticamCopy.emptyPicker, cancel: { addingSlot = nil },
+            pick: { id in
+                guard let row = rows.first(where: { $0.id == id }) else { return }
+                addingSlot = nil
+                coordinator.add(row.record, reachable: true, slot: slot)
+            })
     }
 }
 
