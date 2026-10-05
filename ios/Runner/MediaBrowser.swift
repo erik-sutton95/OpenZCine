@@ -4,6 +4,7 @@ import MonitorPresentation
 import MonitorUI
 import OSLog
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -2102,7 +2103,9 @@ struct MediaPlayerView: View {
     private var isMuted: Bool { playback?.muted ?? false }
     private var currentTime: Double { playback?.position ?? 0 }
     private var duration: Double { playback?.duration ?? 0 }
-    private var conformSource: ConformPreview.Source { playback?.metadata.conform ?? .init() }
+    private var conformSource: MonitorConformPreview.Source {
+        playback?.metadata.conform ?? .init()
+    }
     private var conformTarget: Double? {
         get { playback?.conformTarget }
         nonmutating set { playback?.setConformTarget(newValue) }
@@ -2136,7 +2139,7 @@ struct MediaPlayerView: View {
     @State private var playbackScopeAssist: ScopeAssistBundle = .empty
     @State private var playbackScopeController = PlaybackScopeController()
     @State private var playbackAudioLevels: AudioMeterLevels?
-    @State private var audioMeterController = PlaybackAudioMeterController { status in
+    @State private var audioMeterController = MonitorPlaybackAudioMeterRuntime { status in
         Logger(subsystem: "OpenZCine", category: "media-playback-audio")
             .error("MTAudioProcessingTapCreate failed: \(status)")
     }
@@ -2644,13 +2647,14 @@ struct MediaPlayerView: View {
 
     /// Real seconds shown on the conformed timeline: a 6 s clip at 40% reads 15 s.
     private func conformedLabel(_ seconds: Double) -> String {
-        timeLabel(ConformPreview.conformedDuration(sourceSeconds: seconds, speed: conformSpeed))
+        timeLabel(
+            MonitorConformPreview.conformedDuration(sourceSeconds: seconds, speed: conformSpeed))
     }
 
     /// Playback rate for the active conform, or 1 in real time.
     private var conformSpeed: Double {
         guard let target = conformTarget, let rate = conformSource.captureRate else { return 1 }
-        return ConformPreview.speed(captureRate: rate, targetRate: target)
+        return MonitorConformPreview.speed(captureRate: rate, targetRate: target)
     }
 
     /// Starts playback at the conform rate. Setting a non-zero `rate` IS play, so this replaces

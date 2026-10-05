@@ -12,7 +12,7 @@ import com.google.android.gms.wearable.CapabilityInfo
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
-import com.opencapture.openzcine.LiveFramePreviewBaker
+import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import com.opencapture.openzcine.wearrelay.WatchConnectionState
@@ -160,7 +160,7 @@ internal class AndroidWearPhoneRelay(context: Context) :
     fun ingestPresentedFrame(
         frame: LiveFrame,
         bitmap: Bitmap,
-        previewBaker: LiveFramePreviewBaker?,
+        previewBaker: MonitorBitmapPreviewBaker?,
     ) {
         val profile = previewPacing.currentProfile()
         val shouldCapture = synchronized(lock) { active && reachableWearNodes.isNotEmpty() }
@@ -493,7 +493,7 @@ internal class AndroidWearPhoneRelay(context: Context) :
 /** A relay-owned, small bitmap snapshot that may safely outlive the feed's decode ring. */
 private data class PreviewSnapshot(
     val bitmap: Bitmap,
-    val previewBaker: LiveFramePreviewBaker?,
+    val previewBaker: MonitorBitmapPreviewBaker?,
     val timecode: WatchTimecode,
     val isRecording: Boolean,
     val profile: WearPreviewProfile,

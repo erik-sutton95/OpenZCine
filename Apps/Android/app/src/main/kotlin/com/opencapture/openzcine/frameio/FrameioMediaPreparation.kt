@@ -42,12 +42,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
-internal typealias MediaExportContainer = MonitorMovieExportContainer
-
 /** One explicit per-run configuration shared by every external media destination. */
 internal data class MediaDeliveryConfiguration(
     val bakeLut: Boolean = false,
-    val exportContainer: MediaExportContainer = MediaExportContainer.MOV,
+    val exportContainer: MonitorMovieExportContainer = MonitorMovieExportContainer.MOV,
     val includeMetadata: Boolean = true,
     val selectedLut: FeedLutSelection? = null,
     val forceFrameioReupload: Boolean = false,
@@ -69,8 +67,6 @@ internal data class FrameioArtifactContext(
     val supportsLutBake: Boolean,
     val stableClipIdentity: String = "",
 )
-
-internal typealias FrameioLutPayload = MonitorMovieExportLut
 
 /** Upload-ready output plus the exact look that was actually baked, if any. */
 internal class FrameioPreparedArtifact(
@@ -116,26 +112,26 @@ internal object PassthroughFrameioArtifactPreparer : FrameioArtifactPreparer {
 
 /** Resolves only a built-in core cube or revalidated app-private stored selection. */
 internal interface FrameioLutProvider {
-    suspend fun approvedPayload(selection: FeedLutSelection): FrameioLutPayload?
+    suspend fun approvedPayload(selection: FeedLutSelection): MonitorMovieExportLut?
 }
 
 /** Production LUT resolver. Kotlin never parses `.cube` source or invents colour math. */
 internal class AndroidFrameioLutProvider(
     private val library: AndroidLutLibrary,
 ) : FrameioLutProvider {
-    override suspend fun approvedPayload(selection: FeedLutSelection): FrameioLutPayload? =
+    override suspend fun approvedPayload(selection: FeedLutSelection): MonitorMovieExportLut? =
         when (selection) {
             is FeedLutSelection.BuiltIn -> {
                 if (!SwiftCore.isAvailable) return null
                 val packed = SwiftCore.bakeLut(selection.value.wireOrdinal, BUILT_IN_CUBE_SIZE)
                     ?: return null
-                FrameioLutPayload(selection.value.label, BUILT_IN_CUBE_SIZE, packed)
+                MonitorMovieExportLut(selection.value.label, BUILT_IN_CUBE_SIZE, packed)
             }
             is FeedLutSelection.Stored -> {
                 if (!library.prepare(selection.value)) return null
                 val packed = library.packedCube(selection.value) ?: return null
                 val name = library.displayName(selection.value) ?: return null
-                FrameioLutPayload(name, packed.cubeSize, packed.rgba)
+                MonitorMovieExportLut(name, packed.cubeSize, packed.rgba)
             }
         }
 
@@ -149,7 +145,7 @@ internal interface FrameioLutVideoExporter {
     suspend fun export(
         source: Path,
         target: Path,
-        lut: FrameioLutPayload,
+        lut: MonitorMovieExportLut,
         onProgress: suspend (Double) -> Unit,
     )
 }
@@ -195,7 +191,7 @@ internal class AndroidMedia3FrameioLutVideoExporter(
         mainDispatcher = mainDispatcher,
     )
 
-    override suspend fun export(source: Path, target: Path, lut: FrameioLutPayload, onProgress: suspend (Double) -> Unit) =
+    override suspend fun export(source: Path, target: Path, lut: MonitorMovieExportLut, onProgress: suspend (Double) -> Unit) =
         owner.export(source, target, lut, onProgress)
 }
 

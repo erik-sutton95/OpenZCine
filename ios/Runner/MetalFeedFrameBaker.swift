@@ -60,18 +60,5 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
             })
     }
 
-    func acquireFrame(for drawableSize: CGSize, pixelFormat: MTLPixelFormat) -> MonitorFrameBaker
-        .Frame?
-    {
-        native.acquireFrame(for: drawableSize, pixelFormat: pixelFormat)
-    }
-    func bakedTexture(for drawableSize: CGSize, pixelFormat: MTLPixelFormat) -> MTLTexture? {
-        native.bakedTexture(for: drawableSize, pixelFormat: pixelFormat)
-    }
-    func releaseBakedTexture(_ texture: MTLTexture) { native.releaseBakedTexture(texture) }
     func reset() { native.reset() }
-    func close() { native.close() }
-    static func bakeSize(source: CGSize, drawable: CGSize) -> CGSize {
-        MonitorFrameBaker.bakeSize(source: source, drawable: drawable)
-    }
 }

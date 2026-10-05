@@ -208,8 +208,8 @@ enum MediaLUT {
             guard
                 let cgImage = MediaLUT.renderContext.createCGImage(
                     source, from: source.extent, format: .RGBA8,
-                    colorSpace: FrameSampling.cameraFileColorSpace),
-                let buffer = FrameSampling.rgbaBuffer(
+                    colorSpace: MonitorImageSampling.fileCodeColorSpace),
+                let buffer = MonitorImageSampling.rgbaBuffer(
                     from: UIImage(cgImage: cgImage), maxWidth: 200)
             else { return }
             let samples = OpenCineMedia.ScopeSampler.sampleRaw(
@@ -255,25 +255,6 @@ enum MediaLUT {
         } catch let error as MonitorReaderWriterMediaExporter.ExportError {
             throw appExportError(error)
         }
-    }
-
-    /// Legacy entry point — bakes LUT into `{baseName}_LUT.mov`.
-    static func export(
-        sourceURL: URL,
-        cube: CubeLUT,
-        baseName: String,
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> URL {
-        let stem = (baseName as NSString).deletingPathExtension
-        let result = try await export(
-            sourceURL: sourceURL,
-            outputFilename: "\(stem)_LUT.mov",
-            format: .mov,
-            cube: cube,
-            metadata: nil,
-            progress: progress
-        )
-        return result.videoURL
     }
 
     static func audioVisualExportAsset(from asset: AVAsset) async throws -> AVMutableComposition {
@@ -335,22 +316,6 @@ enum MediaLUT {
         let url = exports.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: url)
         return url
-    }
-
-    static func movieHasFinishedHeader(at url: URL) -> Bool {
-        MonitorMovieFile.movieHasFinishedHeader(at: url)
-    }
-
-    static func mediaDataExtendsPastEndOfFile(at url: URL) -> Bool {
-        MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: url)
-    }
-
-    static func scaledProgressDuration(for url: URL, headerDuration: CMTime) -> CMTime {
-        MonitorMovieFile.scaledProgressDuration(for: url, headerDuration: headerDuration)
-    }
-
-    static func mdatAvailableFraction(at url: URL) -> Double? {
-        MonitorMovieFile.mdatAvailableFraction(at: url)
     }
 }
 

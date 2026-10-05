@@ -158,7 +158,7 @@ enum FrozenNikonRuntimeEffects {
     ///
     /// `extent` is the frame's own rect and the boundary is its centre. Every present path centres
     /// the frame as a whole — the Metal bake takes a centred crop at the drawable's aspect
-    /// (`MetalFeedFrameBaker.bakeSize`), the fallbacks are `.scaleAspectFill`, and de-squeeze is a
+    /// (`MonitorFrameBaker.bakeSize`), the fallbacks are `.scaleAspectFill`, and de-squeeze is a
     /// `.scaleEffect` about the centre — so the middle of the frame is the middle of the visible
     /// image rectangle on screen, with letterbox, pillarbox and chrome all outside it.
     ///

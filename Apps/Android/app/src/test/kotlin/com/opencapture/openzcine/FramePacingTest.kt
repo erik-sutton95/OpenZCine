@@ -1,6 +1,8 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.LiveFrame
+import com.opencapture.opencine.runtime.MonitorFramePacingStats
+import com.opencapture.opencine.runtime.monitorPumpFramesWithSourceFrame
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -12,7 +14,7 @@ import kotlinx.coroutines.test.runTest
 
 class FramePacingStatsTest {
     private val reports = mutableListOf<String>()
-    private val stats = FramePacingStats(reportIntervalNanos = 1_000_000_000L, log = reports::add)
+    private val stats = MonitorFramePacingStats(reportIntervalNanos = 1_000_000_000L, log = reports::add)
 
     /** One received + presented frame every 40 ms; frame 0 is the window baseline. */
     private fun presentSteadily(count: Int, decodeNanos: Long = 10_000_000L) {
@@ -60,9 +62,10 @@ class PumpFramesTest {
         val source = MutableSharedFlow<LiveFrame>()
         val presented = mutableListOf<Byte>()
         val pump = launch {
-            pumpFramesWithSourceFrame(
+            monitorPumpFramesWithSourceFrame(
                 frames = source,
-                stats = FramePacingStats(log = {}),
+                stats = MonitorFramePacingStats(log = {}),
+                timestampNanos = { it.timestampNanos },
                 decode = { it.jpegData[0] },
                 present = { _, decoded -> presented.add(decoded) },
             )
@@ -82,9 +85,10 @@ class PumpFramesTest {
         // A burst the consumer never gets between: latest-wins keeps only the
         // first frame (taken immediately) and the newest one. The drop ledger
         // itself is covered deterministically in FramePacingStatsTest.
-        pumpFramesWithSourceFrame(
+        monitorPumpFramesWithSourceFrame(
             frames = (0 until 10).map(::frame).asFlow(),
-            stats = FramePacingStats(log = {}),
+            stats = MonitorFramePacingStats(log = {}),
+            timestampNanos = { it.timestampNanos },
             decode = { it.jpegData[0] },
             present = { _, decoded -> presented.add(decoded) },
         )
@@ -96,9 +100,10 @@ class PumpFramesTest {
         val source = MutableSharedFlow<LiveFrame>()
         val presented = mutableListOf<Byte>()
         val pump = launch {
-            pumpFramesWithSourceFrame(
+            monitorPumpFramesWithSourceFrame(
                 frames = source,
-                stats = FramePacingStats(log = {}),
+                stats = MonitorFramePacingStats(log = {}),
+                timestampNanos = { it.timestampNanos },
                 decode = { frame -> frame.jpegData[0].takeIf { it.toInt() % 2 == 0 } },
                 present = { _, decoded -> presented.add(decoded) },
             )
@@ -117,9 +122,10 @@ class PumpFramesTest {
         val firstSource = MutableSharedFlow<LiveFrame>()
         val presented = mutableListOf<Byte>()
         val firstPump = launch {
-            pumpFramesWithSourceFrame(
+            monitorPumpFramesWithSourceFrame(
                 frames = firstSource,
-                stats = FramePacingStats(log = {}),
+                stats = MonitorFramePacingStats(log = {}),
+                timestampNanos = { it.timestampNanos },
                 decode = { it.jpegData[0] },
                 present = { _, decoded -> presented.add(decoded) },
             )
@@ -130,9 +136,10 @@ class PumpFramesTest {
         // Source switch: the shell cancels the old collector and pumps the new
         // source (LaunchedEffect keyed on the source does exactly this).
         firstPump.cancelAndJoin()
-        pumpFramesWithSourceFrame(
+        monitorPumpFramesWithSourceFrame(
             frames = listOf(frame(10)).asFlow(),
-            stats = FramePacingStats(log = {}),
+            stats = MonitorFramePacingStats(log = {}),
+            timestampNanos = { it.timestampNanos },
             decode = { it.jpegData[0] },
             present = { _, decoded -> presented.add(decoded) },
         )
@@ -147,7 +154,7 @@ class PumpFramesTest {
     @Test
     fun `reports how far behind the presented frame is`() {
         val lines = mutableListOf<String>()
-        val stats = FramePacingStats(reportIntervalNanos = 1_000_000_000L) { lines += it }
+        val stats = MonitorFramePacingStats(reportIntervalNanos = 1_000_000_000L) { lines += it }
 
         stats.framePresented(decodeNanos = 0L, nowNanos = 0L, ageNanos = 0L) // baseline
         repeat(25) { index ->
@@ -166,7 +173,7 @@ class PumpFramesTest {
     @Test
     fun `an unstamped source claims no latency at all`() {
         val lines = mutableListOf<String>()
-        val stats = FramePacingStats(reportIntervalNanos = 1_000_000_000L) { lines += it }
+        val stats = MonitorFramePacingStats(reportIntervalNanos = 1_000_000_000L) { lines += it }
 
         stats.framePresented(decodeNanos = 0L, nowNanos = 0L)
         repeat(25) { index ->

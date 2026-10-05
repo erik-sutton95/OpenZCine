@@ -286,7 +286,7 @@ public enum SplitComparisonOrientation: String, CaseIterable, Codable, Equatable
 /// **The boundary is the centre of the visible image rectangle**, never the centre of the surface:
 /// letterbox, pillarbox and monitor chrome are all outside it. Every renderer already establishes
 /// that rectangle before the grade runs — iOS bakes a centred crop of the source at the drawable's
-/// aspect (`MetalFeedFrameBaker.bakeSize`), Android sets the GL viewport to `liveFeedContentRect`
+/// aspect (`MonitorFrameBaker.bakeSize`), Android sets the GL viewport to `liveFeedContentRect`
 /// and the Vulkan viewport to the letterboxed content rect — so each one splits in its own feed
 /// space at the halfway line and inherits a correct boundary through fit/fill, de-squeeze, crop
 /// and orientation changes for free. Fit and fill both centre the image, so the halfway line of

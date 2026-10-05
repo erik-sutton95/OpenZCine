@@ -153,13 +153,13 @@ also covers owned close once, borrowed return without close, and held HDMI throu
 These checks do not qualify physical Nikon/HDMI behavior.
 
 SHELL-03 Z-2 conform candidate: `OpenCineMedia.MonitorConformPreview` owns preview math and
-labels; `OpenZCineCore.ConformPreview` is a public compatibility alias. Android delegates
+labels, and the iOS shell uses it directly. Android delegates
 availability and finite-rate math to the same media module, retaining its nullable/nonfinite
 speed adapter. Nikon's asset metadata probe and player transport remain app-owned.
 
 SHELL-03 Z-2 decoded-audio candidate (locally implemented, automated checks passed): both shells
-consume existing shared audio owners. iOS `PlaybackAudioMeterController` aliases
-`OpenCineApple.MonitorPlaybackAudioMeterRuntime`, which owns the actual processing tap,
+consume existing shared audio owners. iOS uses `OpenCineApple.MonitorPlaybackAudioMeterRuntime`
+directly; it owns the actual processing tap,
 track query, source retirement and polling. Portable meter values and ballistics alias
 `OpenCineMedia`; Nikon retains the camera's segment mapping, audio-session actions and
 conform mute policy. Android's Media3 adapter passes PCM bytes through unchanged and uses

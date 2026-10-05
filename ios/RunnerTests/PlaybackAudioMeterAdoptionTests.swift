@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenCineApple
 import OpenZCineCore
 import XCTest
 
@@ -18,7 +19,7 @@ final class PlaybackAudioMeterAdoptionTests: XCTestCase {
         try Self.writeAudio(to: tone, amplitude: 0.5)
         try Self.writeAudio(to: silence, amplitude: 0)
 
-        let runtime = PlaybackAudioMeterController()
+        let runtime = MonitorPlaybackAudioMeterRuntime()
         let player = AVPlayer()
         player.isMuted = true
         var latest: AudioMeterLevels?
@@ -65,7 +66,7 @@ final class PlaybackAudioMeterAdoptionTests: XCTestCase {
         let tone = directory.appendingPathComponent("tone.caf")
         try Self.writeAudio(to: tone, amplitude: 0.5)
         let item = AVPlayerItem(url: tone)
-        let runtime = PlaybackAudioMeterController()
+        let runtime = MonitorPlaybackAudioMeterRuntime()
         defer { runtime.close() }
         runtime.attach(to: item)
         runtime.detach(from: item)

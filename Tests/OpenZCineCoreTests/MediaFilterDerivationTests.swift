@@ -22,8 +22,8 @@ private func captureDate(daysAgo: Int) -> String {
     return String(format: "%04d%02d%02dT120000", parts.year!, parts.month!, parts.day!)
 }
 
-private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
-    MediaFilterDerivation.options(for: items, now: testNow, calendar: testCalendar)
+private func options(_ items: [NikonMediaFilterItem]) -> MediaFilterOptions {
+    NikonMediaFilterDerivation.options(for: items, now: testNow, calendar: testCalendar)
 }
 
 // MARK: - Format classification
@@ -54,11 +54,11 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 
 @Test func photosTabOffersStillFormatsAndNeverVideoChips() {
     let derived = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0001.JPG", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0002.NEF", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0003.HIF", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(derived.formats == [.jpeg, .heif, .nef])
@@ -70,9 +70,9 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 
 @Test func videosTabKeepsContainerAndResolutionChips() {
     let derived = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0001.MOV", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0002.MP4", pixelWidth: 1920, captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(derived.formats == [.mov, .mp4])
@@ -83,11 +83,11 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 
 @Test func allTabOffersTheUnionActuallyPresent() {
     let derived = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0001.MOV", pixelWidth: 3840, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0001.JPG", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0002.NEF", pixelWidth: 3024, captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(derived.formats == [.mov, .jpeg, .nef])
@@ -100,9 +100,9 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 @Test func chipMatchingNothingIsNotOffered() {
     // A listing with no MP4 must not advertise MP4, and no 5.4K clip must not advertise 5.4K.
     let derived = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0001.MOV", pixelWidth: 1920, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0002.MOV", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(!derived.formats.contains(.mp4))
@@ -113,9 +113,9 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 @Test func chipMatchingEverythingIsNotOffered() {
     // Every clip is a MOV, so a MOV chip would filter nothing at all.
     let derived = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0001.MOV", pixelWidth: 1920, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0002.MOV", pixelWidth: 1920, captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(derived.formats.isEmpty)
@@ -152,7 +152,7 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 
     let derived = options(
         fxAndDX.enumerated().map { index, width in
-            MediaFilterItem(
+            NikonMediaFilterItem(
                 filename: "DSC_000\(index).JPG",
                 pixelWidth: width,
                 captureDate: captureDate(daysAgo: 0))
@@ -165,8 +165,8 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 @Test func sizeRowIsOmittedWhenStillsCarryNoDimensions() {
     // The camera reported no ImagePixWidth for these stills: no SIZE chip is faked.
     let derived = options([
-        MediaFilterItem(filename: "DSC_0001.JPG", captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(filename: "DSC_0002.NEF", captureDate: captureDate(daysAgo: 0)),
+        NikonMediaFilterItem(filename: "DSC_0001.JPG", captureDate: captureDate(daysAgo: 0)),
+        NikonMediaFilterItem(filename: "DSC_0002.NEF", captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(derived.photoSizes.isEmpty)
     #expect(derived.formats == [.jpeg, .nef])
@@ -174,9 +174,9 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 
 @Test func sizeRowIsOmittedWhenEveryStillIsTheSameSize() {
     let derived = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0001.JPG", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0002.JPG", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(derived.photoSizes.isEmpty)
@@ -221,11 +221,11 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 
 @Test func onlyDateWindowsThatSplitTheListingAreOffered() {
     let derived = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0001.MOV", pixelWidth: 1920, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0002.MP4", pixelWidth: 1920, captureDate: captureDate(daysAgo: 3)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "C0003.MP4", pixelWidth: 1920, captureDate: captureDate(daysAgo: 90)),
     ])
     // TODAY selects one, 7 DAYS two, 30 DAYS two — all three genuinely split the listing.
@@ -235,15 +235,15 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
 @Test func dateWindowsThatSelectEverythingOrNothingAreDropped() {
     // Everything is from today: all three windows select all three clips, so none filters.
     let allToday = options([
-        MediaFilterItem(filename: "C0001.MOV", captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(filename: "C0002.MP4", captureDate: captureDate(daysAgo: 0)),
+        NikonMediaFilterItem(filename: "C0001.MOV", captureDate: captureDate(daysAgo: 0)),
+        NikonMediaFilterItem(filename: "C0002.MP4", captureDate: captureDate(daysAgo: 0)),
     ])
     #expect(allToday.dateWindows.isEmpty)
 
     // Nothing is recent: TODAY and 7 DAYS would show an empty grid, so neither is offered.
     let allOld = options([
-        MediaFilterItem(filename: "C0001.MOV", captureDate: captureDate(daysAgo: 200)),
-        MediaFilterItem(filename: "C0002.MP4", captureDate: captureDate(daysAgo: 20)),
+        NikonMediaFilterItem(filename: "C0001.MOV", captureDate: captureDate(daysAgo: 200)),
+        NikonMediaFilterItem(filename: "C0002.MP4", captureDate: captureDate(daysAgo: 20)),
     ])
     #expect(allOld.dateWindows == [.last30Days])
 }
@@ -255,9 +255,9 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
     // selection with the new tab's offered chips is what both shells do on a tab change: an
     // invisible MOV filter would otherwise hide every still.
     let photos = options([
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0001.JPG", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
-        MediaFilterItem(
+        NikonMediaFilterItem(
             filename: "DSC_0002.NEF", pixelWidth: 6048, captureDate: captureDate(daysAgo: 0)),
     ])
     let active: Set<MediaFormatChip> = [.mov, .jpeg]

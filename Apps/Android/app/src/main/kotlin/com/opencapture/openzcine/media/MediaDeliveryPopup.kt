@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.MonitorMediaDeliveryPanel
 import com.opencapture.monitorui.MonitorMediaDeliveryValue
+import com.opencapture.opencine.runtime.MonitorMovieExportContainer
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
@@ -31,7 +32,6 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.FrameioNetworkState
 import com.opencapture.openzcine.frameio.FrameioProjectState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
-import com.opencapture.openzcine.frameio.MediaExportContainer
 import kotlinx.coroutines.launch
 
 /** iOS `MediaDeliveryDestination` — where a delivery run sends prepared clips. */
@@ -99,7 +99,7 @@ internal fun MediaDeliveryPopup(
     var destination by remember(preferredDestination) { mutableStateOf(preferredDestination) }
     var shareAction by remember { mutableStateOf(MediaDeliveryPostExportAction.SYSTEM_SHARE) }
     var bakeLut by remember(selectedLut) { mutableStateOf(selectedLut != null) }
-    var exportContainer by remember { mutableStateOf(MediaExportContainer.MOV) }
+    var exportContainer by remember { mutableStateOf(MonitorMovieExportContainer.MOV) }
     var includeMetadata by remember { mutableStateOf(true) }
     var forceReupload by remember { mutableStateOf(false) }
     var showHopConfirm by remember { mutableStateOf(false) }
@@ -253,7 +253,7 @@ internal fun MediaDeliveryPopup(
                 MonitorMediaDeliveryValue.Option.CONVERT_LOG, MonitorMediaDeliveryValue.Option.BAKE_EXPOSURE -> Unit
             }
             is MonitorMediaDeliveryValue.Action.Selection -> when (action.selection) {
-                MonitorMediaDeliveryValue.Selection.FORMAT -> MediaExportContainer.entries
+                MonitorMediaDeliveryValue.Selection.FORMAT -> MonitorMovieExportContainer.entries
                     .firstOrNull { it.name == action.id }?.let { exportContainer = it }
                 MonitorMediaDeliveryValue.Selection.POST_EXPORT -> MediaDeliveryPostExportAction.entries
                     .firstOrNull { it.name == action.id }?.let { shareAction = it }

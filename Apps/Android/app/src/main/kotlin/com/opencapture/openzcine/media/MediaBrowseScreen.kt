@@ -137,6 +137,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.nikon.NikonMediaClips
 import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.monitorui.MonitorMediaLayout
@@ -655,7 +656,7 @@ internal fun MediaBrowseScreen(
                 val binding = actual.binding
                 if (library !== actual) return@collect
                 val clips = if (binding != null && connectedSource.isCurrent(binding)) {
-                    MediaClips.newestFirst(snapshot.catalog.assets.mapNotNull { asset ->
+                    NikonMediaClips.newestFirst(snapshot.catalog.assets.mapNotNull { asset ->
                         connectedSource.mediaCatalogRecord(asset.id, binding)?.clip
                     })
                 } else emptyList()

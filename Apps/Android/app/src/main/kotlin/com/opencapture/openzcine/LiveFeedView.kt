@@ -3,7 +3,10 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
 import com.opencapture.opencine.runtime.MonitorFrameDecodeWorker
+import com.opencapture.opencine.runtime.MonitorFramePacingStats
+import com.opencapture.opencine.runtime.monitorPumpFramesWithSourceFrame
 import android.os.Build
 import android.util.Log
 import android.view.HapticFeedbackConstants
@@ -328,7 +331,7 @@ class JpegFrameDecoder(private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE) {
 
 /**
  * Renders a [LiveFrameSource] as the monitor feed: decodes off the main
- * thread with latest-wins conflation ([pumpFramesWithSourceFrame]) and draws the newest
+ * thread with latest-wins conflation ([monitorPumpFramesWithSourceFrame]) and draws the newest
  * frame into the full modifier bounds. [aspectFill] selects the portrait
  * centre-crop path; the default keeps the whole frame visible.
  *
@@ -339,7 +342,7 @@ class JpegFrameDecoder(private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE) {
  * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
  * [onPresentedFrame] observes the exact source [LiveFrame], decoded bitmap,
- * and optional [LiveFramePreviewBaker] accepted for display. The
+ * and optional [MonitorBitmapPreviewBaker] accepted for display. The
  * phone-mediated Wear relay uses this callback rather than collecting [source]
  * itself, so it cannot keep camera live view running while the monitor is
  * hidden or backgrounded. When image assists are visible, the baker reuses the
@@ -368,7 +371,7 @@ fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
-    onPresentedFrame: ((LiveFrame, Bitmap, LiveFramePreviewBaker?) -> Unit)? = null,
+    onPresentedFrame: ((LiveFrame, Bitmap, MonitorBitmapPreviewBaker?) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects,
     configuration: FeedEffectsConfiguration = FeedEffectsConfiguration(),
@@ -428,7 +431,7 @@ fun LiveFeedView(
     val colorMode = presentationState?.colorMode ?: fallbackColorMode.value
     var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     // Wear / small preview baker only (not the live monitor path).
-    var previewBaker by remember { mutableStateOf<LiveFramePreviewBaker?>(null) }
+    var previewBaker by remember { mutableStateOf<MonitorBitmapPreviewBaker?>(null) }
     // AGSL grade for the Compose present path (FULL glass). Mid/high devices
     // only — A12 stays on FLAT + GPU SurfaceView.
     var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
@@ -566,13 +569,14 @@ fun LiveFeedView(
         // The same power-of-two trap already cost this path once, when a 960 cap carried over from
         // a 1080p source halved every frame on every device.
         val decoder = JpegFrameDecoder(maxLongSide = JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE)
-        val stats = FramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
+        val stats = MonitorFramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
         val decodeWorker = MonitorFrameDecodeWorker("zc-feed-decode")
         try {
             decodeWorker.run { isCurrent ->
-            pumpFramesWithSourceFrame(
+            monitorPumpFramesWithSourceFrame(
                 frames = source.frames,
                 stats = stats,
+                timestampNanos = { it.timestampNanos },
                 isCurrent = isCurrent,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.

@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import OpenCineApple
 import OpenZCineCore
 import XCTest
 
@@ -132,9 +133,9 @@ final class MediaTimecodeTests: XCTestCase {
 
         let sourceURL = dir.appendingPathComponent("source.mov")
         try await Self.writeMovieWithTimecode(to: sourceURL)
-        XCTAssertFalse(MediaLUT.mediaDataExtendsPastEndOfFile(at: sourceURL))
-        XCTAssertTrue(MediaLUT.movieHasFinishedHeader(at: sourceURL))
-        XCTAssertNil(MediaLUT.mdatAvailableFraction(at: sourceURL))
+        XCTAssertFalse(MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: sourceURL))
+        XCTAssertTrue(MonitorMovieFile.movieHasFinishedHeader(at: sourceURL))
+        XCTAssertNil(MonitorMovieFile.mdatAvailableFraction(at: sourceURL))
     }
 
     func testTruncatedFastStartProxyExportWritesPlayableFile() async throws {
@@ -149,13 +150,14 @@ final class MediaTimecodeTests: XCTestCase {
         let truncatedURL = dir.appendingPathComponent("truncated.mov")
         try Self.truncateMdatPayload(from: sourceURL, to: truncatedURL, keepFraction: 0.35)
         try XCTSkipUnless(
-            MediaLUT.mediaDataExtendsPastEndOfFile(at: truncatedURL),
+            MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: truncatedURL),
             "fast-start rewrite did not leave moov before a declared-oversize mdat")
-        let fraction = try XCTUnwrap(MediaLUT.mdatAvailableFraction(at: truncatedURL))
+        let fraction = try XCTUnwrap(MonitorMovieFile.mdatAvailableFraction(at: truncatedURL))
         XCTAssertGreaterThan(fraction, 0.1)
         XCTAssertLessThan(fraction, 0.9)
         let header = CMTime(seconds: 10, preferredTimescale: 25_000)
-        let scaled = MediaLUT.scaledProgressDuration(for: truncatedURL, headerDuration: header)
+        let scaled = MonitorMovieFile.scaledProgressDuration(
+            for: truncatedURL, headerDuration: header)
         XCTAssertLessThan(scaled.seconds, header.seconds)
 
         let result = try await MediaLUT.export(
@@ -171,8 +173,8 @@ final class MediaTimecodeTests: XCTestCase {
             (try FileManager.default.attributesOfItem(atPath: result.videoURL.path)[.size]
                 as? UInt64) ?? 0
         XCTAssertGreaterThan(size, 0)
-        XCTAssertTrue(MediaLUT.movieHasFinishedHeader(at: result.videoURL))
-        XCTAssertFalse(MediaLUT.mediaDataExtendsPastEndOfFile(at: result.videoURL))
+        XCTAssertTrue(MonitorMovieFile.movieHasFinishedHeader(at: result.videoURL))
+        XCTAssertFalse(MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: result.videoURL))
     }
 
     func testExportReferenceProxyIfPresent() async throws {

@@ -5,12 +5,6 @@ data class ZoneFrame(val x: Float, val y: Float, val width: Float, val height: F
 
 /** How a zone's chrome is drawn. */
 enum class ZoneStyle {
-    INFO_PILL,
-    INFO_BAR,
-    AXIS_HORIZONTAL,
-    AXIS_VERTICAL,
-    SCOPES_FLOATING,
-    SCOPES_STACKED,
     BATTERY_RAIL,
     BATTERY_INLINE,
 }
