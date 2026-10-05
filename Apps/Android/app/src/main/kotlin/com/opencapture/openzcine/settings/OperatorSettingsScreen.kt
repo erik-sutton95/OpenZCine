@@ -6,6 +6,7 @@ import com.opencapture.monitorui.settings.MonitorSettingsSegmented
 import com.opencapture.monitorui.settings.MonitorSettingsChoices
 import com.opencapture.monitorui.settings.MonitorSettingsActionPill
 import com.opencapture.monitorui.settings.MonitorConnectionSettings
+import com.opencapture.monitorui.settings.MonitorLinkHealthScale
 import com.opencapture.monitorui.settings.MonitorSupportAction
 import com.opencapture.monitorui.settings.MonitorSupportSettings
 import com.opencapture.openzcine.NikonAssists
@@ -28,7 +29,6 @@ import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -616,7 +616,7 @@ private fun LinkRows(
                     activeTransportLabel ?: "Wi-Fi",
                 )
         }
-    SettingsDashScale(
+    MonitorLinkHealthScale(
         title = stringResource(R.string.settings_link_health),
         caption = healthCaption,
         score = if (linked) health.score else 0,

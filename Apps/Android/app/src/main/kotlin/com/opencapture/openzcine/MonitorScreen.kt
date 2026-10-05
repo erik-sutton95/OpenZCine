@@ -111,6 +111,8 @@ import com.opencapture.opencine.appkit.quickControl
 import com.opencapture.opencine.appkit.MonitorCaptureDrum
 import com.opencapture.opencine.appkit.MonitorCaptureButton
 import com.opencapture.monitorui.MonitorLayoutPolicy
+import com.opencapture.monitorui.monitorBottomInsetDp
+import com.opencapture.monitorui.monitorLeadingInsetDp
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorCameraValues
 import com.opencapture.monitorui.MonitorValue
@@ -233,60 +235,9 @@ internal fun Modifier.liveFeedBodyRotation(rotation: LiveFeedRotation): Modifier
             .graphicsLayer { rotationZ = rotation.displayDegreesClockwise }
     }
 
-/**
- * The iPhone Dynamic Island's landscape leading safe-area inset, in points/dp —
- * the canonical iOS geometry throughout the core tests
- * (`Tests/OpenZCineCoreTests/MonitorLayoutPolicyTests.swift`:
- * `MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)`).
- * `MonitorFeedLayout.leadingInset` turns it into a left chrome lane: the feed
- * starts at x = 59 while the fixed-margin lock button and battery rail
- * (chrome insets ignore the safe area; lock spans x 16–56) sit beside it.
- */
-internal const val IOS_ISLAND_LANE_DP = 59f
-
 /** The on-feed 50/50 quick key, matching the iOS pill. */
 private const val SPLIT_KEY_WIDTH_DP = 44f
 private const val SPLIT_KEY_HEIGHT_DP = 30f
-
-/**
- * The bottom inset handed to the portrait zone map while Android's system bars
- * are hidden. The SM-A127F reports a zero bottom inset in sticky immersive
- * mode, but the physical gesture/home-indicator area is still present. This
- * floor keeps the 83dp record control comfortably above that edge after the
- * shared layout reclaims its 14dp system-bar lift.
- */
-internal const val PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP = 30f
-
-/**
- * Leading inset handed to the zone map, in dp: the display cutout floored at
- * [IOS_ISLAND_LANE_DP], plus any transient system-bar lane on this edge.
- *
- * Devices whose punch-hole resolves below the core's 50dp cutout threshold
- * (SM-A127F: zero inset) would otherwise run the feed edge-to-edge, putting
- * the lock button and battery rail ON the image. Flooring the cutout at the
- * iPhone island lane synthesizes the iOS composition — feed right of the
- * chrome — as a platform-adapter decision, keeping the shared core
- * platform-blind. The floor is a MINIMUM under the physical cutout only; a
- * transient bar on this edge (reverse-landscape nav bar) still ADDS its lane
- * on top so the feed clears the overlay.
- */
-internal fun monitorLeadingInsetDp(cutoutDp: Float, transientBarDp: Float): Float =
-    maxOf(cutoutDp, IOS_ISLAND_LANE_DP) + maxOf(0f, transientBarDp - cutoutDp)
-
-/**
- * Bottom inset handed to the zone map, in dp.
- *
- * Sticky immersive mode can report no Android navigation-bar inset even
- * though a device still reserves its gesture area at the physical bottom.
- * Keep a portrait-only floor so the fixed system rail and its record button
- * never touch that edge; a real, larger system-bar/cutout inset still wins.
- */
-internal fun monitorBottomInsetDp(rawInsetDp: Float, isPortrait: Boolean): Float =
-    if (isPortrait) {
-        maxOf(rawInsetDp, PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP)
-    } else {
-        rawInsetDp
-    }
 
 /** Seats fail-closed feed feedback below any status deck mounted over the live image. */
 internal fun liveFeedColorNoticeTopInsetDp(

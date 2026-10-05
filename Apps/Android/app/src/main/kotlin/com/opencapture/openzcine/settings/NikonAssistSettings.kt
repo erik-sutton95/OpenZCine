@@ -17,7 +17,6 @@ import com.opencapture.monitorui.MonitorWaveformMode
 import com.opencapture.monitorui.MonitorZebraNumberEntry
 import com.opencapture.monitorui.MonitorZebraNumberZone
 import com.opencapture.monitorui.MonitorZebraUnit
-import com.opencapture.monitorui.settings.MonitorSettingsColorDot
 import com.opencapture.monitorui.settings.MonitorAssistSettingsSection
 import com.opencapture.monitorui.settings.MonitorViewAssistSettings
 import android.os.Build
@@ -81,7 +80,7 @@ internal fun nikonAssistSection(
         MonitorAssistTool.FALSE -> if (nikonImageProcessingAvailable) falseColor(state, cameraInput, onInteraction) else null
         MonitorAssistTool.ZEBRA -> if (nikonImageProcessingAvailable) zebra(state, cameraInput, onInteraction) else null
         MonitorAssistTool.PEAK -> if (!nikonImageProcessingAvailable) null else MonitorAssistSettingsSection.Peaking(
-            state.peakingSensitivity, state.peakingColor, commonColors(SettingsPalette.peaking),
+            state.peakingSensitivity, state.peakingColor, SettingsPalette.peaking,
             "Higher sensitivity catches finer edges but can get noisy on detailed scenes.",
             "Choose the edge color that stays readable over your typical scene.",
             onSensitivity = { state.setPeaking(sense = it); onInteraction() }, onColor = { state.setPeaking(color = it); onInteraction() },
@@ -212,7 +211,7 @@ private fun zebraZone(state: MonitorAssistState, input: ExposureAssistCameraInpu
     }
     return MonitorZebraNumberZone(enabled = if (highlight) state.zebraHighlight else state.zebraMidtone,
         entry = entry, paint = if (highlight) state.zebraHighlightColor else state.zebraMidtoneColor,
-        colors = commonColors(if (highlight) SettingsPalette.highlight else SettingsPalette.midtone),
+        colors = if (highlight) SettingsPalette.highlight else SettingsPalette.midtone,
         onEnabled = {
             if (highlight) state.setZebraHighlight(enabled = !state.zebraHighlight)
             else state.setZebraMidtone(enabled = !state.zebraMidtone)
@@ -222,6 +221,3 @@ private fun zebraZone(state: MonitorAssistState, input: ExposureAssistCameraInpu
             onInteraction()
         })
 }
-
-private fun commonColors(colors: List<SettingsColorDot>): List<MonitorSettingsColorDot> =
-    colors.map { MonitorSettingsColorDot(it.name, it.color) }
