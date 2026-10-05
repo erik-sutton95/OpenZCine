@@ -1,37 +1,19 @@
 package com.opencapture.openzcine.multicam
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,47 +21,48 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorMaterial
 import com.opencapture.monitorui.MonitorPalette
-import com.opencapture.monitorui.MonitorRecordLamp
-import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorTypography
-import com.opencapture.monitorui.MultiviewArrangement
 import com.opencapture.monitorui.MultiviewPresentationLayout
 import com.opencapture.monitorui.MultiviewSafeArea
 import com.opencapture.monitorui.monitorMaterial
+import com.opencapture.opencine.appkit.MultiviewCameraAction
+import com.opencapture.opencine.appkit.MultiviewCameraPicker
+import com.opencapture.opencine.appkit.MultiviewPickerRow
+import com.opencapture.opencine.appkit.MultiviewReadout
+import com.opencapture.opencine.appkit.MultiviewRecordContext
+import com.opencapture.opencine.appkit.MultiviewStage
+import com.opencapture.opencine.appkit.MultiviewStageActions
+import com.opencapture.opencine.appkit.MultiviewTally
+import com.opencapture.opencine.appkit.MultiviewTile
+import com.opencapture.opencine.appkit.MultiviewTileStatus
+import com.opencapture.opencine.appkit.MultiviewTool
 import com.opencapture.opencine.core.Availability
 import com.opencapture.opencine.core.ISOValue
 import com.opencapture.opencine.core.MonitorEntryID
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
-import com.opencapture.opencine.multicam.RecordDirection
-import com.opencapture.opencine.multicam.RecordPlan
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /** One saved body offered by Add camera; [refusal] says why it cannot join, null when it can. */
 data class MulticamPickerRow(val record: SavedCameraRecord, val refusal: String?)
 
 /**
- * The multicam stage (Android twin of iOS `MulticamStage`): four fixed tiles laid out by the
- * shared `MultiviewPresentationLayout` (Grid / Center stage), drawn with monitor-ui chrome.
+ * The multicam stage (Android twin of iOS `MulticamStage`): OpenCine's shared Multiview stage over
+ * this app's members. Membership, the eligible-subset record plan, per-member results and
+ * property writes stay in [MulticamCoordinator].
  */
 @Composable
 fun MulticamStage(
@@ -89,11 +72,9 @@ fun MulticamStage(
     openLiveView: (MonitorEntryID) -> Unit,
     close: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     var adding by remember { mutableStateOf<Int?>(null) }
-    var clean by remember { mutableStateOf(false) }
-    var confirming by remember { mutableStateOf<RecordPlan?>(null) }
     var leaving by remember { mutableStateOf(false) }
+    var fill by remember { mutableStateOf(false) }
     val insets = WindowInsets.safeDrawing.asPaddingValues()
     val direction = LocalLayoutDirection.current
     BackHandler { leaving = true }
@@ -111,57 +92,48 @@ fun MulticamStage(
                 ),
                 coordinator.arrangement, coordinator.focusedSlot,
             )
-        val strip = if (layout.secondaryViewport != null) layout.secondaryIndices else emptyList()
-        for (slot in 0 until MulticamCoordinator.TILES) {
-            if (slot in strip) continue
-            Tile(layout, slot, coordinator, clean, openLiveView) { adding = slot }
-        }
-        layout.secondaryViewport?.let { viewport ->
-            // Center stage's trailing strip scrolls inside its viewport.
-            val height = strip.maxOf { layout.tiles[it].maxY } - viewport.y
-            Box(Modifier.at(viewport).verticalScroll(rememberScrollState())) {
-                Box(Modifier.requiredSize(viewport.width.dp, height.dp)) {
-                    for (slot in strip) {
-                        Tile(layout, slot, coordinator, clean, openLiveView, origin = viewport) { adding = slot }
+        MultiviewStage(
+            tiles = (0 until MulticamCoordinator.TILES).map { slot -> coordinator.memberAt(slot)?.let { tile(it, coordinator) } },
+            layout = layout, arrangement = coordinator.arrangement, selected = coordinator.focusedSlot, fill = fill,
+            tools = listOf(MultiviewTool.LAYOUT, MultiviewTool.FIT),
+            readouts = coordinator.program?.takeIf { it.isLive }?.let { readouts(it, coordinator) },
+            recording = coordinator.anyRecording, groupBusy = coordinator.groupBusy, confirmsRecord = confirmsRecord,
+            actions = MultiviewStageActions(
+                select = coordinator::select,
+                arrange = { coordinator.arrangement = it },
+                setFill = { fill = it },
+                openLiveView = { slot -> coordinator.memberAt(slot)?.let { openLiveView(it.id) } },
+                add = { adding = it },
+                perform = { action, slot ->
+                    coordinator.memberAt(slot)?.let { member ->
+                        when (action) {
+                            MulticamTileAction.RECONNECT -> coordinator.retry(member.id)
+                            MulticamTileAction.REMOVE -> coordinator.remove(member.id)
+                        }
                     }
-                }
-            }
-        }
-        if (!clean) {
-            ChromeButton(layout.sessionControls, MonitorIcon.X, "Close multicam") { leaving = true }
-            ChromeButton(
-                layout.network,
-                if (coordinator.arrangement == MultiviewArrangement.GRID) MonitorIcon.LAYOUT_LIST else MonitorIcon.LAYOUT_GRID,
-                if (coordinator.arrangement == MultiviewArrangement.GRID) "Center stage" else "Grid",
-            ) {
-                coordinator.arrangement =
-                    if (coordinator.arrangement == MultiviewArrangement.GRID) {
-                        MultiviewArrangement.CENTER_STAGE
-                    } else {
-                        MultiviewArrangement.GRID
+                },
+                close = { leaving = true },
+                recordContext = { slot ->
+                    val plan = slot?.let(coordinator::memberAt)?.let { coordinator.plan(it.id) } ?: coordinator.groupPlan()
+                    MultiviewRecordContext(
+                        plan, busy = coordinator.groupBusy,
+                        prompt = MulticamCopy.confirm(plan.direction, coordinator.names(plan)),
+                    )
+                },
+                record = { plan, _ -> coordinator.start(plan) },
+                // The value the operator picked, by the name shown: one no longer advertised writes nothing.
+                choose = { slot, readout, choice ->
+                    coordinator.memberAt(slot)?.takeIf { readout == 0 || readout == 2 }?.let { member ->
+                        val key = if (readout == 0) SettingKey.ISO else SettingKey.WHITE_BALANCE
+                        choices(key, member, coordinator).firstOrNull { it.second == choice }
+                            ?.let { (value, _) -> coordinator.set(value, member.id, if (readout == 0) "ISO" else "WB") }
                     }
+                },
+            ),
+        ) { slot ->
+            coordinator.memberAt(slot)?.frame?.let {
+                Image(it, null, Modifier.fillMaxSize(), contentScale = if (fill) ContentScale.Crop else ContentScale.Fit)
             }
-            coordinator.program?.takeIf { it.isLive }?.let { program ->
-                Values(program, coordinator, Modifier.at(layout.readouts))
-            }
-        }
-        ChromeButton(layout.display, if (clean) MonitorIcon.EYE_OFF else MonitorIcon.EYE, "DISP", active = clean) {
-            clean = !clean
-        }
-        val enabled = coordinator.canRecord
-        Box(
-            Modifier.at(layout.record).clickable(enabled = enabled) {
-                val plan = coordinator.groupPlan()
-                when {
-                    !plan.isExecutable -> coordinator.toast = MulticamCopy.COULDNT_REC
-                    confirmsRecord -> confirming = plan
-                    else -> scope.launch { coordinator.run(plan) }
-                }
-            }.semantics {
-                contentDescription = if (coordinator.anyRecording) "Stop recording on all" else "Record on all"
-            }.testTag("multicam.record"),
-        ) {
-            MonitorRecordLamp(coordinator.anyRecording, Modifier.fillMaxSize())
         }
         coordinator.toast?.let { text ->
             LaunchedEffect(text) {
@@ -179,28 +151,24 @@ fun MulticamStage(
             )
         }
         adding?.let { slot ->
-            Picker(
-                pickerRows(),
-                pick = { record ->
-                    adding = null
-                    coordinator.add(record, reachable = true, slot = slot)
+            val rows = pickerRows()
+            MultiviewCameraPicker(
+                rows = rows.mapIndexed { index, row ->
+                    MultiviewPickerRow(
+                        index.toString(), row.record.customName ?: row.record.cameraName,
+                        detail = row.refusal ?: row.record.transport.displayName, enabled = row.refusal == null,
+                    )
                 },
-                dismiss = { adding = null },
+                onCancel = { adding = null },
+                onPick = { id ->
+                    rows.getOrNull(id.toInt())?.let { row ->
+                        adding = null
+                        coordinator.add(row.record, reachable = true, slot = slot)
+                    }
+                },
+                empty = MulticamCopy.EMPTY_PICKER,
             )
         }
-    }
-    confirming?.let { plan ->
-        AlertDialog(
-            onDismissRequest = { confirming = null },
-            text = { Text(MulticamCopy.confirm(plan.direction, coordinator.names(plan))) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirming = null
-                    scope.launch { coordinator.run(plan) }
-                }) { Text(if (plan.direction == RecordDirection.STOP) "Stop recording" else "Start recording") }
-            },
-            dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
-        )
     }
     if (leaving) {
         AlertDialog(
@@ -217,232 +185,82 @@ fun MulticamStage(
     }
 }
 
-private fun Modifier.at(rect: MonitorRect, origin: MonitorRect? = null): Modifier =
-    offset((rect.x - (origin?.x ?: 0f)).dp, (rect.y - (origin?.y ?: 0f)).dp).requiredSize(rect.width.dp, rect.height.dp)
-
-@Composable
-private fun ChromeButton(
-    rect: MonitorRect,
-    icon: MonitorIcon,
-    label: String,
-    active: Boolean = false,
-    action: () -> Unit,
-) {
-    val shape = RoundedCornerShape(14.dp)
-    Box(
-        Modifier.at(rect).monitorMaterial(MonitorMaterial.Compact, shape)
-            .then(if (active) Modifier.border(1.5.dp, MonitorPalette.accent.copy(alpha = .75f), shape) else Modifier)
-            .clickable(onClick = action).semantics { contentDescription = label },
-        contentAlignment = Alignment.Center,
-    ) {
-        MonitorIcon(icon, null, Modifier.size(20.dp), tint = if (active) MonitorPalette.accent else MonitorPalette.text)
-    }
+/** This app's camera option ids beside the shared Live View id. */
+private object MulticamTileAction {
+    const val RECORD = "record"
+    const val RECONNECT = "reconnect"
+    const val REMOVE = "remove"
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun Tile(
-    layout: MultiviewPresentationLayout,
-    slot: Int,
-    coordinator: MulticamCoordinator,
-    clean: Boolean,
-    openLiveView: (MonitorEntryID) -> Unit,
-    origin: MonitorRect? = null,
-    add: () -> Unit,
-) {
-    val frame = layout.tiles[slot]
-    val member = coordinator.memberAt(slot)
-    val selected = slot == coordinator.focusedSlot
-    val compact = frame.width < 200f || frame.height < 136f
-    // The program values sit inside the selected tile in landscape and Grid: its footer rides above.
-    val footerInset = if (selected && layout.readoutsOverlay && !clean) maxOf(0f, frame.maxY - layout.readouts.y) else 0f
-    var menu by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(10.dp)
-    Box(
-        Modifier.at(frame, origin).background(MonitorPalette.surface, shape)
-            .border(if (selected) 1.5.dp else 1.dp, if (selected) MonitorPalette.accent else MonitorPalette.border, shape)
-            .combinedClickable(
-                onClick = { if (member == null) add() else coordinator.select(slot) },
-                onDoubleClick = { member?.let { openLiveView(it.id) } },
-                onLongClick = { if (member != null) menu = true },
-            ).testTag("multicam.tile.$slot"),
-    ) {
-        if (member == null) {
-            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                MonitorIcon(MonitorIcon.PLUS, null, Modifier.size(18.dp), tint = MonitorPalette.secondary)
-                Text("Add camera", style = MonitorTypography.text(if (compact) 11f else 13f, FontWeight.SemiBold).copy(color = MonitorPalette.secondary))
-            }
-            return@Box
-        }
-        member.frame?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
-        val style = MonitorTypography.readout(if (compact) 10f else 12f, FontWeight.SemiBold)
-        Column(Modifier.fillMaxSize().padding(if (compact) 6.dp else 10.dp)) {
-            Row {
-                Column(Modifier.weight(1f)) {
-                    Text("${member.letter}  ${member.displayName}", style = style, maxLines = 1)
-                    member.note?.let { Text(it, style = style.copy(color = MonitorPalette.recording)) }
-                }
-                member.batteryPercent?.let { battery ->
-                    val tint = when {
-                        battery <= 20 -> MonitorPalette.recording
-                        battery <= 40 -> MonitorPalette.digitalCrop
-                        else -> MonitorPalette.text
-                    }
-                    Text("$battery%", style = style.copy(color = tint))
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            Row(Modifier.padding(bottom = footerInset.dp)) {
-                Text(member.timecode.orEmpty(), style = style, modifier = Modifier.weight(1f))
-                Text(tally(member, coordinator.groupBusy), style = style.copy(color = if (member.recording == true) MonitorPalette.recording else MonitorPalette.text))
-            }
-        }
-        when (val status = member.status) {
-            MemberStatus.Connecting ->
-                Text("Connecting…", style = style.copy(color = MonitorPalette.secondary), modifier = Modifier.align(Alignment.Center))
-            is MemberStatus.Failed ->
-                Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(status.reason, style = style.copy(color = MonitorPalette.secondary))
-                    TextButton(onClick = { coordinator.retry(member.id) }) {
-                        Text("Retry", style = style.copy(color = MonitorPalette.accent))
-                    }
-                }
-            MemberStatus.Live -> Unit
-        }
-        val scope = rememberCoroutineScope()
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            if (member.isLive) {
-                DropdownMenuItem(text = { Text("Open Live View") }, onClick = {
-                    menu = false
-                    openLiveView(member.id)
-                })
-                DropdownMenuItem(
-                    text = { Text(if (member.recording == true) "Stop recording" else "Start recording") },
-                    onClick = {
-                        menu = false
-                        scope.launch { coordinator.run(coordinator.plan(member.id)) }
-                    },
-                )
-            }
-            DropdownMenuItem(text = { Text("Reconnect") }, onClick = {
-                menu = false
-                coordinator.retry(member.id)
-            })
-            DropdownMenuItem(text = { Text("Remove camera") }, onClick = {
-                menu = false
-                coordinator.remove(member.id)
-            })
-        }
+/** The member's values as the shared stage shows them; unknown stays unknown. */
+private fun tile(member: MulticamMember, coordinator: MulticamCoordinator): MultiviewTile {
+    val rolling = member.recording.takeIf { member.isLive }
+    val (status, detail) = when (val state = member.status) {
+        MemberStatus.Live -> null to "Connected"
+        MemberStatus.Connecting -> MultiviewTileStatus("Connecting…", inProgress = true) to "Connecting…"
+        is MemberStatus.Failed -> MultiviewTileStatus(
+            state.reason, inProgress = false,
+            actions = listOf(
+                MultiviewCameraAction(MulticamTileAction.RECONNECT, "Reconnect"),
+                MultiviewCameraAction(MulticamTileAction.REMOVE, "Remove", MultiviewCameraAction.Kind.DESTRUCTIVE),
+            ),
+        ) to state.reason
     }
-}
-
-/** `REC mm:ss` while rolling (timed from the take's first recording frame), else STBY. */
-@Composable
-private fun tally(member: MulticamMember, busy: Boolean): String {
-    if (busy) return "WAIT"
-    val recording = member.recording?.takeIf { member.isLive } ?: return "-"
-    if (!recording) return "STBY"
-    val since = member.recordingSinceMillis ?: return "REC"
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(since) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1_000)
-        }
-    }
-    val seconds = maxOf(0L, (now - since) / 1_000)
-    return "REC %02d:%02d".format(seconds / 60, seconds % 60)
+    return MultiviewTile(
+        name = member.displayName, model = member.record.transport.displayName, battery = member.batteryPercent,
+        timecode = member.timecode,
+        tally = MultiviewTally.text(rolling, waiting = coordinator.groupBusy),
+        // Nikon reports no take length: the tile times it from the first recording frame.
+        recordingSince = member.recordingSinceMillis.takeIf { rolling == true && !coordinator.groupBusy },
+        recording = member.recording == true, note = member.note, tileNote = member.note,
+        readouts = readouts(member, coordinator), status = status, detail = detail,
+        failure = (member.status as? MemberStatus.Failed)?.reason,
+        actions = listOf(
+            MultiviewCameraAction(MultiviewCameraAction.LIVE_VIEW, "Open Live View", enabled = member.isLive),
+            MultiviewCameraAction(
+                MulticamTileAction.RECORD, if (member.recording == true) "Stop recording" else "Start recording",
+                MultiviewCameraAction.Kind.RECORD,
+                enabled = member.isLive && !coordinator.groupBusy && coordinator.plan(member.id).isExecutable,
+            ),
+            MultiviewCameraAction(MulticamTileAction.RECONNECT, "Reconnect", closes = true),
+            MultiviewCameraAction(MulticamTileAction.REMOVE, "Remove camera", MultiviewCameraAction.Kind.DESTRUCTIVE),
+        ),
+        accessibilityValue = detail,
+    )
 }
 
 /**
- * The program camera's values. ISO and white balance open that camera's own advertised choices
- * and write to it only; its readback decides what shows.
+ * ISO, shutter, white balance and focus as read back from the camera. ISO and white balance offer
+ * the camera's own advertised choices; picking one writes to that camera only.
  */
-@Composable
-private fun Values(member: MulticamMember, coordinator: MulticamCoordinator, modifier: Modifier) {
+private fun readouts(member: MulticamMember, coordinator: MulticamCoordinator): List<MultiviewReadout> {
     val properties = member.properties
-    Row(
-        modifier.monitorMaterial(MonitorMaterial.Compact, RoundedCornerShape(10.dp)).padding(horizontal = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Value("ISO", properties.iso?.toString(), coordinator, member, SettingKey.ISO) {
-            ((it as? SettingValue.Iso)?.value as? ISOValue.Manual)?.iso?.toString()
-        }
-        Value("SHUTTER", properties.shutterAngle ?: properties.shutterSpeed, coordinator, member)
-        Value(
-            "WB", properties.whiteBalanceKelvin?.let { "${it}K" } ?: properties.whiteBalanceMode,
-            coordinator, member, SettingKey.WHITE_BALANCE,
-        ) {
-            when (val wb = (it as? SettingValue.WhiteBalance)?.value) {
-                is WhiteBalanceValue.Preset -> wb.id
-                WhiteBalanceValue.Auto -> "Auto"
+    return listOf(
+        MultiviewReadout(
+            "ISO", properties.iso?.toString() ?: MultiviewTally.UNAVAILABLE,
+            choices(SettingKey.ISO, member, coordinator).map { it.second },
+        ),
+        MultiviewReadout("SHUTTER", properties.shutterAngle ?: properties.shutterSpeed ?: MultiviewTally.UNAVAILABLE),
+        MultiviewReadout(
+            "WB", properties.whiteBalanceKelvin?.let { "${it}K" } ?: properties.whiteBalanceMode ?: MultiviewTally.UNAVAILABLE,
+            choices(SettingKey.WHITE_BALANCE, member, coordinator).map { it.second },
+        ),
+        MultiviewReadout("FOCUS", properties.focusMode ?: MultiviewTally.UNAVAILABLE),
+    )
+}
+
+/** What the camera advertises for [key], with the name the stage shows. */
+private fun choices(key: SettingKey, member: MulticamMember, coordinator: MulticamCoordinator): List<Pair<SettingValue, String>> =
+    coordinator.descriptor(key, member)?.takeIf { it.availability == Availability.Available }?.domain?.choices.orEmpty()
+        .mapNotNull { choice ->
+            val name = when (choice) {
+                is SettingValue.Iso -> (choice.value as? ISOValue.Manual)?.iso?.toString()
+                is SettingValue.WhiteBalance -> when (val wb = choice.value) {
+                    is WhiteBalanceValue.Preset -> wb.id
+                    WhiteBalanceValue.Auto -> "Auto"
+                    else -> null
+                }
                 else -> null
             }
+            name?.let { choice to it }
         }
-        Value("FOCUS", properties.focusMode, coordinator, member)
-    }
-}
-
-@Composable
-private fun Value(
-    title: String,
-    text: String?,
-    coordinator: MulticamCoordinator,
-    member: MulticamMember,
-    key: SettingKey? = null,
-    label: ((SettingValue) -> String?)? = null,
-) {
-    var open by remember { mutableStateOf(false) }
-    val descriptor = key?.let { coordinator.descriptor(it, member) }
-    val choices =
-        descriptor?.takeIf { it.availability == Availability.Available }?.domain?.choices.orEmpty()
-            .mapNotNull { choice -> label?.invoke(choice)?.let { choice to it } }
-    Box {
-        Column(
-            Modifier.then(if (choices.isNotEmpty()) Modifier.clickable { open = true } else Modifier)
-                .testTag("multicam.value.${title.lowercase()}"),
-        ) {
-            Text(title, style = MonitorTypography.text(8f, FontWeight.Bold).copy(color = MonitorPalette.faint))
-            Text(text ?: "-", style = MonitorTypography.readout(13f, FontWeight.SemiBold), maxLines = 1)
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            for ((choice, name) in choices) {
-                DropdownMenuItem(text = { Text(name) }, onClick = {
-                    open = false
-                    coordinator.set(choice, member.id, title)
-                })
-            }
-        }
-    }
-}
-
-/** Saved bodies, one row per setup; the ones that cannot join say why. */
-@Composable
-private fun Picker(rows: List<MulticamPickerRow>, pick: (SavedCameraRecord) -> Unit, dismiss: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .35f)).clickable(onClick = dismiss)) {
-        Column(
-            Modifier.align(Alignment.Center).widthIn(max = 420.dp).padding(24.dp)
-                .background(MonitorPalette.surface, RoundedCornerShape(16.dp)).padding(18.dp)
-                .testTag("multicam.picker"),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Add camera", style = MonitorTypography.text(16f, FontWeight.SemiBold))
-            if (rows.isEmpty()) {
-                Text(MulticamCopy.EMPTY_PICKER, style = MonitorTypography.text(13f).copy(color = MonitorPalette.muted))
-            }
-            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (row in rows) {
-                    Column(
-                        Modifier.fillMaxWidth().background(MonitorPalette.tile, RoundedCornerShape(10.dp))
-                            .clickable(enabled = row.refusal == null) { pick(row.record) }.padding(12.dp),
-                    ) {
-                        val alpha = if (row.refusal == null) 1f else .5f
-                        Text(row.record.customName ?: row.record.cameraName, style = MonitorTypography.text(14f, FontWeight.SemiBold).copy(color = MonitorPalette.text.copy(alpha = alpha)))
-                        Text(row.refusal ?: row.record.transport.displayName, style = MonitorTypography.text(12f).copy(color = MonitorPalette.muted.copy(alpha = alpha)))
-                    }
-                }
-            }
-        }
-    }
-}

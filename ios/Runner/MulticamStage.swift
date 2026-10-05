@@ -1,5 +1,6 @@
 import MonitorPresentation
 import MonitorUI
+import OpenCineAppKit
 import OpenCineCore
 import OpenCineMulticam
 import OpenZCineCore
@@ -13,9 +14,9 @@ struct MulticamPickerRow: Identifiable {
     var id: String { record.id }
 }
 
-/// The multicam stage: four fixed tiles laid out by the shared `MultiviewPresentationLayout`
-/// (Grid / Center stage), drawn with the shared MonitorUI chrome. State and camera actions come
-/// from `MulticamCoordinator`; the app model supplies the saved-camera list, Live View and exit.
+/// The multicam stage: OpenCine's shared Multiview stage over this app's members. State and
+/// camera actions come from `MulticamCoordinator` (membership, eligible-subset record, per-member
+/// results and properties); the app model supplies the saved-camera list, Live View and exit.
 struct MulticamStage: View {
     @Bindable var coordinator: MulticamCoordinator
     let confirmsRecord: Bool
@@ -24,9 +25,8 @@ struct MulticamStage: View {
     let close: () -> Void
 
     @State private var addingSlot: Int?
-    @State private var clean = false
-    @State private var confirming: RecordPlan?
     @State private var leaving = false
+    @State private var fill = false
     @Environment(\.monitorWindowGeometry) private var windowGeometry
 
     var body: some View {
@@ -39,78 +39,45 @@ struct MulticamStage: View {
                     top: insets.top, leading: insets.leading, bottom: insets.bottom,
                     trailing: insets.trailing),
                 arrangement: coordinator.arrangement, selected: coordinator.focusedSlot)
-            ZStack(alignment: .topLeading) {
-                MonitorTheme.canvas
-                let strip = layout.secondaryViewport.map { _ in layout.secondaryIndices } ?? []
-                ForEach(0..<MulticamCoordinator.tileCount, id: \.self) { slot in
-                    if !strip.contains(slot) {
-                        let frame = layout.tiles[slot]
-                        tile(slot, layout: layout)
-                            .frame(width: frame.width, height: frame.height)
-                            .position(x: frame.midX, y: frame.midY)
-                    }
+            MultiviewStage(
+                tiles: (0..<MulticamCoordinator.tileCount).map { slot in
+                    coordinator.member(atSlot: slot).map(tile)
+                },
+                layout: layout, viewport: proxy.size,
+                safeArea: EdgeInsets(
+                    top: insets.top, leading: insets.leading, bottom: insets.bottom,
+                    trailing: insets.trailing),
+                arrangement: $coordinator.arrangement,
+                selected: Binding(
+                    get: { coordinator.focusedSlot }, set: { coordinator.select(slot: $0) }),
+                fill: $fill, tools: [.layout, .fit],
+                readouts: coordinator.program.flatMap { $0.isLive ? readouts($0) : nil },
+                recording: coordinator.anyRecording, groupBusy: coordinator.groupBusy,
+                confirmsRecord: confirmsRecord,
+                actions: MultiviewStageActions(
+                    openLiveView: { slot in
+                        if let member = coordinator.member(atSlot: slot) { openLiveView(member.id) }
+                    },
+                    add: { addingSlot = $0 }, perform: perform, choose: choose,
+                    close: { leaving = true }, recordContext: recordContext,
+                    record: { plan, _ in await coordinator.run(plan) })
+            ) { slot in
+                if let frame = coordinator.member(atSlot: slot)?.frame {
+                    Image(uiImage: frame).resizable()
+                        .aspectRatio(contentMode: fill ? .fill : .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                if let viewport = layout.secondaryViewport {
-                    // Center stage's trailing strip scrolls inside its viewport.
-                    let height =
-                        (strip.map { layout.tiles[$0].maxY }.max() ?? viewport.y) - viewport.y
-                    ScrollView(showsIndicators: false) {
-                        ZStack(alignment: .topLeading) {
-                            ForEach(strip, id: \.self) { slot in
-                                let frame = layout.tiles[slot]
-                                tile(slot, layout: layout)
-                                    .frame(width: frame.width, height: frame.height)
-                                    .offset(x: frame.x - viewport.x, y: frame.y - viewport.y)
-                            }
-                        }
-                        .frame(
-                            width: viewport.width, height: max(height, 1), alignment: .topLeading)
-                    }
-                    .monitorScrollFade()
-                    .frame(width: viewport.width, height: viewport.height)
-                    .position(x: viewport.midX, y: viewport.midY)
-                }
-                if !clean {
-                    chromeButton("Close multicam", icon: .x, rect: layout.sessionControls) {
-                        leaving = true
-                    }
-                    chromeButton(
-                        coordinator.arrangement == .grid ? "Center stage" : "Grid",
-                        icon: coordinator.arrangement == .grid ? .layoutList : .layoutGrid,
-                        rect: layout.network
-                    ) {
-                        coordinator.arrangement =
-                            coordinator.arrangement == .grid ? .centerStage : .grid
-                    }
-                    if let program = coordinator.program, program.isLive {
-                        MulticamValues(member: program, coordinator: coordinator)
-                            .frame(width: layout.readouts.width, height: layout.readouts.height)
-                            .position(x: layout.readouts.midX, y: layout.readouts.midY)
-                    }
-                }
-                chromeButton(
-                    "DISP", icon: clean ? .eyeOff : .eye, rect: layout.display, active: clean
-                ) {
-                    clean.toggle()
-                }
-                recordButton(diameter: layout.record.width)
-                    .position(x: layout.record.midX, y: layout.record.midY)
+            }
+            .overlay(alignment: .top) {
                 if let toast = coordinator.toast {
                     MulticamToast(text: toast) { coordinator.toast = nil }
                         .frame(maxWidth: min(420, proxy.size.width - 40))
-                        .position(x: proxy.size.width / 2, y: insets.top + 40)
+                        .padding(.top, insets.top + 20)
                 }
             }
-            .frame(width: proxy.size.width, height: proxy.size.height)
             .overlay {
                 if let slot = addingSlot {
-                    MulticamPicker(
-                        rows: pickerRows(),
-                        pick: { record in
-                            addingSlot = nil
-                            coordinator.add(record, reachable: true, slot: slot)
-                        },
-                        dismiss: { addingSlot = nil })
+                    picker(slot)
                 }
             }
         }
@@ -119,17 +86,6 @@ struct MulticamStage: View {
         .foregroundStyle(MonitorTheme.text)
         .preferredColorScheme(.dark)
         .confirmationDialog(
-            confirming.map { MulticamCopy.confirm($0.direction, names: coordinator.names($0)) }
-                ?? "",
-            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button(confirming?.direction == .stop ? "Stop recording" : "Start recording") {
-                if let plan = confirming { Task { await coordinator.run(plan) } }
-                confirming = nil
-            }
-        }
-        .confirmationDialog(
             "Close multicam? Recording continues on every camera.", isPresented: $leaving,
             titleVisibility: .visible
         ) {
@@ -137,274 +93,152 @@ struct MulticamStage: View {
         }
     }
 
-    private func tile(_ slot: Int, layout: MultiviewPresentationLayout) -> some View {
-        let frame = layout.tiles[slot]
-        let selected = slot == coordinator.focusedSlot
-        return MulticamTile(
-            member: coordinator.member(atSlot: slot), slot: slot, selected: selected,
-            compact: frame.width < 200 || frame.height < 136,
-            // The program values sit inside the selected tile in landscape and Grid: its footer
-            // rides above them.
-            footerInset: selected && layout.readoutsOverlay && !clean
-                ? max(0, frame.maxY - layout.readouts.y) : 0,
-            coordinator: coordinator, openLiveView: openLiveView,
-            add: { addingSlot = slot })
+    /// The member's values as the shared stage shows them; unknown stays unknown.
+    private func tile(_ member: MulticamMember) -> MultiviewTile {
+        let rolling = member.isLive ? member.recording : nil
+        let status: MultiviewTileStatus?
+        let detail: String
+        switch member.status {
+        case .live:
+            status = nil
+            detail = "Connected"
+        case .connecting:
+            status = MultiviewTileStatus(text: "Connecting…", inProgress: true)
+            detail = "Connecting…"
+        case .failed(let reason):
+            status = MultiviewTileStatus(
+                text: reason, inProgress: false,
+                actions: [
+                    MultiviewCameraAction(MulticamTileAction.reconnect, "Reconnect"),
+                    MultiviewCameraAction(
+                        MulticamTileAction.remove, "Remove", kind: .destructive),
+                ])
+            detail = reason
+        }
+        return MultiviewTile(
+            name: member.displayName, model: SavedCameraPathGroups.pathLabel(for: member.record),
+            battery: member.batteryPercent,
+            storage: member.storage.map { "\($0.gigabytesFree) GB" } ?? MultiviewTally.unavailable,
+            timecode: member.timecode.flatMap { timecode in
+                timecode.on
+                    ? String(
+                        format: "%02d:%02d:%02d", timecode.hour, timecode.minute, timecode.second)
+                    : nil
+            },
+            tally: MultiviewTally.text(recording: rolling, waiting: coordinator.groupBusy),
+            // Nikon reports no take length: the tile times it from the first recording frame.
+            recordingSince: rolling == true && !coordinator.groupBusy ? member.recordingSince : nil,
+            recording: member.recording == true, note: member.note, tileNote: member.note,
+            readouts: readouts(member), status: status, detail: detail,
+            failure: { if case .failed(let reason) = member.status { reason } else { nil } }(),
+            actions: [
+                MultiviewCameraAction(
+                    MultiviewCameraAction.liveView, "Live View", enabled: member.isLive),
+                MultiviewCameraAction(
+                    MulticamTileAction.record,
+                    member.recording == true ? "Stop recording" : "Start recording",
+                    kind: .record, enabled: member.isLive),
+                MultiviewCameraAction(MulticamTileAction.reconnect, "Reconnect", closes: true),
+                MultiviewCameraAction(MulticamTileAction.remove, "Remove camera", kind: .destructive),
+            ],
+            accessibilityValue: detail)
     }
 
-    private func recordButton(diameter: Double) -> some View {
-        Button {
-            let plan = coordinator.groupPlan()
-            guard plan.isExecutable else {
-                coordinator.toast = MulticamCopy.couldntRec
-                return
-            }
-            if confirmsRecord {
-                confirming = plan
-            } else {
-                Task { await coordinator.run(plan) }
-            }
-        } label: {
-            MonitorRecordLamp(diameter: diameter, recording: coordinator.anyRecording)
-        }
-        .buttonStyle(.plain)
-        .disabled(!coordinator.canRecord)
-        .opacity(coordinator.canRecord ? 1 : 0.45)
-        .accessibilityLabel(coordinator.anyRecording ? "Stop recording on all" : "Record on all")
-        .accessibilityIdentifier("multicam.record")
-    }
-
-    private func chromeButton(
-        _ title: String, icon: MonitorIcon, rect: MonitorRect, active: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        MonitorChromeButton(
-            title, size: CGSize(width: rect.width, height: rect.height), active: active,
-            action: action
-        ) {
-            icon.frame(width: 20, height: 20)
-        }
-        .position(x: rect.midX, y: rect.midY)
-    }
-}
-
-/// A stage tile: the member's picture and identity chrome (name, battery, timecode, tally) on
-/// every live tile, or Add camera on an empty one.
-private struct MulticamTile: View {
-    let member: MulticamMember?
-    let slot: Int
-    let selected: Bool
-    let compact: Bool
-    let footerInset: Double
-    let coordinator: MulticamCoordinator
-    let openLiveView: (MonitorEntryID) -> Void
-    let add: () -> Void
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        ZStack {
-            MonitorTheme.surface
-            if let member {
-                if let frame = member.frame {
-                    Image(uiImage: frame).resizable().aspectRatio(contentMode: .fit)
-                }
-                chrome(member)
-            } else {
-                Button(action: add) {
-                    VStack(spacing: 6) {
-                        MonitorIcon.plus.frame(width: 18, height: 18)
-                        Text("Add camera").font(
-                            MonitorTheme.font(compact ? 11 : 13, weight: .semibold))
-                    }
-                    .foregroundStyle(MonitorTheme.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("multicam.add.\(slot)")
-            }
-        }
-        .clipShape(shape)
-        .overlay {
-            shape.strokeBorder(
-                selected ? MonitorTheme.accent : MonitorTheme.border, lineWidth: selected ? 1.5 : 1)
-        }
-        .contentShape(shape)
-        .onTapGesture(count: 2) { if let member { openLiveView(member.id) } }
-        .onTapGesture { coordinator.select(slot: slot) }
-        .contextMenu {
-            if let member { menu(member) }
-        }
-        .accessibilityIdentifier("multicam.tile.\(slot)")
-    }
-
-    @ViewBuilder
-    private func chrome(_ member: MulticamMember) -> some View {
-        let font = MonitorTheme.font(compact ? 10 : 12, weight: .semibold)
-        VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 6) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(member.letter)  \(member.displayName)").font(font).lineLimit(1)
-                    if let note = member.note {
-                        Text(note).font(MonitorTheme.font(compact ? 9 : 11, weight: .medium))
-                            .foregroundStyle(MonitorTheme.recording)
-                    }
-                }
-                Spacer(minLength: 4)
-                if let battery = member.batteryPercent {
-                    Text("\(battery)%").font(font).monospacedDigit()
-                        .foregroundStyle(
-                            battery <= 20
-                                ? MonitorTheme.recording
-                                : battery <= 40 ? MonitorTheme.digitalCrop : MonitorTheme.text)
-                }
-            }
-            Spacer(minLength: 0)
-            HStack(alignment: .bottom) {
-                if let timecode = member.timecode, timecode.on {
-                    Text(
-                        String(
-                            format: "%02d:%02d:%02d", timecode.hour, timecode.minute,
-                            timecode.second)
-                    )
-                    .font(font).monospacedDigit()
-                }
-                Spacer(minLength: 4)
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(tally(member)).font(font).monospacedDigit()
-                        .foregroundStyle(
-                            member.recording == true ? MonitorTheme.recording : MonitorTheme.text)
-                }
-            }
-            .padding(.bottom, footerInset)
-        }
-        .monitorReadoutShadow()
-        .padding(compact ? 6 : 10)
-        if case .live = member.status {
-        } else {
-            status(member)
+    private func perform(_ action: String, slot: Int) {
+        guard let member = coordinator.member(atSlot: slot) else { return }
+        switch action {
+        case MulticamTileAction.reconnect: coordinator.retry(member.id)
+        case MulticamTileAction.remove: coordinator.remove(member.id)
+        default: break
         }
     }
 
-    @ViewBuilder
-    private func status(_ member: MulticamMember) -> some View {
-        VStack(spacing: 8) {
-            switch member.status {
-            case .connecting:
-                ProgressView().tint(MonitorTheme.secondary)
-                Text("Connecting…").font(MonitorTheme.font(12, weight: .medium))
-            case .failed(let reason):
-                Text(reason).font(MonitorTheme.font(12, weight: .semibold))
-                Button("Retry") { coordinator.retry(member.id) }
-                    .font(MonitorTheme.font(12, weight: .semibold))
-                    .foregroundStyle(MonitorTheme.accent)
-                    .accessibilityIdentifier("multicam.retry.\(member.slot)")
-            case .live:
-                EmptyView()
-            }
-        }
-        .foregroundStyle(MonitorTheme.secondary)
+    private func recordContext(_ slot: Int?) -> MultiviewRecordContext {
+        let plan =
+            slot.flatMap { coordinator.member(atSlot: $0) }.map { coordinator.plan(for: $0.id) }
+            ?? coordinator.groupPlan()
+        return MultiviewRecordContext(
+            plan: plan, busy: coordinator.groupBusy,
+            prompt: MulticamCopy.confirm(plan.direction, names: coordinator.names(plan)))
     }
 
-    @ViewBuilder
-    private func menu(_ member: MulticamMember) -> some View {
-        if member.isLive {
-            Button("Open Live View") { openLiveView(member.id) }
-            Button(member.recording == true ? "Stop recording" : "Start recording") {
-                Task { await coordinator.run(coordinator.plan(for: member.id)) }
-            }
-        }
-        Button("Reconnect") { coordinator.retry(member.id) }
-        Button("Remove camera", role: .destructive) { coordinator.remove(member.id) }
-    }
+    // MARK: Values
 
-    /// `REC mm:ss` while rolling (timed from the take's first recording frame), else STBY.
-    private func tally(_ member: MulticamMember) -> String {
-        if coordinator.groupBusy { return "WAIT" }
-        guard member.isLive, let recording = member.recording else {
-            return CameraDisplayState.unavailableValue
-        }
-        guard recording else { return "STBY" }
-        guard let since = member.recordingSince else { return "REC" }
-        let seconds = max(0, Int(Date().timeIntervalSince(since)))
-        return String(format: "REC %02d:%02d", seconds / 60, seconds % 60)
-    }
-}
-
-/// The program camera's values. ISO and white balance open the camera's own advertised choices
-/// and write to that camera only; the camera's readback decides what shows.
-private struct MulticamValues: View {
-    let member: MulticamMember
-    let coordinator: MulticamCoordinator
-
-    var body: some View {
+    /// ISO, shutter, white balance and focus as read back from the camera. ISO and white balance
+    /// offer the camera's own advertised choices; picking one writes to that camera only.
+    private func readouts(_ member: MulticamMember) -> [MultiviewReadout] {
         let properties = member.properties
-        HStack(spacing: 18) {
-            value("ISO", properties.iso.map(String.init), key: .iso) { setting in
-                if case .iso(.manual(let iso)) = setting { return String(iso) }
-                return nil
-            }
-            value("SHUTTER", shutter(properties))
-            value(
-                "WB", properties.wbKelvin.map { "\($0)K" } ?? properties.wbMode, key: .whiteBalance
-            ) {
-                setting in
-                if case .whiteBalance(.preset(let label)) = setting { return label }
-                if case .whiteBalance(.auto) = setting { return "Auto" }
-                return nil
-            }
-            value("FOCUS", properties.focusMode)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .frame(maxHeight: .infinity)
-        .monitorGlass(in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func shutter(_ properties: PTPCameraPropertySnapshot) -> String? {
-        properties.shutterMode == .speed
+        let shutter =
+            properties.shutterMode == .speed
             ? properties.shutterSpeed ?? properties.shutterAngle
             : properties.shutterAngle ?? properties.shutterSpeed
+        return [
+            MultiviewReadout(
+                title: "ISO", value: properties.iso.map(String.init) ?? MultiviewTally.unavailable,
+                choices: choices(.iso, of: member).map(\.name)),
+            MultiviewReadout(title: "SHUTTER", value: shutter ?? MultiviewTally.unavailable),
+            MultiviewReadout(
+                title: "WB",
+                value: properties.wbKelvin.map { "\($0)K" } ?? properties.wbMode
+                    ?? MultiviewTally.unavailable,
+                choices: choices(.whiteBalance, of: member).map(\.name)),
+            MultiviewReadout(
+                title: "FOCUS", value: properties.focusMode ?? MultiviewTally.unavailable),
+        ]
     }
 
-    @ViewBuilder
-    private func value(
-        _ title: String, _ text: String?, key: SettingKey? = nil,
-        label: ((SettingValue) -> String?)? = nil
-    ) -> some View {
-        let readout = ViewThatFits(in: .vertical) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(MonitorTheme.font(8, weight: .bold)).tracking(1.2)
-                    .foregroundStyle(MonitorTheme.faint)
-                Text(text ?? CameraDisplayState.unavailableValue)
-                    .font(MonitorTheme.font(13, weight: .semibold)).monospacedDigit().lineLimit(1)
-            }
-            // Grid's short in-tile row: title and value on one line.
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(title).font(MonitorTheme.font(7, weight: .bold)).tracking(1)
-                    .foregroundStyle(MonitorTheme.faint)
-                Text(text ?? CameraDisplayState.unavailableValue)
-                    .font(MonitorTheme.font(11, weight: .semibold)).monospacedDigit().lineLimit(1)
-            }
+    /// The value the operator picked, by the name shown: a choice the camera no longer
+    /// advertises writes nothing.
+    private func choose(slot: Int, readout: Int, choice: String) {
+        guard readout == 0 || readout == 2, let member = coordinator.member(atSlot: slot) else {
+            return
         }
-        if let key, let label,
-            let descriptor = coordinator.descriptor(key, of: member),
-            descriptor.availability == .available,
-            let choices = descriptor.domain?.choices, !choices.isEmpty
-        {
-            Menu {
-                ForEach(Array(choices.enumerated()), id: \.offset) { _, choice in
-                    if let name = label(choice) {
-                        Button(name) { coordinator.set(choice, on: member.id, label: title) }
-                    }
-                }
-            } label: {
-                readout
+        let key: SettingKey = readout == 0 ? .iso : .whiteBalance
+        guard let value = choices(key, of: member).first(where: { $0.name == choice })?.value
+        else { return }
+        coordinator.set(value, on: member.id, label: readout == 0 ? "ISO" : "WB")
+    }
+
+    /// What the camera advertises for `key`, with the name the stage shows.
+    private func choices(_ key: SettingKey, of member: MulticamMember) -> [(
+        value: SettingValue, name: String
+    )] {
+        guard let descriptor = coordinator.descriptor(key, of: member),
+            descriptor.availability == .available, let choices = descriptor.domain?.choices
+        else { return [] }
+        return choices.compactMap { choice in
+            switch choice {
+            case .iso(.manual(let iso)): (choice, String(iso))
+            case .whiteBalance(.preset(let label)): (choice, label)
+            case .whiteBalance(.auto): (choice, "Auto")
+            default: nil
             }
-            .accessibilityIdentifier("multicam.value.\(title.lowercased())")
-        } else {
-            readout
         }
     }
+
+    private func picker(_ slot: Int) -> some View {
+        let rows = pickerRows()
+        return MultiviewCameraPicker(
+            rows: rows.map { row in
+                MultiviewPickerRow(
+                    id: row.id, title: row.record.displayTitle,
+                    detail: row.refusal ?? SavedCameraPathGroups.pathLabel(for: row.record),
+                    enabled: row.refusal == nil)
+            },
+            empty: MulticamCopy.emptyPicker, cancel: { addingSlot = nil }
+        ) { id in
+            guard let row = rows.first(where: { $0.id == id }) else { return }
+            addingSlot = nil
+            coordinator.add(row.record, reachable: true, slot: slot)
+        }
+    }
+}
+
+/// This app's camera option ids beside the shared Live View id.
+private enum MulticamTileAction {
+    static let record = "record"
+    static let reconnect = "reconnect"
+    static let remove = "remove"
 }
 
 private struct MulticamToast: View {
@@ -421,63 +255,5 @@ private struct MulticamToast: View {
                 dismiss()
             }
             .accessibilityIdentifier("multicam.toast")
-    }
-}
-
-/// Saved bodies, one row per camera; the ones that cannot join say why.
-private struct MulticamPicker: View {
-    let rows: [MulticamPickerRow]
-    let pick: (PTPIPSavedCameraRecord) -> Void
-    let dismiss: () -> Void
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.35).ignoresSafeArea().onTapGesture(perform: dismiss)
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Add camera").font(MonitorTheme.font(16, weight: .semibold))
-                    Spacer()
-                    Button(action: dismiss) { MonitorIcon.x.frame(width: 16, height: 16) }
-                        .buttonStyle(.plain).accessibilityLabel("Close")
-                }
-                if rows.isEmpty {
-                    Text(MulticamCopy.emptyPicker).font(MonitorTheme.font(13))
-                        .foregroundStyle(MonitorTheme.muted)
-                }
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(rows) { row in
-                            Button {
-                                pick(row.record)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(row.record.displayTitle)
-                                        .font(MonitorTheme.font(14, weight: .semibold))
-                                    Text(
-                                        row.refusal
-                                            ?? SavedCameraPathGroups.pathLabel(for: row.record)
-                                    )
-                                    .font(MonitorTheme.font(12))
-                                    .foregroundStyle(MonitorTheme.muted)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                                .background(
-                                    MonitorTheme.raised, in: RoundedRectangle(cornerRadius: 10))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(row.refusal != nil)
-                            .opacity(row.refusal == nil ? 1 : 0.5)
-                        }
-                    }
-                }
-                .frame(maxHeight: 320)
-            }
-            .padding(18)
-            .frame(maxWidth: 420)
-            .background(MonitorTheme.surface, in: RoundedRectangle(cornerRadius: 16))
-            .padding(24)
-        }
-        .accessibilityAddTraits(.isModal)
     }
 }
