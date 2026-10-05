@@ -52,15 +52,15 @@ flowchart TD
 ### FRAME-01 — Settings sign-in (prerequisite)
 
 - **Status:** shipped
-- **Screen:** Settings → Storage → Frame.io row: **Sign in** / **Log out** / **Not set up in this
-  build** / **Sign in over internet** (when on the camera AP).
+- **Screen:** Settings → Storage → Frame.io row (MonitorUI `MonitorAccountSettings`): **Sign in** /
+  **Log out** / **Not configured**.
 - **Code:** `MonitorPanels.swift` (`storageRows`, `signInFrameioOverInternet`),
   `Frameio/FrameioAuthCoordinator.swift`, `Frameio/FrameioCredentials.swift` (`FrameioTokenStore`),
   OpenCineFrameIO `FrameioOAuth.swift` (OpenCine package).
 - **Detail:** Adobe IMS OAuth 2.0 (PKCE) via `ASWebAuthenticationSession` (iOS 17.4+). Token +
   refresh stored in Keychain (`OpenZCine.frameio` / `oauth-token`); auto-refreshed 60s before
   expiry. Requires `Frameio.local.xcconfig` → `Info.plist` (`FrameioClientID`, `FrameioRedirectURI`).
-  On the camera AP the row shows **Sign in over internet** → a confirm alert → consented internet
+  On the camera AP, **Sign in** opens a confirm alert → consented internet
   hop (`beginInternetHop` re-hosts the Storage panel as a standalone cover so it survives the
   monitor collapse) → `waitForInternetPath(30s)` → `connectFrameio()` (Adobe sign-in) →
   `endInternetHop()` rejoins the camera via the full join pipeline, sign-in outcome notwithstanding.

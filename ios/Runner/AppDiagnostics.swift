@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import MetricKit
+import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -97,7 +98,8 @@ struct DiagnosticReportMetadata: Equatable, Sendable {
     let appVersion: String
     let buildNumber: String
     let deviceClass: String
-    let operatingSystem: String
+    let osName: String
+    let osVersion: String
 
     @MainActor static var current: DiagnosticReportMetadata {
         let info = Bundle.main.infoDictionary
@@ -106,7 +108,8 @@ struct DiagnosticReportMetadata: Equatable, Sendable {
             appVersion: info?["CFBundleShortVersionString"] as? String ?? "unknown",
             buildNumber: info?["CFBundleVersion"] as? String ?? "unknown",
             deviceClass: UIDevice.current.model,
-            operatingSystem: "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
+            osName: UIDevice.current.systemName,
+            osVersion: UIDevice.current.systemVersion
         )
     }
 }
@@ -293,6 +296,8 @@ actor DiagnosticEventStore {
         return url
     }
 
+    /// The shared OpenCine report (environment header, privacy redaction, journal) with this app's
+    /// privacy note, connect-attempt trace and MetricKit payloads as its sections.
     static func renderReport(
         metadata: DiagnosticReportMetadata,
         events: [DiagnosticBreadcrumb],
@@ -300,55 +305,63 @@ actor DiagnosticEventStore {
         payloads: [(name: String, data: Data)]
     ) -> String {
         let formatter = ISO8601DateFormatter()
-        var lines = [
-            "OpenZCine Diagnostics",
-            "=====================",
-            "",
-            "Review this file before sharing it publicly.",
-            "It intentionally excludes camera frames, media names, camera identities, network",
-            "addresses, Wi-Fi details, pairing data, credentials, and account identifiers.",
-            "The connect-attempt trace below is closed tokens only (body family, DeviceInfo",
-            "known/unknown, pairing decision). It never leaves this phone unless you share",
-            "this file.",
-            "",
-            "Generated: \(formatter.string(from: metadata.generatedAt))",
-            "App: OpenZCine \(metadata.appVersion) (build \(metadata.buildNumber))",
-            "Device class: \(metadata.deviceClass)",
-            "Operating system: \(metadata.operatingSystem)",
-            "",
-            "Recent app events",
-            "-----------------",
+        let environment = DiagnosticEnvironment(
+            product: "OpenZCine",
+            appVersion: metadata.appVersion,
+            appBuild: metadata.buildNumber,
+            osName: metadata.osName,
+            osVersion: metadata.osVersion,
+            deviceModel: metadata.deviceClass,
+            cameraModel: "unknown",
+            phase: "unknown",
+            // ponytail: unknown, not off: no local-VPN probe here yet. Pocket and Insta's
+            // `LocalVPNProbe` is the one to share when the Nikon report needs it.
+            vpnActive: nil)
+        var extras: [(name: String, body: String)] = [
+            (
+                "Before sharing",
+                [
+                    "Generated: \(formatter.string(from: metadata.generatedAt))",
+                    "Review this file before sharing it publicly.",
+                    "It intentionally excludes camera frames, media names, camera identities, network",
+                    "addresses, Wi-Fi details, pairing data, credentials, and account identifiers.",
+                    "The connect-attempt trace below is closed tokens only (body family, DeviceInfo",
+                    "known/unknown, pairing decision). It never leaves this phone unless you share",
+                    "this file.",
+                ].joined(separator: "\n")
+            ),
+            (
+                "Connect attempt trace",
+                connectTrace.isEmpty
+                    ? "No retained connect-attempt trace."
+                    : connectTrace.suffix(ConnectAttemptDiagnostic.maximumLineCount).joined(
+                        separator: "\n")
+            ),
         ]
-        if events.isEmpty {
-            lines.append("No retained app events.")
-        } else {
-            lines.append(
-                contentsOf: events.suffix(500).map {
-                    "\(formatter.string(from: $0.timestamp))  \($0.event)"
-                })
-        }
-
-        lines.append(contentsOf: ["", "Connect attempt trace", "---------------------"])
-        if connectTrace.isEmpty {
-            lines.append("No retained connect-attempt trace.")
-        } else {
-            lines.append(contentsOf: connectTrace.suffix(ConnectAttemptDiagnostic.maximumLineCount))
-        }
-
-        lines.append(contentsOf: ["", "MetricKit diagnostics", "---------------------"])
         if payloads.isEmpty {
-            lines.append("No MetricKit payloads have been delivered on this device.")
+            extras.append(
+                (
+                    "MetricKit diagnostics",
+                    "No MetricKit payloads have been delivered on this device."
+                ))
         } else {
             var remainingBytes = 1_048_576
             for payload in payloads.suffix(4) where remainingBytes > 0 {
                 let included = payload.data.prefix(remainingBytes)
-                lines.append(contentsOf: ["", "### \(payload.name)"])
-                lines.append(String(decoding: included, as: UTF8.self))
+                extras.append(
+                    ("metrickit-\(payload.name)", String(decoding: included, as: UTF8.self)))
                 remainingBytes -= included.count
             }
         }
-        lines.append("")
-        return lines.joined(separator: "\n")
+        let journal = events.suffix(500).map {
+            "\(formatter.string(from: $0.timestamp))  \($0.event)"
+        }
+        return DiagnosticReport.fullReport(
+            environment: environment,
+            journal: journal,
+            exceptions: [],
+            extras: extras,
+            isSafeNetwork: { _ in false })
     }
 
     static func compactedEventData(_ data: Data, limit: Int) -> Data {

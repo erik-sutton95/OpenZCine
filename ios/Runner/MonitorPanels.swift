@@ -2598,28 +2598,6 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
     }
 }
 
-/// Four digits, committed as they complete; clearing commits an open broadcast. Local draft so
-/// half-typed codes never hit the wire.
-private struct RelayPasscodeField: View {
-    let code: String
-    let onCommit: (String) -> Void
-    @State private var draft = ""
-
-    var body: some View {
-        TextField("None", text: $draft)
-            .keyboardType(.numberPad)
-            .multilineTextAlignment(.trailing)
-            .font(.system(size: 15, weight: .semibold, design: .monospaced))
-            .frame(width: 96)
-            .onAppear { draft = code }
-            .onChange(of: draft) { _, next in
-                let digits = String(next.filter(\.isNumber).prefix(4))
-                if digits != next { draft = digits }
-                if digits.count == 4 || digits.isEmpty { onCommit(digits) }
-            }
-    }
-}
-
 /// The settings cover has its own presentation environment. Observe its containing window
 /// here so rotation cannot replace a physical cutout lane with child GeometryReader insets.
 private struct NikonSettingsViewport<Content: View>: View {
@@ -2657,6 +2635,8 @@ struct OperatorSettingsPanel: View {
     @State private var frameioSigningIn = false
     @State private var frameioSignInError: String?
     @State private var showFrameioHopConfirm = false
+    /// Digits typed so far; the model takes the passcode only at four digits or empty.
+    @State private var relayPasscodeDraft: String?
     @State private var cacheSizeBytes: UInt64?
     @State private var diagnosticsShareItem: DiagnosticsShareItem?
     @State private var diagnosticsErrorMessage: String?
@@ -2780,11 +2760,11 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var sharingRows: some View {
-        MonitorSettingsRowCard {
-            if model.videoSource == .relay {
-                // A watcher rebroadcasting would daisy-chain feeds — a second generation of
-                // encode, a second hop of latency, and a control-token tangle. Sharing is done
-                // from the device that holds the camera.
+        if model.videoSource == .relay {
+            // A watcher rebroadcasting would daisy-chain feeds: a second generation of
+            // encode, a second hop of latency, and a control-token tangle. Sharing is done
+            // from the device that holds the camera.
+            MonitorSettingsRowCard {
                 MonitorSettingsInlineRow(
                     title: "Watching",
                     help:
@@ -2793,98 +2773,90 @@ struct OperatorSettingsPanel: View {
                 ) {
                     MonitorSettingsValueText(value: model.cameraState.cameraName)
                 }
-            } else {
-                sharingBroadcasterRows
             }
+        } else {
+            sharingBroadcasterRows
         }
     }
 
     @ViewBuilder private var sharingBroadcasterRows: some View {
-        MonitorSettingsInlineRow(
-            title: "Share This Feed",
-            help:
-                "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device — this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi — its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
-            showTopDivider: false
-        ) {
-            NikonSettingsChoices(
-                options: ["Off", "On"],
-                selected: model.isRelayBroadcasting ? "On" : "Off"
-            ) { value in
-                model.setRelayBroadcasting(value == "On")
-            }
-        }
+        MonitorFeedSharingSettings(
+            sharing: Binding(
+                get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
+            passcode: Binding(
+                get: { relayPasscodeDraft ?? model.preferences.relayWatcherPasscode },
+                set: { relayPasscodeDraft = String($0.filter(\.isNumber).prefix(4)) }),
+            controlRequests: Binding(
+                get: { model.preferences.relayAllowsControlRequests },
+                set: { model.setRelayAllowsControlRequests($0) }),
+            priority: Binding(
+                get: { model.preferences.relayEncoderProfile.title },
+                set: { title in
+                    guard
+                        let profile = RelayEncoderProfile.allCases.first(where: {
+                            $0.title == title
+                        })
+                    else { return }
+                    model.setRelayEncoderProfile(profile)
+                }),
+            priorities: RelayEncoderProfile.allCases.map(\.title),
+            help: MonitorFeedSharingHelp(
+                sharing:
+                    "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device; this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi: its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
+                passcode:
+                    "Four digits watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
+                controlRequests:
+                    "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.",
+                priority:
+                    "Low latency is the tightest glass-to-glass path, the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
+            ),
+            // Watchers never join a Nikon access point (it drops the monitor), so no Wi-Fi code row.
+            showWiFiCode: nil,
+            passcodeChanged: { code in
+                if code.count == 4 || code.isEmpty { model.setRelayWatcherPasscode(code) }
+            },
+            feedback: settingsFeedback)
         if model.isRelayBroadcasting {
-            MonitorSettingsInlineRow(
-                title: "Watching",
-                help:
-                    "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control."
-            ) {
-                MonitorSettingsValueText(
-                    value: model.relayPeerCount == 1
-                        ? "1 device" : "\(model.relayPeerCount) devices")
-            }
-        }
-        MonitorSettingsInlineRow(
-            title: "Broadcast Priority",
-            help:
-                "Low latency is the tightest glass-to-glass path — the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
-        ) {
-            NikonSettingsChoices(
-                options: RelayEncoderProfile.allCases.map(\.title),
-                selected: model.preferences.relayEncoderProfile.title
-            ) { value in
-                guard
-                    let profile = RelayEncoderProfile.allCases.first(where: {
-                        $0.title == value
-                    })
-                else { return }
-                model.setRelayEncoderProfile(profile)
-            }
-        }
-        MonitorSettingsInlineRow(
-            title: "Watcher Passcode",
-            help:
-                "Watchers must enter this code once per device before they receive anything — no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave."
-        ) {
-            RelayPasscodeField(
-                code: model.preferences.relayWatcherPasscode,
-                onCommit: { model.setRelayWatcherPasscode($0) })
-        }
-        MonitorSettingsInlineRow(
-            title: "Control Requests",
-            help:
-                "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way."
-        ) {
-            NikonSettingsChoices(
-                options: ["Off", "On"],
-                selected: model.preferences.relayAllowsControlRequests ? "On" : "Off"
-            ) { value in
-                model.setRelayAllowsControlRequests(value == "On")
-            }
-        }
-        if let requester = model.relayPendingControlRequest {
-            MonitorSettingsInlineRow(
-                title: "Control Requested",
-                help:
-                    "A device watching this feed is asking to drive the camera. Granting it does not move the camera link — this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
-            ) {
-                HStack(spacing: 8) {
-                    MonitorSettingsActionPill(title: "Decline") { model.declineRelayControl() }
-                    MonitorSettingsActionPill(title: "Grant to \(requester)") {
-                        model.grantRelayControl()
+            MonitorSettingsRowCard(title: "Watchers") {
+                MonitorSettingsInlineRow(
+                    title: "Watching",
+                    help:
+                        "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control.",
+                    showTopDivider: false
+                ) {
+                    MonitorSettingsValueText(
+                        value: model.relayPeerCount == 1
+                            ? "1 device" : "\(model.relayPeerCount) devices")
+                }
+                if let requester = model.relayPendingControlRequest {
+                    MonitorSettingsInlineRow(
+                        title: "Control Requested",
+                        help:
+                            "A device watching this feed is asking to drive the camera. Granting it does not move the camera link: this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly."
+                    ) {
+                        HStack(spacing: 8) {
+                            MonitorSettingsActionPill(title: "Decline") {
+                                model.declineRelayControl()
+                            }
+                            MonitorSettingsActionPill(title: "Grant to \(requester)") {
+                                model.grantRelayControl()
+                            }
+                        }
                     }
                 }
-            }
-        }
-        if model.isRelayBroadcasting, let holder = model.relayControlHeldBy {
-            MonitorSettingsInlineRow(
-                title: "Camera Control",
-                help:
-                    "Take the camera back. This device holds the link, so it never has to ask."
-            ) {
-                HStack(spacing: 8) {
-                    MonitorSettingsValueText(value: holder)
-                    MonitorSettingsActionPill(title: "Take back") { model.reclaimRelayControl() }
+                if let holder = model.relayControlHeldBy {
+                    MonitorSettingsInlineRow(
+                        title: "Camera Control",
+                        help:
+                            "Take the camera back. This device holds the link, so it never has to ask."
+                    ) {
+                        HStack(spacing: 8) {
+                            MonitorSettingsValueText(value: holder)
+                            MonitorSettingsActionPill(title: "Take back") {
+                                model.reclaimRelayControl()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3339,64 +3311,33 @@ struct OperatorSettingsPanel: View {
     /// (standalone settings from the startup home) — sign in to Frame.io before a shoot, clear
     /// cache after one.
     @ViewBuilder private var storageRows: some View {
-        MonitorSettingsRowCard {
-            MonitorSettingsInlineRow(
-                title: "Frame.io",
-                help:
-                    "Sign in once here and the share sheet's Frame.io option unlocks everywhere. On the camera's Wi‑Fi, \"Sign in over internet\" hops to home Wi‑Fi or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.",
-                showTopDivider: false
-            ) {
-                if model.isFrameioConnected {
-                    Button {
-                        model.disconnectFrameio()
-                        frameioAccountStamp += 1
-                    } label: {
-                        Text("Log out")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(.systemRed))
-                    }
-                    .buttonStyle(.monitorTapTarget)
-                } else if !model.isFrameioConfigured {
-                    MonitorSettingsValueText(value: "Not set up in this build")
-                } else if frameioSigningIn {
-                    ProgressView().tint(LiveDesign.accent)
-                } else if model.isOnCameraAccessPoint {
-                    Button {
-                        showFrameioHopConfirm = true
-                    } label: {
-                        Text("Sign in over internet")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(LiveDesign.accent)
-                    }
-                    .buttonStyle(.monitorTapTarget)
+        MonitorAccountSettings(
+            title: "Frame.io",
+            help:
+                "Sign in once here and the share sheet's Frame.io option unlocks everywhere. On the camera's Wi‑Fi, signing in hops to home Wi‑Fi or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.",
+            state: frameioAccountState,
+            signIn: {
+                if model.isOnCameraAccessPoint {
+                    showFrameioHopConfirm = true
                 } else {
-                    Button {
-                        frameioSigningIn = true
-                        frameioSignInError = nil
-                        Task {
-                            do {
-                                try await model.connectFrameio()
-                            } catch {
-                                frameioSignInError = error.localizedDescription
-                            }
-                            frameioSigningIn = false
-                            frameioAccountStamp += 1
+                    frameioSigningIn = true
+                    frameioSignInError = nil
+                    Task {
+                        do {
+                            try await model.connectFrameio()
+                        } catch {
+                            frameioSignInError = error.localizedDescription
                         }
-                    } label: {
-                        Text("Sign in")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(LiveDesign.accent)
+                        frameioSigningIn = false
+                        frameioAccountStamp += 1
                     }
-                    .buttonStyle(.monitorTapTarget)
                 }
+            },
+            signOut: {
+                model.disconnectFrameio()
+                frameioAccountStamp += 1
             }
-            if let frameioSignInError {
-                Text(frameioSignInError)
-                    .font(.system(size: 11))
-                    .foregroundStyle(LiveDesign.accent)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
+        )
         // Keychain-backed state isn't observable — the stamp forces the card to re-read
         // `isFrameioConnected` after sign-in/out.
         .id(frameioAccountStamp)
@@ -3407,6 +3348,12 @@ struct OperatorSettingsPanel: View {
             Text(
                 "We'll hop to home Wi‑Fi or cellular so you can sign in to Frame.io, then reconnect to the camera automatically."
             )
+        }
+        if let frameioSignInError {
+            Text(frameioSignInError)
+                .font(MonitorTheme.font(11.5))
+                .foregroundStyle(MonitorTheme.recording)
+                .fixedSize(horizontal: false, vertical: true)
         }
 
         MonitorCacheSettings(
@@ -3420,6 +3367,12 @@ struct OperatorSettingsPanel: View {
             cacheSizeBytes = model.totalMediaCacheByteCount()
         }
         .onAppear { cacheSizeBytes = model.totalMediaCacheByteCount() }
+    }
+
+    private var frameioAccountState: MonitorAccountState {
+        if model.isFrameioConnected { return .signedIn }
+        if !model.isFrameioConfigured { return .notConfigured }
+        return frameioSigningIn ? .connecting : .signedOut
     }
 
     private var cacheSizeLabel: String {
