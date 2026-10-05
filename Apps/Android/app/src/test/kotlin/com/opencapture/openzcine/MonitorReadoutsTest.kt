@@ -1,6 +1,5 @@
 package com.opencapture.openzcine
 
-import android.os.BatteryManager
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -89,39 +88,6 @@ class MonitorReadoutsTest {
         assertEquals("EXT", poweredOnly.label)
         assertTrue(poweredOnly.externalPower)
         assertFalse(monitorBatteryPresentation(80, externalPower = false).externalPower)
-        assertNull(readPhoneBatteryPercent(null))
-    }
-
-    @Test
-    fun `phone battery broadcast preserves percentage and charging state`() {
-        val charging =
-            phoneBatteryReadout(
-                level = 167,
-                scale = 200,
-                status = BatteryManager.BATTERY_STATUS_CHARGING,
-                fallbackPercent = null,
-            )
-        assertEquals(84, charging.percent)
-        assertEquals(true, charging.externalPower)
-
-        val full =
-            phoneBatteryReadout(
-                level = 100,
-                scale = 100,
-                status = BatteryManager.BATTERY_STATUS_FULL,
-                fallbackPercent = null,
-            )
-        assertEquals(true, full.externalPower)
-
-        val unplugged =
-            phoneBatteryReadout(
-                level = -1,
-                scale = 0,
-                status = BatteryManager.BATTERY_STATUS_DISCHARGING,
-                fallbackPercent = 62,
-            )
-        assertEquals(62, unplugged.percent)
-        assertEquals(false, unplugged.externalPower)
     }
 
     @Test
