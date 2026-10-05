@@ -210,9 +210,11 @@ changes and return from covers remain untested. The local candidate has no app p
   balance can be changed there (that camera only, confirmed by reading it back). One Record button
   starts or stops every eligible camera; each tile reports its own result, a mixed start says
   "2 of 3 rolling. C didn't start.", and nothing is stopped because another camera failed.
-  Double-tap (or long-press, Open Live View) opens that camera's full Live View on its open link;
-  Return to Multicam in the lock slot hands it back without reconnecting. Closing the stage closes
-  every link and never stops a recording.
+  Double-tap (or the tile's options, Live View) opens that camera's full Live View on its open
+  link; Return to Multicam in the lock slot hands it back without reconnecting. Closing the stage
+  closes every link and never stops a recording. The stage is OpenCine's shared Multiview stage,
+  as in OpenPocketCine: per-tile options (Live View, record, Reconnect, Remove camera), the assist
+  palette (layout, fit), DISP and Record on all, whose confirmation names the cameras it starts.
 - Shared monitor UI (NIKON-01): no visible change outside multicam on iOS (simulator screenshots of
   first launch, live view, Operator Setup and media are unchanged). Android takes the shared
   monitor-ui with its iOS-look switch on; only multicam uses it so far.
@@ -278,9 +280,10 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     battery, timecode and picture on every tile in Grid and Center stage, portrait and landscape.
     Try to add a camera-AP setup, an unplugged USB body, the same body over a second setup (it
     must be refused or dropped with "That camera is already on the stage.") and a fifth camera.
-    Unplug one USB member and drop one Wi-Fi member: that tile shows Connection lost with Retry,
-    the others keep streaming, Retry brings it back.
-14. NIKON-01 borrow and return: open a member's Live View (double-tap, or long-press then Open
+    Unplug one USB member and drop one Wi-Fi member: that tile shows Connection lost (Reconnect in
+    its options; Android also shows Reconnect and Remove on the tile), the others keep streaming,
+    Reconnect brings it back.
+14. NIKON-01 borrow and return: open a member's Live View (double-tap, or the tile's options then
     Live View), change ISO, record and stop there, then Return to Multicam: the tile resumes
     without reconnecting, the camera never shows a new pairing or session prompt, and the other
     members kept streaming meanwhile. Leave Live View with Disconnect too: it must return to the
@@ -342,8 +345,8 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     TCP to 15740 and no PTP/IP bytes from the phone. A second phone's live session on the same
     body survives the whole time.
 27. Multicam stage safe area (iOS): on an iPhone 16 Pro, run multicam in both landscapes; the
-    Grid/Center toggle and Exit stay clear of the Dynamic Island and respond to taps, and the
-    camera strip does not run under the island.
+    assist palette (layout toggle) and Exit stay clear of the Dynamic Island and respond to taps,
+    and the camera strip does not run under the island.
 28. SHELL-02 setup names (iOS and Android): long-press a setup chip, including a camera with
     only one setup, rename it, then reopen the app. The name stays on that setup only. Clear
     the name and save: the normal setup label returns. Cancel keeps the previous name. Repeat
