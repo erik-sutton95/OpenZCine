@@ -316,8 +316,8 @@ struct LiveFeedModule: View {
     // The fixed-factor MAG tool (button + factor drum, AF-box-anchored) is retired in favour of
     // direct manipulation: pinch anywhere on the feed and it zooms about the pinch, drag to pan,
     // pinch out (or below ~1.05×) to snap back — the Photos-app contract. The transform still
-    // goes LAST and wraps the WHOLE overlay stack (see `Magnification` for why), so the AF box
-    // and guides magnify with the picture.
+    // goes LAST, after de-squeeze and Fit/Fill have settled the framing, and wraps the WHOLE
+    // overlay stack, so the AF box and guides magnify with the picture.
     /// Committed zoom, 1 when not zoomed.
     @State private var zoomScale: CGFloat = 1
     /// Committed pan, applied after the CENTER-anchored scale.
@@ -569,7 +569,7 @@ struct LiveFeedModule: View {
                 DemoFocusPointerSurface(model: model, size: CGSize(width: width, height: height))
             }
         }
-        // The zoom goes LAST and wraps the WHOLE stack, not the raster — see `Magnification`. The
+        // The zoom goes LAST and wraps the WHOLE stack, not the raster. The
         // AF box and focus ring are siblings of the raster, so scaling the raster alone would
         // leave them behind at unmagnified positions over a magnified picture. Gesture locations
         // do NOT follow: the focus gestures attach outside this transform, so a tap reports where

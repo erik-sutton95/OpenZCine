@@ -607,9 +607,9 @@ final class RunnerTests: XCTestCase {
     }
 
     func testDemoSettingsTabSelection() {
-        XCTAssertEqual(OperatorSettingsTab.demoLaunchTab("assist"), .assist)
-        XCTAssertEqual(OperatorSettingsTab.demoLaunchTab("storage"), .storage)
-        XCTAssertEqual(OperatorSettingsTab.demoLaunchTab("unknown"), .link)
+        XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("assist"), .assist)
+        XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("storage"), .storage)
+        XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("unknown"), .link)
     }
 
     func testMediaClipStoreBuildsContainedURLsForSafeBasenames() throws {

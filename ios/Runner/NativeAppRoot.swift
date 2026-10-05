@@ -12,6 +12,7 @@ import UIKit
 import ZIPFoundation
 import os
 import struct MonitorPresentation.MonitorEdgeInsets
+import enum MonitorPresentation.MonitorSettingsTab
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -1017,8 +1018,8 @@ final class NativeAppModel {
     /// moving it; the camera remains the source of truth, this just suppresses our ChangeAfArea
     /// sends. Session-only.
     var focusPointLocked = false
-    /// Whether the live view is punched in. Transient by design — see `Magnification`; a session
-    /// that restored itself already magnified would read as a broken feed.
+    /// Whether the live view is punched in. Transient by design: a session that restored itself
+    /// already magnified would read as a broken feed.
     var magnificationActive = DemoHarness.magnificationActive
     /// Where the monitor's picture comes from.
     ///
@@ -2361,7 +2362,7 @@ final class NativeAppModel {
     }
     /// Operator Setup rail tab and per-tab scroll offsets — session-only; survive dismissing the
     /// panel back to live view without resetting to Link / top-of-page.
-    var operatorSettingsTab: OperatorSettingsTab = .link
+    var operatorSettingsTab: MonitorSettingsTab = .link
     var operatorSettingsScrollOffsets: [String: CGFloat] = [:]
     /// Global frame of the bottom capture-settings bar. The exposure picker right-aligns to this
     /// bar's right edge and rises just above it, mirroring the mockup's `.pk-card` placement.
@@ -12302,10 +12303,10 @@ final class NativeAppModel {
         assist.set(tool, visible: visible, context: context)
         if context == .liveView { preferences.recordScopeActivation(tool, on: visible) }
         // Switching the tool off cannot leave the feed punched in: the button goes with the tool,
-        // so an armed transform would have no visible control explaining it. `Magnification`
-        // states the rule; this is the only place the tool can be turned off.
+        // so an armed transform would have no visible control explaining it. This is the only
+        // place the tool can be turned off.
         if tool == .magnification, !visible {
-            magnificationActive = Magnification.activeAfterDisabling()
+            magnificationActive = false
         }
         if tool == .instantReview, visible {
             // Arm the post-capture diff with the card's current handles right away.
