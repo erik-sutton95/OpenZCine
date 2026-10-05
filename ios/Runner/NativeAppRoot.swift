@@ -2208,9 +2208,6 @@ final class NativeAppModel {
     {
         didSet { PreferencesStore.saveMovablePanelPositions(movablePanelPositions) }
     }
-    /// Live frames of the currently-shown movable panels (same live-canvas space), so other floating
-    /// chrome (the recenter button) can dodge them. Reported by each `MovablePanel`; absent = hidden.
-    var movablePanelFrames: [String: CGRect] = [:]
     /// Capture settings the camera refuses to change (body "Control lock"; `MovieTVLockSetting`
     /// can report shutter locked independently). Set when the body rejects a write or the lock
     /// property reads engaged; cleared when a write succeeds or the poll reports unlocked. The bar
@@ -9619,31 +9616,6 @@ final class NativeAppModel {
             coordinateWidth: coordinateWidth,
             coordinateHeight: coordinateHeight
         )
-    }
-
-    /// Lifts the recenter-focus button above any movable assist panel (scope / false-colour
-    /// reference) that would overlap its bottom-left corner spot, so e.g. a waveform dropped there
-    /// pushes it up to the next clear slot. Climbs panel-by-panel (lowest first) until nothing
-    /// overlaps. Called by `MonitorShell`'s landscape chrome since it only reads
-    /// `movablePanelFrames`, not view-local state.
-    func focusResetButtonClearY(centerX: CGFloat, baseY: CGFloat, size: CGFloat) -> CGFloat {
-        let half = size / 2
-        let gap: CGFloat = 10
-        let panels = movablePanelFrames.values.sorted { $0.maxY > $1.maxY }
-        var y = baseY
-        var moved = true
-        var iterations = 0
-        while moved && iterations < 8 {
-            moved = false
-            iterations += 1
-            let buttonRect = CGRect(x: centerX - half, y: y - half, width: size, height: size)
-            for frame in panels where buttonRect.intersects(frame.insetBy(dx: -gap, dy: -gap)) {
-                y = frame.minY - gap - half
-                moved = true
-            }
-        }
-        // Never climb off the top of the feed.
-        return max(y, 44)
     }
 
     /// True when `location` (feed space) lands on the camera's current AF / subject box, with a

@@ -79,7 +79,7 @@ flowchart TD
 - **Detail:** First good frame sets `isMonitorPresented = true`, dismisses connection progress,
   resets stall counters, publishes timecode/FPS/batteries. Layout resolves feed safe area, 16:9
   full-bleed frame, mirrored chrome for landscape-right (`MonitorHorizontalLayoutDirection`), and
-  module positions via `MonitorLiveViewModuleLayout.fit`.
+  module positions from the shared `FieldMonitorLayout`.
 - 📝 Notes:
 
 ### LIVE-FAILED-01 — Start failure

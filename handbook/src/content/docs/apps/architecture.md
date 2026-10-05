@@ -52,10 +52,10 @@ a stable identity per install and reuses it on every connect.
 ## Monitor layout
 
 The live monitor is one view tree for landscape and portrait on iOS, and one
-Compose tree on Android. Both call the same pure zone map in the core
-(`MonitorZoneLayout`), which delegates to the landscape and portrait layout
-policies and is covered by golden-parity tests. Rotation is a geometry change
-under stable view identity, not a tree swap.
+Compose tree on Android. Both lay out from the shared OpenCine Field Monitor
+geometry (`FieldMonitorLayout` on iOS, `MonitorLayoutPolicy.fieldMonitor` on
+Android), as Pocket and Insta do. Rotation is a geometry change under stable
+view identity, not a tree swap.
 
 Operator-visible behavior should match across iOS and Android. The full seam
 table and decision records:

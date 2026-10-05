@@ -123,41 +123,6 @@ object SwiftCore {
     /** Resolves an upload MIME family through the shared Frame.io core policy. */
     external fun frameioMediaTypeForFilename(filename: String): String
 
-
-    /**
-     * Monitor zone map from the shared core's `MonitorZoneLayout.map` — the
-     * exact frames the iOS shell lays chrome out with. Flat records of
-     * `[kind, style, x, y, width, height]` (see [MonitorZones.parse] and the
-     * Swift mirror `MonitorZoneMapWire`). All dimensions are dp.
-     *
-     * @param mode DispMode ordinal: 0 live, 1 clean, 2 command.
-     * @param aspectFill portrait feed aspect; false = fit 16:9.
-     * @param mirrored true for the mirrored landscape-right chrome.
-     * @param portraitFeedAspectRatio fit-mode feed content ratio: photography
-     *   passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders
-     *   whole under the top bar; video passes 16:9. Ignored in fill.
-     * @param canDriveCamera `MonitorDataAvailability.canDriveCamera`. False for a
-     *   relay watcher without the control token, which owns the band the capture
-     *   strip would have taken: the core then centres the assist strip and drops
-     *   DISP into the trailing corner, exactly as on iOS.
-     */
-    external fun monitorZoneMap(
-        viewportWidth: Float,
-        viewportHeight: Float,
-        safeTop: Float,
-        safeLeading: Float,
-        safeBottom: Float,
-        safeTrailing: Float,
-        mode: Int,
-        isPortrait: Boolean,
-        aspectFill: Boolean,
-        scopeCount: Int,
-        mirrored: Boolean,
-        bottomBarHeight: Float,
-        portraitFeedAspectRatio: Float,
-        canDriveCamera: Boolean,
-    ): FloatArray
-
     /**
      * Registers [listener] and has Swift push a canned connection-phase
      * sequence from a background thread — the callback shape session events

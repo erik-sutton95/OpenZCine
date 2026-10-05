@@ -191,7 +191,7 @@ struct LiveViewLayoutContext {
     /// True when the viewport is taller than it is wide — drives the portrait monitor shell.
     let isPortrait: Bool
     /// Full PHYSICAL viewport height for the portrait zone layout. The GeometryReader reports the
-    /// safe-area frame, but the shell renders edge-to-edge and `MonitorPortraitLayout.zones`
+    /// safe-area frame, but the shell renders edge-to-edge and the shared `FieldMonitorLayout`
     /// subtracts the insets itself — restore them here (as `MonitorLiveViewViewport.fullWidth` does
     /// horizontally). Passing the safe-area height double-counts the insets: ~96pt dead band.
     let viewportHeight: Double
@@ -1490,118 +1490,6 @@ struct FeedGrain: View {
     }
 }
 
-extension View {
-    /// Positions a view at an absolute `MonitorModuleFrame` (viewport coordinates). Internal:
-    /// `MonitorSystemCluster` / `MonitorShell` (MonitorUnified.swift) place rail slots with it.
-    func monitorModuleFrame(_ frame: MonitorModuleFrame, alignment: Alignment = .center)
-        -> some View
-    {
-        self
-            .frame(width: CGFloat(frame.width), height: CGFloat(frame.height), alignment: alignment)
-            .position(x: CGFloat(frame.midX), y: CGFloat(frame.midY))
-    }
-}
-
-struct BatteryRailModule: View {
-    @Environment(NativeAppModel.self) private var model
-    let safeArea: MonitorEdgeInsets
-    let phoneTopClearance: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            let layout = MonitorBatteryRailLayout.fit(
-                railHeight: Double(proxy.size.height),
-                safeArea: safeArea,
-                phoneTopClearance: phoneTopClearance
-            )
-
-            ZStack {
-                if layout.usesBatteryPill {
-                    // Anchored in the rail zone's own width, nudged toward the screen edge —
-                    // the zone ends short of the feed frame, which keeps the gauges off the
-                    // image.
-                    batteryPill
-                        .chromeEditable(
-                            .batteryIndicators, editing: model.chromeEditorMode
-                        )
-                        .position(x: proxy.size.width / 2 - 6, y: CGFloat(layout.pillCenterY))
-                } else {
-                    phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
-                        .chromeEditable(
-                            .batteryIndicators, editing: model.chromeEditorMode
-                        )
-                        .position(
-                            x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
-                    cameraBatteryIndicator
-                        .chromeEditable(
-                            .batteryIndicators, editing: model.chromeEditorMode
-                        )
-                        .position(
-                            x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-        }
-    }
-
-    private var batteryPill: some View { BatteryGaugeStack() }
-
-    private func phoneBatteryIndicator(compact: Bool) -> some View {
-        BatteryIndicator(
-            percent: model.cameraState.phoneBatteryPercent,
-            deviceSystemName: "iphone",
-            isCamera: false,
-            isCharging: model.phoneBatteryCharging,
-            layout: compact ? .compactRail : .rail
-        )
-    }
-
-    private var cameraBatteryIndicator: some View {
-        BatteryIndicator(
-            percent: model.cameraState.cameraBatteryPercent,
-            deviceSystemName: "camera",
-            isCamera: true,
-            isCharging: model.cameraBatteryCharging
-        )
-    }
-}
-
-/// The combined battery gauges (Dynamic-Island rails, and the iPad's inline cluster): two bare
-/// rows, each a device icon beside a battery-shaped outline with the number inside — narrow
-/// enough to sit inside the rail lane without touching the feed.
-struct BatteryGaugeStack: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            BatteryIndicator(
-                percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: deviceSymbol,
-                isCamera: false,
-                isCharging: model.phoneBatteryCharging,
-                layout: .pillRow
-            )
-            BatteryIndicator(
-                percent: model.cameraState.cameraBatteryPercent,
-                deviceSystemName: "camera",
-                isCamera: true,
-                isCharging: model.cameraBatteryCharging,
-                layout: .pillRow
-            )
-        }
-    }
-
-    private var deviceSymbol: String {
-        UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
-    }
-}
-
-/// Inline phone + camera battery cluster for width-constrained (4:3-ish iPad) landscape layouts,
-/// mounted beside the lock button at the zone map's `.batteryInline` cluster frame.
-struct BatteryInlineCluster: View {
-    var body: some View { BatteryGaugeStack() }
-}
-
 /// A single tappable exposure readout (label + value) that opens its picker above the capture bar.
 /// While that picker is open it lights up gold so the operator can see which setting is being edited.
 struct CaptureSettingButton: View {
@@ -1759,102 +1647,15 @@ struct CaptureSettingButton: View {
     }
 }
 
-struct AssetCircleButton: View {
-    let assetName: String
-    let systemName: String
-    let size: CGFloat
-
-    var body: some View {
-        Image(assetName)
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size * 0.44, height: size * 0.44)
-            .foregroundStyle(LiveDesign.text.opacity(0.86))
-            .frame(width: size, height: size)
-            .liquidGlass(in: Circle())
-    }
-}
-
-struct RecordButton: View {
-    let isRecording: Bool
-
-    // Drawn at the rail's record-button diameter; inner shapes keep their original proportions.
-    private var diameter: CGFloat { CGFloat(MonitorSideRailControlLayout.recordButtonSize) }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color(red: 0.88, green: 0.28, blue: 0.30),
-                            LiveDesign.rec,
-                        ],
-                        center: .top,
-                        startRadius: 4,
-                        endRadius: diameter * (48.0 / 72.0)
-                    )
-                )
-                .overlay(Circle().stroke(.white.opacity(0.17), lineWidth: 3))
-                .shadow(color: .black.opacity(0.50), radius: 20, x: 0, y: 12)
-                .shadow(color: isRecording ? LiveDesign.rec.opacity(0.50) : .clear, radius: 16)
-            if isRecording {
-                // Stop icon — rounded square, not panel chrome (see `DesignTokens` exceptions).
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LiveDesign.rec)
-                    .frame(width: diameter * (25.0 / 72.0), height: diameter * (25.0 / 72.0))
-            } else {
-                Circle()
-                    .fill(LiveDesign.rec)
-                    .frame(width: diameter * (58.0 / 72.0), height: diameter * (58.0 / 72.0))
-            }
-        }
-        .frame(width: diameter, height: diameter)
-    }
-}
-
+/// One compact battery row (icon · glyph · number) inside the combined gauge pill.
 struct BatteryIndicator: View {
-    /// `.rail`: 3-row landscape rail. `.compactRail`: battery + percentage between a classic
-    /// notch and lock button. `.inline`: single-row portrait/iPad presentation. `.pillRow`:
-    /// one compact row (icon · glyph · number) inside the combined rail pill.
-    enum Layout {
-        case rail, compactRail, inline, pillRow
-    }
-
     let percent: Int
     let deviceSystemName: String
     let isCamera: Bool
     var isCharging: Bool = false
-    var layout: Layout = .rail
 
     /// Drives the exhausted gauge's pulse. Only ever set while ``batteryPulses``.
     @State private var batteryPulsePhase = false
-
-    /// Standard SF battery glyph whose fill reflects the charge percent. The Nikon ZR reports
-    /// battery as discrete steps (1/20/40/60/80/100 %), so the camera readout naturally lands on
-    /// 20/40/60/80/100 % (and 1 % when critical) rather than a misleadingly precise figure.
-    private var batterySymbol: String {
-        // Camera: pick the glyph from the bar count so the icon and the readout cannot disagree.
-        if let cameraGauge {
-            switch cameraGauge.filledBars {
-            case 0: return "battery.0percent"
-            case 1: return "battery.25percent"
-            case 2: return "battery.25percent"
-            case 3: return "battery.50percent"
-            case 4: return "battery.75percent"
-            default: return "battery.100percent"
-            }
-        }
-        let bucket = percent
-        switch bucket {
-        case ..<13: return "battery.0percent"
-        case ..<38: return "battery.25percent"
-        case ..<63: return "battery.50percent"
-        case ..<88: return "battery.75percent"
-        default: return "battery.100percent"
-        }
-    }
 
     /// The camera's gauge, as the body reports it (nil for the phone, which is a real percentage).
     private var cameraGauge: CameraBatteryGauge? {
@@ -1942,19 +1743,10 @@ struct BatteryIndicator: View {
     /// "nearly out", a pulsing one is "the shutter is already disabled".
     private var batteryPulses: Bool { cameraGauge?.pulses ?? false }
 
-    var body: some View {
-        switch layout {
-        case .rail: railBody
-        case .compactRail: compactRailBody
-        case .inline: inlineBody
-        case .pillRow: pillRowBody
-        }
-    }
-
     /// One compact gauge row: device icon beside a battery-shaped outline with the bare
     /// number inside (the tight lane drops the % sign — the context is unambiguous). The
     /// outline's stroke carries the state tint; a bolt precedes the number while charging.
-    private var pillRowBody: some View {
+    var body: some View {
         HStack(spacing: 5) {
             Image(systemName: deviceSystemName)
                 .font(.system(size: 10, weight: .medium))
@@ -1982,68 +1774,6 @@ struct BatteryIndicator: View {
                     .frame(width: 1.6, height: 6)
                     .offset(x: 3)
             }
-        }
-    }
-
-    /// A charging bolt sits over the battery body when plugged in, legible against the fill via
-    /// a dark glyph with a thin light outline. Shared by both presentations.
-    private var chargingOverlay: some View {
-        Group {
-            if isCharging {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 9, weight: .black))
-                    .foregroundStyle(LiveDesign.background)
-                    .shadow(color: LiveDesign.text.opacity(0.9), radius: 0.5)
-                    .offset(x: -1)
-            }
-        }
-    }
-
-    private var railBody: some View {
-        VStack(spacing: 4) {
-            Image(systemName: batterySymbol)
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(batteryTint)
-                .overlay { chargingOverlay }
-            gaugeReadout(size: 8)
-            Image(systemName: deviceSystemName)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(LiveDesign.muted)
-        }
-        .frame(
-            width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
-            height: CGFloat(MonitorBatteryRailLayout.indicatorHeight)
-        )
-    }
-
-    private var compactRailBody: some View {
-        VStack(spacing: 1) {
-            Image(systemName: batterySymbol)
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(batteryTint)
-                .overlay { chargingOverlay }
-            gaugeReadout(size: 6.5)
-        }
-        .frame(
-            width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
-            height: CGFloat(MonitorBatteryRailLayout.compactPhoneIndicatorHeight)
-        )
-        .accessibilityLabel("iPhone battery")
-        .accessibilityValue(readout)
-    }
-
-    /// Portrait top-bar presentation (R2): one row, battery glyph / percent / device glyph,
-    /// reusing the rail's exact symbol/readout/color/charging logic.
-    private var inlineBody: some View {
-        HStack(spacing: 5) {
-            Image(systemName: batterySymbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(batteryTint)
-                .overlay { chargingOverlay }
-            gaugeReadout(size: 10)
-            Image(systemName: deviceSystemName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(LiveDesign.muted)
         }
     }
 }

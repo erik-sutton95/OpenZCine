@@ -50,10 +50,6 @@ extension ButtonStyle where Self == ZCTapTargetButtonStyle {
 }
 
 extension View {
-    func startupContentWidth(_ layout: StartupContentLayout) -> some View {
-        frame(width: CGFloat(layout.contentWidth), alignment: .topLeading)
-    }
-
     func glassCapsule(interactive: Bool = false) -> some View {
         liquidGlass(in: Capsule(), interactive: interactive)
     }

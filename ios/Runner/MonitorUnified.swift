@@ -306,12 +306,10 @@ private struct NikonMonitorPower: View {
         ) {
             BatteryIndicator(
                 percent: model.cameraState.phoneBatteryPercent,
-                deviceSystemName: "iphone", isCamera: false, isCharging: model.phoneBatteryCharging,
-                layout: .pillRow)
+                deviceSystemName: "iphone", isCamera: false, isCharging: model.phoneBatteryCharging)
             BatteryIndicator(
                 percent: model.cameraState.cameraBatteryPercent,
-                deviceSystemName: "camera", isCamera: true, isCharging: model.cameraBatteryCharging,
-                layout: .pillRow)
+                deviceSystemName: "camera", isCamera: true, isCharging: model.cameraBatteryCharging)
         }
     }
 }

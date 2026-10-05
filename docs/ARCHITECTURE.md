@@ -102,22 +102,11 @@ environment value.
 The live-view monitor is a single view tree, `MonitorShell(context:)`
 (`ios/Runner/MonitorUnified.swift`), that renders both landscape and portrait from one body —
 there are no separate landscape/portrait shell structs and no feature flag selecting between them.
-`MonitorShell` computes a `MonitorZoneMap` once per layout pass via
-`MonitorZoneLayout.map(...)` (`Sources/OpenZCineCore/MonitorZoneLayout.swift`) and mounts each
-unified module (`MonitorInfoBar`, `MonitorCaptureStrip`, the shared assist palette,
-`MonitorSystemCluster`, `MonitorScopes`, plus the shared feed/command/panel views) at the frame
-and style hint the map returns for that zone; a `nil` zone stays unmounted.
-
-`MonitorZoneLayout.map(...)` is a pure **adapter, not a re-derivation**: it delegates to the two
-original layout policies — `MonitorLiveViewModuleLayout.fit(...)` for landscape,
-`MonitorPortraitLayout.zones(...)` for portrait — and normalizes their outputs into one zone
-vocabulary (frame + style hint, e.g. `.infoPill`/`.infoBar`, `.axisHorizontal`/`.axisVertical`,
-`.scopesFloating`/`.scopesStacked`). Both policies remain in the portable core, UI-free and
-unit-tested by their own long-standing suites (500+ tests) plus a golden-parity suite
-(`Tests/OpenZCineCoreTests/MonitorZoneLayoutTests.swift`) that asserts the map's frames equal the
-legacy policies' outputs exactly for a fixture matrix (both orientations, all DISP modes, portrait
-aspect × scope-count combinations). No new layout math was invented to unify the shells — only the
-container/mounting layer changed.
+`MonitorShell` builds the shared OpenCine `FieldMonitorLayout` (the Pocket / Insta Field Monitor
+geometry) once per layout pass from the viewport, safe area, source aspect and portrait fit/fill,
+and hands it to the shared `MonitorScreen`, which places the picture, status, values, assists and
+system controls; the assist palette is placed by `MonitorAssistPaletteLayout.fieldMonitor`. The
+Nikon core keeps only the feed-cutout and chrome-inset facts in `MonitorLayoutPolicy.swift`.
 
 Rotation is a **geometry change under stable view identity**, not a tree swap: `LiveViewShell`
 (`ios/Runner/MonitorExperience.swift`) mounts one `MonitorShell(context:)` with
@@ -126,11 +115,11 @@ new zone frame when `context.isPortrait` flips. There is no `matchedGeometryEffe
 namespace, and no hero-tag plumbing — earlier "rung 2" approximated the morph with matched-geometry
 heroes across two parallel shells; unification replaced that with the real thing.
 
-Android follows the same product model in one Compose `MonitorScreen` tree. It calls the shared
-Swift monitor-zone map through the facade, retains state across configuration changes, and keeps
+Android follows the same product model in one Compose `MonitorScreen` tree. It lays out from the
+shared OpenCine `MonitorLayoutPolicy.fieldMonitor`, retains state across configuration changes, and keeps
 feed, focus, framing, scope, and chrome geometry registered to the same fit/fill content rectangle.
 
-**Portrait monitor v2 (live mode)** is the zone shape `MonitorPortraitLayout.zones(...)` produces:
+**Portrait monitor v2 (live mode)** is the portrait shape of the shared Field Monitor layout:
 a top bar overlaid on the feed, the feed itself (pinch-toggled between `.fit16x9` and a
 center-crop `.fill`), a dynamic scopes region, and a persistent 100pt bottom system bar (a
 `LiveDesign.glass` band that runs to the physical bottom edge, clearing the record button and the

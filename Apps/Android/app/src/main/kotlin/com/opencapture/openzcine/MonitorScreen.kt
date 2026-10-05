@@ -332,8 +332,8 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
 
 /**
  * The monitor shell — a 1:1 port of the iOS `MonitorShell`
- * (ios/Runner/MonitorUnified.swift), laid out by the SAME shared-core zone
- * map via [SwiftCore.monitorZoneMap] in both orientations.
+ * (ios/Runner/MonitorUnified.swift), laid out by the same shared OpenCine
+ * `MonitorLayoutPolicy.fieldMonitor` geometry in both orientations.
  *
  * Scope: feed, top info deck (landscape pill / portrait bar), lock/battery
  * band, capture strip, assist toolbar (wired to the feed-effects engine and

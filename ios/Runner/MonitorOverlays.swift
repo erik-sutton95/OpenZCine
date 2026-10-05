@@ -247,11 +247,6 @@ struct MovablePanel<Content: View>: View {
     var body: some View {
         let center = clamp(resolvedCenter())
         let gripPad = resize != nil ? gripHitSize - gripCornerInset : 0
-        // The panel's live frame in the canvas space, published so other floating chrome (the recenter
-        // button) can dodge it.
-        let frame = CGRect(
-            x: center.x - size.width / 2, y: center.y - size.height / 2,
-            width: size.width, height: size.height)
         // Expand layout bounds so the exterior grip stays hit-testable; shift `.position` to keep the
         // scope panel itself anchored at `center`.
         ZStack(alignment: .topLeading) {
@@ -278,9 +273,6 @@ struct MovablePanel<Content: View>: View {
         .scaleEffect((isDragging || isResizing) ? 1.03 : 1)
         .shadow(color: .black.opacity((isDragging || isResizing) ? 0.5 : 0), radius: 18, y: 8)
         .position(x: center.x + gripPad / 2, y: center.y + gripPad / 2)
-        .onAppear { model.movablePanelFrames[id] = frame }
-        .onChange(of: frame) { _, newFrame in model.movablePanelFrames[id] = newFrame }
-        .onDisappear { model.movablePanelFrames[id] = nil }
         .sensoryFeedback(trigger: isDragging) { _, dragging in
             dragging ? .impact(flexibility: .rigid, intensity: 1) : nil
         }

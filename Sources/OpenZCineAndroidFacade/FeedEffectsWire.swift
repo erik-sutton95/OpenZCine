@@ -1,6 +1,6 @@
 // Baked feed-effect payloads crossing the JNI seam.
 //
-// Like `MonitorZoneMapWire`, this file compiles on every platform so the baking
+// This file compiles on every platform so the baking
 // is exercised by `just native-check` on macOS against the exact colour math
 // the iOS shell renders with. The Kotlin consumer is
 // `Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/FeedEffectsRenderer.kt`.
