@@ -18,35 +18,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.setProgress
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.openzcine.ChromeShape
-import com.opencapture.openzcine.GlassTier
 import com.opencapture.openzcine.LiveDesign
-import com.opencapture.openzcine.LocalMonitorGlass
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
-import com.opencapture.openzcine.glass.LiquidSlider
-import kotlin.math.roundToInt
 
 @Composable
 internal fun Modifier.settingsClickable(role: Role, onClick: () -> Unit): Modifier =
@@ -192,92 +177,6 @@ public object SettingsPalette {
             SettingsColorDot("Red", LiveDesign.rec),
             SettingsColorDot("Green", LiveDesign.good),
         )
-}
-
-/** Playback still uses the app glass owner; migrate with its separately reviewed media seam. */
-@Composable
-public fun GlassPillSlider(
-    value: Int,
-    range: IntRange,
-    onChange: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val monitorGlass = LocalMonitorGlass.current
-    // Liquid glass only when the monitor session is on FULL tier. Standalone
-    // Operator Setup and FLAT-tier devices get the solid white capsule thumb.
-    val useLiquidGlass = monitorGlass?.tier == GlassTier.FULL
-    val localBackdrop = rememberLayerBackdrop()
-    val sceneBackdrop = monitorGlass?.layerBackdrop
-    val latestOnChange by rememberUpdatedState(onChange)
-    val latestValue by rememberUpdatedState(value)
-    val floatRange = range.first.toFloat()..range.last.toFloat()
-    // Continuous thumb position while dragging. Discrete onChange (Int steps) alone cannot
-    // drive a smooth pill drag — intermediate floats would be rounded away and the thumb
-    // would stick (especially on short ranges like desqueeze 0…10).
-    var displayValue by remember { mutableFloatStateOf(value.toFloat()) }
-    // Accept external commits without yanking the pill back to the last Int mid-drag.
-    SideEffect {
-        if (displayValue.roundToInt().coerceIn(range) != value) {
-            displayValue = value.toFloat()
-        }
-    }
-
-    Box(
-        modifier
-            .height(40.dp)
-            .then(
-                if (useLiquidGlass && sceneBackdrop == null) {
-                    Modifier.layerBackdrop(localBackdrop)
-                } else {
-                    Modifier
-                },
-            )
-            .semantics(mergeDescendants = true) {
-                stateDescription = "$value%"
-                setProgress { target ->
-                    val next =
-                        (range.first + target * (range.last - range.first))
-                            .roundToInt()
-                            .coerceIn(range)
-                    displayValue = next.toFloat()
-                    latestOnChange(next)
-                    true
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        if (useLiquidGlass && sceneBackdrop == null) {
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .background(
-                        brush =
-                            Brush.horizontalGradient(
-                                colors =
-                                    listOf(
-                                        LiveDesign.surface,
-                                        LiveDesign.background,
-                                        LiveDesign.surface,
-                                    ),
-                            ),
-                    ),
-            )
-        }
-        LiquidSlider(
-            value = { displayValue },
-            onValueChange = { next ->
-                displayValue = next
-                val rounded = next.roundToInt().coerceIn(range)
-                if (rounded != latestValue) latestOnChange(rounded)
-            },
-            valueRange = floatRange,
-            visibilityThreshold = 0.5f,
-            backdrop = sceneBackdrop ?: localBackdrop,
-            modifier = Modifier.fillMaxWidth(),
-            accentColor = LiveDesign.accent,
-            useLiquidGlass = useLiquidGlass,
-        )
-    }
 }
 
 /** Physical close lane reserved by the Nikon full-screen page adapter. */
