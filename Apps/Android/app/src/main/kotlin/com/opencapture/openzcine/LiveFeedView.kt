@@ -3,10 +3,8 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.os.Process
-import java.util.concurrent.Executors
-import kotlinx.coroutines.asCoroutineDispatcher
 import android.media.MediaCodecList
+import com.opencapture.opencine.runtime.MonitorFrameDecodeWorker
 import android.os.Build
 import android.util.Log
 import android.view.HapticFeedbackConstants
@@ -323,107 +321,17 @@ public class LiveFeedEffectsPresentationState {
  * The ring is 3 deep so the bitmap being decoded into is never the one the
  * RenderThread may still be drawing (current frame + one in flight).
  */
-class JpegFrameDecoder(
-    /**
-     * Maximum long-side pixels for the decoded bitmap. `0` keeps the source
-     * resolution; default [DEFAULT_MAX_LONG_SIDE] matches phone feed size.
-     */
-    private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE,
-) {
-    private val pool = arrayOfNulls<Bitmap>(3)
-    private var next = 0
-    private val options =
-        BitmapFactory.Options().apply {
-            inMutable = true
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-            // Keep the JPEG's declared color space intact. Forcing sRGB here
-            // would erase wide-gamut/HDR evidence before the fail-closed gate
-            // can reject a source the monitor cubes do not yet support.
-        }
-
-    /** Decodes [jpeg] into the next pooled bitmap; null if the data is invalid. */
-    fun decode(jpeg: ByteArray): Bitmap? {
-        options.inSampleSize = 1
-        if (maxLongSide > 0) {
-            options.inJustDecodeBounds = true
-            options.inBitmap = null
-            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
-            options.inSampleSize =
-                jpegSampleSizeForLongSide(options.outWidth, options.outHeight, maxLongSide)
-            options.inJustDecodeBounds = false
-        }
-        // Prefer pool reuse; IllegalArgumentException resets the ring slot.
-        options.inBitmap = pool[next]
-        val decoded =
-            try {
-                BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
-            } catch (_: IllegalArgumentException) {
-                // Pooled bitmap incompatible (size/sample change) — decode fresh.
-                options.inBitmap = null
-                BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
-            } ?: return null
-        pool[next] = decoded
-        next = (next + 1) % pool.size
-        return decoded
-    }
-
+class JpegFrameDecoder(private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE) {
+    private val native = com.opencapture.opencine.runtime.MonitorJpegFrameDecoder(maxLongSide)
+    fun decode(jpeg: ByteArray): Bitmap? = native.decode(jpeg)
     companion object {
-        /**
-         * Long-side cap for the decoded feed, set to the live-view frame's own
-         * width so the stream decodes 1:1 instead of falling to the next
-         * power-of-two step.
-         *
-         * `LiveViewImageSize` bounds the frame at XGA (≤1024×768), so 1024 is
-         * the widest the camera can send and this is a no-op guard in the normal
-         * case — it only engages if a body ever streams something larger. The
-         * previous 960 was carried over from a 1080p source and silently halved
-         * every frame (see the decode-path note on [JpegFrameDecoder]).
-         *
-         * Raising this raises per-frame texture upload 4×, back to ~0.59 MP —
-         * still well under the ~2.07 MP 1080p case that caused the original
-         * jank, but the low-RAM + effects path keeps its own tighter cap.
-         */
         const val DEFAULT_MAX_LONG_SIDE: Int = 1024
     }
 }
 
-/**
- * The one thread that decodes and presents the live picture.
- *
- * It was running on `Dispatchers.Default`, which is wrong twice over. That pool is shared — the
- * scope pump and the LUT/plan baking run on it too — so the picture queued behind work that could
- * have waited. And its threads sit at default priority while the UI and render threads run at -10,
- * which on a big.LITTLE scheduler is an invitation to park a bursty display-deadline workload on
- * an efficiency core. That placement decision is a vendor one, which makes it a much better
- * explanation for "late on one chipset, fine on another" than any per-byte cost — the bytes are
- * the same on both.
- *
- * One thread on purpose: there is one live feed, decoding is single-image work, and a second
- * decode in flight would reorder frames rather than deliver any sooner.
- */
-private val feedDecodeDispatcher =
-    Executors.newSingleThreadExecutor { runnable ->
-            Thread(
-                {
-                    Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
-                    runnable.run()
-                },
-                "zc-feed-decode",
-            )
-        }
-        .asCoroutineDispatcher()
-
 /** Power-of-two [BitmapFactory.Options.inSampleSize] so long side ≤ [maxLongSide]. */
-internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int): Int {
-    if (maxLongSide <= 0 || width <= 0 || height <= 0) return 1
-    val longSide = maxOf(width, height)
-    var sample = 1
-    // Grow sample until decoded long side is at most maxLongSide.
-    while (longSide / sample > maxLongSide) {
-        sample *= 2
-    }
-    return sample
-}
+internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int): Int =
+    com.opencapture.opencine.runtime.monitorJpegSampleSizeForLongSide(width, height, maxLongSide)
 
 /**
  * Renders a [LiveFrameSource] as the monitor feed: decodes off the main
@@ -666,10 +574,13 @@ fun LiveFeedView(
         // a 1080p source halved every frame on every device.
         val decoder = JpegFrameDecoder(maxLongSide = JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE)
         val stats = FramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
-        withContext(feedDecodeDispatcher) {
+        val decodeWorker = MonitorFrameDecodeWorker("zc-feed-decode")
+        try {
+            decodeWorker.run { isCurrent ->
             pumpFramesWithSourceFrame(
                 frames = source.frames,
                 stats = stats,
+                isCurrent = isCurrent,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.
                 decode = { frame ->
@@ -700,6 +611,9 @@ fun LiveFeedView(
                     )
                 },
             )
+            }
+        } finally {
+            decodeWorker.close()
         }
     }
 

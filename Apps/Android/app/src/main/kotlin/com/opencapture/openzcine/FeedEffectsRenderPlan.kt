@@ -4,6 +4,7 @@ import android.util.Log
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import java.util.LinkedHashMap
+import com.opencapture.opencine.media.MonitorLUTCube
 
 private const val TAG = "ZCFeedEffects"
 private const val BUILT_IN_LUT_SIZE = 33
@@ -21,6 +22,27 @@ internal class FeedEffectsRenderPlan(
     val limitsPaintCube: FeedEffectsCube?,
     val limitsWeightCube: FeedEffectsCube?,
 ) {
+    internal val nativePlan: com.opencapture.opencine.media.FeedEffectsRenderPlan by lazy {
+        com.opencapture.opencine.media.FeedEffectsRenderPlan(
+            lutCube = baseCube, falseColorPaint = limitsPaintCube, falseColorWeight = limitsWeightCube,
+            peaking = effects.peaking, peakingColor = configuration.peakingColor,
+            peakingRatioThreshold = configuration.peakingRatioThreshold,
+            peakingNoiseGate = configuration.peakingNoiseGate,
+            zebraHighlightOn = effects.zebra && configuration.highlightEnabled,
+            zebraHighlightCode = configuration.highlightCode,
+            zebraHighlightColor = configuration.highlightColor,
+            zebraMidtoneOn = effects.zebra && configuration.midtoneEnabled,
+            zebraMidtoneCode = configuration.midtoneCode, zebraMidtoneHalf = 5f / 255f,
+            zebraMidtoneColor = configuration.midtoneColor,
+            splitComparison = splitComparison != null,
+            splitVertical = splitComparison == FeedSplitOrientation.VERTICAL,
+            zebraMaskPolicy = com.opencapture.opencine.media.MonitorZebraMaskPolicy(
+                highlightMeasure = com.opencapture.opencine.media.MonitorZebraMaskPolicy.HighlightMeasure.REC709_LUMA,
+                rampBias = 0.0,
+            ),
+        )
+    }
+
     /**
      * The 50/50 Log-vs-LUT comparison to render, or `null`.
      *
@@ -48,18 +70,8 @@ internal class FeedEffectsRenderPlan(
             }
 }
 
-/** One validated packed-2D RGBA8 cube from the shared core. */
-internal class FeedEffectsCube(
-    val size: Int,
-    val rgba: ByteArray,
-) {
-    init {
-        require(size in 2..64) { "unsupported feed-effects cube size $size" }
-        require(rgba.size == size * size * size * 4) {
-            "bad feed-effects cube payload for size $size"
-        }
-    }
-}
+/** Shared validated packed-2D RGBA8 cube; source bytes retain the legacy codec. */
+internal typealias FeedEffectsCube = MonitorLUTCube
 
 /** Builds the single shared plan used by every Android GPU backend. */
 internal object FeedEffectsRenderPlanFactory {

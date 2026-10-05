@@ -1772,8 +1772,9 @@ final class NativeAppModel {
             // listening to this device.
             if !token.holderIsRecipient { self.dismissActivePanel() }
         }
-        client.onFrame = { [weak self] metadata, image in
-            self?.applyRelayFrame(metadata: metadata, image: image)
+        client.onFrame = { [weak self, weak client] metadata, image in
+            guard let self, let client, self.relayClient === client else { return }
+            self.applyRelayFrame(metadata: metadata, image: image, client: client)
         }
         client.onJoinDenied = { [weak self] denial in
             guard let self else { return }
@@ -1925,7 +1926,9 @@ final class NativeAppModel {
         liveFPS = state.liveFPS
     }
 
-    private func applyRelayFrame(metadata: MonitorRelayFrameMetadata, image: Data) {
+    private func applyRelayFrame(metadata: MonitorRelayFrameMetadata, image: Data,
+        client: MonitorRelayClient) {
+        guard relayClient === client, videoSource == .relay else { return }
         applyRelayFrameReadings(metadata)
         if metadata.codec == MonitorRelayProtocol.FrameCodec.hevc {
             let decoder = relayVideoDecoder ?? MonitorRelayVideoDecoder()
@@ -1934,13 +1937,14 @@ final class NativeAppModel {
                 image, isKeyframe: metadata.isKeyframe, parameterSets: metadata.parameterSets
             ) { [weak self] decoded in
                 guard let decoded else { return }
-                Task { @MainActor in self?.presentRelayFrame(decoded) }
+                Task { @MainActor in self?.presentRelayFrame(decoded, client: client) }
             }
             return
         }
+        guard let decodeSource = frameDecoder.source(client) else { return }
         Task { [weak self] in
-            guard let self, let decoded = await self.frameDecoder.decode(image) else { return }
-            self.presentRelayFrame(decoded)
+            guard let self, let decoded = await self.frameDecoder.decode(image, source: decodeSource) else { return }
+            self.presentRelayFrame(decoded, client: client)
         }
     }
 
@@ -1978,8 +1982,8 @@ final class NativeAppModel {
     }
 
     /// One decoded picture onto the viewer's monitor, whichever codec delivered it.
-    private func presentRelayFrame(_ decoded: UIImage) {
-        guard videoSource == .relay else { return }
+    private func presentRelayFrame(_ decoded: UIImage, client: MonitorRelayClient) {
+        guard videoSource == .relay, relayClient === client else { return }
         // A frame or two is always still in the decode pipeline when the link dies; presenting
         // one would repopulate the feed the failure path just blanked, leaving a frozen picture
         // over a FAIL chip.
@@ -1990,12 +1994,19 @@ final class NativeAppModel {
         Task { [weak self] in
             guard let self else { return }
             guard let display = await self.displayReadyLiveFrame(from: decoded) else { return }
-            guard self.videoSource == .relay else { return }
-            if self.liveFrameImage !== display { self.liveFrameImage = display }
+            guard self.videoSource == .relay, self.relayClient === client else { return }
+            switch self.relayClientState {
+            case .failed, .idle: return
+            default: break
+            }
+            self.publishNativeFrame(display, owner: .relay(client))
             self.lastGoodFrameAt = Date()
             if self.relayFailureReason != nil { self.relayFailureReason = nil }
             // The viewer's assists meter the clean frame exactly as the host's do.
-            self.sampleScopesIfDue(clean: decoded) { [weak self] in self?.videoSource == .relay }
+            self.sampleScopesIfDue(clean: decoded) { [weak self, weak client] in
+                guard let self, let client else { return false }
+                return self.videoSource == .relay && self.relayClient === client
+            }
         }
     }
 
@@ -2086,7 +2097,66 @@ final class NativeAppModel {
     /// Whether the camera reports it's charging. No PTP power-source property is wired yet, so this
     /// stays false on hardware; the indicator's charging glyph is ready for when one is identified.
     var cameraBatteryCharging = false
-    var liveFrameImage: UIImage?
+    private final class NativePictureReference<Value: AnyObject> {
+        weak var value: Value?
+        init(_ value: Value) { self.value = value }
+    }
+    private enum NativePictureOwner {
+        case local
+        case cameraSource(NativePictureReference<NativeCameraSession>)
+        case relaySource(NativePictureReference<MonitorRelayClient>)
+        case captureSource(NativePictureReference<UVCVideoSource>, StreamGeneration)
+        static func camera(_ value: NativeCameraSession) -> Self { .cameraSource(.init(value)) }
+        static func relay(_ value: MonitorRelayClient) -> Self { .relaySource(.init(value)) }
+        static func capture(_ value: UVCVideoSource, _ generation: StreamGeneration) -> Self {
+            .captureSource(.init(value), generation)
+        }
+        func matches(_ other: NativePictureOwner?) -> Bool {
+            switch (self, other) {
+            case (.local, .local): return true
+            case (.cameraSource(let source), .cameraSource(let other)):
+                guard let source = source.value else { return false }
+                return source === other.value
+            case (.relaySource(let source), .relaySource(let other)):
+                guard let source = source.value else { return false }
+                return source === other.value
+            case (.captureSource(let source, let generation), .captureSource(let other, let otherGeneration)):
+                guard let source = source.value else { return false }
+                return source === other.value && generation == otherGeneration
+            default: return false
+            }
+        }
+    }
+    @ObservationIgnored private let nativePictureBus = LiveFrameSampleBus()
+    @ObservationIgnored private var nativePictureSource: LiveFrameSampleBus.Source?
+    @ObservationIgnored private var nativePictureOwner: NativePictureOwner?
+    private(set) var liveFrameSource: LiveFrameSampleBus.Source?
+    var liveFrameImage: UIImage? {
+        didSet {
+            if liveFrameImage == nil { retireNativePictureSource(); liveFrameSource = nil }
+            else if nativePictureSource == nil {
+                nativePictureOwner = .local
+                nativePictureSource = nativePictureBus.openSource(.live)
+                liveFrameSource = nativePictureSource
+            }
+        }
+    }
+    private func retireNativePictureSource() {
+        nativePictureBus.closeSource(nativePictureSource)
+        nativePictureSource = nil
+        nativePictureOwner = nil
+    }
+    /// Retain an accepted held raster through recovery; only a newly admitted picture or clear
+    /// retires its render lease. Acquisition callbacks separately check the captured actual source.
+    private func publishNativeFrame(_ image: UIImage, owner: NativePictureOwner) {
+        if !owner.matches(nativePictureOwner) {
+            retireNativePictureSource()
+            nativePictureOwner = owner
+            nativePictureSource = nativePictureBus.openSource(.live)
+        }
+        if liveFrameSource !== nativePictureSource { liveFrameSource = nativePictureSource }
+        if liveFrameImage !== image { liveFrameImage = image }
+    }
     /// AF / face-detection boxes from the latest live-view frame's header, drawn over the feed.
     var liveViewFocus: PTPLiveViewFocusInfo? {
         didSet {
@@ -6910,7 +6980,8 @@ final class NativeAppModel {
     }
 
     private func startLiveView(session: NativeCameraSession, skipPropertyBootstrap: Bool = false) {
-        Task { await frameDecoder.resetProcessors() }
+        let retiredDecodeSource = frameDecoder.retireSource()
+        Task { await frameDecoder.resetProcessors(source: retiredDecodeSource) }
         if videoSource == .cameraLiveView { resetCameraPropertyState() }
         var frameRate = FrameRateSampler()
         monitorRuntime?.startPreview(
@@ -7120,7 +7191,7 @@ final class NativeAppModel {
                 guard let handoff = await renderer.image(from: lease),
                     source.fence.isCurrent(lease.generation)
                 else { continue }
-                await self.presentHDMIFrame(handoff.image)
+                await self.presentHDMIFrame(handoff.image, source: source, generation: lease.generation)
             }
         }
         Task { await source.start() }
@@ -7139,10 +7210,13 @@ final class NativeAppModel {
     }
 
     /// Displays one captured frame, and feeds the scope tap and watch relay from it.
-    private func presentHDMIFrame(_ image: UIImage) async {
-        guard videoSource == .hdmiCapture else { return }
+    private func presentHDMIFrame(_ image: UIImage, source: UVCVideoSource,
+        generation: StreamGeneration) async {
+        guard videoSource == .hdmiCapture, uvcSource === source,
+            source.fence.isCurrent(generation) else { return }
         guard let display = await displayReadyLiveFrame(from: image) else { return }
-        guard videoSource == .hdmiCapture else { return }
+        guard videoSource == .hdmiCapture, uvcSource === source,
+            source.fence.isCurrent(generation) else { return }
         // One line per size change: the #115 crop hunt. Every SwiftUI link reads
         // aspect-correct statically, so the witness is which size actually arrives here
         // versus what the capture readout claims.
@@ -7164,9 +7238,11 @@ final class NativeAppModel {
         // also writes the focus box. On a header-less source the only thing that knows where the
         // AF point is, is our own `ChangeAfArea`; passing nil here wiped the box about one frame
         // after the tap drew it, which reads exactly like tap-to-focus doing nothing at all.
-        if liveFrameImage !== display { liveFrameImage = display }
-        sampleScopesIfDue(clean: image) { [weak self] in
-            self?.videoSource == .hdmiCapture
+        publishNativeFrame(display, owner: .capture(source, generation))
+        sampleScopesIfDue(clean: image) { [weak self, weak source] in
+            guard let self, let source else { return false }
+            return self.videoSource == .hdmiCapture && self.uvcSource === source
+                && source.fence.isCurrent(generation)
         }
         // The CPU path returns a distinct display-baked image; the Metal path returns the clean
         // frame because its bake stays GPU-side, so the relay grades its own thumbnail instead.
@@ -7637,7 +7713,10 @@ final class NativeAppModel {
             publishWatchState()
             return true
         }
-        let cleanFrame = await frameDecoder.decode(frame.jpeg)
+        guard !Task.isCancelled, cameraSession === session,
+            let decodeSource = frameDecoder.source(session)
+        else { return false }
+        let cleanFrame = await frameDecoder.decode(frame.jpeg, source: decodeSource)
         let decoded = await displayReadyLiveFrame(from: cleanFrame)
         guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame
         else { return false }
@@ -7647,7 +7726,7 @@ final class NativeAppModel {
         consecutiveBadLiveFrames = 0
         measuredLiveViewFPS = frameRate.displayFPS
         if delivery.first {
-            liveFrameImage = image
+            publishNativeFrame(image, owner: .camera(session))
             liveViewFocus = frame.focus
             isMonitorPresented = true
             AppDiagnostics.shared.record(.liveViewStarted)
@@ -7664,7 +7743,7 @@ final class NativeAppModel {
                     ? measuredLiveViewFPS
                     : relaySoloFPSBaseline + 0.05 * (measuredLiveViewFPS - relaySoloFPSBaseline)
             }
-            publishLiveFrameDisplay(image: image, focus: frame.focus)
+            publishLiveFrameDisplay(image: image, focus: frame.focus, session: session)
             captureRelayFrameMetadata(frame)
             broadcastRelayFrame(image: cleanFrame)
             let watchEffects = image === cleanFrame ? liveImageEffects : nil
@@ -7880,8 +7959,9 @@ final class NativeAppModel {
     ///
     /// The identity and equality checks below are the only filtering that remains, and they
     /// suppress redundant observable writes rather than frames.
-    private func publishLiveFrameDisplay(image: UIImage, focus: PTPLiveViewFocusInfo?) {
-        if liveFrameImage !== image { liveFrameImage = image }
+    private func publishLiveFrameDisplay(image: UIImage, focus: PTPLiveViewFocusInfo?,
+        session: NativeCameraSession) {
+        publishNativeFrame(image, owner: .camera(session))
         if liveViewFocus != focus {
             dismissInstantReviewIfAutofocusEngaged(previous: liveViewFocus, next: focus)
             liveViewFocus = focus

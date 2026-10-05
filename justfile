@@ -182,18 +182,11 @@ android-build:
 android-test:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew test
 
-# Recompile the committed Vulkan SPIR-V from its GLSL source. Nothing in the Gradle
-# build does this, so editing feed.frag without running this ships the old shader.
+# Build the shared Vulkan renderer and its derived Bitmap SPIR-V.
 android-shaders:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    src=Apps/Android/app/src/main/cpp/live_feed_vk/shaders
-    out=Apps/Android/app/src/main/assets/shaders/vulkan
-    glslc -fshader-stage=vert "$src/feed.vert" -o "$out/feed.vert.spv"
-    glslc -fshader-stage=frag "$src/feed.frag" -o "$out/feed.frag.spv"
-    echo "recompiled Vulkan SPIR-V"
+    cd ../OpenCine/Android && ./gradlew :vulkan:assembleDebug
 
-# Verify the committed Vulkan SPIR-V still matches its GLSL source.
+# Verify shared Vulkan presentation synchronization; shader compilation is part of android-check.
 check-vulkan-shaders:
     ./scripts/check-vulkan-shaders.sh
 
