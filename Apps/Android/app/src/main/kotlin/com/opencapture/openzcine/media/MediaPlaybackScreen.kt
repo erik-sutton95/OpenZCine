@@ -105,6 +105,8 @@ import androidx.media3.ui.PlayerView
 import com.opencapture.openzcine.AudioMetersOverlay
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FalseColorReferenceOverlay
+import com.opencapture.openzcine.MonitorAnalysisPanelLayout
+import com.opencapture.openzcine.StoredPanelCenter
 import com.opencapture.openzcine.FeedEffectsRenderer
 import com.opencapture.openzcine.FeedEffectsRenderPlan
 import com.opencapture.openzcine.FeedEffectsRenderPlanFactory
@@ -767,6 +769,11 @@ private fun rememberNikonNativePlayback(
 ) : NikonNativePlaybackContent {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    // Playback keeps its own panel centres, apart from the live monitor's.
+    val playbackFalseColorCenter =
+        remember(context) { StoredPanelCenter(context, "playbackFalseColorReferencePlacement", "fcref") }
+    val playbackAudioCenter =
+        remember(context) { StoredPanelCenter(context, "playbackAudioMeterPlacement", "audio") }
     val audioMeterCoordinator = remember(entry, itemToken) { PlaybackAudioMeterCoordinator() }
     val player =
         remember(entry, itemToken, audioMeterCoordinator) {
@@ -1107,11 +1114,13 @@ private fun rememberNikonNativePlayback(
                 viewport = analysisViewport,
             )
         }
+        val analysisLayout = MonitorAnalysisPanelLayout(analysisViewport, analysisViewport)
         FalseColorReferenceOverlay(
             effectsState = effectsPresentationState,
             feed = feedFrame,
-            viewport = analysisViewport,
-            placementStoreName = "playbackFalseColorReferencePlacement",
+            panelLayout = analysisLayout,
+            stored = playbackFalseColorCenter.load(),
+            onStore = playbackFalseColorCenter::save,
             // analysisViewport already excludes playback chrome.
             bottomChromeClearance = 0f,
             // A trailing-biased default avoids the leading waveform/parade
@@ -1123,8 +1132,9 @@ private fun rememberNikonNativePlayback(
                 levels = playbackAudioLevels,
                 sensitivity = null,
                 feed = feedFrame,
-                viewport = analysisViewport,
-                placementStoreName = "playbackAudioMeterPlacement",
+                panelLayout = analysisLayout,
+                stored = playbackAudioCenter.load(),
+                onStore = playbackAudioCenter::save,
                 // analysisViewport already excludes playback chrome.
                 bottomChromeClearance = 0f,
                 // Keep the tall meter clear of the next-clip arrow in portrait.

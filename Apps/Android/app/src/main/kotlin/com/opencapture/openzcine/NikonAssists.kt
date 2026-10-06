@@ -209,7 +209,13 @@ internal fun restoreNikonAssists(
         context.getSharedPreferences(OPERATOR_PREFERENCES, Context.MODE_PRIVATE),
         context.getSharedPreferences(PLAYBACK_PREFERENCES, Context.MODE_PRIVATE),
         debugEffects, debugScopes, availableStoredLut,
-    ).also { MonitorAnalysisPanelPlacementStore(context).moveScopeCentres(into = it.shared) }
+    ).also {
+        MonitorAnalysisPanelPlacementStore(context).movePanelCentres(into = it.shared)
+        StoredPanelCenter(context, LIVE_AUDIO_METER_PLACEMENT, "audio").moveAudioCentre(into = it.shared)
+    }
+
+/** The live audio meter's own placement file before it joined the shared assist state. */
+private const val LIVE_AUDIO_METER_PLACEMENT = "audioMeterPlacement"
 
 /** [restoreNikonAssists] over explicit stores, for JVM tests. */
 internal fun restoreNikonAssists(

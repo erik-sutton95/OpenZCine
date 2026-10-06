@@ -38,6 +38,7 @@ import com.opencapture.monitorui.MonitorScopePanelSize
 import com.opencapture.monitorui.MonitorScopePoint
 import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.monitorui.MonitorScopeSize
+import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.monitorui.MonitorTrafficLightsGeometry
 import com.opencapture.monitorui.MonitorTrafficLightsMeter
 import com.opencapture.monitorui.MonitorVectorscopeScopePlot
@@ -536,58 +537,97 @@ internal fun FloatingScopePanels(
     onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
     content: @Composable (ScopeKind, Modifier) -> Unit,
 ) {
+    val portrait = panelLayout.viewport.height > panelLayout.viewport.width
+    displayed.forEach { kind ->
+        key(kind) {
+            val tool = kind.assistTool
+            val description = stringResource(R.string.scope_panel_description, scopeTitle(kind))
+            MovableMonitorPanel(
+                identity = kind.token,
+                base = kind.panelBase,
+                panelLayout = panelLayout,
+                stored = assist.centerFor(tool, portrait),
+                onStore = { assist.storeCenter(tool, it, portrait) },
+                hapticsEnabled = hapticsEnabled,
+                panelID = kind.monitorAnalysisPanelID(),
+                onPanelFrameChanged = onPanelFrameChanged,
+                scale = assist.scaleFor(kind).toDouble(),
+                onScale = { assist.setScale(tool, it) },
+                onOpenOptions = { assist.configureTool = tool },
+                // The scope plates draw their own material, as in the portrait stack.
+                fillPlate = false,
+            ) { modifier -> content(kind, modifier.semantics { contentDescription = description }) }
+        }
+    }
+}
+
+/**
+ * One movable monitor panel on the shared [MonitorMovableScopePanel], in monitor-zone dp: drag
+ * within [panelLayout]'s safe bounds, the centre stored normalized to its viewport. It reports its
+ * frame so the focus-reset button can climb above it. An unplaced panel starts at [defaultFrame]'s
+ * centre, or the viewport centre.
+ */
+@Composable
+internal fun MovableMonitorPanel(
+    identity: String,
+    base: MonitorScopeSize,
+    panelLayout: MonitorAnalysisPanelLayout,
+    stored: MonitorScopeStoredCenter?,
+    onStore: (MonitorScopeStoredCenter) -> Unit,
+    hapticsEnabled: Boolean,
+    panelID: MonitorAnalysisPanelID? = null,
+    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
+    defaultFrame: MonitorRect? = null,
+    scale: Double = 1.0,
+    onScale: ((Double) -> Unit)? = null,
+    onOpenOptions: (() -> Unit)? = null,
+    fillPlate: Boolean = true,
+    content: @Composable (Modifier) -> Unit,
+) {
     val density = LocalDensity.current.density
     val view = LocalView.current
     val canvas = panelLayout.viewport.scopeRect(density)
     val bounds = panelLayout.safeBounds.scopeRect(density)
-    val portrait = canvas.height > canvas.width
     val report by rememberUpdatedState(onPanelFrameChanged)
     var origin by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    if (panelID != null) DisposableEffect(panelID) { onDispose { report(panelID, null) } }
     Box(Modifier.fillMaxSize().onGloballyPositioned { origin = it }) {
-        displayed.forEach { kind ->
-            key(kind) {
-                val tool = kind.assistTool
-                val id = kind.monitorAnalysisPanelID()
-                val description = stringResource(R.string.scope_panel_description, scopeTitle(kind))
-                DisposableEffect(id) { onDispose { report(id, null) } }
-                MonitorMovableScopePanel(
-                    identity = kind.token,
-                    base = kind.panelBase,
-                    scale = assist.scaleFor(kind).toDouble(),
-                    stored = assist.centerFor(tool, portrait),
-                    canvas = canvas,
-                    placementBounds = bounds,
-                    defaultCenter = MonitorScopePoint(canvas.midX, canvas.midY),
-                    enabled = true,
-                    onStore = { assist.storeCenter(tool, it, portrait) },
-                    onScale = { assist.setScale(tool, it) },
-                    onOpenOptions = { assist.configureTool = tool },
-                    onConfirm = {
-                        if (hapticsEnabled) view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
+        MonitorMovableScopePanel(
+            identity = identity,
+            base = base,
+            scale = scale,
+            stored = stored,
+            canvas = canvas,
+            placementBounds = bounds,
+            defaultCenter =
+                defaultFrame?.let { MonitorScopePoint((it.x + it.width / 2f) * density, (it.y + it.height / 2f) * density) }
+                    ?: MonitorScopePoint(canvas.midX, canvas.midY),
+            enabled = true,
+            onStore = onStore,
+            onScale = onScale,
+            onOpenOptions = onOpenOptions?.let { open -> { _ -> open() } },
+            onConfirm = {
+                if (hapticsEnabled) view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
+            },
+            fillPlate = fillPlate,
+        ) { size ->
+            content(
+                Modifier
+                    .size(size.width.dp, size.height.dp)
+                    .onGloballyPositioned { coordinates ->
+                        val id = panelID ?: return@onGloballyPositioned
+                        val root = origin ?: return@onGloballyPositioned
+                        val at = root.localPositionOf(coordinates, Offset.Zero)
+                        report(
+                            id,
+                            MonitorRect(
+                                at.x / density, at.y / density,
+                                coordinates.size.width / density,
+                                coordinates.size.height / density,
+                            ),
+                        )
                     },
-                    // The scope plates draw their own material, as in the portrait stack.
-                    fillPlate = false,
-                ) { size ->
-                    content(
-                        kind,
-                        Modifier
-                            .size(size.width.dp, size.height.dp)
-                            .semantics { contentDescription = description }
-                            .onGloballyPositioned { coordinates ->
-                                val root = origin ?: return@onGloballyPositioned
-                                val at = root.localPositionOf(coordinates, Offset.Zero)
-                                report(
-                                    id,
-                                    MonitorRect(
-                                        at.x / density, at.y / density,
-                                        coordinates.size.width / density,
-                                        coordinates.size.height / density,
-                                    ),
-                                )
-                            },
-                    )
-                }
-            }
+            )
         }
     }
 }

@@ -1,6 +1,8 @@
 package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorRect
+import com.opencapture.monitorui.MonitorScopePanelMath
+import com.opencapture.monitorui.MonitorScopePoint
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
@@ -161,10 +163,11 @@ class ScopeLayoutTest {
     }
 
     @Test
-    fun `false color panel movement snaps to the iOS four point grid`() {
+    fun `movable panels snap to the iOS four point grid`() {
+        assertEquals(4f, MonitorScopePanelMath.POSITION_GRID)
         assertEquals(
-            MonitorRect(60f, 100f, 264f, 52f),
-            snapFalseColorReferenceFrame(MonitorRect(59f, 101f, 264f, 52f)),
+            MonitorScopePoint(192f, 124f),
+            MonitorScopePanelMath.snap(MonitorScopePoint(190.5f, 125f)),
         )
     }
 

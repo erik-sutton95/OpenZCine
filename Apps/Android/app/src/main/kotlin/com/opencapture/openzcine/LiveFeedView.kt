@@ -10,9 +10,7 @@ import com.opencapture.opencine.runtime.MonitorFramePacingStats
 import com.opencapture.opencine.runtime.monitorPumpFramesWithSourceFrame
 import android.os.Build
 import android.util.Log
-import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -35,33 +33,29 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.opencapture.monitorui.MonitorFalseColorReference
+import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
+import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
+import com.opencapture.monitorui.MonitorFalseColorReferenceValues
 import com.opencapture.monitorui.MonitorRect
+import com.opencapture.monitorui.MonitorScopePanelSize
+import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusInfo
@@ -717,165 +711,53 @@ internal fun LiveFeedColorModeNotice(
 }
 
 /**
- * Unscaled sibling of [LiveFeedView]. Keeping the reference outside the feed's
- * de-squeeze graphics layer preserves its 264×52 iOS footprint and typography.
+ * The false-colour key on the shared movable panel and ruler. The Swift-calibrated bands, stop
+ * markers and curve name arrive as the shared reference values; [stored] and [onStore] keep its
+ * centre (live: the shared assist state; playback: its own preference file). Unscaled sibling of
+ * [LiveFeedView], outside the feed's de-squeeze layer.
  */
 @Composable
 internal fun FalseColorReferenceOverlay(
     effectsState: LiveFeedEffectsPresentationState,
     feed: MonitorRect,
-    viewport: MonitorRect,
-    modifier: Modifier = Modifier,
-    placementStoreName: String = FalseColorReferencePlacementStore.STORE_NAME,
+    panelLayout: MonitorAnalysisPanelLayout,
+    stored: MonitorScopeStoredCenter?,
+    onStore: (MonitorScopeStoredCenter) -> Unit,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     defaultHorizontalFraction: Float = 0f,
-    panelLayout: MonitorAnalysisPanelLayout? = null,
-    placementStore: MonitorAnalysisPanelPlacementStore? = null,
-    placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
     onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
 ) {
     val presentation = effectsState.falseColorReference ?: return
-    val resolvedLayout =
-        panelLayout ?: MonitorAnalysisPanelLayout(viewport = viewport, safeBounds = viewport)
+    if (presentation.reference.segments.isEmpty()) return
     val default =
-        remember(feed, resolvedLayout, bottomChromeClearance, defaultHorizontalFraction) {
+        remember(feed, panelLayout, bottomChromeClearance, defaultHorizontalFraction) {
             controlSafeFalseColorReferenceDefaultFrame(
                 feed = feed,
-                layout = resolvedLayout,
+                layout = panelLayout,
                 bottomChromeClearance = bottomChromeClearance,
                 horizontalFraction = defaultHorizontalFraction,
             )
         }
-    val context = LocalContext.current.applicationContext
-    val legacyStore =
-        remember(context, placementStoreName, placementStore) {
-            placementStore?.let { null }
-                ?: FalseColorReferencePlacementStore(context, placementStoreName)
-        }
-    val panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE
-    fun resolvedFrame(): MonitorRect =
-        placementStore?.resolve(panelID, default, resolvedLayout)
-            ?: requireNotNull(legacyStore).resolve(default, resolvedLayout.safeBounds)
-
-    fun saveFrame(frame: MonitorRect) {
-        if (placementStore != null) {
-            placementStore.save(panelID, frame, resolvedLayout)
-        } else {
-            requireNotNull(legacyStore).save(frame, resolvedLayout.safeBounds)
-        }
-    }
-    var frame by
-        remember(default, resolvedLayout, placementRevision) {
-            mutableStateOf(resolvedFrame())
-        }
-    val currentFrameCallback by rememberUpdatedState(onPanelFrameChanged)
-    SideEffect { currentFrameCallback(panelID, frame) }
-    DisposableEffect(panelID) {
-        onDispose { currentFrameCallback(panelID, null) }
-    }
-    var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
-    val density = LocalDensity.current
-    val view = LocalView.current
-    val referenceDescription = stringResource(R.string.false_color_reference_description)
-    val recenterDescription = stringResource(R.string.false_color_recenter_description)
-    val copy =
-        FalseColorReferenceCopy(
-            title = stringResource(R.string.false_color_title),
-            scale = stringResource(presentation.scale.labelResource()),
-            stopLabels =
-                listOf(
-                    stringResource(R.string.false_color_axis_min),
-                    stringResource(R.string.false_color_axis_minus_three),
-                    stringResource(R.string.false_color_axis_middle_gray),
-                    stringResource(R.string.false_color_axis_skin),
-                    stringResource(R.string.false_color_axis_plus_two),
-                    stringResource(R.string.false_color_axis_max),
-                ),
-            ireLabels =
-                listOf(
-                    stringResource(R.string.false_color_axis_clip_shadows),
-                    stringResource(R.string.false_color_axis_middle_gray),
-                    stringResource(R.string.false_color_axis_skin_high),
-                    stringResource(R.string.false_color_axis_highlights_clip),
-                ),
-            limitsLabels =
-                listOf(
-                    stringResource(R.string.false_color_axis_crushed),
-                    stringResource(R.string.false_color_axis_midtones),
-                    stringResource(R.string.false_color_axis_clipped),
-                ),
-        )
-    var isDragging by remember { mutableStateOf(false) }
-    Canvas(
-        modifier
-            .zone(frame)
-            .zIndex(if (isDragging) 1f else 0f)
-            // Outside the lift layer, so the 1.03 lift never scales the finger's delta.
-            .pointerInput(default, resolvedLayout, placementRevision, hapticsEnabled) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = {
-                        isDragging = true
-                        if (hapticsEnabled) {
-                            view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
-                        }
-                    },
-                    onDragEnd = {
-                        isDragging = false
-                        saveFrame(frame)
-                    },
-                    onDragCancel = { isDragging = false },
-                ) { change, dragAmount ->
-                    change.consume()
-                    val snapped =
-                        clampScopeFrame(
-                            snapFalseColorReferenceFrame(
-                                frame.copy(
-                                    x = frame.x + dragAmount.x / density.density,
-                                    y = frame.y + dragAmount.y / density.density,
-                                ),
-                            ),
-                            resolvedLayout.safeBounds,
-                        )
-                    val cell =
-                        ((snapped.x + snapped.width / 2f) / 22f).roundToInt() * 100_000 +
-                            ((snapped.y + snapped.height / 2f) / 22f).roundToInt()
-                    if (cell != hapticCell) {
-                        hapticCell = cell
-                        if (hapticsEnabled) {
-                            view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                        }
-                    }
-                    frame = snapped
-                }
-            }
-            .graphicsLayer {
-                scaleX = if (isDragging) 1.03f else 1f
-                scaleY = if (isDragging) 1.03f else 1f
-                shadowElevation = if (isDragging) 18.dp.toPx() else 0f
-                shape = ChromeShape
-                clip = true
-                ambientShadowColor = Color.Black.copy(alpha = 0.5f)
-                spotShadowColor = Color.Black.copy(alpha = 0.5f)
-            }
-            .glass(ChromeShape)
-            .semantics {
-                contentDescription = referenceDescription
-                if (placementStore != null) {
-                    customActions =
-                        listOf(
-                            CustomAccessibilityAction(recenterDescription) {
-                                placementStore.recenter(panelID)
-                                frame = clampScopeFrame(default, resolvedLayout.safeBounds)
-                                true
-                            },
-                        )
-                }
-            }
-    ) {
-        drawFalseColorReference(presentation, copy)
+    val description = stringResource(R.string.false_color_reference_description)
+    val values = presentation.referenceValues(falseColorReferenceCopy(presentation.scale))
+    MovableMonitorPanel(
+        identity = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE.storageKey,
+        base = MonitorScopePanelSize.falseColorReference,
+        panelLayout = panelLayout,
+        stored = stored,
+        onStore = onStore,
+        hapticsEnabled = hapticsEnabled,
+        panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
+        onPanelFrameChanged = onPanelFrameChanged,
+        defaultFrame = default,
+        // The shared ruler draws its own plate.
+        fillPlate = false,
+    ) { modifier ->
+        MonitorFalseColorReference(values, modifier.semantics { contentDescription = description })
     }
 }
+
 
 /** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
 internal fun controlSafeFalseColorReferenceDefaultFrame(
@@ -927,55 +809,82 @@ internal fun falseColorReferenceDefaultFrame(
     )
 }
 
-/** Mirrors iOS `MovablePanel`'s fine 4-point position grid. */
-internal fun snapFalseColorReferenceFrame(frame: MonitorRect): MonitorRect =
-    frame.copy(
-        x = (frame.x / 4f).roundToInt() * 4f,
-        y = (frame.y / 4f).roundToInt() * 4f,
-    )
-
-/** Persists the normalized centre used by iOS's `MovablePanel(id: "fcref")`. */
-private class FalseColorReferencePlacementStore(context: Context, name: String) {
-    private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
-
-    fun resolve(default: MonitorRect, bounds: MonitorRect): MonitorRect {
-        if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
-        val normalizedX = preferences.getFloat(CENTER_X_KEY, 0.5f)
-        val normalizedY = preferences.getFloat(CENTER_Y_KEY, 0.5f)
-        if (!normalizedX.isFinite() || !normalizedY.isFinite()) return default
-        return clampScopeFrame(
-            default.copy(
-                x = bounds.x + normalizedX * bounds.width - default.width / 2f,
-                y = bounds.y + normalizedY * bounds.height - default.height / 2f,
-            ),
-            bounds,
-        )
-    }
-
-    fun save(frame: MonitorRect, bounds: MonitorRect) {
-        val centerX = (frame.x + frame.width / 2f - bounds.x) / maxOf(1f, bounds.width)
-        val centerY = (frame.y + frame.height / 2f - bounds.y) / maxOf(1f, bounds.height)
-        preferences.edit()
-            .putFloat(CENTER_X_KEY, centerX.coerceIn(0f, 1f))
-            .putFloat(CENTER_Y_KEY, centerY.coerceIn(0f, 1f))
-            .apply()
-    }
-
-    companion object {
-        const val STORE_NAME = "falseColorReferencePlacement"
-        const val CENTER_X_KEY = "fcref.centerX"
-        const val CENTER_Y_KEY = "fcref.centerY"
-    }
-}
-
-/** Draws the Swift-derived palette geometry and camera-aware reference axis. */
-private data class FalseColorReferenceCopy(
-    val title: String,
+/** The ruler's localized words: scale name and axis labels per scale. */
+internal data class FalseColorReferenceCopy(
     val scale: String,
     val stopLabels: List<String>,
     val ireLabels: List<String>,
     val limitsLabels: List<String>,
 )
+
+@Composable
+private fun falseColorReferenceCopy(scale: FeedFalseColorScale): FalseColorReferenceCopy =
+    FalseColorReferenceCopy(
+        scale = stringResource(scale.labelResource()),
+        stopLabels =
+            listOf(
+                stringResource(R.string.false_color_axis_min),
+                stringResource(R.string.false_color_axis_minus_three),
+                stringResource(R.string.false_color_axis_middle_gray),
+                stringResource(R.string.false_color_axis_skin),
+                stringResource(R.string.false_color_axis_plus_two),
+                stringResource(R.string.false_color_axis_max),
+            ),
+        ireLabels =
+            listOf(
+                stringResource(R.string.false_color_axis_clip_shadows),
+                stringResource(R.string.false_color_axis_middle_gray),
+                stringResource(R.string.false_color_axis_skin_high),
+                stringResource(R.string.false_color_axis_highlights_clip),
+            ),
+        limitsLabels =
+            listOf(
+                stringResource(R.string.false_color_axis_crushed),
+                stringResource(R.string.false_color_axis_midtones),
+                stringResource(R.string.false_color_axis_clipped),
+            ),
+    )
+
+/** The Swift reference as the shared ruler's values: bands, stop markers (STOPS) or axis words. */
+internal fun FalseColorReferencePresentation.referenceValues(
+    copy: FalseColorReferenceCopy,
+): MonitorFalseColorReferenceValues {
+    val curve =
+        when (reference.curveOrdinal) {
+            ExposureCurveOrdinals.SRGB -> "sRGB"
+            ExposureCurveOrdinals.HLG -> "HLG"
+            ExposureCurveOrdinals.NIKON_NLOG -> "N-Log"
+            else -> "L3G10"
+        }
+    return MonitorFalseColorReferenceValues(
+        subtitle = "${copy.scale} · $curve",
+        segments =
+            reference.segments.mapIndexed { index, segment ->
+                MonitorFalseColorReferenceSegment(
+                    index,
+                    segment.lowerFraction.toDouble(),
+                    segment.upperFraction.toDouble(),
+                    segment.color[0].toDouble(),
+                    segment.color[1].toDouble(),
+                    segment.color[2].toDouble(),
+                )
+            },
+        markers =
+            if (scale == FeedFalseColorScale.STOPS) {
+                copy.stopLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
+                    MonitorFalseColorReferenceMarker(index, label, at.toDouble())
+                }
+            } else {
+                emptyList()
+            },
+        axisLabels =
+            when (scale) {
+                FeedFalseColorScale.STOPS -> emptyList()
+                FeedFalseColorScale.IRE -> copy.ireLabels
+                FeedFalseColorScale.LIMITS -> copy.limitsLabels
+            },
+    )
+}
 
 @androidx.annotation.StringRes
 internal fun FeedFalseColorScale.labelResource(): Int =
@@ -984,82 +893,3 @@ internal fun FeedFalseColorScale.labelResource(): Int =
         FeedFalseColorScale.IRE -> R.string.false_color_scale_ire
         FeedFalseColorScale.LIMITS -> R.string.false_color_scale_limits
     }
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorReference(
-    presentation: FalseColorReferencePresentation,
-    copy: FalseColorReferenceCopy,
-) {
-    val reference = presentation.reference
-    if (reference.segments.isEmpty()) return
-    val panelWidth = size.width
-    val panelHeight = size.height
-    if (panelWidth < 120.dp.toPx() || panelHeight < 38.dp.toPx()) return
-    val left = 0f
-    val top = 0f
-    val padding = 7.dp.toPx()
-    val barLeft = left + padding
-    val barTop = top + 21.dp.toPx()
-    val barWidth = panelWidth - padding * 2
-    val barHeight = 8.dp.toPx()
-    val neutral =
-        if (presentation.scale == FeedFalseColorScale.STOPS) {
-            listOf(Color(0.04f, 0.04f, 0.04f), Color(0.86f, 0.86f, 0.86f))
-        } else {
-            listOf(Color(0.54f, 0.54f, 0.54f), Color(0.75f, 0.75f, 0.75f))
-        }
-    clipRect(barLeft, barTop, barLeft + barWidth, barTop + barHeight) {
-        drawRect(
-            brush = Brush.horizontalGradient(neutral, startX = barLeft, endX = barLeft + barWidth),
-            topLeft = Offset(barLeft, barTop),
-            size = Size(barWidth, barHeight),
-        )
-        reference.segments.forEach { segment ->
-            drawRect(
-                color = Color(segment.color[0], segment.color[1], segment.color[2]),
-                topLeft = Offset(barLeft + barWidth * segment.lowerFraction, barTop),
-                size = Size(maxOf(1f, barWidth * (segment.upperFraction - segment.lowerFraction)), barHeight),
-            )
-        }
-    }
-    drawIntoCanvas { canvas ->
-        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
-        }
-        paint.color = LiveDesign.text.toArgb()
-        paint.textSize = 8.5.dp.toPx()
-        paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
-        paint.textAlign = android.graphics.Paint.Align.LEFT
-        canvas.nativeCanvas.drawText(copy.title, barLeft, top + 13.dp.toPx(), paint)
-        paint.color = LiveDesign.muted.toArgb()
-        paint.textSize = 7.5.dp.toPx()
-        paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
-        paint.textAlign = android.graphics.Paint.Align.RIGHT
-        val curve =
-            when (reference.curveOrdinal) {
-                ExposureCurveOrdinals.SRGB -> "sRGB"
-                ExposureCurveOrdinals.HLG -> "HLG"
-                ExposureCurveOrdinals.NIKON_NLOG -> "N-Log"
-                else -> "L3G10"
-            }
-        canvas.nativeCanvas.drawText("${copy.scale} · $curve", left + panelWidth - padding, top + 13.dp.toPx(), paint)
-
-        paint.textSize = 5.5.dp.toPx()
-        paint.textAlign = android.graphics.Paint.Align.CENTER
-        val labels: List<Pair<String, Float>> =
-            if (presentation.scale == FeedFalseColorScale.STOPS) {
-                copy.stopLabels.zip(reference.stopMarkerFractions.toList())
-            } else {
-                val axis =
-                    if (presentation.scale == FeedFalseColorScale.IRE) {
-                        copy.ireLabels
-                    } else {
-                        copy.limitsLabels
-                    }
-                axis.mapIndexed { index, label -> label to index.toFloat() / (axis.size - 1) }
-            }
-        labels.forEach { (label, fraction) ->
-            val x = (barLeft + barWidth * fraction).coerceIn(barLeft + 8.dp.toPx(), barLeft + barWidth - 8.dp.toPx())
-            canvas.nativeCanvas.drawText(label, x, top + 44.dp.toPx(), paint)
-        }
-    }
-}

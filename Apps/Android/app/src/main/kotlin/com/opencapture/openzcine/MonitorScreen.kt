@@ -645,9 +645,6 @@ internal fun MonitorScreen(
             }
         }
     }
-    val analysisPanelPlacementStore =
-        remember(appContext) { MonitorAnalysisPanelPlacementStore(appContext) }
-    var analysisPanelPlacementRevision by remember { mutableIntStateOf(0) }
     val analysisPanelFrames =
         remember { mutableStateMapOf<MonitorAnalysisPanelID, MonitorRect>() }
     val onAnalysisPanelFrameChanged =
@@ -2715,34 +2712,37 @@ internal fun MonitorScreen(
         }
         if (!isCommand && (!isPortrait || isPortraitFill) && renderedAudioMeters) {
             val audioBounds = if (isPortraitFill) fieldLayout.picture else physicalViewport
+            val audioPortrait = audioBounds.height > audioBounds.width
             AudioMetersOverlay(
                 levels = liveAudioLevels,
                 sensitivity = cameraProperties.microphoneSensitivity,
                 feed = fieldLayout.picture,
-                viewport = audioBounds,
+                panelLayout = analysisPanelLayout ?: MonitorAnalysisPanelLayout(audioBounds, audioBounds),
+                stored = assists.shared.audioCenterFor(audioPortrait),
+                onStore = { assists.shared.storeAudioCenter(it, audioPortrait) },
+                hapticsEnabled = operatorSettings.hapticsEnabled.value,
             )
         }
         // Match iOS z-order: the false-colour key is mounted after floating
         // scopes and audio so nothing can obscure or intercept its drag target.
         if (!isCommand && (!isPortrait || isPortraitFill) && renderedEffects.falseColor != null) {
             val falseColorBounds = if (isPortraitFill) fieldLayout.picture else physicalViewport
-            CompositionLocalProvider(LocalMonitorGlass provides glass) {
-                FalseColorReferenceOverlay(
-                    effectsState = liveFeedEffectsPresentation,
-                    feed = fieldLayout.picture,
-                    viewport = falseColorBounds,
-                    // Portrait fill owns a persistent assist rail at the
-                    // feed's leading edge. Seat the movable reference at the
-                    // trailing edge by default so VIEW remains visible and
-                    // tappable before the operator customises placement.
-                    defaultHorizontalFraction = if (isPortraitFill) 1f else 0f,
-                    panelLayout = analysisPanelLayout,
-                    placementStore = analysisPanelPlacementStore,
-                    placementRevision = analysisPanelPlacementRevision,
-                    hapticsEnabled = operatorSettings.hapticsEnabled.value,
-                    onPanelFrameChanged = onAnalysisPanelFrameChanged,
-                )
-            }
+            val falseColorPortrait = falseColorBounds.height > falseColorBounds.width
+            FalseColorReferenceOverlay(
+                effectsState = liveFeedEffectsPresentation,
+                feed = fieldLayout.picture,
+                panelLayout =
+                    analysisPanelLayout ?: MonitorAnalysisPanelLayout(falseColorBounds, falseColorBounds),
+                stored = assists.shared.centerFor(MonitorAssistTool.FALSE, falseColorPortrait),
+                onStore = { assists.shared.storeCenter(MonitorAssistTool.FALSE, it, falseColorPortrait) },
+                // Portrait fill owns a persistent assist rail at the
+                // feed's leading edge. Seat the movable reference at the
+                // trailing edge by default so VIEW remains visible and
+                // tappable before the operator customises placement.
+                defaultHorizontalFraction = if (isPortraitFill) 1f else 0f,
+                hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                onPanelFrameChanged = onAnalysisPanelFrameChanged,
+            )
         }
 
         // Fit/Fill quick key (iOS parity): the feed frame's own bottom-right corner control — the
