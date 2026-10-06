@@ -1494,9 +1494,6 @@ internal fun MonitorScreen(
         val assistToolbarVisible = mounts(ChromeSection.ASSIST_TOOLBAR)
         val cameraValuesVisible = mounts(ChromeSection.CAMERA_VALUES)
         val chromeEditBoxes = remember { mutableStateMapOf<ChromeSection, MonitorRect>() }
-        val recordChromeEditBounds: (ChromeSection, MonitorRect) -> Unit = { section, rect ->
-            chromeEditBoxes[section] = rect
-        }
         // Done returns to where the operator came from, Display settings, not to the live monitor
         // with no way back but the rail they may have just hidden.
         val chromeEditHost =
@@ -1606,7 +1603,8 @@ internal fun MonitorScreen(
         // it directly.
         val fieldLayout = MonitorLayoutPolicy.fieldMonitor(
             width = viewportWidth, height = viewportHeight,
-            safeTop = safeTop, safeLeading = safeLeading, safeBottom = safeBottom, safeTrailing = safeTrailing,
+            safeTop = portraitPhoneSafeTop(safeTop, viewportWidth, viewportHeight),
+            safeLeading = safeLeading, safeBottom = safeBottom, safeTrailing = safeTrailing,
             sourceAspect = portraitFeedAspectRatio, fill = isPortraitFill,
             showsValues = cameraValuesVisible, hasDisplayCutout = safeLeading > 0 || safeTrailing > 0,
         )
@@ -2475,11 +2473,11 @@ internal fun MonitorScreen(
                         if (chromeEditorMode == null) {
                             null
                         } else {
-                            Modifier.chromeEditable(
+                            Modifier.nikonChromeEditable(
                                 chromeEditHost,
                                 ChromeSection.FOCUS_BOX,
                                 chromeEditorMode,
-                                recordChromeEditBounds,
+                                chromeEditBoxes,
                             )
                         },
                     evIndicatorSixths = cameraProperties.evIndicatorSixths,
@@ -2499,19 +2497,23 @@ internal fun MonitorScreen(
             status = { accepts ->
                 val fpsReadout: @Composable () -> Unit = {
                     if (mounts(ChromeSection.FPS_READOUT)) FpsChip(actualLinkHealth.presentation.signalBars,
-                        fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState))
+                        fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState),
+                        Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.FPS_READOUT, chromeEditorMode, chromeEditBoxes))
                 }
                 MonitorStatusChrome(fieldLayout, commonStatus,
                     showsRecording = !isPhotographyMode && mounts(ChromeSection.REC_READOUT),
                     showsTimecode = !isPhotographyMode && mounts(ChromeSection.TIMECODE_READOUT),
-                    modifier = Modifier.chromeEditable(chromeEditHost, ChromeSection.STATUS_BAR, chromeEditorMode, recordChromeEditBounds),
+                    modifier = Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.STATUS_BAR, chromeEditorMode, chromeEditBoxes),
                     storage = {
                         if (isPhotographyMode && mounts(ChromeSection.TIMECODE_READOUT)) {
-                            ShotsRemainingReadout(cameraProperties.shotsRemaining, storage = cameraProperties.storage,
+                            ShotsRemainingReadout(cameraProperties.shotsRemaining,
+                                Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.TIMECODE_READOUT, chromeEditorMode, chromeEditBoxes),
+                                storage = cameraProperties.storage,
                                 showsStorage = photoPillShowsStorage, onToggle = { photoPillShowsStorage = !photoPillShowsStorage })
                         } else if (mounts(ChromeSection.MEDIA_READOUT)) {
                             Text(topBarMedia, style = chromeStyle(12f, FontWeight.Medium), color = LiveDesign.text,
-                                modifier = Modifier.chromeClickable { prefersMediaDuration = !prefersMediaDuration })
+                                modifier = Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.MEDIA_READOUT, chromeEditorMode, chromeEditBoxes)
+                                    .chromeClickable { prefersMediaDuration = !prefersMediaDuration })
                         }
                     },
                     format = {
@@ -2520,7 +2522,8 @@ internal fun MonitorScreen(
                                 val kind = if (isPhotographyMode) MonitorPickerKind.SIZE else MonitorPickerKind.RESOLUTION
                                 Text(if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() ?: "--" else readoutRetention.resolution,
                                     style = chromeStyle(12f, FontWeight.Medium), color = LiveDesign.text, maxLines = 1,
-                                    modifier = Modifier.chromeClickable(accepts && commandControlsEnabled) { openSharedPicker(kind) }
+                                    modifier = Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.RESOLUTION_READOUT, chromeEditorMode, chromeEditBoxes)
+                                        .chromeClickable(accepts && commandControlsEnabled) { openSharedPicker(kind) }
                                         .onGloballyPositioned { coords ->
                                             val r = coords.boundsInRoot()
                                             with(density) { measuredTopPills[kind] = MonitorRect(r.left.toDp().value, r.top.toDp().value, r.width.toDp().value, r.height.toDp().value) }
@@ -2530,7 +2533,8 @@ internal fun MonitorScreen(
                                 val kind = if (isPhotographyMode) MonitorPickerKind.QUALITY else MonitorPickerKind.CODEC
                                 Text(if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() ?: "--" else readoutRetention.codec,
                                     style = chromeStyle(12f, FontWeight.Medium), color = LiveDesign.text, maxLines = 1,
-                                    modifier = Modifier.chromeClickable(accepts && commandControlsEnabled) { openSharedPicker(kind) })
+                                    modifier = Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.CODEC_READOUT, chromeEditorMode, chromeEditBoxes)
+                                        .chromeClickable(accepts && commandControlsEnabled) { openSharedPicker(kind) })
                             }
                         }
                     },
@@ -2540,13 +2544,13 @@ internal fun MonitorScreen(
             },
             power = { _ ->
                 BatteryRowStack(phoneBatteryReadout.percent, cameraReadouts.batteryPercent,
-                    Modifier.chromeEditable(chromeEditHost, ChromeSection.BATTERY_INDICATORS, chromeEditorMode, recordChromeEditBounds),
+                    Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.BATTERY_INDICATORS, chromeEditorMode, chromeEditBoxes),
                     phoneExternalPower = phoneBatteryReadout.externalPower, cameraExternalPower = cameraReadouts.externalPower)
             },
             capture = { accepts ->
                 MonitorCameraValues(values, enabled = accepts && commandControlsEnabled && !controlsSurrendered,
                     portrait = isPortrait, columns = if (isPortrait && !fieldLayout.tablet) { if (isPhotographyMode) 5 else 3 } else values.size,
-                    modifier = Modifier.chromeEditable(chromeEditHost, ChromeSection.CAMERA_VALUES, chromeEditorMode, recordChromeEditBounds)
+                    modifier = Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.CAMERA_VALUES, chromeEditorMode, chromeEditBoxes)
                         .onGloballyPositioned { coords ->
                             val r = coords.boundsInRoot()
                             with(density) { measuredCaptureBar = MonitorRect(r.left.toDp().value, r.top.toDp().value, r.width.toDp().value, r.height.toDp().value) }
@@ -2585,24 +2589,31 @@ internal fun MonitorScreen(
                         railMounts(ChromeSection.RAIL_MEDIA), railMounts(ChromeSection.RAIL_RECORD), railMounts(ChromeSection.RAIL_DISP)),
                     navigationHidden = false, interactive = accepts,
                     lock = { enabled -> LockButton(locked) { if (enabled) locked = !locked } },
-                    settings = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenSettings() } },
+                    settings = { enabled -> AuxCircleButton(
+                        Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.RAIL_SETTINGS, chromeEditorMode, chromeEditBoxes),
+                        onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenSettings() } },
                         contentDescription = stringResource(R.string.a11y_monitor_settings)) { glyphModifier, tint -> MonitorIcon(MonitorIcon.SETTINGS, null, glyphModifier, tint) } },
-                    media = { enabled -> AuxCircleButton(onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenMedia() } },
+                    media = { enabled -> AuxCircleButton(
+                        Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.RAIL_MEDIA, chromeEditorMode, chromeEditBoxes),
+                        onClick = { if (enabled) { activeMonitorPickerKind = null; onOpenMedia() } },
                         contentDescription = stringResource(R.string.a11y_monitor_media)) { glyphModifier, tint ->
                             // Nikon main: a photo glyph reads as "media" on the stills side; cinema keeps film.
                             MonitorIcon(if (isPhotographyMode) MonitorIcon.IMAGE else MonitorIcon.FILM, null, glyphModifier, tint)
                         } },
                     record = { enabled ->
-                        if (isPhotographyMode) PhotographyShutterButton(stillCapturing, enabled = enabled && !controlsSurrendered,
+                        val recordEdit = Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.RAIL_RECORD, chromeEditorMode, chromeEditBoxes)
+                        if (isPhotographyMode) PhotographyShutterButton(stillCapturing, recordEdit, enabled = enabled && !controlsSurrendered,
                             timerRemaining = photoTimerRemaining, bodyShutterPulse = bodyShutterPulse,
                             onPressed = photoShutterPressed, onReleased = photoShutterReleased)
-                        else MonitorCaptureButton(commonControl, fieldLayout.record.width, enabled && recordControlEnabled,
+                        else MonitorCaptureButton(commonControl, fieldLayout.record.width, enabled && recordControlEnabled, recordEdit,
                             confirm = operatorSettings.recordConfirmationEnabled.value,
                             confirmationPolicy = MonitorControlModel.RecordConfirmationPolicy.EXPLICIT_TARGET,
                             onConfirmingChange = { recordConfirmationOpen = it })
                     },
                     display = { enabled -> DispButton(displayModeOrder.indexOf(effectiveDisplayMode), displayModeOrder.size,
-                        effectiveDisplayMode == MonitorDisplayMode.LIVE, onClick = { if (enabled) cycleDisplayMode() }) })
+                        effectiveDisplayMode == MonitorDisplayMode.LIVE,
+                        Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.RAIL_DISP, chromeEditorMode, chromeEditBoxes),
+                        onClick = { if (enabled) cycleDisplayMode() }) })
             },
             tools = { accepts ->
                 if (isCommand) {
@@ -2632,7 +2643,8 @@ internal fun MonitorScreen(
                 } else if (assistToolbarVisible && configureTool == null) {
                     NikonAssistPalette(liveAssistChips, assists, playback = false, portrait = isPortrait,
                         locked = locked || !accepts,
-                        modifier = Modifier.zone(fieldLayout.assists))
+                        modifier = Modifier.zone(fieldLayout.assists)
+                            .nikonChromeEditable(chromeEditHost, ChromeSection.ASSIST_TOOLBAR, chromeEditorMode, chromeEditBoxes))
                 }
                 // Focus-by-wire scrub strip: on the live view just left of the right system rail
                 // in an AF focus mode. The camera refuses a remote drive in MF (Invalid_Status) —
@@ -3267,7 +3279,32 @@ internal fun nextDisplayModeInOrder(
     return if (index < 0) order.first() else order[(index + 1) % order.size]
 }
 
+/**
+ * A portrait phone's top inset for the shared field layout, at least 44 dp. The shared layout hangs
+ * the battery and FPS band 40 dp above the status row, in the cutout; a phone with no top cutout
+ * (0 under immersive) would stack the band on the status row, the batteries over CODEC and FPS over
+ * the clock. From 44 dp up the band keeps the gap it has on a punch-hole phone.
+ */
+internal fun portraitPhoneSafeTop(safeTop: Float, width: Float, height: Float): Float =
+    if (height > width && width < 600f) maxOf(safeTop, 44f) else safeTop
+
 // MARK: - Edit view (per-DISP chrome)
+
+/**
+ * [chromeEditable] into the Edit view's badge [boxes]. The box goes when its element leaves the
+ * screen (a readout that lost its source, the media readout giving way to the shots pill), so no
+ * eye is left over nothing; iOS measures by preference, which has no stale box to drop.
+ */
+@Composable
+internal fun Modifier.nikonChromeEditable(
+    host: NikonChromeEditHost,
+    section: ChromeSection,
+    mode: MonitorDisplayMode?,
+    boxes: MutableMap<ChromeSection, MonitorRect>,
+): Modifier {
+    DisposableEffect(boxes, section) { onDispose { boxes.remove(section) } }
+    return chromeEditable(host, section, mode) { key, rect -> boxes[key] = rect }
+}
 
 /**
  * The Edit view's host (iOS `NativeAppModel: ChromeEditHost`): this monitor's own sections and DISP

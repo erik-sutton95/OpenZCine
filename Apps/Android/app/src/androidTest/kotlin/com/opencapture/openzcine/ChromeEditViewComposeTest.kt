@@ -3,6 +3,10 @@ package com.opencapture.openzcine
 import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -25,6 +29,7 @@ import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.OperatorSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -72,5 +77,29 @@ class ChromeEditViewComposeTest {
         compose.waitForIdle()
         assertNull(settings.chromeEditorMode)
         assertEquals(1, returned)
+    }
+
+    @Test
+    fun theShotsPillMeasuresForItsEyeAndDropsTheBoxWhenItLeaves() {
+        val settings = OperatorSettings(preferences)
+        settings.beginChromeEditing(MonitorDisplayMode.LIVE)
+        val host = NikonChromeEditHost(settings, CaptureLayoutMode.PHOTO) {}
+        val boxes = mutableStateMapOf<ChromeSection, MonitorRect>()
+        var shown by mutableStateOf(true)
+        compose.setContent {
+            if (shown) {
+                ShotsRemainingReadout(
+                    812,
+                    Modifier.nikonChromeEditable(host, ChromeSection.TIMECODE_READOUT, MonitorDisplayMode.LIVE, boxes),
+                )
+            }
+        }
+        compose.waitForIdle()
+        assertTrue(boxes.getValue(ChromeSection.TIMECODE_READOUT).width > 0f)
+
+        // The readout gives way (in video the media readout takes its slot): no eye is left over nothing.
+        shown = false
+        compose.waitForIdle()
+        assertNull(boxes[ChromeSection.TIMECODE_READOUT])
     }
 }

@@ -176,7 +176,7 @@ fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextSty
 
 /** Signal bars + FPS readout capsule (iOS `FPSChip`). */
 @Composable
-fun FpsChip(signalBars: Int, fps: String) {
+fun FpsChip(signalBars: Int, fps: String, modifier: Modifier = Modifier) {
     val tint =
         when {
             signalBars >= 3 -> LiveDesign.good
@@ -185,7 +185,7 @@ fun FpsChip(signalBars: Int, fps: String) {
             else -> LiveDesign.faint
         }
     Row(
-        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
+        modifier = modifier.chipGlass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
