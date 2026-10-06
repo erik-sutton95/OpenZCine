@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineMedia
 
 /// The source categories the LUT picker groups looks under.
 public enum LUTCategory: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
@@ -99,24 +100,12 @@ public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Iden
 
     /// Nikon N-Log (normalized 10-bit code value) → scene-linear reflectance (0.18 == middle grey).
     private static func nLogToLinear(_ codeValue: Float) -> Float {
-        let x = Double(codeValue)
-        let a = 650.0 / 1023.0
-        let c = 150.0 / 1023.0
-        let d = 619.0 / 1023.0
-        let threshold = 452.0 / 1023.0
-        let linear = x < threshold ? pow(x / a, 3.0) - 0.0075 : exp((x - d) / c)
-        return Float(linear)
+        Float(NLog.decode(Double(codeValue)))
     }
 
     /// RED Log3G10 (encoded) → scene-linear (0.18 == middle grey); v2/v3 form with the linear toe.
     private static func log3G10ToLinear(_ encoded: Float) -> Float {
-        let x = Double(encoded)
-        let a = 0.224282
-        let b = 155.975327
-        let c = 0.01
-        let g = 15.1927
-        let linear = x < 0 ? (x / g) - c : (pow(10.0, x / a) - 1.0) / b - c
-        return Float(linear)
+        Float(Log3G10.decode(Double(encoded)))
     }
 
     /// N-Gamut (≡ BT.2020, D65) → Rec.709 linear RGB, row-major 3×3.
