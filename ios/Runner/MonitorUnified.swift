@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineCameraControls
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -107,9 +108,13 @@ struct NikonMonitorShell: View {
         .coordinateSpace(name: ChromeEditSpace.name)
         .overlayPreferenceValue(ChromeEditBoundsKey.self) { boxes in
             if let mode = editing {
+                // The canvas space is the safe-area-inset shell frame while the chrome draws
+                // full-bleed past it: the physical-size layer starts at the space's origin.
                 ChromeEditBadgeLayer(
                     mode: mode, boxes: boxes,
-                    viewport: CGSize(width: layout.viewport.width, height: layout.viewport.height))
+                    viewport: CGSize(width: layout.viewport.width, height: layout.viewport.height)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .overlay(alignment: .bottom) {

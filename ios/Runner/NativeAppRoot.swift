@@ -12288,12 +12288,17 @@ final class NativeAppModel {
         }
     }
 
-    /// Flips one chrome section for one DISP mode (Display settings, and the Edit view's badges).
+    /// Flips one chrome section for one DISP mode on the capture side the body reports (the Edit
+    /// view's badges).
+    func toggleChrome(_ section: DisplayChromeVisibility.Section, for mode: DispMode) {
+        toggleChrome(section, for: mode, capture: captureLayoutMode)
+    }
+
+    /// Flips one chrome section for one DISP mode and capture side (Display settings).
     func toggleChrome(
-        _ section: DisplayChromeVisibility.Section, for mode: DispMode,
-        capture: CaptureLayoutMode? = nil
+        _ section: DisplayChromeVisibility.Section, for mode: DispMode, capture: CaptureLayoutMode
     ) {
-        preferences.toggleChrome(section, for: mode, capture: capture ?? captureLayoutMode)
+        preferences.toggleChrome(section, for: mode, capture: capture)
     }
 
     func setStreamPreset(_ preset: LiveViewStreamPreset) {
