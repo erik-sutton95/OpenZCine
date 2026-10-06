@@ -111,7 +111,7 @@ import com.opencapture.openzcine.FeedEffectsRenderer
 import com.opencapture.openzcine.FeedEffectsRenderPlan
 import com.opencapture.openzcine.FeedEffectsRenderPlanFactory
 import com.opencapture.openzcine.FeedLutSelection
-import com.opencapture.openzcine.FramingAssistRect
+import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.LiveFeedEffectsPresentationState
 import com.opencapture.openzcine.LocalFramingAssistOverlay
@@ -1089,7 +1089,7 @@ private fun rememberNikonNativePlayback(
             LocalFramingAssistOverlay(
                 configuration = playbackFramingConfiguration,
                 feedRect =
-                    FramingAssistRect(geometry.feed.x, geometry.feed.y,
+                    MonitorScopeRect(geometry.feed.x, geometry.feed.y,
                         geometry.feed.width, geometry.feed.height),
                 modifier = Modifier.fillMaxSize(),
             )
