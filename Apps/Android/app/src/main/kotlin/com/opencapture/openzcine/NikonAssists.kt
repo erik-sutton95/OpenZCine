@@ -140,20 +140,15 @@ internal val MonitorAssistState.feedEffectsConfiguration: FeedEffectsConfigurati
     get() =
         FeedEffectsConfiguration(
             falseColorReferenceEnabled = falseColorReference,
-            peakingSensitivity =
-                when (peakingSensitivity) {
-                    MonitorPeakingSense.LOW -> FeedPeakingSensitivity.LOW
-                    MonitorPeakingSense.MED -> FeedPeakingSensitivity.MEDIUM
-                    MonitorPeakingSense.HIGH -> FeedPeakingSensitivity.HIGH
-                },
-            peakingColor = FeedPeakingColor.valueOf(peakingColor.name),
-            zebraUnit = FeedZebraUnit.valueOf(zebraUnit.name),
+            peakingSensitivity = peakingSensitivity,
+            peakingColor = peakingColor,
+            zebraUnit = zebraUnit,
             zebraHighlightEnabled = zebraHighlight,
             zebraHighlightIre = zebraHighlightIRE.toFloat(),
-            zebraHighlightColor = FeedZebraStripeColor.valueOf(zebraHighlightColor.name),
+            zebraHighlightColor = zebraHighlightColor,
             zebraMidtoneEnabled = zebraMidtone,
             zebraMidtoneIre = zebraMidtoneIRE.toFloat(),
-            zebraMidtoneColor = FeedZebraStripeColor.valueOf(zebraMidtoneColor.name),
+            zebraMidtoneColor = zebraMidtoneColor,
         ).normalized()
 
 /** The framing overlays for one visibility predicate; the level style is this camera's own. */
@@ -209,7 +204,13 @@ internal fun restoreNikonAssists(
         context.getSharedPreferences(OPERATOR_PREFERENCES, Context.MODE_PRIVATE),
         context.getSharedPreferences(PLAYBACK_PREFERENCES, Context.MODE_PRIVATE),
         debugEffects, debugScopes, availableStoredLut,
-    ).also { MonitorAnalysisPanelPlacementStore(context).moveScopeCentres(into = it.shared) }
+    ).also {
+        MonitorAnalysisPanelPlacementStore(context).movePanelCentres(into = it.shared)
+        StoredPanelCenter(context, LIVE_AUDIO_METER_PLACEMENT, "audio").moveAudioCentre(into = it.shared)
+    }
+
+/** The live audio meter's own placement file before it joined the shared assist state. */
+private const val LIVE_AUDIO_METER_PLACEMENT = "audioMeterPlacement"
 
 /** [restoreNikonAssists] over explicit stores, for JVM tests. */
 internal fun restoreNikonAssists(

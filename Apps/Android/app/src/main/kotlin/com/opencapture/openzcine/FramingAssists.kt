@@ -1,25 +1,17 @@
 package com.opencapture.openzcine
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -29,38 +21,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.monitorui.MonitorAspectGuideFrames
+import com.opencapture.monitorui.MonitorFeedCrosshair
+import com.opencapture.monitorui.MonitorFeedGrid
 import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import kotlin.math.roundToInt
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
-/** A rectangle expressed in the hosting monitor's local pixels for deterministic overlay layout. */
-internal data class FramingAssistRect(
-    val left: Float,
-    val top: Float,
-    val width: Float,
-    val height: Float,
-) {
-    val right: Float get() = left + width
-    val bottom: Float get() = top + height
-    val centerX: Float get() = left + width / 2f
-    val centerY: Float get() = top + height / 2f
-}
-
-/** One labelled aspect guide resolved inside the visible de-squeezed feed. */
-internal data class LocalFramingGuideFrame(
-    val ratio: MonitorGuideAspect,
-    val rect: FramingAssistRect,
-)
-
-/** The pure layout decisions made by [LocalFramingAssistOverlay]. */
+/** The pure layout decisions made by [LocalFramingAssistOverlay], in the hosting monitor's local pixels. */
 internal data class LocalFramingRenderPlan(
     /** Exact de-squeezed image content, never a synthetic screen zone. */
-    val presentationRect: FramingAssistRect,
-    /** Every selected local delivery frame in stable narrow-to-wide draw order. */
-    val guideFrames: List<LocalFramingGuideFrame>,
-    /** Dims the inverse union of [guideFrames] inside [presentationRect]. */
+    val presentationRect: MonitorScopeRect,
+    /** Selected local delivery frames; the shared marks draw them narrow to wide. */
+    val guides: Set<MonitorGuideAspect>,
+    /** Dims the inverse union of [guides] inside [presentationRect]. */
     val drawsInverseGuideMask: Boolean,
     val drawsRuleOfThirds: Boolean,
     val drawsPhiGrid: Boolean,
@@ -77,7 +55,7 @@ internal data class LocalFramingRenderPlan(
  * pixels while the physical viewport clips only their visible portions.
  */
 internal fun localFramingRenderPlan(
-    feed: FramingAssistRect,
+    feed: MonitorScopeRect,
     configuration: LocalFramingAssistConfiguration,
 ): LocalFramingRenderPlan {
     val presentationRect =
@@ -87,26 +65,14 @@ internal fun localFramingRenderPlan(
             factor = configuration.desqueezeFactor,
             direction = configuration.desqueezeDirection,
         )
-    val guideFrames =
-        if (configuration.drawsGuides) {
-            configuration.selectedGuideRatios
-                .sortedBy(MonitorGuideAspect::ratio)
-                .map { ratio ->
-                    LocalFramingGuideFrame(
-                        ratio = ratio,
-                        rect = centeredGuideRect(presentationRect, ratio),
-                    )
-                }
-        } else {
-            emptyList()
-        }
+    val guides = if (configuration.drawsGuides) configuration.selectedGuideRatios else emptySet()
     val drawsGrid = configuration.drawsGrid
     // DISP-mode policy is NOT applied here: the caller passes a configuration already filtered by
     // `rendersLive`, so clean view draws exactly the tools the operator pinned (#256).
     return LocalFramingRenderPlan(
         presentationRect = presentationRect,
-        guideFrames = guideFrames,
-        drawsInverseGuideMask = configuration.guideMaskEnabled && guideFrames.isNotEmpty(),
+        guides = guides,
+        drawsInverseGuideMask = configuration.guideMaskEnabled && guides.isNotEmpty(),
         drawsRuleOfThirds = drawsGrid && configuration.ruleOfThirdsEnabled,
         drawsPhiGrid = drawsGrid && configuration.phiGridEnabled,
         drawsDiagonalGrid = drawsGrid && configuration.diagonalGridEnabled,
@@ -121,7 +87,7 @@ internal fun localFramingRenderPlan(
     configuration: LocalFramingAssistConfiguration,
 ): LocalFramingRenderPlan =
     localFramingRenderPlan(
-        feed = FramingAssistRect(0f, 0f, width.coerceAtLeast(0f), height.coerceAtLeast(0f)),
+        feed = MonitorScopeRect(0f, 0f, width.coerceAtLeast(0f), height.coerceAtLeast(0f)),
         configuration = configuration,
     )
 
@@ -132,58 +98,22 @@ internal fun localFramingRenderPlan(
  * letterbox. Neither changes the camera, the encoded frame, or any media file.
  */
 internal fun localDesqueezePresentationRect(
-    feed: FramingAssistRect,
+    feed: MonitorScopeRect,
     enabled: Boolean,
     factor: Float,
     direction: MonitorDesqueezeDirection,
-): FramingAssistRect {
+): MonitorScopeRect {
     val squeeze = factor.coerceAtLeast(1f)
     if (!enabled || squeeze <= 1f || feed.width <= 0f || feed.height <= 0f) return feed
     return when (direction) {
         MonitorDesqueezeDirection.VERTICAL -> {
             val width = feed.width / squeeze
-            FramingAssistRect(
-                left = feed.centerX - width / 2f,
-                top = feed.top,
-                width = width,
-                height = feed.height,
-            )
+            MonitorScopeRect(feed.midX - width / 2f, feed.y, width, feed.height)
         }
         MonitorDesqueezeDirection.HORIZONTAL -> {
             val height = feed.height / squeeze
-            FramingAssistRect(
-                left = feed.left,
-                top = feed.centerY - height / 2f,
-                width = feed.width,
-                height = height,
-            )
+            MonitorScopeRect(feed.x, feed.midY - height / 2f, feed.width, height)
         }
-    }
-}
-
-/** Returns a centred delivery-frame guide within [feed]. */
-internal fun centeredGuideRect(
-    feed: FramingAssistRect,
-    ratio: MonitorGuideAspect,
-): FramingAssistRect {
-    if (feed.width <= 0f || feed.height <= 0f) return FramingAssistRect(feed.left, feed.top, 0f, 0f)
-    val feedAspectRatio = feed.width / feed.height
-    return if (feedAspectRatio > ratio.ratio) {
-        val width = feed.height * ratio.ratio
-        FramingAssistRect(
-            left = feed.left + (feed.width - width) / 2f,
-            top = feed.top,
-            width = width,
-            height = feed.height,
-        )
-    } else {
-        val height = feed.width / ratio.ratio
-        FramingAssistRect(
-            left = feed.left,
-            top = feed.top + (feed.height - height) / 2f,
-            width = feed.width,
-            height = height,
-        )
     }
 }
 
@@ -191,7 +121,7 @@ internal fun centeredGuideRect(
  * Feed-aligned local framing overlays for the Android monitor.
  *
  * [presentationState] carries the decoded frame dimensions used by
- * [LiveFeedView], so the live monitor resolves the same `LiveFeedContentRect`
+ * [LiveFeedView], so the live monitor resolves the same `NativeFeedContentRect`
  * rather than estimating against its enclosing zone. [feedRect] is the exact
  * pixel-space seam for callers such as Media3 playback that already own the
  * decoded image's aspect-fit rectangle.
@@ -200,7 +130,7 @@ internal fun centeredGuideRect(
 internal fun LocalFramingAssistOverlay(
     configuration: LocalFramingAssistConfiguration,
     presentationState: LiveFeedPresentationState? = null,
-    feedRect: FramingAssistRect? = null,
+    feedRect: MonitorScopeRect? = null,
     aspectFill: Boolean = false,
     /**
      * The active 50/50 Log-vs-LUT comparison, or `null`. Drawn here rather than in its own
@@ -226,13 +156,13 @@ internal fun LocalFramingAssistOverlay(
                 if (presentationState == null) {
                     null
                 } else {
-                    liveFeedContentRect(
+                    nativeFeedContentRect(
                         containerWidth = maxWidth.toPx(),
                         containerHeight = maxHeight.toPx(),
                         sourceWidth = sourceWidth,
                         sourceHeight = sourceHeight,
                         aspectFill = aspectFill,
-                    )?.toFramingAssistRect()
+                    )?.let { MonitorScopeRect(it.left.toFloat(), it.top.toFloat(), it.width.toFloat(), it.height.toFloat()) }
                 }
             }
         val plan =
@@ -248,15 +178,7 @@ internal fun LocalFramingAssistOverlay(
                 maxHeight,
                 density,
             ) {
-                val fallbackFeed =
-                    with(density) {
-                        FramingAssistRect(
-                            left = 0f,
-                            top = 0f,
-                            width = maxWidth.toPx(),
-                            height = maxHeight.toPx(),
-                        )
-                    }
+                val fallbackFeed = with(density) { MonitorScopeRect(0f, 0f, maxWidth.toPx(), maxHeight.toPx()) }
                 // Before the first live frame, draw nothing rather than align
                 // a local framing overlay to the broader monitor zone.
                 val feed = feedRect ?: exactLiveFeed ?: fallbackFeed.takeIf { presentationState == null }
@@ -268,28 +190,14 @@ internal fun LocalFramingAssistOverlay(
                 }
             }
         if (plan != null) {
-            Canvas(
-                Modifier
-                    .fillMaxSize()
-                    // The inverse mask uses destination-out to reveal the union
-                    // of overlapping frames. An offscreen layer makes that union
-                    // local to the overlay instead of punching through app chrome.
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
-            ) {
-                if (plan.drawsInverseGuideMask) {
-                    drawInverseGuideMask(plan.presentationRect, plan.guideFrames)
-                }
-                plan.guideFrames.forEach { drawFrameGuide(it.rect) }
-                if (plan.drawsRuleOfThirds) drawGridFractions(plan.presentationRect, listOf(1f / 3f, 2f / 3f))
-                if (plan.drawsPhiGrid) drawGridFractions(plan.presentationRect, listOf(0.382f, 0.618f))
-                if (plan.drawsDiagonalGrid) drawDiagonalGrid(plan.presentationRect)
-                if (plan.drawsCenterCrosshair) drawCentreCrosshair(plan.presentationRect)
-                splitComparison?.let { drawSplitDivider(plan.presentationRect, it) }
+            val feed = plan.presentationRect
+            MonitorAspectGuideFrames(plan.guides, feed, plan.drawsInverseGuideMask)
+            MonitorFeedGrid(feed, plan.drawsRuleOfThirds, plan.drawsPhiGrid, plan.drawsDiagonalGrid)
+            if (plan.drawsCenterCrosshair) MonitorFeedCrosshair(feed)
+            splitComparison?.let { split ->
+                Canvas(Modifier.fillMaxSize()) { drawSplitDivider(feed, split) }
+                SplitComparisonLabels(feed, split)
             }
-            plan.guideFrames.forEach { frame ->
-                FramingGuideLabel(frame)
-            }
-            splitComparison?.let { SplitComparisonLabels(plan.presentationRect, it) }
         }
     }
 }
@@ -373,51 +281,6 @@ private fun localFramingAssistAccessibilitySummary(
     )
 }
 
-/** Converts the feed renderer's exact integer fit/fill rectangle into framing coordinates. */
-private fun LiveFeedContentRect.toFramingAssistRect(): FramingAssistRect =
-    FramingAssistRect(left.toFloat(), top.toFloat(), width.toFloat(), height.toFloat())
-
-/** Draws the inverse union mask: overlapping selected frames stay transparent. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawInverseGuideMask(
-    presentation: FramingAssistRect,
-    frames: List<LocalFramingGuideFrame>,
-) {
-    drawRect(
-        color = Color.Black.copy(alpha = 0.6f),
-        topLeft = Offset(presentation.left, presentation.top),
-        size = Size(presentation.width, presentation.height),
-    )
-    frames.forEach { frame ->
-        drawRect(
-            color = Color.Black,
-            topLeft = Offset(frame.rect.left, frame.rect.top),
-            size = Size(frame.rect.width, frame.rect.height),
-            blendMode = BlendMode.DstOut,
-        )
-    }
-}
-
-/** Content-aligned delivery-ratio label matching iOS's compact guide labels. */
-@Composable
-private fun FramingGuideLabel(frame: LocalFramingGuideFrame) {
-    val density = LocalDensity.current
-    val inset = with(density) { 8.dp.roundToPx() }
-    Text(
-        text = frame.ratio.label,
-        style = chromeStyle(10f, FontWeight.Bold, mono = true).copy(letterSpacing = 1.2.sp),
-        color = LiveDesign.accent,
-        modifier =
-            Modifier.offset {
-                IntOffset(
-                    x = (frame.rect.left + inset).roundToInt(),
-                    y = (frame.rect.top + inset).roundToInt(),
-                )
-            }
-                .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(5.dp))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
-}
-
 /**
  * The 50/50 comparison's two half labels, hugging the divider at one edge of the image.
  *
@@ -425,20 +288,20 @@ private fun FramingGuideLabel(frame: LocalFramingGuideFrame) {
  * subject is exactly what "without permanently obscuring the image" rules out.
  */
 @Composable
-private fun SplitComparisonLabels(rect: FramingAssistRect, orientation: FeedSplitOrientation) {
+private fun SplitComparisonLabels(rect: MonitorScopeRect, orientation: FeedSplitOrientation) {
     val density = LocalDensity.current
     val logOffset: Offset
     val lutOffset: Offset
     // Matches the iOS placement: a fraction of the way along the divider, which clears the status
     // deck in landscape and in portrait without knowing which chrome is mounted.
     if (orientation == FeedSplitOrientation.VERTICAL) {
-        val y = rect.top + rect.height * ALONG_DIVIDER
-        logOffset = Offset(rect.centerX - with(density) { 30.dp.toPx() }, y)
-        lutOffset = Offset(rect.centerX + with(density) { 8.dp.toPx() }, y)
+        val y = rect.y + rect.height * ALONG_DIVIDER
+        logOffset = Offset(rect.midX - with(density) { 30.dp.toPx() }, y)
+        lutOffset = Offset(rect.midX + with(density) { 8.dp.toPx() }, y)
     } else {
-        val x = rect.left + rect.width * ALONG_DIVIDER
-        logOffset = Offset(x, rect.centerY - with(density) { 15.dp.toPx() })
-        lutOffset = Offset(x, rect.centerY + with(density) { 4.dp.toPx() })
+        val x = rect.x + rect.width * ALONG_DIVIDER
+        logOffset = Offset(x, rect.midY - with(density) { 15.dp.toPx() })
+        lutOffset = Offset(x, rect.midY + with(density) { 4.dp.toPx() })
     }
     SplitComparisonLabel(FeedSplitOrientation.LOG_LABEL, logOffset)
     SplitComparisonLabel(FeedSplitOrientation.LUT_LABEL, lutOffset)
@@ -477,76 +340,21 @@ private fun SplitComparisonLabel(text: String, offset: Offset) {
  * line the fragment shader grades on one side of.
  */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSplitDivider(
-    rect: FramingAssistRect,
+    rect: MonitorScopeRect,
     orientation: FeedSplitOrientation,
 ) {
     val width = 1.dp.toPx()
     if (orientation == FeedSplitOrientation.VERTICAL) {
         drawRect(
             color = Color.White.copy(alpha = 0.5f),
-            topLeft = Offset(rect.centerX - width / 2f, rect.top),
+            topLeft = Offset(rect.midX - width / 2f, rect.y),
             size = Size(width, rect.height),
         )
     } else {
         drawRect(
             color = Color.White.copy(alpha = 0.5f),
-            topLeft = Offset(rect.left, rect.centerY - width / 2f),
+            topLeft = Offset(rect.x, rect.midY - width / 2f),
             size = Size(rect.width, width),
         )
     }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFrameGuide(
-    rect: FramingAssistRect,
-) {
-    drawRect(
-        color = LiveDesign.accent.copy(alpha = 0.85f),
-        topLeft = Offset(rect.left, rect.top),
-        size = Size(rect.width, rect.height),
-        style = Stroke(width = 1.dp.toPx()),
-    )
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGridFractions(
-    rect: FramingAssistRect,
-    fractions: List<Float>,
-) {
-    val strokeWidth = 1.dp.toPx()
-    val color = Color.White.copy(alpha = 0.22f)
-    fractions.forEach { fraction ->
-        val x = rect.left + rect.width * fraction
-        val y = rect.top + rect.height * fraction
-        drawLine(color, Offset(x, rect.top), Offset(x, rect.bottom), strokeWidth)
-        drawLine(color, Offset(rect.left, y), Offset(rect.right, y), strokeWidth)
-    }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDiagonalGrid(rect: FramingAssistRect) {
-    val color = Color.White.copy(alpha = 0.22f)
-    val strokeWidth = 1.dp.toPx()
-    drawLine(color, Offset(rect.left, rect.top), Offset(rect.right, rect.bottom), strokeWidth)
-    drawLine(color, Offset(rect.right, rect.top), Offset(rect.left, rect.bottom), strokeWidth)
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCentreCrosshair(
-    rect: FramingAssistRect,
-) {
-    val center = Offset(rect.centerX, rect.centerY)
-    val arm = 20.dp.toPx()
-    val strokeWidth = 1.4.dp.toPx()
-    val color = Color.White.copy(alpha = 0.65f)
-    drawLine(
-        color,
-        Offset(center.x - arm, center.y),
-        Offset(center.x + arm, center.y),
-        strokeWidth,
-        cap = StrokeCap.Round,
-    )
-    drawLine(
-        color,
-        Offset(center.x, center.y - arm),
-        Offset(center.x, center.y + arm),
-        strokeWidth,
-        cap = StrokeCap.Round,
-    )
 }

@@ -10,6 +10,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.runtime.NativeFeedContentRect
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class FocusFeedGesturesTest {
     @Test
@@ -41,7 +43,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `landscape fit maps exact inclusive edges and rejects letterbox input`() {
-        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        val content = nativeFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
         requireNotNull(content)
         val geometry =
             focusFeedGeometry(
@@ -72,7 +74,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `mirrored feed folds the tap back into the camera's unflipped space`() {
-        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        val content = nativeFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
         requireNotNull(content)
         fun geometry(mirrored: Boolean) =
             requireNotNull(
@@ -114,7 +116,7 @@ class FocusFeedGesturesTest {
         // corner maps inclusive.
         val container = MonitorRect(202f, 0f, 576f, 384f)
         val content =
-            liveFeedContentRect(container.width, container.height, 5_760, 3_840)
+            nativeFeedContentRect(container.width, container.height, 5_760, 3_840)
         requireNotNull(content)
         val geometry =
             focusFeedGeometry(
@@ -159,9 +161,9 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `portrait fill maps the visible crop against the full offscreen feed`() {
-        val content = liveFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true)
+        val content = nativeFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true)
         requireNotNull(content)
-        assertEquals(LiveFeedContentRect(left = -333, top = 0, width = 1_067, height = 600), content)
+        assertEquals(NativeFeedContentRect(left = -333, top = 0, width = 1_067, height = 600), content)
         val geometry =
             focusFeedGeometry(
                 content = content,
@@ -188,7 +190,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `horizontal and vertical desqueeze use the full presented rectangle`() {
-        val content = LiveFeedContentRect(left = 0, top = 0, width = 800, height = 800)
+        val content = NativeFeedContentRect(left = 0, top = 0, width = 800, height = 800)
         val geometry =
             focusFeedGeometry(
                 content = content,
@@ -218,7 +220,7 @@ class FocusFeedGesturesTest {
     fun `clipped viewport only limits hit testing and never renormalizes the visible slice`() {
         val geometry =
             focusFeedGeometry(
-                content = LiveFeedContentRect(left = -200, top = -100, width = 1_200, height = 800),
+                content = NativeFeedContentRect(left = -200, top = -100, width = 1_200, height = 800),
                 horizontalPresentationScale = 1f,
                 viewport = LiveOverlayRect(0f, 0f, 600f, 400f),
                 coordinateWidth = 1_200,
@@ -243,7 +245,7 @@ class FocusFeedGesturesTest {
     fun `coordinate mapping rounds half up and clamps both endpoints`() {
         val geometry =
             focusFeedGeometry(
-                content = LiveFeedContentRect(0, 0, 100, 100),
+                content = NativeFeedContentRect(0, 0, 100, 100),
                 horizontalPresentationScale = 1f,
                 viewport = LiveOverlayRect(0f, 0f, 100f, 100f),
                 coordinateWidth = 3,
@@ -260,7 +262,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `missing AF dimensions preserve display geometry but never invent focus coordinates`() {
-        val content = LiveFeedContentRect(0, 0, 100, 100)
+        val content = NativeFeedContentRect(0, 0, 100, 100)
         val viewport = LiveOverlayRect(0f, 0f, 100f, 100f)
 
         val noWidth =
@@ -725,7 +727,7 @@ class FocusFeedGesturesTest {
     ): FocusFeedGestureContext {
         val geometry =
             focusFeedGeometry(
-                content = LiveFeedContentRect(0, 0, 100, 100),
+                content = NativeFeedContentRect(0, 0, 100, 100),
                 horizontalPresentationScale = 1f,
                 viewport = LiveOverlayRect(0f, 0f, 100f, 100f),
                 coordinateWidth = coordinateWidth,

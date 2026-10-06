@@ -30,7 +30,6 @@ import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.ExposureCurveOrdinals
 import com.opencapture.openzcine.FeedFalseColorScale
-import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.feedScale
 import com.opencapture.openzcine.nikonFalseColorScales
 import com.opencapture.openzcine.resolveFalseColorReference
@@ -195,14 +194,14 @@ private fun zebra(state: MonitorAssistState, cameraInput: ExposureAssistCameraIn
 @Composable
 private fun zebraZone(state: MonitorAssistState, input: ExposureAssistCameraInput,
     highlight: Boolean, onInteraction: () -> Unit): MonitorZebraNumberZone {
-    val unit = FeedZebraUnit.valueOf(state.zebraUnit.name)
+    val unit = state.zebraUnit
     val percent = (if (highlight) state.zebraHighlightIRE else state.zebraMidtoneIRE).toFloat()
     val editorValue = remember(input, unit, percent) { zebraEditorValue(input, unit, percent) }
-    val maximum = if (unit == FeedZebraUnit.NATIVE) 255 else 100
+    val maximum = if (unit == MonitorZebraUnit.NATIVE) 255 else 100
     val entry = editorValue?.let {
         MonitorZebraNumberEntry(it.roundToInt().coerceIn(0, maximum), maximum, onChange = { value ->
             // A retired unit must not reinterpret an entry captured under another calibration.
-            if (state.zebraUnit.name == unit.name) zebraMonitorPercent(input, unit, value.toFloat())?.let { converted ->
+            if (state.zebraUnit == unit) zebraMonitorPercent(input, unit, value.toFloat())?.let { converted ->
                 if (highlight) state.setZebraHighlight(ire = converted.toDouble())
                 else state.setZebraMidtone(ire = converted.toDouble())
                 onInteraction()

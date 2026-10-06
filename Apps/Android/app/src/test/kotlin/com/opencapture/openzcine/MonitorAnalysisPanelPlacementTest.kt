@@ -9,7 +9,6 @@ import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -234,62 +233,7 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
-    fun `normalized centre survives resolution and orientation changes`() {
-        val preferences = TestSharedPreferences()
-        val store = MonitorAnalysisPanelPlacementStore(preferences)
-        val landscape =
-            MonitorAnalysisPanelLayout(
-                viewport = MonitorRect(0f, 0f, 1_000f, 500f),
-                safeBounds = MonitorRect(0f, 0f, 1_000f, 500f),
-            )
-        val portrait =
-            MonitorAnalysisPanelLayout(
-                viewport = MonitorRect(0f, 0f, 400f, 800f),
-                safeBounds = MonitorRect(80f, 60f, 320f, 600f),
-            )
-        store.save(
-            MonitorAnalysisPanelID.WAVEFORM,
-            MonitorRect(700f, 300f, 100f, 50f),
-            landscape,
-        )
-
-        val restored =
-            store.resolve(
-                MonitorAnalysisPanelID.WAVEFORM,
-                MonitorRect(0f, 0f, 100f, 50f),
-                portrait,
-            )
-
-        assertEquals(MonitorRect(250f, 495f, 100f, 50f), restored)
-        assertEquals(
-            NormalizedPanelCenter(0.75f, 0.65f),
-            store.storedCenter(MonitorAnalysisPanelID.WAVEFORM),
-        )
-    }
-
-    @Test
-    fun `layout clamp is temporary and expanded chrome restores the stored intent`() {
-        val preferences = TestSharedPreferences()
-        val store = MonitorAnalysisPanelPlacementStore(preferences)
-        val viewport = MonitorRect(0f, 0f, 800f, 400f)
-        val wide = MonitorAnalysisPanelLayout(viewport, viewport)
-        val narrow = MonitorAnalysisPanelLayout(viewport, MonitorRect(100f, 80f, 400f, 180f))
-        val size = MonitorRect(0f, 0f, 180f, 100f)
-        store.save(
-            MonitorAnalysisPanelID.HISTOGRAM,
-            MonitorRect(620f, 280f, size.width, size.height),
-            wide,
-        )
-
-        val temporarilyClamped = store.resolve(MonitorAnalysisPanelID.HISTOGRAM, size, narrow)
-        val restored = store.resolve(MonitorAnalysisPanelID.HISTOGRAM, size, wide)
-
-        assertEquals(MonitorRect(320f, 160f, 180f, 100f), temporarilyClamped)
-        assertEquals(MonitorRect(620f, 280f, 180f, 100f), restored)
-    }
-
-    @Test
-    fun `legacy stores migrate finite pairs and reconcile out of range values`() {
+    fun `legacy stores read finite pairs and reconcile out of range values`() {
         val current = TestSharedPreferences()
         val legacyScopes = TestSharedPreferences()
         val legacyFalseColor = TestSharedPreferences()
@@ -316,13 +260,18 @@ class MonitorAnalysisPanelPlacementTest {
             NormalizedPanelCenter(0.25f, 0.75f),
             store.storedCenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE),
         )
+
+        val assist = MonitorAssistState()
+        store.movePanelCentres(into = assist)
+
+        assertEquals(MonitorScopeStoredCenter(1.0, 0.0), assist.centerFor(MonitorAssistTool.WAVE, portrait = false))
+        assertEquals(MonitorScopeStoredCenter(0.25, 0.75), assist.centerFor(MonitorAssistTool.FALSE, portrait = true))
         assertFalse(legacyScopes.contains("wave.centerX"))
         assertFalse(legacyFalseColor.contains("fcref.centerY"))
-        assertEquals(2, current.getInt("schema", 0))
     }
 
     @Test
-    fun `partial or malformed current pair deterministically falls back and is removed`() {
+    fun `partial or malformed current pair is dropped and removed`() {
         val current = TestSharedPreferences()
         current.edit()
             .putInt("schema", 2)
@@ -333,18 +282,9 @@ class MonitorAnalysisPanelPlacementTest {
             .putFloat("fcref.centerY.v2", 0.5f)
             .apply()
         val store = MonitorAnalysisPanelPlacementStore(current)
-        val layout =
-            MonitorAnalysisPanelLayout(
-                viewport = MonitorRect(0f, 0f, 400f, 300f),
-                safeBounds = MonitorRect(40f, 20f, 320f, 240f),
-            )
-        val default = MonitorRect(60f, 40f, 100f, 60f)
 
-        assertEquals(default, store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, layout))
-        assertEquals(
-            default,
-            store.resolve(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE, default, layout),
-        )
+        assertNull(store.storedCenter(MonitorAnalysisPanelID.WAVEFORM))
+        assertNull(store.storedCenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE))
         assertFalse(current.contains("wave.centerX.v2"))
         assertFalse(current.contains("fcref.centerY.v2"))
     }
@@ -357,17 +297,15 @@ class MonitorAnalysisPanelPlacementTest {
             .putFloat("wave.centerY.v2", 0.7f)
             .apply()
         val store = MonitorAnalysisPanelPlacementStore(current)
-        val layout = testLayout()
-        val default = MonitorRect(40f, 30f, 100f, 60f)
 
-        assertEquals(default, store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, layout))
+        assertNull(store.storedCenter(MonitorAnalysisPanelID.WAVEFORM))
         assertFalse(current.contains("schema"))
         assertEquals(0.8f, current.getFloat("wave.centerX.v2", 0f))
         assertEquals(0.7f, current.getFloat("wave.centerY.v2", 0f))
     }
 
     @Test
-    fun `older schema ignores stale v2 and migrates only the explicit legacy pair`() {
+    fun `older schema ignores stale v2 and reads only the explicit legacy pair`() {
         val current = TestSharedPreferences()
         current.edit()
             .putInt("schema", 1)
@@ -390,9 +328,6 @@ class MonitorAnalysisPanelPlacementTest {
             NormalizedPanelCenter(0.25f, 0.5f),
             store.storedCenter(MonitorAnalysisPanelID.WAVEFORM),
         )
-        assertEquals(2, current.getInt("schema", 0))
-        assertEquals(0.25f, current.getFloat("wave.centerX.v2", 0f))
-        assertFalse(legacy.contains("wave.centerX"))
     }
 
     @Test
@@ -414,16 +349,16 @@ class MonitorAnalysisPanelPlacementTest {
                 legacy,
                 TestSharedPreferences(),
             )
-        val default = MonitorRect(40f, 30f, 100f, 60f)
 
-        assertEquals(default, store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, testLayout()))
+        assertNull(store.storedCenter(MonitorAnalysisPanelID.WAVEFORM))
+        store.movePanelCentres(into = MonitorAssistState())
         assertEquals("invalid", current.getString("schema", null))
         assertEquals(0.8f, current.getFloat("wave.centerX.v2", 0f))
         assertTrue(legacy.contains("wave.centerX"))
     }
 
     @Test
-    fun `future schema fails closed without downgrade until an operator deliberately saves`() {
+    fun `future schema fails closed without downgrade`() {
         val current = TestSharedPreferences()
         current.edit()
             .putInt("schema", 3)
@@ -432,22 +367,12 @@ class MonitorAnalysisPanelPlacementTest {
             .putFloat("future-only", 42f)
             .apply()
         val store = MonitorAnalysisPanelPlacementStore(current)
-        val layout = testLayout()
-        val default = MonitorRect(40f, 30f, 100f, 60f)
 
-        assertEquals(default, store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, layout))
+        assertNull(store.storedCenter(MonitorAnalysisPanelID.WAVEFORM))
+        store.movePanelCentres(into = MonitorAssistState())
         assertEquals(3, current.getInt("schema", 0))
         assertEquals(42f, current.getFloat("future-only", 0f))
-
-        store.save(
-            MonitorAnalysisPanelID.WAVEFORM,
-            MonitorRect(200f, 150f, 100f, 60f),
-            layout,
-        )
-
-        assertEquals(2, current.getInt("schema", 0))
-        assertFalse(current.contains("future-only"))
-        assertNotNull(store.storedCenter(MonitorAnalysisPanelID.WAVEFORM))
+        assertEquals(0.8f, current.getFloat("wave.centerX.v2", 0f))
     }
 
     @Test
@@ -472,29 +397,25 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
-    fun `recenter affects only the requested panel including when another panel is hidden`() {
-        val store = MonitorAnalysisPanelPlacementStore(TestSharedPreferences())
-        val layout =
-            MonitorAnalysisPanelLayout(
-                viewport = MonitorRect(0f, 0f, 400f, 300f),
-                safeBounds = MonitorRect(0f, 0f, 400f, 300f),
-            )
-        val default = MonitorRect(20f, 20f, 100f, 60f)
-        store.save(MonitorAnalysisPanelID.WAVEFORM, MonitorRect(240f, 180f, 100f, 60f), layout)
-        store.save(MonitorAnalysisPanelID.HISTOGRAM, MonitorRect(180f, 120f, 100f, 60f), layout)
+    fun `recenter affects only the requested panel`() {
+        val current = TestSharedPreferences()
+        current.edit()
+            .putInt("schema", 2)
+            .putFloat("wave.centerX.v2", 0.6f)
+            .putFloat("wave.centerY.v2", 0.6f)
+            .putFloat("histo.centerX.v2", 0.45f)
+            .putFloat("histo.centerY.v2", 0.5f)
+            .apply()
+        val store = MonitorAnalysisPanelPlacementStore(current)
 
         store.recenter(MonitorAnalysisPanelID.WAVEFORM)
 
-        assertEquals(default, store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, layout))
-        assertNotNull(store.storedCenter(MonitorAnalysisPanelID.HISTOGRAM))
-        assertEquals(
-            MonitorRect(180f, 120f, 100f, 60f),
-            store.resolve(MonitorAnalysisPanelID.HISTOGRAM, default, layout),
-        )
+        assertNull(store.storedCenter(MonitorAnalysisPanelID.WAVEFORM))
+        assertEquals(NormalizedPanelCenter(0.45f, 0.5f), store.storedCenter(MonitorAnalysisPanelID.HISTOGRAM))
     }
 
     @Test
-    fun `scope centres move once into the shared assist state and the false colour key stays`() {
+    fun `panel centres move once into the shared assist state`() {
         val current = TestSharedPreferences()
         val legacyScopes = TestSharedPreferences()
         current.edit()
@@ -516,24 +437,58 @@ class MonitorAnalysisPanelPlacementTest {
                 storeCenter(MonitorAssistTool.HISTO, MonitorScopeStoredCenter(0.5, 0.5))
             }
 
-        store.moveScopeCentres(into = assist)
+        store.movePanelCentres(into = assist)
 
         assertEquals(MonitorScopeStoredCenter(0.25, 0.75), assist.centerFor(MonitorAssistTool.WAVE, portrait = false))
         assertNull(assist.centerFor(MonitorAssistTool.WAVE, portrait = true))
         assertEquals(MonitorScopeStoredCenter(0.125, 0.625), assist.centerFor(MonitorAssistTool.LIGHTS, portrait = false))
         // A centre the shared state already holds wins.
         assertEquals(MonitorScopeStoredCenter(0.5, 0.5), assist.centerFor(MonitorAssistTool.HISTO, portrait = false))
-        ScopeKind.entries.forEach { assertNull(store.storedCenter(it.monitorAnalysisPanelID())) }
+        // The false-colour key had one centre for landscape and portrait fill.
+        assertEquals(MonitorScopeStoredCenter(0.5, 0.25), assist.centerFor(MonitorAssistTool.FALSE, portrait = false))
+        assertEquals(MonitorScopeStoredCenter(0.5, 0.25), assist.centerFor(MonitorAssistTool.FALSE, portrait = true))
+        MonitorAnalysisPanelID.entries.forEach { assertNull(store.storedCenter(it)) }
         assertFalse(legacyScopes.contains("lights.centerX"))
-        assertEquals(
-            NormalizedPanelCenter(0.5f, 0.25f),
-            store.storedCenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE),
-        )
 
         // A later launch finds nothing left to move.
         assist.storeCenter(MonitorAssistTool.WAVE, MonitorScopeStoredCenter(0.375, 0.375))
-        store.moveScopeCentres(into = assist)
+        assist.storeCenter(MonitorAssistTool.FALSE, MonitorScopeStoredCenter(0.75, 0.75))
+        store.movePanelCentres(into = assist)
         assertEquals(MonitorScopeStoredCenter(0.375, 0.375), assist.centerFor(MonitorAssistTool.WAVE, portrait = false))
+        assertEquals(MonitorScopeStoredCenter(0.75, 0.75), assist.centerFor(MonitorAssistTool.FALSE, portrait = false))
+    }
+
+    @Test
+    fun `the live audio meter centre moves once into both shared slots`() {
+        val preferences = TestSharedPreferences()
+        preferences.edit().putFloat("audio.centerX", 0.9f).putFloat("audio.centerY", 0.8f).apply()
+        val stored = StoredPanelCenter(preferences, "audio")
+        val assist = MonitorAssistState()
+
+        stored.moveAudioCentre(into = assist)
+
+        val expected = MonitorScopeStoredCenter(0.9f.toDouble(), 0.8f.toDouble())
+        assertEquals(expected, assist.audioCenterFor(portrait = false))
+        assertEquals(expected, assist.audioCenterFor(portrait = true))
+        assertNull(stored.load())
+        assertFalse(preferences.contains("audio.centerX"))
+    }
+
+    @Test
+    fun `a stored panel centre keeps its file keys and drops a partial or non finite pair`() {
+        val preferences = TestSharedPreferences()
+        val stored = StoredPanelCenter(preferences, "fcref")
+        assertNull(stored.load())
+
+        stored.save(MonitorScopeStoredCenter(0.25, 1.5))
+        assertEquals(0.25f, preferences.getFloat("fcref.centerX", Float.NaN))
+        assertEquals(1f, preferences.getFloat("fcref.centerY", Float.NaN))
+        assertEquals(MonitorScopeStoredCenter(0.25, 1.0), stored.load())
+
+        preferences.edit().remove("fcref.centerY").apply()
+        assertNull(stored.load())
+        preferences.edit().putFloat("fcref.centerY", Float.NaN).apply()
+        assertNull(stored.load())
     }
 
     @Test
@@ -624,12 +579,6 @@ class MonitorAnalysisPanelPlacementTest {
             record = MonitorRect(160f, 680f, 80f, 90f),
             media = MonitorRect(240f, 680f, 80f, 90f),
             settings = MonitorRect(320f, 680f, 80f, 90f),
-        )
-
-    private fun testLayout(): MonitorAnalysisPanelLayout =
-        MonitorAnalysisPanelLayout(
-            viewport = MonitorRect(0f, 0f, 400f, 300f),
-            safeBounds = MonitorRect(20f, 10f, 360f, 270f),
         )
 
     private companion object {

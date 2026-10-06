@@ -304,7 +304,7 @@ class NikonOperatorSettingsComposeTest {
         val properties = session.cameraProperties.value
         val input = ExposureAssistCameraInput(codec = properties.codec, iso = properties.iso, baseIso = properties.baseIso)
         assertTrue("Actual numeric page requires the packaged Swift core", SwiftCore.isAvailable)
-        assertNotNull(zebraEditorValue(input, FeedZebraUnit.IRE, zebra()))
+        assertNotNull(zebraEditorValue(input, MonitorZebraUnit.IRE, zebra()))
         show(settings, MonitorSettingsTab.ASSIST, session, assists = assists)
         composeRule.onNodeWithTag("settings.zebra.threshold.Highlight", useUnmergedTree = true)
             .assertExists(composeRule.onRoot(useUnmergedTree = true).printToString())
@@ -325,12 +325,12 @@ class NikonOperatorSettingsComposeTest {
         }
         enterAndFinish("999")
         composeRule.runOnIdle {
-            assertEquals(zebraMonitorPercent(input, FeedZebraUnit.NATIVE, 255f),
+            assertEquals(zebraMonitorPercent(input, MonitorZebraUnit.NATIVE, 255f),
                 zebra())
         }
         enterAndFinish("128")
         composeRule.runOnIdle {
-            assertEquals(zebraMonitorPercent(input, FeedZebraUnit.NATIVE, 128f),
+            assertEquals(zebraMonitorPercent(input, MonitorZebraUnit.NATIVE, 128f),
                 zebra())
         }
         val retained = zebra()
@@ -344,7 +344,7 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNode(midtone and hasSetTextAction(), useUnmergedTree = true).assertIsFocused()
         composeRule.onNode(threshold and hasSetTextAction(), useUnmergedTree = true).assertDoesNotExist()
         composeRule.runOnIdle {
-            assertEquals(zebraMonitorPercent(input, FeedZebraUnit.NATIVE, 120f),
+            assertEquals(zebraMonitorPercent(input, MonitorZebraUnit.NATIVE, 120f),
                 zebra())
         }
         composeRule.onNode(midtone and hasSetTextAction(), useUnmergedTree = true).performImeAction()

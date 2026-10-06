@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -22,6 +21,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.monitorui.MonitorRect
+import com.opencapture.monitorui.MonitorScopeStoredCenter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -116,11 +116,9 @@ class MonitorAnalysisPanelComposeTest {
     }
 
     @Test
-    fun falseColorReferenceDirectDragUsesTheSameSafeNormalizedStore() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        clearPlacementStores(context)
-        val store = MonitorAnalysisPanelPlacementStore(context)
-        val placementRevision = mutableIntStateOf(0)
+    fun falseColorReferenceDragStoresANormalizedCentreInsideTheSafeBounds() {
+        val stored = mutableStateOf<MonitorScopeStoredCenter?>(null)
+        var reportedFrame: MonitorRect? = null
         val effectsState = LiveFeedEffectsPresentationState()
         effectsState.present(
             FeedFalseColorScale.LIMITS,
@@ -149,81 +147,38 @@ class MonitorAnalysisPanelComposeTest {
                     FalseColorReferenceOverlay(
                         effectsState = effectsState,
                         feed = viewport,
-                        viewport = viewport,
                         panelLayout = layout,
-                        placementStore = store,
-                        placementRevision = placementRevision.intValue,
+                        stored = stored.value,
+                        onStore = { stored.value = it },
                         hapticsEnabled = false,
+                        onPanelFrameChanged = { id, frame ->
+                            if (id == MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE) reportedFrame = frame
+                        },
                     )
                 }
             }
         }
-
+        val start = composeRule.runOnIdle { requireNotNull(reportedFrame) }
+        val density = ApplicationProvider.getApplicationContext<Context>().resources.displayMetrics.density
         composeRule
             .onNodeWithContentDescription("False color reference, movable panel")
             .performTouchInput {
                 down(center)
-                advanceEventTime(700)
+                advanceEventTime(16)
+                moveBy(Offset(-12f * density, -12f * density))
+                advanceEventTime(16)
                 moveBy(Offset(-1_000f, -1_000f))
-                advanceEventTime(50)
+                advanceEventTime(16)
                 up()
             }
 
         composeRule.runOnIdle {
-            val default =
-                controlSafeFalseColorReferenceDefaultFrame(
-                    feed = viewport,
-                    layout = layout,
-                )
-            assertEquals(
-                MonitorRect(40f, 20f, default.width, default.height),
-                store.resolve(
-                    MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
-                    default,
-                    layout,
-                ),
-            )
-        }
-
-        composeRule.runOnIdle {
-            store.recenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE)
-            placementRevision.intValue += 1
-        }
-        val density = context.resources.displayMetrics.density
-        composeRule
-            .onNodeWithContentDescription("False color reference, movable panel")
-            .performTouchInput {
-                down(center)
-                advanceEventTime(700)
-                moveBy(Offset(30f * density, 20f * density))
-                advanceEventTime(50)
-                up()
-            }
-        composeRule.runOnIdle {
-            val default =
-                controlSafeFalseColorReferenceDefaultFrame(
-                    feed = viewport,
-                    layout = layout,
-                )
-            assertEquals(
-                MonitorRect(72f, 128f, default.width, default.height),
-                store.resolve(
-                    MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
-                    default,
-                    layout,
-                ),
-            )
-        }
-        clearPlacementStores(context)
-    }
-
-    private fun clearPlacementStores(context: Context) {
-        listOf(
-            MonitorAnalysisPanelPlacementStore.STORE_NAME,
-            MonitorAnalysisPanelPlacementStore.LEGACY_SCOPE_STORE_NAME,
-            MonitorAnalysisPanelPlacementStore.LEGACY_FALSE_COLOR_STORE_NAME,
-        ).forEach { name ->
-            context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit()
+            val moved = requireNotNull(reportedFrame)
+            assertEquals(40f, moved.x, 0.5f)
+            assertTrue(moved.y >= 20f - 0.5f && moved.y < start.y)
+            val center = requireNotNull(stored.value)
+            assertEquals(moved.x + moved.width / 2f, center.xFraction.toFloat() * viewport.width, 0.5f)
+            assertEquals(moved.y + moved.height / 2f, center.yFraction.toFloat() * viewport.height, 0.5f)
         }
     }
 }
