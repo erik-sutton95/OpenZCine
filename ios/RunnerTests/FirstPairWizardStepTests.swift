@@ -1,3 +1,4 @@
+import MonitorPresentation
 import OpenCineApple
 import OpenZCineCore
 import Testing
@@ -45,11 +46,37 @@ struct FirstPairWizardStepTests {
         let steps = StartupWizardContent.preparationSteps(for: .usbC).joined(separator: " ")
         #expect(!steps.localizedCaseInsensitiveContains("iPhone"))
         let network = StartupWizardContent.networkSections(for: .usbC, tight: false)
-            .flatMap(\.steps).joined(separator: " ")
+            .flatMap(\.lines).joined(separator: " ")
         #expect(!network.localizedCaseInsensitiveContains("iPhone"))
         #expect(
             !StartupWizardContent.networkSubtitle(for: .usbC, tight: false)
                 .localizedCaseInsensitiveContains("iPhone"))
+    }
+
+    @Test("Discovery rows lead with the selection and name a camera's holder")
+    func discoveryRows() {
+        let free = DiscoveredCamera(ip: "192.168.1.44", name: "Z8_4005555", source: .bonjour)
+        let held = DiscoveredCamera(
+            ip: "192.168.1.45", name: "Z6_3001234", source: .heldByAnotherDevice,
+            heldByDeviceName: "Director's iPad")
+        let rows = StartupWizardContent.discoveryDevices([free, held], selectedID: free.id)
+        #expect(rows.map(\.id) == [free.id, held.id])
+        #expect(rows.map(\.name) == [free.displayName, held.displayName])
+        #expect(rows.map(\.isPrimary) == [true, false])
+        #expect(rows.map(\.subtitle) == ["Wi-Fi · nearby", "In use by Director's iPad"])
+        #expect(rows.allSatisfy { $0.signalBars == nil })
+    }
+
+    @Test("Discovery waiting copy follows the chosen path")
+    func discoveryWaitingCopy() {
+        let denied = StartupWizardContent.discoveryWaiting(
+            transport: .usbC, pairingMethod: .usbC, usbAuthorizationDenied: true)
+        #expect(denied.title == "USB camera access is off")
+        #expect(denied.hint.contains("Settings"))
+        let hotspot = StartupWizardContent.discoveryWaiting(
+            transport: .wiFi, pairingMethod: .phoneHotspot, usbAuthorizationDenied: true)
+        #expect(hotspot.title == "Waiting for the camera")
+        #expect(hotspot.hint == "Waiting for the camera to join this phone's hotspot.")
     }
 
     @Test("Phone Hotspot and USB-C keep five steps when permissions are shown")

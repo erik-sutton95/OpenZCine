@@ -279,13 +279,13 @@ struct StartupWizardPermissionsStep: View {
                 HStack(spacing: 8) {
                     Image(systemName: "lock.shield")
                         .font(.system(size: style.isTight ? 12 : 14, weight: .semibold))
-                        .foregroundStyle(StartupColors.accent)
+                        .foregroundStyle(MonitorTheme.accent)
                     Text("iOS permissions")
                         .font(
                             .system(
                                 size: style.isTight ? 10 : 11, weight: .semibold, design: .rounded)
                         )
-                        .foregroundStyle(StartupColors.muted)
+                        .foregroundStyle(MonitorTheme.muted)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, style.isTight ? 12 : 14)
@@ -296,7 +296,7 @@ struct StartupWizardPermissionsStep: View {
                     index, kind in
                     if index > 0 {
                         Rectangle()
-                            .fill(StartupColors.border.opacity(0.10))
+                            .fill(Color.white.opacity(0.10))
                             .frame(height: 1)
                             .padding(.leading, style.isTight ? 42 : 48)
                     }
@@ -310,11 +310,11 @@ struct StartupWizardPermissionsStep: View {
                 }
             }
             .background(
-                StartupColors.card, in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
+                MonitorTheme.surface, in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: MonitorTheme.radius)
-                    .stroke(StartupColors.border.opacity(0.12), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
             )
 
             if !coordinator.allRequiredGranted {
@@ -322,7 +322,7 @@ struct StartupWizardPermissionsStep: View {
                     .font(
                         .system(size: style.isTight ? 11 : 12, weight: .regular, design: .rounded)
                     )
-                    .foregroundStyle(StartupColors.dim)
+                    .foregroundStyle(MonitorTheme.faint)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -344,9 +344,9 @@ private struct StartupPermissionRow: View {
             HStack(alignment: .center, spacing: style.isTight ? 8 : 10) {
                 Image(systemName: kind.systemImage)
                     .font(.system(size: style.isTight ? 14 : 16, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
+                    .foregroundStyle(MonitorTheme.accent)
                     .frame(width: style.isTight ? 30 : 34, height: style.isTight ? 30 : 34)
-                    .background(StartupColors.accent.opacity(0.14), in: Circle())
+                    .background(MonitorTheme.accent.opacity(0.14), in: Circle())
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(kind.title)
@@ -355,7 +355,7 @@ private struct StartupPermissionRow: View {
                                 size: style.checklistFontSize + 2, weight: .semibold,
                                 design: .rounded)
                         )
-                        .foregroundStyle(StartupColors.ink)
+                        .foregroundStyle(MonitorTheme.text)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(kind.detail)
                         .font(
@@ -363,7 +363,7 @@ private struct StartupPermissionRow: View {
                                 size: style.checklistDetailFontSize + 1, weight: .regular,
                                 design: .rounded)
                         )
-                        .foregroundStyle(StartupColors.muted)
+                        .foregroundStyle(MonitorTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -382,21 +382,23 @@ private struct StartupPermissionRow: View {
         switch state {
         case .granted:
             pill(
-                text: "Allowed", systemImage: "checkmark", fill: StartupColors.ready.opacity(0.16),
-                stroke: StartupColors.ready.opacity(0.5), textColor: StartupColors.ready)
+                text: "Allowed", systemImage: "checkmark",
+                fill: MonitorTheme.linkHealthColor(.stable).opacity(0.16),
+                stroke: MonitorTheme.linkHealthColor(.stable).opacity(0.5),
+                textColor: MonitorTheme.linkHealthColor(.stable))
         case .denied:
             pill(
                 text: "Settings", systemImage: "gearshape.fill",
-                fill: StartupColors.control.opacity(0.6),
-                stroke: StartupColors.border.opacity(0.12), textColor: StartupColors.muted)
+                fill: MonitorTheme.raised.opacity(0.6),
+                stroke: Color.white.opacity(0.12), textColor: MonitorTheme.muted)
         case .requested:
             pill(
-                text: "Requested", systemImage: nil, fill: StartupColors.control.opacity(0.6),
-                stroke: StartupColors.border.opacity(0.12), textColor: StartupColors.muted)
+                text: "Requested", systemImage: nil, fill: MonitorTheme.raised.opacity(0.6),
+                stroke: Color.white.opacity(0.12), textColor: MonitorTheme.muted)
         case .notDetermined:
             pill(
-                text: "Allow", systemImage: nil, fill: StartupColors.accent,
-                stroke: .clear, textColor: StartupColors.darkText)
+                text: "Allow", systemImage: nil, fill: MonitorTheme.accent,
+                stroke: .clear, textColor: MonitorTheme.onAccent)
         }
     }
 
