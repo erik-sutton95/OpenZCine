@@ -16,11 +16,11 @@ enum LadderControl: Hashable, Sendable {
 
 extension CameraPicker {
     /// Pickers that draw on `LadderSheet`. Quality stays on its own panel: two wheels compose one
-    /// label, and the NEF chips write a different control.
+    /// label, and the NEF chips write a different control. Each audio command tile is one tab.
     var usesLadderSheet: Bool {
         switch self {
         case .iso, .shutter, .iris, .whiteBalance, .focus, .resolution, .codec,
-            .stillMode, .stillDrive, .stillMeter, .stillSize, .stillPicture:
+            .stillMode, .stillDrive, .stillMeter, .stillSize, .stillPicture, .audio:
             true
         default:
             false
@@ -28,7 +28,7 @@ extension CameraPicker {
     }
 }
 
-/// Host for one video picker on `LadderSheet`. Seeds descriptor lists on appear, follows a
+/// Host for one capture picker on `LadderSheet`. Seeds descriptor lists on appear, follows a
 /// camera circuit change by rebuilding, and routes each write through the existing model helpers.
 struct LadderPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
@@ -39,6 +39,9 @@ struct LadderPickerPanel: View {
     @State private var codecRows: [PTPCameraCodecFamily] = []
     @State private var generation = 0
     @State private var adoptedCircuit: Int?
+    /// Audio mode for this opening. `seed` clears `pickerInitialMode`, and the one tab has to
+    /// survive that clear. The first body reads the seed directly so the sheet never starts as five.
+    @State private var audioTab: Int?
 
     var body: some View {
         LadderSheet(
@@ -83,11 +86,15 @@ struct LadderPickerPanel: View {
     }
 
     private var presentation: LadderSheetPresentation<LadderControl> {
-        LadderSheetPresentation(
-            title: picker.valueLabel,
-            subtitle: model.pickerSubtitle(for: picker),
-            tabs: modes.enumerated().map { tab($1, index: $0) },
-            initialTab: initialTab,
+        let entries = modeEntries
+        let singleAudio = picker == .audio && entries.count == 1
+        return LadderSheetPresentation(
+            title: singleAudio ? entries[0].mode.title : picker.valueLabel,
+            subtitle: singleAudio
+                ? model.pickerModeValue(picker, mode: entries[0].index)
+                : model.pickerSubtitle(for: picker),
+            tabs: entries.map { tab($0.mode, index: $0.index) },
+            initialTab: singleAudio ? 0 : initialTab,
             lock: sheetLock,
             lockBanner: banner)
     }
@@ -96,6 +103,19 @@ struct LadderPickerPanel: View {
         let listed = model.pickerModes(for: picker)
         if !listed.isEmpty { return listed }
         return [PickerMode(title: picker.valueLabel, options: picker.options)]
+    }
+
+    /// One command tile is one tab. The key stays the real audio mode, not the array offset.
+    private var modeEntries: [(index: Int, mode: PickerMode)] {
+        if picker == .audio, let only = heldAudioTab, modes.indices.contains(only) {
+            return [(only, modes[only])]
+        }
+        return modes.enumerated().map { ($0.offset, $0.element) }
+    }
+
+    private var heldAudioTab: Int? {
+        guard picker == .audio else { return nil }
+        return audioTab ?? model.pickerInitialMode
     }
 
     private var initialTab: Int {
@@ -196,7 +216,7 @@ struct LadderPickerPanel: View {
             return (LadderWrite(key: .autoISO, value: autoOn ? "On" : "Off"), !autoOn)
         case .shutter:
             return (LadderWrite(key: .shutterMode, value: index == 1 ? "Speed" : "Angle"), false)
-        case .focus, .stillMode, .stillDrive, .stillSize:
+        case .focus, .stillMode, .stillDrive, .stillSize, .audio:
             return (nil, false)
         case .whiteBalance where mode.title == "Tint":
             return (nil, false)
@@ -274,6 +294,14 @@ struct LadderPickerPanel: View {
             return .exposureMeteringMode
         case .stillPicture:
             return .activePicCtrlItem
+        case .audio:
+            switch index {
+            case 1: return .audioInputSelection
+            case 2: return .movWindNoiseReduction
+            case 3: return .movieAttenuator
+            case 4: return .movie32BitFloatAudioRecording
+            default: return nil
+            }
         default:
             return nil
         }
@@ -335,7 +363,12 @@ struct LadderPickerPanel: View {
         if picker == .codec { codecRows = model.codecFamilies }
         if picker == .whiteBalance { model.refreshWhiteBalanceTintFromCamera() }
         if adoptedCircuit == nil { adoptedCircuit = circuitIndex }
-        if picker != .iso, picker != .shutter, picker != .whiteBalance {
+        if picker == .audio, audioTab == nil {
+            audioTab = model.pickerInitialMode
+        }
+        // Keep the audio seed until it is stored. Clearing it first would rebuild as five tabs.
+        let audioSeedPending = picker == .audio && audioTab == nil
+        if picker != .iso, picker != .shutter, picker != .whiteBalance, !audioSeedPending {
             model.pickerInitialMode = nil
         }
     }
