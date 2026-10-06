@@ -214,7 +214,14 @@ bodies and reconnect them silently on plug-in.
 
 ### ADR-006 — Bug-Report Paths and Relay
 
-Bug reports are intentionally a platform-shell concern, not a portable-core feature. **Report a
+Android (October 2026) uses OpenCine's shared reporting instead: **Report a Problem** is the
+`ManualProblemReport` form and sends to Sentry, and optional automatic error reports (a first-run
+question, off by default) are `ReliabilityReporting`. The Sentry and OkHttp adapters are per-app
+copies because OpenCine takes no third-party package. Uploads wait while a camera session is held
+or the process is bound to the camera's Wi-Fi. The relay design below stays iOS's until it moves
+to the same owner.
+
+Bug reports are intentionally a platform-shell concern, not a portable-core feature. On iOS, **Report a
 Problem** offers two public GitHub-issue paths: an anonymous in-app form and the signed-in
 [GitHub bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml). The anonymous
 form sends the report text the operator supplies plus a small, closed set of app/platform fields.

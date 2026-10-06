@@ -76,8 +76,8 @@ behavior, or setup, update the matching handbook page in the same PR. Preview it
 
 ## Reporting bugs & requesting features
 
-- **Bugs only** — In **Operator Setup &gt; System &gt; Report a Problem**, choose one of two public
-  GitHub-issue paths:
+- **Bugs only** — On Android, **Operator Setup &gt; System &gt; Report a Problem** sends a private
+  report to OpenCapture through Sentry. On iOS, choose one of two public GitHub-issue paths:
   - **Anonymous in-app report** — No GitHub account. You may opt into a privacy-filtered app
     activity log or user-selected screenshots; both become public with the issue. Screenshot file
     metadata is removed, but visible content can still identify someone. It cannot receive a
