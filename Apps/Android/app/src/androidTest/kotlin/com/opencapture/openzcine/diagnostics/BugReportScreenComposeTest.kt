@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.diagnostics
 
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -7,7 +8,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.AnnotatedString
 import com.opencapture.openzcine.OpenZCineTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -30,14 +32,8 @@ class BugReportScreenComposeTest {
             }
         }
 
-        compose
-            .onNodeWithContentDescription("Bug report summary")
-            .performScrollTo()
-            .performTextInput("Live view freezes")
-        compose
-            .onNodeWithContentDescription("What happened")
-            .performScrollTo()
-            .performTextInput("Preview stopped after reconnecting.")
+        enterText("Bug report summary", "Live view freezes")
+        enterText("What happened", "Preview stopped after reconnecting.")
         compose.waitForIdle()
         compose
             .onNodeWithContentDescription("Send anonymous bug report")
@@ -59,10 +55,7 @@ class BugReportScreenComposeTest {
             )
         }
 
-        compose
-            .onNodeWithContentDescription("Bug report summary")
-            .performScrollTo()
-            .performTextInput(" again")
+        enterText("Bug report summary", " again")
         compose.waitForIdle()
         compose
             .onNodeWithContentDescription("Send anonymous bug report")
@@ -91,14 +84,8 @@ class BugReportScreenComposeTest {
             }
         }
 
-        compose
-            .onNodeWithContentDescription("Bug report summary")
-            .performScrollTo()
-            .performTextInput("Live view freezes")
-        compose
-            .onNodeWithContentDescription("What happened")
-            .performScrollTo()
-            .performTextInput("Preview stopped after reconnecting.")
+        enterText("Bug report summary", "Live view freezes")
+        enterText("What happened", "Preview stopped after reconnecting.")
         compose
             .onNodeWithContentDescription("Include privacy-filtered app activity log")
             .performScrollTo()
@@ -155,14 +142,8 @@ class BugReportScreenComposeTest {
             }
         }
 
-        compose
-            .onNodeWithContentDescription("Bug report summary")
-            .performScrollTo()
-            .performTextInput("Live view freezes")
-        compose
-            .onNodeWithContentDescription("What happened")
-            .performScrollTo()
-            .performTextInput("Preview stopped after reconnecting.")
+        enterText("Bug report summary", "Live view freezes")
+        enterText("What happened", "Preview stopped after reconnecting.")
         compose.waitForIdle()
         compose
             .onNodeWithContentDescription("Send anonymous bug report")
@@ -200,14 +181,8 @@ class BugReportScreenComposeTest {
             }
         }
 
-        compose
-            .onNodeWithContentDescription("Bug report summary")
-            .performScrollTo()
-            .performTextInput("Live view freezes")
-        compose
-            .onNodeWithContentDescription("What happened")
-            .performScrollTo()
-            .performTextInput("Preview stopped after reconnecting.")
+        enterText("Bug report summary", "Live view freezes")
+        enterText("What happened", "Preview stopped after reconnecting.")
         compose.waitForIdle()
         compose
             .onNodeWithContentDescription("Send anonymous bug report")
@@ -223,6 +198,16 @@ class BugReportScreenComposeTest {
             .onNodeWithContentDescription("Bug report summary")
             .performScrollTo()
             .assertIsDisplayed()
+    }
+
+    // Text goes in through the field's own semantics action without focusing it, so no soft
+    // keyboard opens. The screen's imePadding moves Send while a keyboard animates, and Compose
+    // idling does not wait for that, so a tap right after typing could miss the button.
+    private fun enterText(field: String, text: String) {
+        compose
+            .onNodeWithContentDescription(field)
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString(text)) }
     }
 
     private class RecordingSubmitter(
