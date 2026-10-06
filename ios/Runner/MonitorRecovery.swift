@@ -63,7 +63,8 @@ struct MonitorRecoveryOverlay: View {
                         .foregroundStyle(LiveDesign.text)
                     Text(
                         SessionRecoveryCopy.detail(
-                            state, deviceName: model.connectionProgressDeviceName)
+                            state, deviceName: model.connectionProgressDeviceName,
+                            dropSuspect: .otherDeviceScanning)
                     )
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(LiveDesign.muted)
