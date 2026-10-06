@@ -17,7 +17,7 @@ storage and UI live in the shells.
 | Android app | `Apps/Android/app/` | Jetpack Compose shell, lifecycle, rendering, storage and platform adapters. |
 | Android session | OpenCine `Android/nikon` | Typed Kotlin interface between the app and the camera session, and its implementation. |
 | Wear OS | `Apps/Android/wear/`, `Apps/Android/wear-relay/` | Wear UI and the phone-mediated relay. |
-| Bug relay | `services/bug-relay/` | Cloudflare Worker behind the iOS anonymous Report a Problem path (Android reports go to Sentry). |
+| Bug relay | `services/bug-relay/` | Cloudflare Worker behind the earlier anonymous Report a Problem path; both apps now report through Sentry. |
 | Prototype | `reference/flutter-prototype/` | Archived Flutter reference. Not built in CI. |
 
 `Sources/OpenZCineCore` must never import SwiftUI, UIKit, AppKit, Android or

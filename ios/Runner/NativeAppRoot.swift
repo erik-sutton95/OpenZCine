@@ -11,6 +11,7 @@ import SwiftUI
 import UIKit
 import ZIPFoundation
 import os
+
 import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
@@ -970,7 +971,7 @@ final class NativeAppModel {
         updateBluetoothShutter()
         if old == .media, new != .media, activePanel != .media { closeMediaBrowse() }
     }
-    /// Root-owned presentation state for the report flow, so it survives a camera-AP internet hop.
+    /// Root-owned presentation state for the problem report sheet.
     var isBugReportPresented = false
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
     /// internet. Drives the download screen's "Switching networks…" state.
@@ -982,10 +983,6 @@ final class NativeAppModel {
     /// prevents transient activation changes during presentation from prompting an immediate
     /// camera-AP rejoin over the page the person just opened.
     @ObservationIgnored private var externalInternetLinkSawBackground = false
-    /// True while the root-owned anonymous/GitHub report flow is using the internet side of a
-    /// camera-AP hop. Unlike a browser handoff, ordinary foreground transitions must not end this
-    /// hop because screenshot picking can briefly move the app inactive while the form is open.
-    private(set) var bugReportInternetHandoffActive = false
     /// The selected destination shown while iOS leaves the camera AP and settles on an
     /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
     /// panel collapse with the camera session.
@@ -4446,6 +4443,8 @@ final class NativeAppModel {
             activePanel = nil
             liveFPS = SessionRecoveryCopy.heldFrameBadge
             sessionRecovery = state
+            // A painted state has no retry to wait out: its card shows at once.
+            sessionRecoveryCardGraceElapsed = true
         }
 
         /// Drives the entry point a physical detach reaches once the transport has closed and the
@@ -5575,12 +5574,6 @@ final class NativeAppModel {
     /// Leaves the camera AP only when needed and waits for a validated internet route before an
     /// external support, GitHub, or privacy link is opened.
     func prepareExternalInternetLinkHandoff() async -> Bool {
-        if bugReportInternetHandoffActive {
-            bugReportInternetHandoffActive = false
-            externalInternetLinkHandoffActive = true
-            externalInternetLinkSawBackground = false
-            return true
-        }
         guard isOnCameraAccessPoint else { return true }
         beginInternetHop(rehostActivePanel: false)
         guard await waitForInternetPath(timeoutSeconds: 30) else {
@@ -5589,20 +5582,6 @@ final class NativeAppModel {
         }
         externalInternetLinkHandoffActive = true
         externalInternetLinkSawBackground = false
-        return true
-    }
-
-    /// Leaves the camera AP for the in-app report flow without preserving or reopening Settings.
-    /// The report becomes the root-owned destination after internet reachability is confirmed.
-    func prepareBugReportInternetHandoff() async -> Bool {
-        if bugReportInternetHandoffActive { return true }
-        guard isOnCameraAccessPoint else { return true }
-        beginInternetHop(rehostActivePanel: false)
-        guard await waitForInternetPath(timeoutSeconds: 30) else {
-            endInternetHop()
-            return false
-        }
-        bugReportInternetHandoffActive = true
         return true
     }
 
@@ -5644,13 +5623,6 @@ final class NativeAppModel {
         else { return }
         externalInternetLinkHandoffActive = false
         externalInternetLinkSawBackground = false
-        endInternetHop()
-    }
-
-    /// Rejoins the camera when the in-app report flow finishes or is explicitly closed.
-    func resumeBugReportInternetHandoffIfNeeded() {
-        guard bugReportInternetHandoffActive else { return }
-        bugReportInternetHandoffActive = false
         endInternetHop()
     }
 
@@ -13297,6 +13269,8 @@ struct NativeAppRoot: View {
     @State private var model = NativeAppModel()
     @State private var deliveryCoordinator = MediaDeliveryCoordinator()
     @State private var showsLaunchSplash = true
+    @State private var showsReliabilityPrompt = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -13342,6 +13316,11 @@ struct NativeAppRoot: View {
             withAnimation(.easeOut(duration: LaunchSplashTiming.fadeOutDuration)) {
                 showsLaunchSplash = false
             }
+            if ReliabilityDiagnostics.reporting.isAvailable
+                && !ReliabilityDiagnostics.consent.hasDecision
+            {
+                showsReliabilityPrompt = true
+            }
         }
         // Root-level (not inside the LUT picker) so the cover survives the monitor collapsing
         // when the RED internet hop tears the camera session down mid-download.
@@ -13349,15 +13328,24 @@ struct NativeAppRoot: View {
             RedDownloadView { url in await model.importRedZip(from: url) }
                 .environment(model)
         }
-        .fullScreenCover(isPresented: bugReportPresented) {
-            BugReportFlowView(
-                onDismiss: {
-                    model.isBugReportPresented = false
-                    model.resumeBugReportInternetHandoffIfNeeded()
-                },
-                onBrowserHandoff: { model.isBugReportPresented = false }
-            )
-            .environment(model)
+        .sheet(isPresented: bugReportPresented) { ProblemReportView() }
+        .sheet(isPresented: $showsReliabilityPrompt) {
+            ReliabilityConsentPrompt { enabled in
+                ReliabilityDiagnostics.reporting.setConsent(enabled)
+                showsReliabilityPrompt = false
+            }
+        }
+        // A saved problem report sends once the gate allows it (off camera Wi-Fi, foreground).
+        .task {
+            while !Task.isCancelled {
+                ReliabilityDiagnostics.problemReporting.tick()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+        .onChange(of: scenePhase) { _, _ in ReliabilityDiagnostics.problemReporting.tick() }
+        // Nothing uploads while a camera session is live (the camera's own Wi-Fi has no route).
+        .onChange(of: model.isConnected, initial: true) { _, live in
+            ReliabilityDiagnostics.reporting.setCameraSessionActive(live)
         }
         .onChange(of: model.shell.cover) { old, new in
             model.noteShellCoverChange(from: old, to: new)

@@ -34,9 +34,9 @@ enum DemoHarness {
     static let forcedRedAvailability = value("ZC_DEMO_RED_BLOCKED")
     /// `ZC_DEMO_OPEN_BUG_REPORT=1` opens the bug-report route chooser for screenshot checks.
     static let openBugReport = flag("ZC_DEMO_OPEN_BUG_REPORT")
-    /// `ZC_DEMO_INTERNET_CONFIRM=support|report|feature` stages the camera-AP confirmation alert.
+    /// `ZC_DEMO_INTERNET_CONFIRM=support|feature` stages the camera-AP confirmation alert.
     static let internetHandoffConfirmation = value("ZC_DEMO_INTERNET_CONFIRM")
-    /// `ZC_DEMO_INTERNET_PROGRESS=support|report|feature` stages the route-waiting overlay.
+    /// `ZC_DEMO_INTERNET_PROGRESS=support|feature` stages the route-waiting overlay.
     static let internetHandoffProgress = value("ZC_DEMO_INTERNET_PROGRESS")
     /// `ZC_DEMO_CPU_FEED=1` forces the old `UIImageView` feed path back, for an A/B against the
     /// default GPU-native renderer. See `FeedRenderMode`.

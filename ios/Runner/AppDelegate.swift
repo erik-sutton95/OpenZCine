@@ -9,6 +9,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         AppDiagnostics.shared.start()
+        ReliabilityDiagnostics.reporting.install()
         // The camera transports live in OpenCineNikon; their milestones land in this app's
         // connection log and diagnostics journal, wired before any transport exists.
         PTPIPTransport.connectionLog = { logConnection($0) }
