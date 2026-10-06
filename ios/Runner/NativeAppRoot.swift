@@ -12,7 +12,9 @@ import UIKit
 import ZIPFoundation
 import os
 import struct MonitorPresentation.MonitorEdgeInsets
+import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
+import enum MonitorPresentation.MonitorThumbnailSize
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -248,25 +250,25 @@ enum PreferencesStore {
         UserDefaults.standard.set(enabled, forKey: mfScrubEnabledKey)
     }
 
-    static func loadMediaThumbnailSize() -> MediaThumbnailSize {
+    static func loadMediaThumbnailSize() -> MonitorThumbnailSize {
         guard let raw = UserDefaults.standard.string(forKey: mediaThumbnailSizeKey),
-            let size = MediaThumbnailSize(rawValue: raw)
+            let size = MonitorThumbnailSize(rawValue: raw)
         else { return .medium }
         return size
     }
 
-    static func saveMediaThumbnailSize(_ size: MediaThumbnailSize) {
+    static func saveMediaThumbnailSize(_ size: MonitorThumbnailSize) {
         UserDefaults.standard.set(size.rawValue, forKey: mediaThumbnailSizeKey)
     }
 
-    static func loadMediaBrowserLayout() -> MediaBrowserLayout {
+    static func loadMediaBrowserLayout() -> MonitorMediaLayout {
         guard let raw = UserDefaults.standard.string(forKey: mediaBrowserLayoutKey),
-            let layout = MediaBrowserLayout(rawValue: raw)
+            let layout = MonitorMediaLayout(rawValue: raw)
         else { return .grid }
         return layout
     }
 
-    static func saveMediaBrowserLayout(_ layout: MediaBrowserLayout) {
+    static func saveMediaBrowserLayout(_ layout: MonitorMediaLayout) {
         UserDefaults.standard.set(layout.rawValue, forKey: mediaBrowserLayoutKey)
     }
 
@@ -2579,10 +2581,10 @@ final class NativeAppModel {
     var mediaSortOrder: MediaSortOrder = PreferencesStore.loadMediaSortOrder() {
         didSet { PreferencesStore.saveMediaSortOrder(mediaSortOrder) }
     }
-    var mediaThumbnailSize: MediaThumbnailSize = PreferencesStore.loadMediaThumbnailSize() {
+    var mediaThumbnailSize: MonitorThumbnailSize = PreferencesStore.loadMediaThumbnailSize() {
         didSet { PreferencesStore.saveMediaThumbnailSize(mediaThumbnailSize) }
     }
-    var mediaBrowserLayout: MediaBrowserLayout = PreferencesStore.loadMediaBrowserLayout() {
+    var mediaBrowserLayout: MonitorMediaLayout = PreferencesStore.loadMediaBrowserLayout() {
         didSet { PreferencesStore.saveMediaBrowserLayout(mediaBrowserLayout) }
     }
     /// Per-slot card capacity from the last `refreshMediaStorageSlots` pass.
@@ -13525,6 +13527,14 @@ extension NativeAppModel {
     /// Unfiltered source pairing remains separate from visible grid representatives.
     func rawSibling(of clip: MediaClip) -> MediaClip? {
         NikonAppGalleryProjection.rawSibling(of: clip, in: mediaClips)
+    }
+    /// `rawSibling(of:)` for a whole grid in one pass: the ids that have a RAW companion.
+    func rawPairedClipIDs(_ clips: [MediaClip]) -> Set<String> {
+        NikonAppGalleryProjection.rawPairedIDs(clips, in: mediaClips)
+    }
+    /// Grid count per category under the current filters, from the last grid projection.
+    func mediaCategoryCount(_ category: MediaCategoryTab) -> Int {
+        mediaProjectionSnapshot?.count(in: category) ?? 0
     }
 
     /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.

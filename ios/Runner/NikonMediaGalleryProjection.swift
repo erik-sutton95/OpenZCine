@@ -10,6 +10,8 @@ struct NikonAppGalleryProjection {
     let policy: NikonAppleGalleryProjectionPolicy
     private let rowsByID: [MediaAssetID: MediaClip]
     private let idsByLegacy: [String: MediaAssetID]
+    private let ids: [MediaAssetID]
+    private let request: MonitorMediaProjectionRequest
     init(
         clips: [MediaClip], actualIDs: [String: MediaAssetID], category: MediaCategoryTab,
         sort: MediaSortOrder, formats: Set<MediaFormatChip>,
@@ -28,16 +30,27 @@ struct NikonAppGalleryProjection {
         rowsByID = Dictionary(zip(input.map(\.id), clips), uniquingKeysWith: { first, _ in first })
         idsByLegacy = Dictionary(
             input.map { ($0.legacyID, $0.id) }, uniquingKeysWith: { first, _ in first })
-        result = MonitorMediaProjection.project(
-            input.map(\.id),
-            request: .init(
-                category: Self.category(category), sort: Self.sort(sort),
-                formats: Set(formats.map(\.rawValue)),
-                resolutions: Set(resolutions.map(\.rawValue)),
-                photoSizes: Set(photoSizes.map(\.rawValue)), dateWindow: dateWindow?.rawValue,
-                storage: storage.map(String.init), requireLocal: requireLocal), policy: policy)
+        ids = input.map(\.id)
+        request = .init(
+            category: Self.category(category), sort: Self.sort(sort),
+            formats: Set(formats.map(\.rawValue)),
+            resolutions: Set(resolutions.map(\.rawValue)),
+            photoSizes: Set(photoSizes.map(\.rawValue)), dateWindow: dateWindow?.rawValue,
+            storage: storage.map(String.init), requireLocal: requireLocal)
+        result = MonitorMediaProjection.project(ids, request: request, policy: policy)
     }
     var gridClips: [MediaClip] { result.gridIDs.compactMap { rowsByID[$0] } }
+    /// Grid count of `category` under the same filters (the Media navigation counts).
+    func count(in category: MediaCategoryTab) -> Int {
+        let category = Self.category(category)
+        guard category != request.category else { return result.gridIDs.count }
+        let other = MonitorMediaProjectionRequest(
+            category: category, sort: request.sort, formats: request.formats,
+            resolutions: request.resolutions, photoSizes: request.photoSizes,
+            dateWindow: request.dateWindow, storage: request.storage,
+            requireLocal: request.requireLocal)
+        return MonitorMediaProjection.project(ids, request: other, policy: policy).gridIDs.count
+    }
     var filterOptions: NikonMediaFilterOptions {
         .init(
             formats: result.offered.formats.compactMap(MediaFormatChip.init(rawValue:)),
@@ -102,6 +115,16 @@ struct NikonAppGalleryProjection {
             items: items, now: Date(), calendar: .current)
         guard let sibling = policy.rawCompanion(of: sourceID(clip)) else { return nil }
         return zip(items, clips).first { $0.0.id == sibling }?.1
+    }
+    /// `rawSibling(of:in:)` for every clip of `clips` over one policy: the ids that have one.
+    static func rawPairedIDs(_ clips: [MediaClip], in all: [MediaClip]) -> Set<String> {
+        let items = all.map { input($0) }
+        let known = Set(items.map(\.id))
+        let policy = NikonAppleGalleryProjectionPolicy(
+            items: items, now: Date(), calendar: .current)
+        return Set(
+            clips.filter { policy.rawCompanion(of: sourceID($0)).map(known.contains) ?? false }
+                .map(\.id))
     }
     private static func input(
         _ clip: MediaClip, actualID: MediaAssetID? = nil,
