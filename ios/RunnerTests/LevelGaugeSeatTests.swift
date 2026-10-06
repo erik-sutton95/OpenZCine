@@ -1,4 +1,5 @@
 import CoreGraphics
+import MonitorUI
 import Testing
 
 @testable import Runner
@@ -6,27 +7,41 @@ import Testing
 /// The level gauge is a HUD instrument: its tracks seat against the VISIBLE feed area (content
 /// rect ∩ on-screen bounds), unlike the framing aids that stay pixel-exact with the content even
 /// when portrait fill or de-squeeze widen it past the screen.
+@MainActor
 @Suite("Level gauge seats")
 struct LevelGaugeSeatTests {
+
+    private static func frames(
+        feed: CGRect, visibleBounds: CGRect, isPortrait: Bool, bottomChrome: CGFloat
+    ) -> (roll: CGRect, tilt: CGRect) {
+        MonitorLevelGeometry.frames(
+            feed: feed,
+            viewport: FeedLevelView.gaugeViewport(visibleBounds, bottomChrome: bottomChrome),
+            portrait: isPortrait)
+    }
 
     @Test("Landscape: fully visible feed seats against the feed itself")
     func landscapeFullyVisible() {
         let feed = CGRect(x: 40, y: 0, width: 800, height: 390)
         let screen = CGRect(x: 0, y: 0, width: 874, height: 402)
-        let seats = LevelGaugeView.seats(
+        let seats = Self.frames(
             feed: feed, visibleBounds: screen, isPortrait: false, bottomChrome: 0)
-        #expect(seats.roll == CGPoint(x: feed.midX, y: feed.maxY - 104))
-        #expect(seats.pitch == CGPoint(x: feed.maxX - 44, y: feed.midY))
+        #expect(seats.roll.midX == feed.midX)
+        #expect(seats.roll.midY == feed.maxY - MonitorLevelGeometry.rollLiftLandscape)
+        #expect(seats.tilt.midY == feed.midY)
+        #expect(feed.contains(seats.roll) && feed.contains(seats.tilt))
     }
 
     @Test("Portrait fit: feed band fully visible, roll hugs the band bottom")
     func portraitFit() {
         let feed = CGRect(x: 0, y: 0, width: 402, height: 226)
         let bounds = CGRect(x: 0, y: 0, width: 402, height: 226)
-        let seats = LevelGaugeView.seats(
+        let seats = Self.frames(
             feed: feed, visibleBounds: bounds, isPortrait: true, bottomChrome: 0)
-        #expect(seats.roll == CGPoint(x: feed.midX, y: feed.maxY - 30))
-        #expect(seats.pitch == CGPoint(x: feed.maxX - 44, y: feed.midY))
+        #expect(seats.roll.midX == feed.midX)
+        #expect(seats.roll.midY == feed.maxY - MonitorLevelGeometry.rollLiftPortrait)
+        #expect(seats.tilt.midY == feed.midY)
+        #expect(seats.tilt.maxX <= feed.maxX)
     }
 
     @Test("Portrait fill: over-widened content clamps both tracks to the visible rect")
@@ -35,15 +50,16 @@ struct LevelGaugeSeatTests {
         // centred in it (overlay-local coordinates).
         let feed = CGRect(x: 0, y: 0, width: 1000, height: 560)
         let visible = CGRect(x: 299, y: 0, width: 402, height: 560)
-        let seats = LevelGaugeView.seats(
+        let seats = Self.frames(
             feed: feed, visibleBounds: visible, isPortrait: true, bottomChrome: 64)
         // Pitch track lands inside the visible window, not at the clipped-away content edge.
-        #expect(seats.pitch.x == visible.maxX - 44)
-        #expect(seats.pitch.y == visible.midY)
+        #expect(seats.tilt.minX >= visible.minX && seats.tilt.maxX <= visible.maxX)
         // Roll track centres on the visible window and clears the fill capture strip (64) plus
-        // the fit-mode bottom hug (30).
-        #expect(seats.roll.x == visible.midX)
-        #expect(seats.roll.y == visible.maxY - 94)
+        // the portrait bottom hug.
+        #expect(seats.roll.midX == visible.midX)
+        #expect(seats.roll.midY == visible.maxY - 64 - MonitorLevelGeometry.rollLiftPortrait)
+        #expect(seats.roll.maxY <= visible.maxY - 64)
+        #expect(seats.roll.minX >= visible.minX && seats.roll.maxX <= visible.maxX)
     }
 
     @Test("Portrait fill + de-squeeze: seats stay inside both the image and the screen")
@@ -52,21 +68,23 @@ struct LevelGaugeSeatTests {
         // wider than the screen; the seat is the intersection of the two.
         let desqueezed = CGRect(x: 125, y: 0, width: 750, height: 560)
         let visible = CGRect(x: 299, y: 0, width: 402, height: 560)
-        let seats = LevelGaugeView.seats(
+        let seats = Self.frames(
             feed: desqueezed, visibleBounds: visible, isPortrait: true, bottomChrome: 64)
-        #expect(seats.pitch.x <= min(desqueezed.maxX, visible.maxX) - 44)
-        #expect(seats.pitch.x == visible.maxX - 44)
-        #expect(seats.roll.x == visible.midX)
+        #expect(seats.tilt.maxX <= min(desqueezed.maxX, visible.maxX))
+        #expect(seats.tilt.minX >= max(desqueezed.minX, visible.minX))
+        #expect(seats.roll.midX == visible.midX)
     }
 
     @Test("Degenerate visible bounds fall back to the feed rect")
     func degenerateVisibleBounds() {
         let feed = CGRect(x: 0, y: 0, width: 800, height: 450)
         let disjoint = CGRect(x: 2000, y: 2000, width: 10, height: 10)
-        let seats = LevelGaugeView.seats(
+        let seats = Self.frames(
             feed: feed, visibleBounds: disjoint, isPortrait: false, bottomChrome: 0)
-        #expect(seats.roll == CGPoint(x: feed.midX, y: feed.maxY - 104))
-        #expect(seats.pitch == CGPoint(x: feed.maxX - 44, y: feed.midY))
+        #expect(seats.roll.midX == feed.midX)
+        #expect(seats.roll.midY == feed.maxY - MonitorLevelGeometry.rollLiftLandscape)
+        #expect(seats.tilt.midY == feed.midY)
+        #expect(feed.contains(seats.roll) && feed.contains(seats.tilt))
     }
 
     @Test("Visible bounds: screen intersection recovers the clip window in overlay-local space")
