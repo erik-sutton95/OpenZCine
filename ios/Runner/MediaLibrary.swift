@@ -121,15 +121,6 @@ enum MediaCategoryTab: String, CaseIterable, Identifiable, Sendable {
     case favorites = "Favorites"
 
     var id: String { rawValue }
-
-    var systemImage: String {
-        switch self {
-        case .all: "square.grid.2x2"
-        case .videos: "film.stack"
-        case .photos: "photo.on.rectangle.angled"
-        case .favorites: "star"
-        }
-    }
 }
 
 /// Primary layout for the Media browser main column.
@@ -138,13 +129,6 @@ enum MediaBrowserLayout: String, CaseIterable, Codable, Sendable, Identifiable {
     case list
 
     var id: String { rawValue }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .grid: "List view"
-        case .list: "Grid view"
-        }
-    }
 }
 
 /// Persisted clip ordering for the Media browser grid.

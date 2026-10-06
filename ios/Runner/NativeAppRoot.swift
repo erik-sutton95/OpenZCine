@@ -13527,13 +13527,6 @@ extension NativeAppModel {
         NikonAppGalleryProjection.rawSibling(of: clip, in: mediaClips)
     }
 
-    /// Short transport label for the Media browser status readout.
-    var mediaBrowserTransportLabel: String {
-        if isDemoSession { return "DEMO" }
-        guard isConnected else { return "OFFLINE" }
-        return "WIFI"
-    }
-
     /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.
     var mediaActiveFilterCount: Int {
         MediaBrowserFilterMetrics.activeCount(
