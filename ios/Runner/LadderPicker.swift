@@ -15,11 +15,12 @@ enum LadderControl: Hashable, Sendable {
 }
 
 extension CameraPicker {
-    /// Video pickers that draw on `LadderSheet`. Photo pickers stay on `PickerPanel` until they
-    /// move across, and Quality stays on its own panel.
-    var usesVideoLadder: Bool {
+    /// Pickers that draw on `LadderSheet`. Quality stays on its own panel: two wheels compose one
+    /// label, and the NEF chips write a different control. Each audio command tile is one tab.
+    var usesLadderSheet: Bool {
         switch self {
-        case .iso, .shutter, .iris, .whiteBalance, .focus, .resolution, .codec:
+        case .iso, .shutter, .iris, .whiteBalance, .focus, .resolution, .codec,
+            .stillMode, .stillDrive, .stillMeter, .stillSize, .stillPicture, .audio:
             true
         default:
             false
@@ -27,7 +28,7 @@ extension CameraPicker {
     }
 }
 
-/// Host for one video picker on `LadderSheet`. Seeds descriptor lists on appear, follows a
+/// Host for one capture picker on `LadderSheet`. Seeds descriptor lists on appear, follows a
 /// camera circuit change by rebuilding, and routes each write through the existing model helpers.
 struct LadderPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
@@ -38,6 +39,9 @@ struct LadderPickerPanel: View {
     @State private var codecRows: [PTPCameraCodecFamily] = []
     @State private var generation = 0
     @State private var adoptedCircuit: Int?
+    /// Audio mode for this opening. `seed` clears `pickerInitialMode`, and the one tab has to
+    /// survive that clear. The first body reads the seed directly so the sheet never starts as five.
+    @State private var audioTab: Int?
 
     var body: some View {
         LadderSheet(
@@ -55,9 +59,12 @@ struct LadderPickerPanel: View {
             tintHelp: picker == .whiteBalance
                 ? "Steps of 0.5 (A-B) and 0.25 (G-M), like the camera body. Double-tap the pad to reset."
                 : nil
-        ) { _ in
+        ) { tab in
             if picker == .focus {
                 FocusDialFooter()
+            }
+            if picker == .stillDrive, case .value(let mode) = tab.key, mode == 1 || mode == 2 {
+                TimerShotsFooter(mode: mode)
             }
         }
         .environment(\.ladderOperatorHaptics, model.preferences.hapticsEnabled)
@@ -79,11 +86,15 @@ struct LadderPickerPanel: View {
     }
 
     private var presentation: LadderSheetPresentation<LadderControl> {
-        LadderSheetPresentation(
-            title: picker.valueLabel,
-            subtitle: model.pickerSubtitle(for: picker),
-            tabs: modes.enumerated().map { tab($1, index: $0) },
-            initialTab: initialTab,
+        let entries = modeEntries
+        let singleAudio = picker == .audio && entries.count == 1
+        return LadderSheetPresentation(
+            title: singleAudio ? entries[0].mode.title : picker.valueLabel,
+            subtitle: singleAudio
+                ? model.pickerModeValue(picker, mode: entries[0].index)
+                : model.pickerSubtitle(for: picker),
+            tabs: entries.map { tab($0.mode, index: $0.index) },
+            initialTab: singleAudio ? 0 : initialTab,
             lock: sheetLock,
             lockBanner: banner)
     }
@@ -92,6 +103,19 @@ struct LadderPickerPanel: View {
         let listed = model.pickerModes(for: picker)
         if !listed.isEmpty { return listed }
         return [PickerMode(title: picker.valueLabel, options: picker.options)]
+    }
+
+    /// One command tile is one tab. The key stays the real audio mode, not the array offset.
+    private var modeEntries: [(index: Int, mode: PickerMode)] {
+        if picker == .audio, let only = heldAudioTab, modes.indices.contains(only) {
+            return [(only, modes[only])]
+        }
+        return modes.enumerated().map { ($0.offset, $0.element) }
+    }
+
+    private var heldAudioTab: Int? {
+        guard picker == .audio else { return nil }
+        return audioTab ?? model.pickerInitialMode
     }
 
     private var initialTab: Int {
@@ -162,6 +186,7 @@ struct LadderPickerPanel: View {
             detail: mode.detail,
             activate: activate,
             applyOnActivate: apply,
+            disabled: model.pickerModeDisabled(picker, mode: index),
             field: core.field,
             tint: tint(mode),
             values: grown,
@@ -191,7 +216,7 @@ struct LadderPickerPanel: View {
             return (LadderWrite(key: .autoISO, value: autoOn ? "On" : "Off"), !autoOn)
         case .shutter:
             return (LadderWrite(key: .shutterMode, value: index == 1 ? "Speed" : "Angle"), false)
-        case .focus:
+        case .focus, .stillMode, .stillDrive, .stillSize, .audio:
             return (nil, false)
         case .whiteBalance where mode.title == "Tint":
             return (nil, false)
@@ -219,6 +244,11 @@ struct LadderPickerPanel: View {
             return WhiteBalanceKelvinPolicy.kelvinOptions
         case .whiteBalance where mode.title == "Tint":
             return []
+        case .stillDrive where index == 0:
+            if let camera = model.cameraControlOptions[.stillCaptureMode], !camera.isEmpty {
+                return StillDriveMode.driveDrumOptions(advertised: camera)
+            }
+            return fallback(mode)
         default:
             if let property = advertisedProperty(index: index),
                 let camera = model.cameraControlOptions[property], !camera.isEmpty
@@ -256,6 +286,22 @@ struct LadderPickerPanel: View {
         case .whiteBalance:
             guard index == 1 else { return nil }
             return model.isPhotographyMode ? .whiteBalance : .movieWhiteBalance
+        case .stillMode:
+            return index == 0 ? .exposureProgramMode : .userMode
+        case .stillSize:
+            return index == 1 ? .imageSize : nil
+        case .stillMeter:
+            return .exposureMeteringMode
+        case .stillPicture:
+            return .activePicCtrlItem
+        case .audio:
+            switch index {
+            case 1: return .audioInputSelection
+            case 2: return .movWindNoiseReduction
+            case 3: return .movieAttenuator
+            case 4: return .movie32BitFloatAudioRecording
+            default: return nil
+            }
         default:
             return nil
         }
@@ -317,7 +363,12 @@ struct LadderPickerPanel: View {
         if picker == .codec { codecRows = model.codecFamilies }
         if picker == .whiteBalance { model.refreshWhiteBalanceTintFromCamera() }
         if adoptedCircuit == nil { adoptedCircuit = circuitIndex }
-        if picker != .iso, picker != .shutter, picker != .whiteBalance {
+        if picker == .audio, audioTab == nil {
+            audioTab = model.pickerInitialMode
+        }
+        // Keep the audio seed until it is stored. Clearing it first would rebuild as five tabs.
+        let audioSeedPending = picker == .audio && audioTab == nil
+        if picker != .iso, picker != .shutter, picker != .whiteBalance, !audioSeedPending {
             model.pickerInitialMode = nil
         }
     }
@@ -454,6 +505,59 @@ struct LadderPickerPanel: View {
 
     private nonisolated static func cellCount(_ units: Double, perCell: Double) -> Int {
         Int((units / perCell).rounded())
+    }
+}
+
+/// Shot count shared by the drive picker's two timer tabs.
+private struct TimerShotsFooter: View {
+    @Environment(NativeAppModel.self) private var model
+    let mode: Int
+
+    var body: some View {
+        let disabled = model.pickerModeDisabled(.stillDrive, mode: mode)
+        HStack(spacing: 12) {
+            Text("Shots")
+                .font(.system(size: 12, weight: .semibold))
+                .kerning(1)
+                .textCase(.uppercase)
+                .foregroundStyle(LiveDesign.muted)
+            Spacer(minLength: 8)
+            step("minus", enabled: model.photoTimerShotCount > 1) {
+                model.adjustPhotoTimerShots(by: -1)
+            }
+            Text("\(model.photoTimerShotCount)")
+                .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                .foregroundStyle(LiveDesign.text)
+                .frame(minWidth: 28)
+                .contentTransition(.numericText())
+            step("plus", enabled: model.photoTimerShotCount < 9) {
+                model.adjustPhotoTimerShots(by: 1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            LiveDesign.background.opacity(0.28),
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        }
+        .opacity(disabled ? 0.35 : 1)
+        .disabled(disabled)
+    }
+
+    private func step(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
+                .frame(width: 32, height: 32)
+                .liquidGlass(in: Circle())
+        }
+        .buttonStyle(.monitorTapTarget)
+        .disabled(!enabled)
     }
 }
 
