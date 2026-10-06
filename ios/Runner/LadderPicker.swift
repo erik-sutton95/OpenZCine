@@ -15,11 +15,12 @@ enum LadderControl: Hashable, Sendable {
 }
 
 extension CameraPicker {
-    /// Video pickers that draw on `LadderSheet`. Photo pickers stay on `PickerPanel` until they
-    /// move across, and Quality stays on its own panel.
-    var usesVideoLadder: Bool {
+    /// Pickers that draw on `LadderSheet`. Quality stays on its own panel: two wheels compose one
+    /// label, and the NEF chips write a different control.
+    var usesLadderSheet: Bool {
         switch self {
-        case .iso, .shutter, .iris, .whiteBalance, .focus, .resolution, .codec:
+        case .iso, .shutter, .iris, .whiteBalance, .focus, .resolution, .codec,
+            .stillMode, .stillDrive, .stillMeter, .stillSize, .stillPicture:
             true
         default:
             false
@@ -55,9 +56,12 @@ struct LadderPickerPanel: View {
             tintHelp: picker == .whiteBalance
                 ? "Steps of 0.5 (A-B) and 0.25 (G-M), like the camera body. Double-tap the pad to reset."
                 : nil
-        ) { _ in
+        ) { tab in
             if picker == .focus {
                 FocusDialFooter()
+            }
+            if picker == .stillDrive, case .value(let mode) = tab.key, mode == 1 || mode == 2 {
+                TimerShotsFooter(mode: mode)
             }
         }
         .environment(\.ladderOperatorHaptics, model.preferences.hapticsEnabled)
@@ -162,6 +166,7 @@ struct LadderPickerPanel: View {
             detail: mode.detail,
             activate: activate,
             applyOnActivate: apply,
+            disabled: model.pickerModeDisabled(picker, mode: index),
             field: core.field,
             tint: tint(mode),
             values: grown,
@@ -191,7 +196,7 @@ struct LadderPickerPanel: View {
             return (LadderWrite(key: .autoISO, value: autoOn ? "On" : "Off"), !autoOn)
         case .shutter:
             return (LadderWrite(key: .shutterMode, value: index == 1 ? "Speed" : "Angle"), false)
-        case .focus:
+        case .focus, .stillMode, .stillDrive, .stillSize:
             return (nil, false)
         case .whiteBalance where mode.title == "Tint":
             return (nil, false)
@@ -219,6 +224,11 @@ struct LadderPickerPanel: View {
             return WhiteBalanceKelvinPolicy.kelvinOptions
         case .whiteBalance where mode.title == "Tint":
             return []
+        case .stillDrive where index == 0:
+            if let camera = model.cameraControlOptions[.stillCaptureMode], !camera.isEmpty {
+                return StillDriveMode.driveDrumOptions(advertised: camera)
+            }
+            return fallback(mode)
         default:
             if let property = advertisedProperty(index: index),
                 let camera = model.cameraControlOptions[property], !camera.isEmpty
@@ -256,6 +266,14 @@ struct LadderPickerPanel: View {
         case .whiteBalance:
             guard index == 1 else { return nil }
             return model.isPhotographyMode ? .whiteBalance : .movieWhiteBalance
+        case .stillMode:
+            return index == 0 ? .exposureProgramMode : .userMode
+        case .stillSize:
+            return index == 1 ? .imageSize : nil
+        case .stillMeter:
+            return .exposureMeteringMode
+        case .stillPicture:
+            return .activePicCtrlItem
         default:
             return nil
         }
@@ -454,6 +472,59 @@ struct LadderPickerPanel: View {
 
     private nonisolated static func cellCount(_ units: Double, perCell: Double) -> Int {
         Int((units / perCell).rounded())
+    }
+}
+
+/// Shot count shared by the drive picker's two timer tabs.
+private struct TimerShotsFooter: View {
+    @Environment(NativeAppModel.self) private var model
+    let mode: Int
+
+    var body: some View {
+        let disabled = model.pickerModeDisabled(.stillDrive, mode: mode)
+        HStack(spacing: 12) {
+            Text("Shots")
+                .font(.system(size: 12, weight: .semibold))
+                .kerning(1)
+                .textCase(.uppercase)
+                .foregroundStyle(LiveDesign.muted)
+            Spacer(minLength: 8)
+            step("minus", enabled: model.photoTimerShotCount > 1) {
+                model.adjustPhotoTimerShots(by: -1)
+            }
+            Text("\(model.photoTimerShotCount)")
+                .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                .foregroundStyle(LiveDesign.text)
+                .frame(minWidth: 28)
+                .contentTransition(.numericText())
+            step("plus", enabled: model.photoTimerShotCount < 9) {
+                model.adjustPhotoTimerShots(by: 1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            LiveDesign.background.opacity(0.28),
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        }
+        .opacity(disabled ? 0.35 : 1)
+        .disabled(disabled)
+    }
+
+    private func step(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
+                .frame(width: 32, height: 32)
+                .liquidGlass(in: Circle())
+        }
+        .buttonStyle(.monitorTapTarget)
+        .disabled(!enabled)
     }
 }
 

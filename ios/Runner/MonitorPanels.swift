@@ -699,7 +699,7 @@ struct PanelHost: View {
                     StabilizationPickerPanel()
                 }
             }
-        } else if picker.usesVideoLadder {
+        } else if picker.usesLadderSheet {
             LadderPickerPanel(picker: picker)
         } else {
             PickerPanel(picker: picker)
