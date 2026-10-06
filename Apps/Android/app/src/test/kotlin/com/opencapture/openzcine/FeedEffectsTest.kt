@@ -228,4 +228,16 @@ class FeedEffectsTest {
         assertEquals(listOf("WHITE", "AMBER", "RED", "CYAN", "GREEN"), MonitorZebraPaint.entries.map { it.name })
         assertEquals(listOf("NATIVE", "IRE"), MonitorZebraUnit.entries.map { it.name })
     }
+
+    @Test
+    fun `stop ruler end labels stay inside the shared false colour panel`() {
+        val reference = FeedFalseColorReference(0, emptyList(), floatArrayOf(0f, 0.3f, 0.5f, 0.6f, 0.75f, 1f))
+        val copy = FalseColorReferenceCopy("Stops", listOf("Min", "-3", "18%", "Skin", "+2", "Max"), emptyList(), emptyList())
+        val fractions =
+            FalseColorReferencePresentation(FeedFalseColorScale.STOPS, reference).referenceValues(copy).markers.map { it.fraction }
+        // The shared ruler starts a label 10 dp before its fraction of the 264 dp panel.
+        assertEquals(16.0 / 264, fractions.first(), absoluteTolerance = 1e-9)
+        assertEquals(1 - 16.0 / 264, fractions.last(), absoluteTolerance = 1e-9)
+        assertEquals(listOf(0.3, 0.5, 0.6, 0.75), fractions.subList(1, 5).map { Math.round(it * 100) / 100.0 })
+    }
 }
