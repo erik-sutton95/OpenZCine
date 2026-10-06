@@ -118,7 +118,8 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNodeWithText("Full Resolution Caching").assertDoesNotExist()
         composeRule.onNodeWithText("Local Media Cache").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("monitor.settings.tab.System").performScrollTo().performClick()
-        composeRule.onNodeWithText("Automatic error reports").assertDoesNotExist()
+        // OpenCine's reliability reporting (D2): the row is now part of the System tab.
+        composeRule.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Licenses").assertDoesNotExist()
         composeRule.onNodeWithText("NOTICE").assertDoesNotExist()
         for (label in listOf("Open Source Code", "Open Privacy Policy", "Open Terms of Use", "Open Support")) {
