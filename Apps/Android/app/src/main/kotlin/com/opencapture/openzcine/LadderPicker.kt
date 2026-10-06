@@ -16,8 +16,11 @@ import com.opencapture.opencine.vocabulary.CaptureLadder
 import com.opencapture.opencine.vocabulary.CaptureLock
 import com.opencapture.opencine.vocabulary.CaptureTint
 
-/** Video pickers that draw on [LadderSheet]. Photo pickers stay on the legacy body until the next set. */
-internal val videoLadderKinds: Set<MonitorPickerKind> = setOf(
+/**
+ * Pickers that draw on [LadderSheet]. QUALITY stays on its own panel: the two wheels
+ * compose one compression label, and the NEF chips write a different control.
+ */
+internal val ladderKinds: Set<MonitorPickerKind> = setOf(
     MonitorPickerKind.ISO,
     MonitorPickerKind.SHUTTER,
     MonitorPickerKind.IRIS,
@@ -25,7 +28,18 @@ internal val videoLadderKinds: Set<MonitorPickerKind> = setOf(
     MonitorPickerKind.WHITE_BALANCE,
     MonitorPickerKind.RESOLUTION,
     MonitorPickerKind.CODEC,
+    MonitorPickerKind.MODE,
+    MonitorPickerKind.DRIVE,
+    MonitorPickerKind.METER,
+    MonitorPickerKind.PROFILE,
+    MonitorPickerKind.SIZE,
 )
+
+/** The photo timer shot row rides on the drive tabs that ask for it. */
+internal fun ladderShowsTimerShots(
+    picker: MonitorPickerPresentation,
+    tab: LadderTab<CameraControl>,
+): Boolean = picker.modes.firstOrNull { it.label == tab.label }?.showsTimerShots == true
 
 /**
  * A typed core drum is the ISO, shutter, iris and white-balance preset circuits.

@@ -5,6 +5,7 @@ import com.opencapture.opencine.appkit.MonitorCaptureField
 import com.opencapture.opencine.core.ISOValue
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
+import com.opencapture.opencine.cameracontrols.LadderWrite
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CodecBitDepthOption
 import com.opencapture.opencine.vocabulary.CaptureLock
@@ -70,6 +71,59 @@ class LadderPickerTest {
         assertFalse(sheet.tabs[0].applyOnActivate)
         assertEquals(CameraControl.SHUTTER_MODE, sheet.tabs[1].activate?.key)
         assertEquals("Speed", sheet.tabs[1].activate?.value)
+    }
+
+    @Test
+    fun photoModeDisablesTheUserBankTabAndDriveTimersKeepTheShotRow() {
+        val modeSheet = videoLadderPresentation(
+            picker(
+                MonitorPickerKind.MODE,
+                mode("Mode", CameraControl.EXPOSURE_MODE, "P", listOf("Auto", "P", "U1"), applyOnActivate = false),
+                mode(
+                    "U Mode", CameraControl.STILL_USER_MODE_PROGRAM, "P", listOf("P", "S", "A", "M"),
+                    applyOnActivate = false, disabled = true,
+                ),
+            ),
+        )
+        assertFalse(modeSheet.tabs[0].disabled)
+        assertTrue(modeSheet.tabs[1].disabled)
+        assertFalse(modeSheet.tabs[1].applyOnActivate)
+        assertEquals(CameraControl.STILL_USER_MODE_PROGRAM, modeSheet.tabs[1].key)
+        assertNull(modeSheet.tabs[0].field)
+
+        val drivePicker = picker(
+            MonitorPickerKind.DRIVE,
+            mode(
+                "Drive", CameraControl.STILL_DRIVE, "Single", listOf("Single", "Continuous L"),
+                applyOnActivate = false, disabled = true,
+            ),
+            mode(
+                "Built-in Timer", CameraControl.STILL_DRIVE, "On", listOf("Off", "On"),
+                applyOnActivate = false, showsTimerShots = true,
+            ),
+            mode(
+                "App-timer", CameraControl.STILL_DRIVE, "Off", StillPickerPolicy.APP_TIMER_OPTIONS,
+                applyOnActivate = false, showsTimerShots = true,
+            ),
+        )
+        val drive = videoLadderPresentation(drivePicker)
+        assertTrue(drive.tabs[0].disabled)
+        assertFalse(ladderShowsTimerShots(drivePicker, drive.tabs[0]))
+        assertTrue(ladderShowsTimerShots(drivePicker, drive.tabs[1]))
+        assertTrue(ladderShowsTimerShots(drivePicker, drive.tabs[2]))
+        val write = requestForLadderWrite(drivePicker, LadderWrite(CameraControl.STILL_DRIVE, "5s"))
+        assertNotNull(write)
+        assertTrue("5s" in write.options)
+        assertFalse("Single" in write.options)
+
+        val meter = videoLadderPresentation(
+            picker(
+                MonitorPickerKind.METER,
+                mode("METER", CameraControl.STILL_METER, "Matrix", listOf("Matrix", "Spot")),
+            ),
+        )
+        assertEquals(listOf("Matrix", "Spot"), meter.tabs.single().ladder.values)
+        assertNull(meter.tabs.single().field)
     }
 
     @Test
@@ -205,12 +259,18 @@ class LadderPickerTest {
         detail: String? = null,
         activate: CommandControlRequest? = null,
         marked: Set<String> = emptySet(),
+        applyOnActivate: Boolean = true,
+        disabled: Boolean = false,
+        showsTimerShots: Boolean = false,
     ) = MonitorPickerModePresentation(
         label = label,
         request = request(control, current, options),
         detail = detail,
         activateRequest = activate,
         markedValues = marked,
+        applyValueOnActivate = applyOnActivate,
+        disabled = disabled,
+        showsTimerShots = showsTimerShots,
     )
 
     private fun request(control: CameraControl, current: String, options: List<String>) = CommandControlRequest(

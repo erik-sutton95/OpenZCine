@@ -116,11 +116,54 @@ class LadderSheetComposeTest {
         save("iris")
     }
 
+    @Test
+    fun photoModeDriveMeterProfileAndSizeUseTheSheet() {
+        val harness = harness()
+        val folder = "r2b"
+        saveLegacy(harness, "mode", photoMode(), folder)
+        saveLegacy(harness, "drive", photoDrive(), folder)
+        saveLegacy(harness, "meter", photoMeter(), folder)
+        saveLegacy(harness, "profile", photoProfile(), folder)
+        saveLegacy(harness, "size", photoSize(), folder)
+
+        show(harness, photoMode())
+        composeRule.onNodeWithText("U MODE").assertIsDisplayed()
+        composeRule.runOnIdle { assertTrue(harness.writes.isEmpty()) }
+        save("mode", folder)
+
+        show(harness, photoDrive())
+        save("drive", folder)
+        composeRule.onNodeWithText("BUILT-IN TIMER").performClick()
+        composeRule.onNodeWithText("SHOTS").assertIsDisplayed()
+        composeRule.onNodeWithText("+").performClick()
+        composeRule.runOnIdle {
+            assertEquals(listOf(1), harness.shots)
+            assertTrue(harness.writes.isEmpty())
+        }
+        save("drive-timer", folder)
+
+        show(harness, photoMeter())
+        composeRule.onNodeWithText("METER").assertIsDisplayed()
+        composeRule.onNodeWithText("METERING PATTERN").assertIsDisplayed()
+        save("meter", folder)
+
+        show(harness, photoProfile())
+        composeRule.onNodeWithText("PROFILE").assertIsDisplayed()
+        composeRule.onNodeWithText("PICTURE CONTROL").assertIsDisplayed()
+        save("profile", folder)
+
+        show(harness, photoSize())
+        composeRule.onNodeWithText("AREA").assertIsDisplayed()
+        composeRule.onNodeWithText("AREA · SIZE").assertIsDisplayed()
+        save("size", folder)
+    }
+
     /** One setContent for the whole test. The rule rejects a second call. */
     private class Harness {
         var legacy by mutableStateOf<MonitorPickerPresentation?>(null)
         var live by mutableStateOf<MonitorPickerPresentation?>(null)
         val writes = mutableListOf<Pair<CameraControl, String>>()
+        val shots = mutableListOf<Int>()
     }
 
     private fun harness(): Harness {
@@ -138,6 +181,8 @@ class LadderSheetComposeTest {
                         feedback = null,
                         onSelect = { _, _ -> },
                         onDismiss = {},
+                        timerShotsCount = 2,
+                        onAdjustTimerShots = { delta -> harness.shots += delta },
                     )
                 }
             }
@@ -153,6 +198,8 @@ class LadderSheetComposeTest {
                         onDismiss = {},
                         slideFromTop = live.kind.isTopBarPicker(),
                         onToggleMfScrub = {},
+                        timerShotsCount = 2,
+                        onAdjustTimerShots = { delta -> harness.shots += delta },
                     )
                 }
             }
@@ -168,22 +215,27 @@ class LadderSheetComposeTest {
         composeRule.waitForIdle()
     }
 
-    private fun save(name: String) {
-        writePng(name, composeRule.onNodeWithTag("ladder_sheet").captureToImage())
+    private fun save(name: String, folder: String = "r2a") {
+        writePng(name, composeRule.onNodeWithTag("ladder_sheet").captureToImage(), folder)
     }
 
     /** The vertical accent drum, captured beside the sheet that replaces it. */
-    private fun saveLegacy(harness: Harness, name: String, picker: MonitorPickerPresentation) {
+    private fun saveLegacy(
+        harness: Harness,
+        name: String,
+        picker: MonitorPickerPresentation,
+        folder: String = "r2a",
+    ) {
         composeRule.runOnIdle {
             harness.live = null
             harness.legacy = picker
         }
         composeRule.waitForIdle()
-        writePng("$name-before", composeRule.onNodeWithTag("legacy_sheet").captureToImage())
+        writePng("$name-before", composeRule.onNodeWithTag("legacy_sheet").captureToImage(), folder)
     }
 
-    private fun writePng(name: String, image: androidx.compose.ui.graphics.ImageBitmap) {
-        val dir = InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir("r2a")
+    private fun writePng(name: String, image: androidx.compose.ui.graphics.ImageBitmap, folder: String) {
+        val dir = InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(folder)
         check(dir != null)
         val file = File(dir, "$name.png")
         FileOutputStream(file).use { out ->
@@ -191,19 +243,19 @@ class LadderSheetComposeTest {
         }
         // executeShellCommandRw returns (stdout, stdin). The connected run uninstalls the app
         // and deletes external files, so the bytes also land on a path the host can pull.
-        publish(name, file.readBytes())
+        publish(folder, name, file.readBytes())
     }
 
-    private fun publish(name: String, bytes: ByteArray) {
+    private fun publish(folder: String, name: String, bytes: ByteArray) {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val pipes = automation.executeShellCommandRw("sh")
         val stdin = FileOutputStream(pipes[1].fileDescriptor)
-        stdin.write("mkdir -p /data/local/tmp/r2a\ncat > /data/local/tmp/r2a/$name.png\n".toByteArray())
+        stdin.write("mkdir -p /data/local/tmp/$folder\ncat > /data/local/tmp/$folder/$name.png\n".toByteArray())
         stdin.write(bytes)
         stdin.flush()
         pipes[1].close()
         FileInputStream(pipes[0].fileDescriptor).use { it.readBytes() }
-        val listed = automation.executeShellCommand("wc -c /data/local/tmp/r2a/$name.png")
+        val listed = automation.executeShellCommand("wc -c /data/local/tmp/$folder/$name.png")
         val text = FileInputStream(listed.fileDescriptor).bufferedReader().readText()
         val count = text.trim().substringBefore(" ").toLongOrNull()
         check(count == bytes.size.toLong()) { "publish $name wrote $count of ${bytes.size}: $text" }
@@ -312,6 +364,119 @@ class LadderSheetComposeTest {
             MonitorPickerModePresentation(
                 label = "Iris",
                 request = CommandControlRequest(title = "IRIS", control = CameraControl.IRIS, currentValue = "f/2.8", options = listOf("f/2", "f/2.8", "f/4")),
+            ),
+        ),
+    )
+
+    private fun photoMode() = MonitorPickerPresentation(
+        kind = MonitorPickerKind.MODE,
+        title = "MODE",
+        subtitle = "Exposure program",
+        modes = listOf(
+            MonitorPickerModePresentation(
+                label = "Mode",
+                request = CommandControlRequest(
+                    title = "MODE", control = CameraControl.EXPOSURE_MODE,
+                    currentValue = "P", options = listOf("Auto", "P", "S", "A", "M"),
+                ),
+                applyValueOnActivate = false,
+            ),
+            MonitorPickerModePresentation(
+                label = "U Mode",
+                request = CommandControlRequest(
+                    title = "MODE", control = CameraControl.STILL_USER_MODE_PROGRAM,
+                    currentValue = "P", options = listOf("P", "S", "A", "M"),
+                ),
+                applyValueOnActivate = false,
+                disabled = true,
+            ),
+        ),
+    )
+
+    private fun photoDrive() = MonitorPickerPresentation(
+        kind = MonitorPickerKind.DRIVE,
+        title = "DRIVE",
+        subtitle = "Release mode",
+        modes = listOf(
+            MonitorPickerModePresentation(
+                label = "Drive",
+                request = CommandControlRequest(
+                    title = "DRIVE", control = CameraControl.STILL_DRIVE,
+                    currentValue = "Single", options = listOf("Single", "Continuous L"),
+                ),
+                applyValueOnActivate = false,
+            ),
+            MonitorPickerModePresentation(
+                label = "Built-in Timer",
+                request = CommandControlRequest(
+                    title = "Built-in Timer", control = CameraControl.STILL_DRIVE,
+                    currentValue = "Off", options = listOf("Off", "On"),
+                ),
+                applyValueOnActivate = false,
+                showsTimerShots = true,
+            ),
+            MonitorPickerModePresentation(
+                label = "App-timer",
+                request = CommandControlRequest(
+                    title = "App-timer", control = CameraControl.STILL_DRIVE,
+                    currentValue = "Off", options = listOf("Off", "5s"),
+                ),
+                applyValueOnActivate = false,
+                showsTimerShots = true,
+            ),
+        ),
+    )
+
+    private fun photoMeter() = MonitorPickerPresentation(
+        kind = MonitorPickerKind.METER,
+        title = "METER",
+        subtitle = "Metering pattern",
+        modes = listOf(
+            MonitorPickerModePresentation(
+                label = "METER",
+                request = CommandControlRequest(
+                    title = "METER", control = CameraControl.STILL_METER,
+                    currentValue = "Matrix", options = listOf("Matrix", "Center", "Spot"),
+                ),
+            ),
+        ),
+    )
+
+    private fun photoProfile() = MonitorPickerPresentation(
+        kind = MonitorPickerKind.PROFILE,
+        title = "PROFILE",
+        subtitle = "Picture control",
+        modes = listOf(
+            MonitorPickerModePresentation(
+                label = "PROFILE",
+                request = CommandControlRequest(
+                    title = "PROFILE", control = CameraControl.STILL_PICTURE_CONTROL,
+                    currentValue = "Portrait", options = listOf("Auto", "Portrait", "Landscape"),
+                ),
+            ),
+        ),
+    )
+
+    private fun photoSize() = MonitorPickerPresentation(
+        kind = MonitorPickerKind.SIZE,
+        title = "SIZE",
+        subtitle = "Area · size",
+        modes = listOf(
+            MonitorPickerModePresentation(
+                label = "Area",
+                request = CommandControlRequest(
+                    title = "SIZE", control = CameraControl.STILL_IMAGE_AREA,
+                    currentValue = "FX", options = listOf("FX", "DX", "1:1"),
+                ),
+                applyValueOnActivate = false,
+            ),
+            MonitorPickerModePresentation(
+                label = "Size",
+                request = CommandControlRequest(
+                    title = "SIZE", control = CameraControl.STILL_IMAGE_SIZE,
+                    currentValue = "Size L", options = listOf("Size L", "Size M"),
+                ),
+                applyValueOnActivate = false,
             ),
         ),
     )

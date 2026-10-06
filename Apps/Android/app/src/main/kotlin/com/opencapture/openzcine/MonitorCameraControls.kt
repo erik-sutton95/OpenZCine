@@ -1192,7 +1192,7 @@ internal fun MonitorControlPickerPanel(
                         nefOptions =
                             nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
                     )
-                } else if (currentPicker.kind in videoLadderKinds) {
+                } else if (currentPicker.kind in ladderKinds) {
                     VideoLadderBody(
                         picker = currentPicker,
                         field = commonField,
@@ -1209,7 +1209,14 @@ internal fun MonitorControlPickerPanel(
                         },
                         tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
                             stringResource(R.string.camera_wb_tint_double_tap_help),
-                        footer = { _ ->
+                        footer = { tab ->
+                            if (ladderShowsTimerShots(currentPicker, tab) && onAdjustTimerShots != null) {
+                                TimerShotsRow(
+                                    count = timerShotsCount,
+                                    enabled = controlsEnabled && !tab.disabled,
+                                    onAdjust = onAdjustTimerShots,
+                                )
+                            }
                             if (currentPicker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
                                 MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
                             }
