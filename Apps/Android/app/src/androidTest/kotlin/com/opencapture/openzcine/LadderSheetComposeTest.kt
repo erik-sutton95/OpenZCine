@@ -158,6 +158,48 @@ class LadderSheetComposeTest {
         save("size", folder)
     }
 
+    @Test
+    fun commandDialogIsOneLadderSheet() {
+        val writes = mutableListOf<String>()
+        var dismissed = false
+        var enabled by mutableStateOf(true)
+        var feedback by mutableStateOf<CommandControlFeedback?>(null)
+        composeRule.setContent {
+            CommandControlDialog(
+                request = CommandControlRequest(
+                    title = "ISO",
+                    control = CameraControl.ISO,
+                    currentValue = "800",
+                    options = listOf("400", "800", "1600"),
+                ),
+                controlsEnabled = enabled,
+                pendingControl = null,
+                feedback = feedback,
+                onSelect = { writes += it },
+                onDismiss = { dismissed = true },
+            )
+        }
+        composeRule.onNodeWithTag("ladder_sheet").assertIsDisplayed()
+        composeRule.onNodeWithText("ISO").assertIsDisplayed()
+        composeRule.onNodeWithText("CURRENT: 800").assertIsDisplayed()
+        composeRule.runOnIdle { assertTrue(writes.isEmpty()) }
+        save("iso", "command")
+
+        feedback = CommandControlFeedback("Saved", isError = false)
+        composeRule.onNodeWithText("Saved").assertDoesNotExist()
+        feedback = CommandControlFeedback("Body refused ISO", isError = true)
+        composeRule.onNodeWithText("Body refused ISO").assertIsDisplayed()
+        save("iso-error", "command")
+
+        enabled = false
+        composeRule.onNodeWithText("Controls are unavailable", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Close camera control").performClick()
+        composeRule.runOnIdle {
+            assertTrue(writes.isEmpty())
+            assertTrue(dismissed)
+        }
+    }
+
     /** One setContent for the whole test. The rule rejects a second call. */
     private class Harness {
         var legacy by mutableStateOf<MonitorPickerPresentation?>(null)

@@ -822,4 +822,34 @@ class CommandMonitorTest {
         store.save(moved)
         assertEquals(moved, CommandTileOrderStore(preferences).load())
     }
+
+    @Test
+    fun `a command tile is one ladder tab and tint uses the shared pad`() {
+        val iso = commandLadderPresentation(
+            CommandControlRequest(
+                title = "ISO",
+                control = CameraControl.ISO,
+                currentValue = "800",
+                options = listOf("400", "800"),
+            ),
+            subtitle = "Current: 800",
+        )
+        assertEquals("ISO", iso.title)
+        assertEquals("Current: 800", iso.subtitle)
+        val tab = iso.tabs.single()
+        assertEquals(CameraControl.ISO, tab.key)
+        assertEquals(listOf("400", "800"), tab.ladder.values)
+        assertFalse(tab.applyOnActivate)
+        assertNull(tab.tint)
+
+        val tint = commandLadderPresentation(
+            CommandControlRequest(
+                title = "TINT",
+                control = CameraControl.WHITE_BALANCE_TINT,
+                currentValue = "Neutral",
+                options = listOf("Neutral"),
+            ),
+        )
+        assertEquals(WhiteBalanceTintGrid.cellRange, tint.tabs.single().tint?.range)
+    }
 }
