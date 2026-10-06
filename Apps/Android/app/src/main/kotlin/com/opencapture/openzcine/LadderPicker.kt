@@ -1,0 +1,203 @@
+package com.opencapture.openzcine
+
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import com.opencapture.opencine.appkit.MonitorCaptureField
+import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.cameracontrols.LadderSheet
+import com.opencapture.opencine.cameracontrols.LadderSheetPresentation
+import com.opencapture.opencine.cameracontrols.LadderStep
+import com.opencapture.opencine.cameracontrols.LadderTab
+import com.opencapture.opencine.cameracontrols.LadderWrite
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.WbPickerPolicy
+import com.opencapture.opencine.vocabulary.CaptureLadder
+import com.opencapture.opencine.vocabulary.CaptureLock
+import com.opencapture.opencine.vocabulary.CaptureTint
+
+/** Video pickers that draw on [LadderSheet]. Photo pickers stay on the legacy body until the next set. */
+internal val videoLadderKinds: Set<MonitorPickerKind> = setOf(
+    MonitorPickerKind.ISO,
+    MonitorPickerKind.SHUTTER,
+    MonitorPickerKind.IRIS,
+    MonitorPickerKind.FOCUS,
+    MonitorPickerKind.WHITE_BALANCE,
+    MonitorPickerKind.RESOLUTION,
+    MonitorPickerKind.CODEC,
+)
+
+/**
+ * A typed core drum is the ISO, shutter, iris and white-balance preset circuits.
+ * Kelvin grows a label ladder (fine steps), tint draws the pad, and a locked drum
+ * only mirrors the camera's label.
+ */
+internal fun ladderUsesCoreDrum(kind: MonitorPickerKind, mode: MonitorPickerModePresentation): Boolean {
+    if (mode.drumLocked) return false
+    if (mode.request.control == CameraControl.WHITE_BALANCE_TINT) return false
+    if (kind == MonitorPickerKind.WHITE_BALANCE && mode.label.equals("Kelvin", ignoreCase = true)) return false
+    return mode.request.control in NikonOpenCineSession.CONTROLS
+}
+
+/** The request a ladder write should travel on. The active control wins; a fine value may sit off the list. */
+internal fun requestForLadderWrite(
+    picker: MonitorPickerPresentation,
+    write: LadderWrite<CameraControl>,
+): CommandControlRequest? {
+    val requests = picker.modes.flatMap { mode -> listOfNotNull(mode.request, mode.activateRequest) }
+    return requests.firstOrNull { it.control == write.key && write.value in it.options }
+        ?: requests.firstOrNull { it.control == write.key }
+}
+
+internal fun videoLadderPresentation(
+    picker: MonitorPickerPresentation,
+    field: MonitorCaptureField? = null,
+): LadderSheetPresentation<CameraControl> {
+    val lock = when {
+        picker.interactionLocked -> CaptureLock.CAMERA_CONTROL
+        picker.drumInteractionLocked -> CaptureLock.AUTO
+        else -> null
+    }
+    val banner = when {
+        picker.interactionLocked -> picker.lockBanner
+        picker.drumInteractionLocked -> picker.drumLockBanner
+        else -> null
+    }
+    return LadderSheetPresentation(
+        title = picker.title,
+        subtitle = picker.subtitle,
+        tabs = picker.modes.map { mode -> ladderTab(picker.kind, mode, field) },
+        initialTab = picker.initialModeIndex,
+        lock = lock,
+        lockBanner = banner,
+    )
+}
+
+private fun ladderTab(
+    kind: MonitorPickerKind,
+    mode: MonitorPickerModePresentation,
+    field: MonitorCaptureField?,
+): LadderTab<CameraControl> {
+    val request = mode.request
+    val kelvin = kind == MonitorPickerKind.WHITE_BALANCE && mode.label.equals("Kelvin", ignoreCase = true)
+    val apply = mode.applyValueOnActivate &&
+        request.control != CameraControl.WHITE_BALANCE_TINT &&
+        kind != MonitorPickerKind.FOCUS &&
+        kind != MonitorPickerKind.SHUTTER
+    return LadderTab(
+        label = mode.label,
+        key = request.control,
+        ladder = CaptureLadder(
+            current = request.currentValue,
+            values = request.options,
+            marked = mode.markedValues,
+            lock = if (mode.drumLocked) CaptureLock.AUTO else null,
+        ),
+        detail = mode.detail,
+        activate = mode.activateRequest?.let { LadderWrite(it.control, it.currentValue) },
+        applyOnActivate = apply,
+        disabled = mode.disabled,
+        field = coreField(kind, mode, field),
+        tint = tintOf(mode),
+        values = if (kelvin) {
+            { landed -> WbPickerPolicy.kelvinOptions(request.options, landed) }
+        } else {
+            null
+        },
+        steps = stepsOf(mode),
+    )
+}
+
+private fun coreField(
+    kind: MonitorPickerKind,
+    mode: MonitorPickerModePresentation,
+    field: MonitorCaptureField?,
+): MonitorCaptureField? {
+    if (field == null || !ladderUsesCoreDrum(kind, mode)) return null
+    val offered = mode.request.options.mapNotNull { NikonOpenCineSession.settingValue(mode.request.control, it) }.toSet()
+    if (offered.isEmpty()) return field
+    val choices = field.choices.filter { it.value in offered }
+    return if (choices.isEmpty()) field else field.copy(choices = choices)
+}
+
+private fun tintOf(mode: MonitorPickerModePresentation): CaptureTint? {
+    if (mode.request.control != CameraControl.WHITE_BALANCE_TINT) return null
+    val (amber, green) = WhiteBalanceTintGrid.cellsFromLabel(mode.request.currentValue.ifBlank { "Neutral" })
+    return CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTintGrid.cellRange)
+}
+
+/**
+ * Codec bit depth is two steps beside the codec row (the written label is the depth variant,
+ * so it does not land on the drum). Kelvin is the -10/+10 pair, and that value does land.
+ */
+private fun stepsOf(mode: MonitorPickerModePresentation): ((String) -> Pair<LadderStep, LadderStep>?)? {
+    val request = mode.request
+    if (request.control == CameraControl.CODEC) {
+        return { selected ->
+            val depths = request.bitDepths.filter { it.codec == selected }
+            if (depths.size != 2) {
+                null
+            } else {
+                val low = depths[0]
+                val high = depths[1]
+                LadderStep(
+                    low.label, low.writeValue, "Record $selected at ${low.label}",
+                    selected = request.bitDepthSelection == low.label,
+                ) to LadderStep(
+                    high.label, high.writeValue, "Record $selected at ${high.label}",
+                    selected = request.bitDepthSelection == high.label,
+                )
+            }
+        }
+    }
+    if (request.control == CameraControl.WHITE_BALANCE && mode.label.equals("Kelvin", ignoreCase = true)) {
+        return { selected ->
+            fun step(delta: Int, label: String, description: String) = LadderStep(
+                label = label,
+                value = WbPickerPolicy.fineAdjust(selected, delta),
+                description = description,
+                lands = true,
+            )
+            step(-WbPickerPolicy.FINE_STEP_KELVIN, "\u221210", "Decrease Kelvin by 10") to
+                step(WbPickerPolicy.FINE_STEP_KELVIN, "+10", "Increase Kelvin by 10")
+        }
+    }
+    return null
+}
+
+@Composable
+internal fun VideoLadderBody(
+    picker: MonitorPickerPresentation,
+    field: MonitorCaptureField?,
+    control: MonitorControlModel?,
+    controlsEnabled: Boolean,
+    error: String?,
+    unavailable: String?,
+    fromTop: Boolean,
+    onWrite: (CommandControlRequest, String) -> Unit,
+    onClose: () -> Unit,
+    onHold: (() -> Unit)?,
+    tintLabel: (CaptureTint) -> String,
+    tintHelp: String?,
+    footer: @Composable (LadderTab<CameraControl>) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LadderSheet(
+        presentation = videoLadderPresentation(picker, field),
+        enabled = controlsEnabled,
+        onWrite = { write ->
+            val request = requestForLadderWrite(picker, write) ?: return@LadderSheet
+            onWrite(request, write.value)
+        },
+        onClose = onClose,
+        modifier = modifier,
+        control = control,
+        fromTop = fromTop,
+        error = error,
+        unavailable = if (controlsEnabled) null else unavailable,
+        onHold = onHold,
+        tintLabel = tintLabel,
+        tintHelp = tintHelp,
+        footer = footer,
+    )
+}
