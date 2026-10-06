@@ -292,6 +292,8 @@ dependencies {
     implementation(libs.opencine.native.runtime)
     // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.
     implementation(libs.opencine.vulkan)
+    // Keystore sealing for the camera Wi-Fi keys.
+    implementation(libs.opencine.platform)
     implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))
