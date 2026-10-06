@@ -532,7 +532,6 @@ internal fun MediaBrowseScreen(
     var shareInProgress by remember { mutableStateOf(false) }
     var shareMessage by remember { mutableStateOf<String?>(null) }
     var shareJob by remember { mutableStateOf<Job?>(null) }
-    var frameioDeliveryPresented by remember { mutableStateOf(false) }
     var frameioPreparationInProgress by remember { mutableStateOf(false) }
     var nativeDeliveryPresented by remember { mutableStateOf(false) }
     var filters by remember(cameraID) { mutableStateOf(MediaLibraryFilters()) }
@@ -759,8 +758,6 @@ internal fun MediaBrowseScreen(
     val burstByRepresentative = remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
     fun burstMembers(representative: NikonMediaClipRecord): List<NikonMediaClipRecord> =
         projection.members(representative, ::clipKey)
-    fun burstExpanded(clips: List<NikonMediaClipRecord>): List<NikonMediaClipRecord> =
-        projection.expanded(clips, ::clipKey)
     fun hasRawSibling(clip: NikonMediaClipRecord): Boolean = projection.hasRawSibling(clip, ::clipKey)
     val selectedClips = projection.selected(selectedIDs)
     val selectedSeriesClips = projection.expanded(selectedClips, ::clipKey)
@@ -781,9 +778,8 @@ internal fun MediaBrowseScreen(
         offlineClipOwners,
         selectedIDs,
         nativeDeliveryPresented,
-        frameioDeliveryPresented,
     ) {
-        if (!nativeDeliveryPresented && !frameioDeliveryPresented) return@LaunchedEffect
+        if (!nativeDeliveryPresented) return@LaunchedEffect
         readySelectionIDs =
             withContext(Dispatchers.IO) {
                 selectedClips.mapNotNull { clip ->
@@ -925,16 +921,9 @@ internal fun MediaBrowseScreen(
         exitSelection()
     }
 
-    fun presentFrameioDelivery() {
-        if (shareInProgress || selectedClips.isEmpty()) return
-        frameioController.refresh()
-        frameioDeliveryPresented = true
-    }
-
     fun beginFrameioDelivery(options: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedSeriesClips
-        frameioDeliveryPresented = false
         shareInProgress = true
         frameioPreparationInProgress = true
         shareMessage = null
@@ -1200,7 +1189,7 @@ internal fun MediaBrowseScreen(
             )
         }
 
-        if (nativeDeliveryPresented || frameioDeliveryPresented) {
+        if (nativeDeliveryPresented) {
             MediaDeliveryPopup(
                 clipCount = selectedClips.size,
                 readyCount = readySelectionIDs.size,
@@ -1208,12 +1197,6 @@ internal fun MediaBrowseScreen(
                 selectedLut = selectedLut.takeIf { selectedLutLabel != null },
                 selectedLutLabel = selectedLutLabel,
                 frameioController = frameioController,
-                preferredDestination =
-                    if (frameioDeliveryPresented && !nativeDeliveryPresented) {
-                        MediaDeliveryDestination.FRAMEIO
-                    } else {
-                        null
-                    },
                 busy = shareInProgress || frameioPreparationInProgress,
                 onCacheBeforeHop = {
                     mediaDeliveryCoordinator.cacheFromCamera(
@@ -1225,7 +1208,6 @@ internal fun MediaBrowseScreen(
                 },
                 onDismiss = {
                     nativeDeliveryPresented = false
-                    frameioDeliveryPresented = false
                     if (frameioController.isInternetHopActive) {
                         scope.launch {
                             withContext(NonCancellable) { frameioController.endInternetHop() }
@@ -1234,17 +1216,14 @@ internal fun MediaBrowseScreen(
                 },
                 onNativeShare = { configuration ->
                     nativeDeliveryPresented = false
-                    frameioDeliveryPresented = false
                     beginBatchShare(configuration)
                 },
                 onSaveToGallery = { configuration ->
                     nativeDeliveryPresented = false
-                    frameioDeliveryPresented = false
                     beginBatchGallerySave(configuration)
                 },
                 onFrameioDeliver = { options ->
                     nativeDeliveryPresented = false
-                    frameioDeliveryPresented = false
                     beginFrameioDelivery(options)
                 },
             )

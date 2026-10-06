@@ -33,7 +33,6 @@ internal class NikonAppGalleryProjection(
             photoSizes = filters.photoSizes.mapTo(linkedSetOf()) { it.title },
             dateWindow = filters.dateWindow?.title, storage = filters.storageId?.toString(),
             requireLocal = false, selectionScope = MonitorMediaProjectionSelectionScope.ALL_SURVIVORS), policy)
-    val categoryClips get() = result.categoryIDs.mapNotNull(byID::get)
     val displayedClips get() = result.displayIDs.mapNotNull(byID::get)
     val gridClips get() = result.gridIDs.mapNotNull(byID::get)
     val visibleKeys get() = result.displayIDs.mapNotNullTo(linkedSetOf(), keysByID::get)

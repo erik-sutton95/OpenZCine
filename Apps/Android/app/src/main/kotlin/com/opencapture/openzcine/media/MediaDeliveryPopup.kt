@@ -20,8 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.opencapture.monitorui.MonitorConfirmPopup
 import com.opencapture.monitorui.MonitorMediaDeliveryPanel
 import com.opencapture.monitorui.MonitorMediaDeliveryValue
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import com.opencapture.opencine.runtime.MonitorMovieExportContainer
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
@@ -74,7 +78,6 @@ internal fun MediaDeliveryPopup(
     selectedLut: FeedLutSelection?,
     selectedLutLabel: String?,
     frameioController: FrameioDeliveryController?,
-    preferredDestination: MediaDeliveryDestination? = null,
     busy: Boolean = false,
     /**
      * Pulls the selection off the camera before the internet hop leaves its Wi‑Fi. On the camera
@@ -89,13 +92,8 @@ internal fun MediaDeliveryPopup(
 ) {
     val scope = rememberCoroutineScope()
     var cachingForHop by remember { mutableStateOf(false) }
-    var step by
-        remember(preferredDestination) {
-            mutableStateOf(
-                if (preferredDestination == null) DeliveryStep.DESTINATION else DeliveryStep.OPTIONS,
-            )
-        }
-    var destination by remember(preferredDestination) { mutableStateOf(preferredDestination) }
+    var step by remember { mutableStateOf(DeliveryStep.DESTINATION) }
+    var destination by remember { mutableStateOf<MediaDeliveryDestination?>(null) }
     var shareAction by remember { mutableStateOf(MediaDeliveryPostExportAction.SYSTEM_SHARE) }
     var bakeLut by remember(selectedLut) { mutableStateOf(selectedLut != null) }
     var exportContainer by remember { mutableStateOf(MonitorMovieExportContainer.MOV) }
@@ -290,35 +288,28 @@ internal fun MediaDeliveryPopup(
     }
 
     if (showHopConfirm && frameioController != null) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { showHopConfirm = false },
-            title = { Text("Hop to internet?") },
-            text = {
-                Text(
-                    "Frame.io needs the internet. OpenZCine will leave the camera Wi‑Fi, then reconnect when delivery finishes.",
-                )
-            },
-            confirmButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = {
-                        showHopConfirm = false
-                        scope.launch {
-                            cachingForHop = true
-                            try {
-                                onCacheBeforeHop()
-                            } finally {
-                                cachingForHop = false
-                            }
-                            frameioController.beginInternetHop()
+        val haptics = LocalOperatorHaptics.current
+        Dialog(onDismissRequest = { showHopConfirm = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            MonitorConfirmPopup(
+                title = "Hop to internet?",
+                confirmTitle = "Hop",
+                onDismiss = { showHopConfirm = false },
+                onConfirm = {
+                    showHopConfirm = false
+                    scope.launch {
+                        cachingForHop = true
+                        try {
+                            onCacheBeforeHop()
+                        } finally {
+                            cachingForHop = false
                         }
-                    },
-                ) { Text("Hop") }
-            },
-            dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { showHopConfirm = false }) {
-                    Text("Cancel")
-                }
-            },
-        )
+                        frameioController.beginInternetHop()
+                    }
+                },
+                destructive = false,
+                onClickFeedback = { haptics.selection() },
+                message = "Frame.io needs the internet. OpenZCine will leave the camera Wi‑Fi, then reconnect when delivery finishes.",
+            )
+        }
     }
 }

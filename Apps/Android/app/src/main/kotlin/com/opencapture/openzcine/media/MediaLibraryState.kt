@@ -574,11 +574,6 @@ internal class MediaLibraryListingCheckpoint(
 
 /** Legacy source callers delegate to the same captured neutral projection owner as the gallery. */
 internal object MediaLibraryFiltering {
-    fun categoryScoped(clips: List<NikonMediaClipRecord>, category: MediaLibraryCategory,
-        favoriteIDs: Set<String>, cameraID: String,
-        libraryKey: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) }): List<NikonMediaClipRecord> =
-        NikonAppGalleryProjection(clips, emptyMap(), category, favoriteIDs, cameraID,
-            MediaLibrarySortOrder.NEWEST, libraryKey = libraryKey).categoryClips
     fun displayed(clips: List<NikonMediaClipRecord>, category: MediaLibraryCategory,
         favoriteIDs: Set<String>, cameraID: String, sortOrder: MediaLibrarySortOrder,
         filters: MediaLibraryFilters = MediaLibraryFilters(), today: LocalDate = LocalDate.now(),
