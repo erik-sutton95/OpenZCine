@@ -5,6 +5,8 @@
 	<!-- Frame.io integration. Client ID, redirect URI, and URL scheme come from the gitignored
 	     Frameio.local.xcconfig via FRAMEIO_* build settings (see docs/frameio-setup.md). Adobe
 	     assigns a unique Native App redirect per credential — copy it exactly from the console. -->
+	<key>SentryDSN</key>
+	<string>$(SENTRY_DSN)</string>
 	<key>FrameioClientID</key>
 	<string>$(FRAMEIO_CLIENT_ID)</string>
 	<key>FrameioRedirectURI</key>

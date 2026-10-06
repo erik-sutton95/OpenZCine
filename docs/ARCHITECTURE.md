@@ -214,6 +214,15 @@ bodies and reconnect them silently on plug-in.
 
 ### ADR-006 — Bug-Report Paths and Relay
 
+On iOS, **Report a Problem** opens the problem report form OpenZCine shares with OpenPocketCine and
+OpenInstaCine (OpenCineAppKit): a description, optional technical details (the redacted journal and
+connect-attempt trace, shown before sending), optional photos or screenshots and an optional reply
+email. The report goes privately to OpenCapture through Sentry, not to a public GitHub issue, and
+sends once the phone has left camera Wi-Fi and has internet. Optional automatic crash and error
+reports (off by default, asked once at launch) take the same route. A build without a Sentry DSN
+(`SENTRY_DSN`, empty in the repository) shows both as unavailable. The rest of this record describes
+Android, which keeps the relay until it moves to the shared reporting too.
+
 Bug reports are intentionally a platform-shell concern, not a portable-core feature. **Report a
 Problem** offers two public GitHub-issue paths: an anonymous in-app form and the signed-in
 [GitHub bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml). The anonymous

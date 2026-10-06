@@ -224,7 +224,9 @@ Contributions are welcome.
 
 - Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, code standards, and how
   to report bugs vs. request features.
-- **Report a Problem** offers two public-issue paths: an anonymous in-app report with no GitHub
+- **Report a Problem** on iOS sends a private report to OpenCapture through Sentry (the form
+  shared with OpenPocketCine), with optional technical details, photos and a reply email.
+- **Report a Problem** on Android offers two public-issue paths: an anonymous in-app report with no GitHub
   account (optional privacy-filtered activity events and user-selected, metadata-stripped
   screenshots), or a [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
   with richer optional details. Both paths are public.
