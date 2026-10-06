@@ -164,6 +164,9 @@ struct NikonMonitorShell: View {
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .allowsHitTesting(!model.interfaceLocked)
                 .position(x: frame.midX, y: frame.midY)
+                // MonitorScreen draws the camera values after this slot: the expanded landscape
+                // palette's lower row must cover them, as Pocket's does; panels (10) stay above.
+                .zIndex(6)
                 .onChange(of: paletteCollapses) { _, collapse in
                     if collapse { railExpanded = false }
                 }
