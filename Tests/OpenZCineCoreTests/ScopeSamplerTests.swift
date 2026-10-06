@@ -209,7 +209,7 @@ struct ScopeSamplerTests {
         let natives = [16, 40, 55, 128, 200, 255]
         let points = natives.enumerated().map { index, native in
             ScopePoint(
-                xRatio: Double(index) / Double(natives.count), red: UInt8(native),
+                xRatio: Double(index) / Double(natives.count), yRatio: 0, red: UInt8(native),
                 green: UInt8(native), blue: UInt8(native), luma: UInt8(native))
         }
         let median = ScopeSampler.medianWaveformLevel(

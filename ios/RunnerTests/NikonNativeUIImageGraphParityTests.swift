@@ -81,6 +81,35 @@ import enum OpenCineMedia.MonitorZebraPaint
             "identity must evict the exact retained-image memo")
     }
 
+    /// Nikon main grades the LUT half of a 50/50 comparison: the right half for Left / Right and
+    /// the bottom half for Top / Bottom ("LUT on the bottom"), as Nikon playback still does.
+    func testSplitComparisonGradesTheSameHalfAsTheFrozenOwner() throws {
+        let image = try decodedFixture()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LUTFileStore(root: root)
+        let donor = FrozenNikonUIImageGraphProcessor(fileStore: store)
+        let composed = LiveFrameProcessor(fileStore: store)
+        let context = CIContext(options: [
+            .workingColorSpace: NSNull(), .outputColorSpace: NSNull(),
+        ])
+        let plain = pixels(try XCTUnwrap(CIImage(image: image)), context: context)
+        for orientation in SplitComparisonOrientation.allCases {
+            var settings = LiveImageEffects()
+            settings.lut = .builtIn(.monochrome)
+            settings.splitComparison = orientation
+            let before = pixels(
+                try XCTUnwrap(CIImage(image: donor.render(image, effects: settings))),
+                context: context)
+            let after = pixels(
+                try XCTUnwrap(CIImage(image: composed.render(image, effects: settings))),
+                context: context)
+            XCTAssertNotEqual(before, plain, "\(orientation) must grade half the frame")
+            let differing = zip(before, after).filter { $0 != $1 }.count
+            XCTAssertEqual(differing, 0, "\(orientation): channels unlike the frozen owner")
+        }
+    }
+
     private func decodedFixture() throws -> UIImage {
         let width = 96
         let height = 32

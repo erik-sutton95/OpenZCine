@@ -187,7 +187,6 @@ struct LiveViewLayoutContext {
     let chromeInsets: MonitorEdgeInsets
     let horizontalDirection: MonitorHorizontalLayoutDirection
     let viewportWidth: Double
-    let canvasOffsetX: Double
     let topControlInset: Double
     /// True when the viewport is taller than it is wide — drives the portrait monitor shell.
     let isPortrait: Bool
@@ -219,9 +218,7 @@ struct LiveViewLayoutContext {
             physical
             ? windowGeometry.size.height
             : Double(proxy.size.height) + max(0, feedSafeArea.top) + max(0, feedSafeArea.bottom)
-        chromeInsets =
-            MonitorChromeLayout.insets(feedSafeArea: feedSafeArea)
-            .clearingWindowControls
+        chromeInsets = MonitorEdgeInsets.chrome(for: .zero).clearingWindowControls
         horizontalDirection = MonitorHorizontalLayoutDirection.resolve(
             deviceOrientation: deviceOrientation,
             safeArea: feedSafeArea
@@ -236,14 +233,6 @@ struct LiveViewLayoutContext {
                 geometrySpace: .safeArea
             )
         topControlInset = Double(windowGeometry.topControlInset)
-        canvasOffsetX =
-            physical
-            ? 0
-            : MonitorLiveViewViewport.canvasOffsetX(
-                layoutWidth: Double(proxy.size.width),
-                safeArea: feedSafeArea,
-                screenWidth: screenWidth
-            )
     }
 }
 @MainActor
@@ -293,18 +282,13 @@ extension UIInterfaceOrientation {
 
 struct LiveFeedModule: View {
     @Environment(NativeAppModel.self) private var model
-    let safeArea: MonitorEdgeInsets
     let viewportWidth: Double
-    let canvasOffsetX: Double
-    var horizontalDirection: MonitorHorizontalLayoutDirection = .standard
     /// Portrait mounts hand the module an exact zone-frame height. The measured height is only
     /// trustworthy in the landscape full-bleed canvas: inside a safe-area-inset context the
     /// module's own `.ignoresSafeArea()` re-expands the proposal, the reader reports the grown
     /// height, and the derived 16:9 box renders oversized and shifted up — the fill-mode "cropped
     /// on top and right" bug. Nil (landscape) keeps the measured path unchanged.
     var fixedContentHeight: Double? = nil
-    /// The shared canvas already decided the picture footprint; native rendering only fills it.
-    var sharedPictureGeometry = false
 
     /// True while a finger is held (roughly still) on the feed — drives the AF-box lock "draw-in".
     @GestureState private var feedHold = false
@@ -457,48 +441,16 @@ struct LiveFeedModule: View {
             LiveDesign.background
 
             GeometryReader { proxy in
-                // Photography frames the feed at the still image area's shape (FX/DX 3:2,
-                // 1:1, 16:9) so the whole photo frame shows; cinema keeps the native 16:9.
-                let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
-                    selector: model.cameraPropertySnapshot.captureSelector)
-                // A capture device describes its own shape — the HDMI signal is whatever the
-                // camera is sending, which need not be the 16:9 the camera's own live view uses.
-                // The raster fills and clips, so an assumed aspect does not letterbox a mismatch,
-                // it crops it: the operator loses exactly the frame edges they are checking.
-                // Cinema and photography keep describing the camera's frame.
-                let hdmiAspect: Double? = {
-                    guard model.videoSource == .hdmiCapture,
-                        let size = model.liveFrameImage?.size,
-                        size.width > 0, size.height > 0
-                    else { return nil }
-                    return Double(size.width / size.height)
-                }()
                 // Vertical mode: the body is on its side (header byte 839), so the DISPLAYED
                 // frame is the source frame's inverse aspect and the picture rotates upright
                 // inside it. The rotation wraps the whole feed stack — raster, AF boxes, zoom,
                 // gestures — so every existing coordinate mapping keeps operating in the
                 // camera's own (pre-rotation) space.
+                // The shared canvas already fitted the picture (source aspect, rotation, HDMI
+                // shape); the native raster only fills it.
                 let feedRotation = model.displayedFeedRotation
-                let sourceAspect =
-                    hdmiAspect
-                    ?? (isPhotography
-                        ? model.cameraPropertySnapshot.photographyFeedAspect
-                        : MonitorFeedLayout.aspectRatio)
-                let feedFrame =
-                    sharedPictureGeometry
-                    ? MonitorFeedFrame(
-                        x: 0, y: 0, width: viewportWidth,
-                        height: fixedContentHeight ?? Double(proxy.size.height))
-                    : MonitorFeedLayout.fullBleedFrame(
-                        viewportWidth: viewportWidth,
-                        viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
-                        safeArea: safeArea,
-                        horizontalDirection: horizontalDirection,
-                        aspect: feedRotation.isVertical ? 1 / sourceAspect : sourceAspect,
-                        centered: isPhotography || feedRotation.isVertical
-                    )
-                let imageWidth = CGFloat(feedFrame.width)
-                let imageHeight = CGFloat(feedFrame.height)
+                let imageWidth = CGFloat(viewportWidth)
+                let imageHeight = CGFloat(fixedContentHeight ?? Double(proxy.size.height))
                 ZStack(alignment: .leading) {
                     Color.black
                     rotatedFeedImage(
@@ -507,10 +459,7 @@ struct LiveFeedModule: View {
                     FeedGrain()
                 }
                 .frame(width: imageWidth, height: imageHeight, alignment: .leading)
-                .position(
-                    x: CGFloat(feedFrame.x + feedFrame.width / 2),
-                    y: CGFloat(feedFrame.y + feedFrame.height / 2)
-                )
+                .position(x: imageWidth / 2, y: imageHeight / 2)
                 .frame(
                     width: CGFloat(viewportWidth),
                     height: CGFloat(fixedContentHeight ?? Double(proxy.size.height)),
@@ -520,7 +469,6 @@ struct LiveFeedModule: View {
                 // width-bound frame) instead of letting it paint over the chrome above/below.
                 // Landscape full-bleed must stay unclipped — its safe-area escape depends on it.
                 .modifier(ClipToBandWhenFixed(active: fixedContentHeight != nil))
-                .offset(x: CGFloat(canvasOffsetX))
             }
         }
         // The safe-area escape belongs to the landscape full-bleed mount only; with a fixed

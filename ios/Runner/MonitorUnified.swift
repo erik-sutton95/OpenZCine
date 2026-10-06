@@ -65,8 +65,7 @@ struct NikonMonitorShell: View {
             // has no viewport placement authority and stays mounted even in command display.
             GeometryReader { picture in
                 LiveFeedModule(
-                    safeArea: .zero, viewportWidth: picture.size.width, canvasOffsetX: 0,
-                    fixedContentHeight: picture.size.height, sharedPictureGeometry: true
+                    viewportWidth: picture.size.width, fixedContentHeight: picture.size.height
                 )
                 .opacity(model.displayMode == .command ? 0 : 1)
                 .allowsHitTesting(
@@ -123,7 +122,6 @@ struct NikonMonitorShell: View {
             }
         }
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
-        .offset(x: context.canvasOffsetX)
         .onChange(of: layout.portrait, initial: true) { _, portrait in
             model.monitorIsPortrait = portrait
         }
@@ -139,8 +137,10 @@ struct NikonMonitorShell: View {
             NikonCommandControls(layout: layout)
         } else {
             FeedAssistOverlayModule(
-                safeArea: context.feedSafeArea, viewportWidth: context.viewportWidth,
-                canvasOffsetX: 0, horizontalDirection: context.horizontalDirection,
+                viewportWidth: context.viewportWidth,
+                picture: CGRect(
+                    x: layout.picture.x, y: layout.picture.y, width: layout.picture.width,
+                    height: layout.picture.height),
                 suppressFloatingScopes: layout.portrait && !layout.fillsPicture
             )
             .allowsHitTesting(!model.interfaceLocked)

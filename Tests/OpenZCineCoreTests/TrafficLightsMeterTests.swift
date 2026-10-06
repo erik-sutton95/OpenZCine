@@ -52,7 +52,7 @@ struct TrafficLightsMeterTests {
             histogramLuma: hist, histogramRed: hist, histogramGreen: hist, histogramBlue: hist,
             points: [
                 ScopePoint(
-                    xRatio: 0.5, red: UInt8(midNative), green: UInt8(midNative),
+                    xRatio: 0.5, yRatio: 0, red: UInt8(midNative), green: UInt8(midNative),
                     blue: UInt8(midNative), luma: UInt8(midNative))
             ])
         let level = TrafficLightsMeter.channelLevel(
@@ -73,9 +73,9 @@ struct TrafficLightsMeterTests {
             histogramBlue: Array(repeating: 0, count: 256),
             points: [
                 ScopePoint(
-                    xRatio: 0.2, red: UInt8(clipNative), green: 0, blue: 0, luma: 0),
+                    xRatio: 0.2, yRatio: 0, red: UInt8(clipNative), green: 0, blue: 0, luma: 0),
                 ScopePoint(
-                    xRatio: 0.8, red: UInt8(shadowNative), green: 0, blue: 0, luma: 0),
+                    xRatio: 0.8, yRatio: 0, red: UInt8(shadowNative), green: 0, blue: 0, luma: 0),
             ])
         let level = TrafficLightsMeter.channelLevel(
             samples: samples, channel: .red, curve: .redLog3G10)
@@ -164,7 +164,8 @@ struct TrafficLightsMeterTests {
             ExposureSignalMapping(curve: .redLog3G10).middleGrayNative.rounded())
         let points = (0..<100).map { index in
             ScopePoint(
-                xRatio: Double(index) / 100, red: UInt8(midNative), green: UInt8(midNative),
+                xRatio: Double(index) / 100, yRatio: 0, red: UInt8(midNative),
+                green: UInt8(midNative),
                 blue: UInt8(midNative), luma: UInt8(midNative))
         }
         var hist = [Int](repeating: 0, count: 256)
@@ -189,7 +190,8 @@ struct TrafficLightsMeterTests {
             ExposureScale.signalNative(referenceIRE: 100, curve: .redLog3G10).rounded())
         let points = (0..<100).map { index in
             ScopePoint(
-                xRatio: Double(index) / 100, red: UInt8(clipNative), green: UInt8(clipNative),
+                xRatio: Double(index) / 100, yRatio: 0, red: UInt8(clipNative),
+                green: UInt8(clipNative),
                 blue: UInt8(clipNative), luma: UInt8(clipNative))
         }
         var hist = [Int](repeating: 0, count: 256)
@@ -209,7 +211,8 @@ struct TrafficLightsMeterTests {
         let toeFloor = ScopeSampler.trafficCrushFloor(curve: .redLog3G10)
         let points = (0..<100).map { index in
             ScopePoint(
-                xRatio: Double(index) / 100, red: 0, green: 0, blue: UInt8(toeFloor), luma: 0)
+                xRatio: Double(index) / 100, yRatio: 0, red: 0, green: 0, blue: UInt8(toeFloor),
+                luma: 0)
         }
         var red = [Int](repeating: 0, count: 256)
         var green = [Int](repeating: 0, count: 256)
@@ -239,9 +242,9 @@ struct TrafficLightsMeterTests {
             histogramLuma: red, histogramRed: red, histogramGreen: red, histogramBlue: red,
             points: [
                 ScopePoint(
-                    xRatio: 0.2, red: UInt8(clipNative), green: 0, blue: 0, luma: 0),
+                    xRatio: 0.2, yRatio: 0, red: UInt8(clipNative), green: 0, blue: 0, luma: 0),
                 ScopePoint(
-                    xRatio: 0.8, red: UInt8(shadowNative), green: 0, blue: 0, luma: 0),
+                    xRatio: 0.8, yRatio: 0, red: UInt8(shadowNative), green: 0, blue: 0, luma: 0),
             ])
         let level = TrafficLightsMeter.channelLevel(
             samples: samples, channel: .red, curve: .redLog3G10)
@@ -255,7 +258,8 @@ struct TrafficLightsMeterTests {
         let shadowNative = 55
         let points = (0..<100).map { index in
             ScopePoint(
-                xRatio: Double(index) / 100, red: UInt8(shadowNative), green: UInt8(shadowNative),
+                xRatio: Double(index) / 100, yRatio: 0, red: UInt8(shadowNative),
+                green: UInt8(shadowNative),
                 blue: UInt8(shadowNative), luma: UInt8(shadowNative))
         }
         var hist = [Int](repeating: 0, count: 256)

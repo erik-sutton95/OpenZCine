@@ -124,4 +124,36 @@ struct ShellAdoptionTests {
         #expect(shown.map(\.value) == ["1600", "Auto", "AF-C"])
         #expect(shown.map(\.label) == reported.map(\.label))
     }
+
+    /// Nikon main toasts a refused third live scope in portrait fit view; the monitor notice is
+    /// that toast on the integration.
+    @Test("A third scope in portrait fit view is refused with the cap notice")
+    func scopeCapRefusalShowsItsNotice() {
+        let model = NativeAppModel()
+        let saved = model.preferences
+        let live = model.assist.liveTools
+        defer {
+            for tool in MonitorAssistTool.scopeTools {
+                model.assist.set(tool, visible: live.contains(tool), context: .liveView)
+            }
+            model.preferences = saved
+        }
+        model.isMonitorPresented = true
+        model.monitorIsPortrait = true
+        model.preferences.portraitFeedAspect = .fit16x9
+        for tool in MonitorAssistTool.scopeTools {
+            model.assist.set(tool, visible: false, context: .liveView)
+        }
+        model.setAssist(.waveform, visible: true)
+        model.setAssist(.histogram, visible: true)
+        let trigger = model.monitorNoticeTrigger
+
+        model.setAssist(.parade, visible: true)
+
+        #expect(!model.assist.liveTools.contains(.parade))
+        #expect(model.monitorNotice == model.scopeCapNoticeText)
+        #expect(model.monitorNoticeTrigger == trigger + 1)
+        model.toggleAssist(.vectorscope)
+        #expect(model.monitorNoticeTrigger == trigger + 2)
+    }
 }

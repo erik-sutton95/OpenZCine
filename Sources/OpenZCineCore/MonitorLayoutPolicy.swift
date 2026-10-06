@@ -1,173 +1,9 @@
 import MonitorPresentation
 
-/// Rectangular frame for the native monitor live feed.
-public struct MonitorFeedFrame: Equatable, Sendable {
-    public let x: Double
-    public let y: Double
-    public let width: Double
-    public let height: Double
-
-    public init(x: Double, y: Double, width: Double, height: Double) {
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
-    }
-
-    /// Mirrors the frame around the viewport's vertical center line — the same operation the
-    /// module frames carry, so the feed can follow the one-mirror-at-the-exit rule they follow.
-    public func mirroredHorizontally(in viewportWidth: Double) -> MonitorFeedFrame {
-        MonitorFeedFrame(
-            x: max(0, viewportWidth) - x - width,
-            y: y,
-            width: width,
-            height: height
-        )
-    }
-}
-
 /// Placement for the native monitor live feed.
 public enum MonitorFeedLayout {
     /// Native monitor preview aspect ratio.
     public static let aspectRatio = 16.0 / 9.0
-
-    /// Classic-notch feed translation toward the opposite-side control rail.
-    public static let classicNotchRailwardShift = 10.0
-
-    /// Keeps the feed clear of a landscape-left side notch.
-    public static func leadingInset(for safeArea: MonitorEdgeInsets) -> Double {
-        let cutout = StartupSideCutoutAvoidance.resolve(for: safeArea)
-
-        if cutout.trailing > cutout.leading {
-            return 0
-        }
-
-        return cutout.leading
-    }
-
-    /// Builds the feed frame, using height as the stable landscape constraint. `aspect`
-    /// defaults to the native 16:9 monitor frame; photography passes the active still
-    /// image area's shape (3:2, 1:1, 16:9) so the full photo frame letterboxes instead
-    /// of cropping top and bottom. `centered` places the frame mid-viewport (clamped to
-    /// the safe-area insets) — photography's layout — instead of the cinema
-    /// leading-inset placement.
-    public static func frame(
-        viewportWidth: Double,
-        viewportHeight: Double,
-        safeArea: MonitorEdgeInsets,
-        horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
-        aspect: Double = aspectRatio,
-        centered: Bool = false
-    ) -> MonitorFeedFrame {
-        let aspectRatio = max(0.1, aspect)
-        let leadingInset = leadingInset(for: safeArea)
-        let viewportWidth = max(0, viewportWidth)
-        let viewportHeight = max(0, viewportHeight)
-
-        if viewportHeight > viewportWidth {
-            let width = viewportWidth
-            let height = width / aspectRatio
-            // Vertical (rotated) feeds are taller than the tall viewport itself. Gated to
-            // aspect < 1 so every landscape-or-wider aspect keeps its historical full-width
-            // portrait frame untouched.
-            if aspectRatio < 1, height > viewportHeight + 0.5 {
-                // A SMALL overflow (≤15%) binds to the WIDTH and centre-crops the sliver: a
-                // vertical phone filming vertical wants edge-to-edge, and the ~13 pt
-                // pillarbox this produced read as a rendering bug in the field. The mount
-                // clips the overflow. A LARGE overflow still pillarboxes — cropping real
-                // framing is worse than bars.
-                if height <= viewportHeight * 1.15 {
-                    return MonitorFeedFrame(
-                        x: 0, y: (viewportHeight - height) / 2, width: width, height: height)
-                }
-                let boundWidth = viewportHeight * aspectRatio
-                return MonitorFeedFrame(
-                    x: (viewportWidth - boundWidth) / 2, y: 0,
-                    width: boundWidth, height: viewportHeight)
-            }
-            return MonitorFeedFrame(x: 0, y: 0, width: width, height: height)
-        }
-
-        let width = viewportHeight * aspectRatio
-
-        // Landscape viewport narrower than 16:9 (4:3-ish iPads): the full-height frame would
-        // overflow the right edge — and drag the feed-spanning top deck off-center with it.
-        // With the side-rail chrome relocated into the corners (see `isWidthConstrained`), the
-        // letterboxed frame spans the full width, vertically centered between the corner chrome
-        // bands. The tolerance keeps exact-16:9 mounts (portrait fit/fill hand this function
-        // their own 16:9 box, where width == viewportWidth up to float drift) on the untouched
-        // full-height path.
-        if width > viewportWidth + 0.5 {
-            let lanedHeight = viewportWidth / aspectRatio
-            return MonitorFeedFrame(
-                x: 0,
-                y: (viewportHeight - lanedHeight) / 2,
-                width: viewportWidth,
-                height: lanedHeight
-            )
-        }
-
-        let remainingWidth = max(0, viewportWidth - width)
-        let x: Double
-        if centered, aspectRatio < Self.aspectRatio - 0.001 {
-            // Mid-viewport, clamped so neither edge runs under a safe-area inset. Only the
-            // narrower-than-native shapes (3:2, 1:1) centre — a 16:9 photo frame takes the
-            // exact video-mode placement, clear of the system rail.
-            let maxX = max(leadingInset, remainingWidth - max(0, safeArea.trailing))
-            x = min(max(remainingWidth / 2, leadingInset), maxX)
-        } else if MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) {
-            // Classic iPhones report equal horizontal safe areas even though only one side has
-            // the notch: clear the leading side, biased slightly toward the opposite control
-            // rail to close its oversized black gap. STANDARD space only — the exit mirror
-            // below owns the other side, for this arm and every other one. (This arm used to
-            // mirror in place, which for its equal insets happened to equal the exit mirror —
-            // and the island arm below did not mirror at all, so the chrome flipped around a
-            // picture that stayed put: the capture rail overlaid the feed's left edge and a
-            // dead lane sat inboard of the island.)
-            let availableShift = max(
-                0,
-                remainingWidth - max(0, safeArea.leading) - max(0, safeArea.trailing)
-            )
-            let railwardShift = min(classicNotchRailwardShift, availableShift)
-            x = min(remainingWidth, safeArea.leading + railwardShift)
-        } else {
-            x = min(remainingWidth, leadingInset)
-        }
-
-        let standard = MonitorFeedFrame(x: x, y: 0, width: width, height: viewportHeight)
-        // ONE mirror, at the exit, for every arm above — the same rule the module frames follow.
-        // A direction-aware arm here and a direction-blind one there is exactly how the two
-        // halves of the screen ended up disagreeing about which side the island was on.
-        guard horizontalDirection == .mirrored else { return standard }
-        return standard.mirroredHorizontally(in: viewportWidth)
-    }
-
-    /// Fits the feed to the visible viewport without expanding the source frame.
-    public static func fullBleedFrame(
-        viewportWidth: Double,
-        viewportHeight: Double,
-        safeArea: MonitorEdgeInsets,
-        horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
-        aspect: Double = aspectRatio,
-        centered: Bool = false
-    ) -> MonitorFeedFrame {
-        frame(
-            viewportWidth: viewportWidth,
-            viewportHeight: viewportHeight,
-            safeArea: safeArea,
-            horizontalDirection: horizontalDirection,
-            aspect: aspect,
-            centered: centered
-        )
-    }
-}
-
-/// Placement for native monitor chrome that should stay independent from feed cutout avoidance.
-public enum MonitorChromeLayout {
-    /// Keeps chrome controls on their stable screen-relative margins while the feed handles cutouts.
-    public static func insets(feedSafeArea _: MonitorEdgeInsets) -> MonitorEdgeInsets {
-        MonitorEdgeInsets.chrome(for: .zero)
-    }
 }
 
 /// Coordinate space SwiftUI uses when reporting live-view geometry.
@@ -202,14 +38,6 @@ public enum MonitorLiveViewViewport {
         return max(geometryWidth, max(0, screenWidth))
     }
 
-    /// Horizontal shift for a restored full-screen canvas inside safe-area-sized geometry.
-    public static func canvasOffsetX(
-        layoutWidth: Double,
-        safeArea: MonitorEdgeInsets,
-        screenWidth: Double? = nil
-    ) -> Double {
-        0
-    }
 }
 
 /// Rectangular frame for a live-view interface module.
@@ -243,20 +71,6 @@ public enum MonitorLiveViewModuleLayout {
 /// The record button's size, which the photography chrome matches.
 public enum MonitorSideRailControlLayout {
     public static let recordButtonSize = 82.8
-}
-
-/// Landscape side-notch geometry the feed placement reads.
-public enum MonitorBatteryRailLayout {
-    /// Whether landscape safe-area geometry identifies a wider pre-Dynamic-Island notch.
-    /// Apple exposes no public notch-type API, so keep this deliberately narrow: classic-notch
-    /// phones occupy the 44–50pt band while Dynamic Island phones use larger side insets.
-    public static func usesClassicSideNotch(safeArea: MonitorEdgeInsets) -> Bool {
-        let leading = max(0, safeArea.leading)
-        let trailing = max(0, safeArea.trailing)
-        let minimumInset = min(leading, trailing)
-        let maximumInset = max(leading, trailing)
-        return minimumInset >= 40 && maximumInset <= 50 && abs(leading - trailing) < 4
-    }
 }
 
 /// Content margins used by the native startup and pairing screens.
