@@ -1,7 +1,6 @@
 package com.opencapture.openzcine
 
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.net.nsd.NsdManager
 import android.os.Bundle
@@ -156,7 +155,6 @@ import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.SetupStreamSettings
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
-import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -226,8 +224,7 @@ class MainActivity : ComponentActivity() {
         val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
         val debugLiveGuideStep = DemoHarness.liveGuideStep(intent)
         val debugInitialSettingsTab = DemoHarness.settingsTab(intent)
-        val debugSession: CameraSession? =
-            demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
+        val debugSession: CameraSession? = demo?.first
         val pairingScript = DemoHarness.pairingScript(intent)
         val debugSplitComparison = DemoHarness.splitComparison(intent)
         val operatorSettings =
@@ -1727,18 +1724,6 @@ class MainActivity : ComponentActivity() {
             hide(WindowInsetsCompat.Type.systemBars())
         }
     }
-
-    /**
-     * Debug-only hook to exercise the real NSD discovery + socket transport:
-     * `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez openzcine.nsdTransport true`
-     */
-    private fun isNsdTransportRequested(): Boolean =
-        (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
-            intent.getBooleanExtra("openzcine.nsdTransport", false)
-
-    private fun nsdTransportSession(): CameraSession =
-        NsdCameraSessionFactory(AndroidNsdBrowser(getSystemService(NsdManager::class.java)))
-            .create()
 }
 
 /**
