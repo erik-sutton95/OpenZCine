@@ -6,11 +6,11 @@ import com.opencapture.monitorui.settings.MonitorSettingsSegmented
 import com.opencapture.monitorui.settings.MonitorSettingsChoices
 import com.opencapture.monitorui.settings.MonitorSettingsActionPill
 import com.opencapture.monitorui.settings.MonitorConnectionSettings
+import com.opencapture.monitorui.MonitorLinkHealth
 import com.opencapture.monitorui.settings.MonitorLinkHealthScale
 import com.opencapture.monitorui.settings.MonitorSupportAction
 import com.opencapture.monitorui.settings.MonitorSupportSettings
-import com.opencapture.monitorui.settings.MonitorReportStatus
-import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportDelivery
+import com.opencapture.opencine.appkit.diagnostics.settingsStatus
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
@@ -79,7 +79,6 @@ import com.opencapture.openzcine.prefersPhotographyChrome
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
-import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.frameio.FrameioConnectionState
@@ -91,10 +90,7 @@ import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.relay.RelayCameraSession
 import com.opencapture.openzcine.relay.RelayWatchUiState
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -130,10 +126,8 @@ internal fun OperatorSettingsScreen(
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
     linkHealth: AndroidLinkHealthMonitor? = null,
-    liveViewSource: SwiftCoreLiveFrameSource? = null,
     activeTransportLabel: String? = null,
     onDisconnect: (() -> Unit)? = null,
-    onReconnect: (() -> Unit)? = null,
     systemSettingsActions: SystemSettingsActions,
     onReportProblem: () -> Unit,
     liveViewGuideController: LiveViewGuideController,
@@ -148,7 +142,6 @@ internal fun OperatorSettingsScreen(
     relayWatchUi: RelayWatchUiState? = null,
     onClose: () -> Unit,
 ) {
-    val context = LocalContext.current
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
     val cameraInput =
         remember(
@@ -193,7 +186,7 @@ internal fun OperatorSettingsScreen(
         onDispose {
             val controller = frameioController
             if (controller != null && controller.isInternetHopActive) {
-                endInternetHopAfterDismiss(controller)
+                controller.endInternetHopAfterDismiss()
             }
         }
     }
@@ -205,7 +198,6 @@ internal fun OperatorSettingsScreen(
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         val compact = maxWidth < 600.dp
-        val condensed = maxHeight < 300.dp
         val disconnected = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
         val state by (session?.state ?: disconnected).collectAsState()
         val linked = state is CameraSessionState.Connected
@@ -236,8 +228,7 @@ internal fun OperatorSettingsScreen(
                     onInteraction = emitHaptic,
                 )
                 MonitorSettingsTab.LINK -> LinkRows(
-                    session, settings, linkHealth, liveViewSource, activeTransportLabel,
-                    relayWatchUi, onDisconnect, onReconnect, emitHaptic,
+                    session, settings, linkHealth, activeTransportLabel, relayWatchUi, emitHaptic,
                 )
                 MonitorSettingsTab.ASSIST -> NikonViewAssistSettings(assists.shared, cameraInput, emitHaptic)
                 MonitorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic)
@@ -252,7 +243,7 @@ internal fun OperatorSettingsScreen(
                     onEditView = { mode -> settings.beginChromeEditing(mode); onClose() },
                 )
                 MonitorSettingsTab.STORAGE -> StorageRows(
-                    mediaCacheStore, frameioController, condensed, onCompletedMediaCacheCleared,
+                    mediaCacheStore, frameioController, onCompletedMediaCacheCleared,
                 )
                 MonitorSettingsTab.SYSTEM -> SystemRows(
                     systemSettingsActions, onReportProblem, liveViewGuideController,
@@ -264,24 +255,6 @@ internal fun OperatorSettingsScreen(
     }
 }
 
-/**
- * Rejoins the camera after a consented internet hop, from a scope that outlives this
- * composition — the operator has already dismissed the surface that started it.
- *
- * ponytail: same three lines as lut/RedLutDownloadScreen.kt's `endInternetHopAfterDismiss`,
- * which is private to that file. Hoist one copy if a third caller appears.
- */
-private fun endInternetHopAfterDismiss(controller: FrameioDeliveryController) {
-    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
-        try {
-            withContext(NonCancellable) { controller.endInternetHop() }
-        } catch (_: Exception) {
-            // Best-effort rejoin; the operator has already left the settings surface.
-        }
-    }
-}
-
-/** Eyebrow + title with the live tile pinned trailing (iOS `settingsTop`). */
 /**
  * Sharing tab — 1:1 with iOS `sharingRows`: enable, watcher count, 4-digit watcher passcode,
  * control-requests policy, and the live control rows (requested / held-by with Take Back).
@@ -466,33 +439,20 @@ private fun LinkRows(
     session: CameraSession?,
     settings: OperatorSettings,
     linkHealth: AndroidLinkHealthMonitor?,
-    liveViewSource: SwiftCoreLiveFrameSource?,
     activeTransportLabel: String?,
     relayWatchUi: RelayWatchUiState?,
-    onDisconnect: (() -> Unit)?,
-    onReconnect: (() -> Unit)?,
     onInteraction: () -> Unit,
 ) {
-    // liveViewSource is accepted for call-site parity; iOS Link no longer surfaces
-    // preview-apply diagnostics in this tab.
-    @Suppress("UNUSED_PARAMETER")
-    val unusedLiveViewSource = liveViewSource
     val disconnectedState = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
     val state by (session?.state ?: disconnectedState).collectAsState()
     val linked = state is CameraSessionState.Connected
     val health = linkHealth?.presentation ?: LinkHealthPresentation()
-    val scoreBand =
-        when {
-            health.score >= 80 -> "Stable"
-            health.score >= 50 -> "Watch"
-            else -> "Poor"
-        }
     val healthCaption =
         if (session == null || !linked) {
             health.detail.ifBlank { stringResource(R.string.settings_link_no_camera_caption) }
         } else {
             val detail = health.detail.ifBlank { stringResource(R.string.settings_active_link) }
-            "$detail · $scoreBand"
+            "$detail · ${MonitorLinkHealth.band(health.score).label}"
         }
     val transportValue =
         when {
@@ -623,7 +583,6 @@ private fun ControlsRows(
 private fun StorageRows(
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController?,
-    condensed: Boolean,
     onCompletedMediaCacheCleared: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -645,7 +604,7 @@ private fun StorageRows(
 
     // iOS order: Frame.io first, then one Local Media Cache / Clear Cache card.
     frameioController?.let { controller ->
-        FrameioStorageRows(controller, condensed)
+        FrameioStorageRows(controller)
     }
     fun clearNow() {
         clearing = true
@@ -688,7 +647,7 @@ private fun StorageRows(
 
 /** Frame.io account entry point; upload project selection lives beside media selection. */
 @Composable
-private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed: Boolean) {
+private fun FrameioStorageRows(controller: FrameioDeliveryController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var hopConfirmVisible by remember { mutableStateOf(false) }
@@ -736,8 +695,6 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
         }
     }
 
-    @Suppress("UNUSED_PARAMETER")
-    val unusedCondensed = condensed
     val connectionLabel =
         when (controller.connectionState) {
             FrameioConnectionState.UNCONFIGURED -> stringResource(R.string.status_not_configured)
@@ -864,9 +821,7 @@ internal fun SystemRows(
         unavailableHelp = stringResource(R.string.help_system_automatic_reports_unavailable),
         onAutomaticReports = { automaticReports = it; AppDiagnostics.reporting.setConsent(it) },
         privacy = { runAction(actions::openPrivacy) },
-        status = if (report.delivery == ManualProblemReportDelivery.IDLE) null else
-            MonitorReportStatus(report.statusLabel,
-                report.detail ?: "This phone keeps one report until Sentry accepts it or you discard it.", report.eventId),
+        status = report.settingsStatus,
         discard = if (report.allowsDiscard) ({ AppDiagnostics.manualReport.discard() }) else null,
         feedback = feedback,
         reportTitle = stringResource(R.string.system_report_problem),

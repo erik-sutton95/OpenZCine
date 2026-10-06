@@ -12,24 +12,20 @@ import com.opencapture.openzcine.R
 /**
  * Top-level monitor layout selected by the operator's DISP button.
  *
- * [wireIndex] is the shared Swift zone-map mode value. Persisted order and
- * enablement use the stable enum names instead, so a reordered list never
- * changes the core protocol boundary.
+ * Persisted order and enablement use the stable enum names.
  */
 public enum class MonitorDisplayMode(
     /** Operator-facing settings label. */
     public val label: String,
-    /** Stable shared-zone-map value (live = 0, clean = 1, command = 2). */
-    public val wireIndex: Int,
 ) {
     /** Camera feed with operator overlays and controls. */
-    LIVE("Live", 0),
+    LIVE("Live"),
 
     /** Camera feed with the live tool chrome removed. */
-    CLEAN("Clean", 1),
+    CLEAN("Clean"),
 
     /** Camera-backed command dashboard with the live-view consumer released. */
-    COMMAND("Command", 2),
+    COMMAND("Command"),
     ;
 
     internal companion object {
@@ -373,8 +369,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         public val codecReadout: Toggle get() = get(ChromeSection.CODEC_READOUT)
         public val mediaReadout: Toggle get() = get(ChromeSection.MEDIA_READOUT)
         public val fpsReadout: Toggle get() = get(ChromeSection.FPS_READOUT)
-        public val timecodeReadout: Toggle get() = get(ChromeSection.TIMECODE_READOUT)
-        public val resolutionReadout: Toggle get() = get(ChromeSection.RESOLUTION_READOUT)
         public val railRecord: Toggle get() = get(ChromeSection.RAIL_RECORD)
         public val railMedia: Toggle get() = get(ChromeSection.RAIL_MEDIA)
         public val railSettings: Toggle get() = get(ChromeSection.RAIL_SETTINGS)
@@ -437,8 +431,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val codecReadoutVisible: Toggle get() = liveChrome.codecReadout
     public val mediaReadoutVisible: Toggle get() = liveChrome.mediaReadout
     public val fpsReadoutVisible: Toggle get() = liveChrome.fpsReadout
-    public val lockButtonVisible: Toggle get() = liveChrome.lockButton
-    public val batteryIndicatorsVisible: Toggle get() = liveChrome.batteryIndicators
 
     /** The chrome configuration [mode] renders on the [capture] side of the camera. */
     public fun chrome(

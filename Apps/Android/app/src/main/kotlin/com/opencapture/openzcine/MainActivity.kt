@@ -65,7 +65,6 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
-import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
@@ -1292,17 +1291,10 @@ class MainActivity : ComponentActivity() {
                                                 relayBroadcastEnabled = false
                                             }
                                         },
-                                        liveViewSource =
-                                            (active as? SwiftCoreCameraSession)
-                                                ?.liveFrames as? SwiftCoreLiveFrameSource,
                                         activeTransportLabel = activeSavedCamera?.transport?.displayName,
                                         onDisconnect =
                                             activeSavedCamera?.let {
                                                 { disconnectToSavedCameraHome(false) }
-                                            },
-                                        onReconnect =
-                                            activeSavedCamera?.let {
-                                                { disconnectToSavedCameraHome(true) }
                                             },
                                         systemSettingsActions = systemSettingsActions,
                                         onReportProblem = { showProblemReport = true },

@@ -18,7 +18,6 @@ import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
 import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.opencine.appkit.MonitorAssistState
-import com.opencapture.openzcine.settings.resetNikonAssist
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.settings.LocalLevelStyle
@@ -670,7 +669,7 @@ class NikonAssistsTest {
         state.setHistogram(false, MonitorCrushClipCompensation.ONE, 0.8)
         state.setScale(MonitorAssistTool.LIGHTS, 1.5)
 
-        MonitorAssistTool.entries.forEach(state::resetNikonAssist)
+        MonitorAssistTool.entries.forEach(state::resetSettings)
         val restored = restore().shared
 
         assertEquals(MonitorFalseColorSelection.SCENE_STOPS, restored.falseColorScale)
