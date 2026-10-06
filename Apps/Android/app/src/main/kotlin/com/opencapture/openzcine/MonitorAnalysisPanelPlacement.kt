@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.monitorui.MonitorFieldLayout
@@ -210,7 +211,7 @@ internal fun monitorAnalysisChromeMounts(
     )
 }
 
-/** Normalized app-local centre, independent of pixels, dp density, and orientation. */
+/** A saved normalized centre, independent of pixels, dp density, and orientation. */
 internal data class NormalizedPanelCenter(
     val xFraction: Float,
     val yFraction: Float,
@@ -223,33 +224,6 @@ internal data class NormalizedPanelCenter(
             xFraction = xFraction.coerceIn(0f, 1f),
             yFraction = yFraction.coerceIn(0f, 1f),
         )
-
-    fun frame(size: MonitorRect, layout: MonitorAnalysisPanelLayout): MonitorRect {
-        val normalized = reconciled()
-        val centerX = layout.viewport.x + normalized.xFraction * layout.viewport.width
-        val centerY = layout.viewport.y + normalized.yFraction * layout.viewport.height
-        return clampScopeFrame(
-            MonitorRect(
-                x = centerX - size.width / 2f,
-                y = centerY - size.height / 2f,
-                width = size.width,
-                height = size.height,
-            ),
-            layout.safeBounds,
-        )
-    }
-
-    companion object {
-        fun from(frame: MonitorRect, viewport: MonitorRect): NormalizedPanelCenter =
-            NormalizedPanelCenter(
-                xFraction =
-                    (frame.x + frame.width / 2f - viewport.x) /
-                        max(1f, viewport.width),
-                yFraction =
-                    (frame.y + frame.height / 2f - viewport.y) /
-                        max(1f, viewport.height),
-            ).reconciled()
-    }
 }
 
 /**
@@ -331,11 +305,10 @@ internal fun monitorAnalysisPanelLayout(
 }
 
 /**
- * Versioned app-local placement store for live scopes and the false-colour reference.
- *
- * The first read migrates the two pre-OPE-68 preference files. Complete finite pairs are clamped
- * and copied; partial, non-finite, or type-corrupt pairs are discarded deterministically. A stored
- * centre is never rewritten merely because current chrome forces a temporary presentation clamp.
+ * The live scope and false-colour centres saved before the shared assist state held them: the v2
+ * file and the two pre-OPE-68 files, read once by [movePanelCentres]. A complete finite pair is
+ * reconciled into 0...1; a partial or malformed v2 pair is dropped; an unknown schema fails closed
+ * and keeps its data.
  */
 internal class MonitorAnalysisPanelPlacementStore internal constructor(
     private val preferences: SharedPreferences,
@@ -343,46 +316,29 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
     private val legacyFalseColorPreferences: SharedPreferences? = null,
 ) {
     constructor(context: Context) : this(
-        preferences =
-            context.getSharedPreferences(
-                STORE_NAME,
-                Context.MODE_PRIVATE,
-            ),
-        legacyScopePreferences =
-            context.getSharedPreferences(
-                LEGACY_SCOPE_STORE_NAME,
-                Context.MODE_PRIVATE,
-            ),
+        preferences = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE),
+        legacyScopePreferences = context.getSharedPreferences(LEGACY_SCOPE_STORE_NAME, Context.MODE_PRIVATE),
         legacyFalseColorPreferences =
-            context.getSharedPreferences(
-                LEGACY_FALSE_COLOR_STORE_NAME,
-                Context.MODE_PRIVATE,
-            ),
+            context.getSharedPreferences(LEGACY_FALSE_COLOR_STORE_NAME, Context.MODE_PRIVATE),
     )
 
-    fun resolve(
-        id: MonitorAnalysisPanelID,
-        default: MonitorRect,
-        layout: MonitorAnalysisPanelLayout,
-    ): MonitorRect {
-        val stored = load(id) ?: return clampScopeFrame(default, layout.safeBounds)
-        return stored.frame(default, layout)
+    internal fun storedCenter(id: MonitorAnalysisPanelID): NormalizedPanelCenter? {
+        when (schemaState()) {
+            StoreSchema.UNSUPPORTED -> return null
+            StoreSchema.CURRENT -> {
+                val current = readPair(preferences, xKey(id), yKey(id))
+                if (current.state != StoredPairState.ABSENT) {
+                    if (current.value == null) recenter(id)
+                    return current.value?.reconciled()
+                }
+            }
+            StoreSchema.LEGACY -> Unit
+        }
+        val legacy = legacyPreferences(id) ?: return null
+        return readPair(legacy, legacyXKey(id), legacyYKey(id)).value?.reconciled()
     }
 
-    fun save(
-        id: MonitorAnalysisPanelID,
-        frame: MonitorRect,
-        layout: MonitorAnalysisPanelLayout,
-    ) {
-        val normalized = NormalizedPanelCenter.from(frame, layout.viewport)
-        currentSchemaEditor()
-            .putInt(SCHEMA_KEY, SCHEMA_VERSION)
-            .putFloat(xKey(id), normalized.xFraction)
-            .putFloat(yKey(id), normalized.yFraction)
-            .apply()
-    }
-
-    /** Clears one panel only; all unrelated active and hidden panel positions survive. */
+    /** Clears one panel only; all unrelated panel centres survive. */
     fun recenter(id: MonitorAnalysisPanelID) {
         if (schemaState() != StoreSchema.UNSUPPORTED) {
             preferences.edit().remove(xKey(id)).remove(yKey(id)).apply()
@@ -394,49 +350,6 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
                 .apply()
         }
     }
-
-    internal fun storedCenter(id: MonitorAnalysisPanelID): NormalizedPanelCenter? = load(id)
-
-    private fun load(id: MonitorAnalysisPanelID): NormalizedPanelCenter? {
-        when (schemaState()) {
-            StoreSchema.UNSUPPORTED -> return null
-            StoreSchema.CURRENT -> {
-                val current = readPair(preferences, xKey(id), yKey(id))
-                if (current.state != StoredPairState.ABSENT) {
-                    if (current.value == null) recenter(id)
-                    return current.value?.reconciled()?.also { reconciled ->
-                        if (reconciled != current.value) writeMigrated(id, reconciled)
-                    }
-                }
-            }
-            StoreSchema.LEGACY -> Unit
-        }
-
-        val legacy = legacyPreferences(id) ?: return null
-        val migrated = readPair(legacy, legacyXKey(id), legacyYKey(id))
-        if (migrated.state == StoredPairState.ABSENT) return null
-        legacy.edit().remove(legacyXKey(id)).remove(legacyYKey(id)).apply()
-        val value = migrated.value?.reconciled() ?: return null
-        writeMigrated(id, value)
-        return value
-    }
-
-    private fun writeMigrated(id: MonitorAnalysisPanelID, center: NormalizedPanelCenter) {
-        currentSchemaEditor()
-            .putInt(SCHEMA_KEY, SCHEMA_VERSION)
-            .putFloat(xKey(id), center.xFraction)
-            .putFloat(yKey(id), center.yFraction)
-            .apply()
-    }
-
-    /**
-     * Starts a v2 write transaction. Unknown or stale schemas are cleared only for a deliberate
-     * save or a supported legacy migration; passive resolution never downgrades future data.
-     */
-    private fun currentSchemaEditor(): SharedPreferences.Editor =
-        preferences.edit().also { editor ->
-            if (schemaState() != StoreSchema.CURRENT) editor.clear()
-        }
 
     private fun schemaState(): StoreSchema {
         if (!preferences.contains(SCHEMA_KEY)) return StoreSchema.LEGACY
@@ -505,23 +418,70 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
 }
 
 /**
- * Moves the scope centres this store saved into the shared assist state once, then clears them
- * here, so a later launch finds nothing to move. They were saved on the landscape canvas, so they
- * fill the landscape slot, and a centre the shared state already holds wins. The false-colour key
- * keeps this store.
+ * Moves the centres this store saved into the shared assist state once, then clears them here, so a
+ * later launch finds nothing to move. Scope centres were saved on the landscape canvas and fill the
+ * landscape slot; the false-colour key had one centre for landscape and portrait fill, so it fills
+ * both slots. A centre the shared state already holds wins.
  */
-internal fun MonitorAnalysisPanelPlacementStore.moveScopeCentres(into: MonitorAssistState) {
+internal fun MonitorAnalysisPanelPlacementStore.movePanelCentres(into: MonitorAssistState) {
     ScopeKind.entries.forEach { kind ->
         val id = kind.monitorAnalysisPanelID()
         val stored = storedCenter(id) ?: return@forEach
-        if (into.centerFor(kind.assistTool, portrait = false) == null) {
-            into.storeCenter(
-                kind.assistTool,
-                MonitorScopeStoredCenter(stored.xFraction.toDouble(), stored.yFraction.toDouble()),
-                portrait = false,
-            )
-        }
+        into.storeCenterIfAbsent(kind.assistTool, stored.shared(), listOf(false))
         recenter(id)
+    }
+    storedCenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE)?.let { stored ->
+        into.storeCenterIfAbsent(MonitorAssistTool.FALSE, stored.shared(), listOf(false, true))
+        recenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE)
+    }
+}
+
+/** Moves the live audio meter's one saved centre into both shared slots once, as [movePanelCentres]. */
+internal fun StoredPanelCenter.moveAudioCentre(into: MonitorAssistState) {
+    val stored = load() ?: return
+    into.storeCenterIfAbsent(MonitorAssistTool.AUDIO, stored, listOf(false, true))
+    clear()
+}
+
+private fun MonitorAssistState.storeCenterIfAbsent(
+    tool: MonitorAssistTool,
+    center: MonitorScopeStoredCenter,
+    orientations: List<Boolean>,
+) {
+    orientations.forEach { portrait ->
+        if (centerFor(tool, portrait) == null) storeCenter(tool, center, portrait)
+    }
+}
+
+private fun NormalizedPanelCenter.shared(): MonitorScopeStoredCenter =
+    MonitorScopeStoredCenter(xFraction.toDouble(), yFraction.toDouble())
+
+/**
+ * One panel centre in its own preference file (`<prefix>.centerX`/`.centerY`), normalized to the
+ * panel's viewport: the playback false-colour key and audio meter, and the live audio meter's
+ * pre-shared save.
+ */
+internal class StoredPanelCenter(private val preferences: SharedPreferences, private val prefix: String) {
+    constructor(context: Context, name: String, prefix: String) :
+        this(context.getSharedPreferences(name, Context.MODE_PRIVATE), prefix)
+
+    fun load(): MonitorScopeStoredCenter? {
+        if (!preferences.contains("$prefix.centerX") || !preferences.contains("$prefix.centerY")) return null
+        val x = runCatching { preferences.getFloat("$prefix.centerX", Float.NaN) }.getOrNull() ?: return null
+        val y = runCatching { preferences.getFloat("$prefix.centerY", Float.NaN) }.getOrNull() ?: return null
+        if (!x.isFinite() || !y.isFinite()) return null
+        return MonitorScopeStoredCenter(x.coerceIn(0f, 1f).toDouble(), y.coerceIn(0f, 1f).toDouble())
+    }
+
+    fun save(center: MonitorScopeStoredCenter) {
+        preferences.edit()
+            .putFloat("$prefix.centerX", center.xFraction.toFloat().coerceIn(0f, 1f))
+            .putFloat("$prefix.centerY", center.yFraction.toFloat().coerceIn(0f, 1f))
+            .apply()
+    }
+
+    fun clear() {
+        preferences.edit().remove("$prefix.centerX").remove("$prefix.centerY").apply()
     }
 }
 

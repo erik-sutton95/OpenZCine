@@ -2,6 +2,8 @@ package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.monitorui.MonitorGuideGeometry
+import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.opencine.media.MonitorDesqueezePreset
@@ -18,7 +20,7 @@ class FramingAssistsTest {
 
     @Test
     fun `narrowing and widening desqueeze remain centered inside the exact visible feed`() {
-        val feed = FramingAssistRect(left = 10f, top = 20f, width = 1_000f, height = 500f)
+        val feed = MonitorScopeRect(10f, 20f, 1_000f, 500f)
 
         val horizontal =
             localDesqueezePresentationRect(
@@ -35,21 +37,15 @@ class FramingAssistsTest {
                 direction = MonitorDesqueezeDirection.HORIZONTAL,
             )
 
-        assertEquals(260f, horizontal.left)
-        assertEquals(20f, horizontal.top)
-        assertEquals(500f, horizontal.width)
-        assertEquals(500f, horizontal.height)
-        assertEquals(10f, vertical.left)
-        assertEquals(145f, vertical.top)
-        assertEquals(1_000f, vertical.width)
-        assertEquals(250f, vertical.height)
+        assertEquals(MonitorScopeRect(260f, 20f, 500f, 500f), horizontal)
+        assertEquals(MonitorScopeRect(10f, 145f, 1_000f, 250f), vertical)
     }
 
     @Test
-    fun `multiple guide frames resolve in stable narrow to wide order within supplied feed`() {
+    fun `multiple guide frames resolve within the supplied feed`() {
         val plan =
             localFramingRenderPlan(
-                feed = FramingAssistRect(left = 40f, top = 60f, width = 1_920f, height = 1_080f),
+                feed = MonitorScopeRect(40f, 60f, 1_920f, 1_080f),
                 configuration =
                     framingConfiguration(
                         guidesVisible = true,
@@ -61,14 +57,14 @@ class FramingAssistsTest {
                     ),
             )
 
-        assertEquals(
-            listOf(MonitorGuideAspect.VERTICAL, MonitorGuideAspect.CINEMA),
-            plan.guideFrames.map { it.ratio },
-        )
-        assertEquals(696.25f, plan.guideFrames.first().rect.left)
-        assertEquals(60f, plan.guideFrames.first().rect.top)
-        assertEquals(40f, plan.guideFrames.last().rect.left)
-        assertEquals(198.32635f, plan.guideFrames.last().rect.top, absoluteTolerance = 0.001f)
+        // The shared marks draw each guide with MonitorGuideGeometry inside the presentation rect.
+        val vertical = MonitorGuideGeometry.rectForRatio(plan.presentationRect, MonitorGuideAspect.VERTICAL.ratio)
+        val cinema = MonitorGuideGeometry.rectForRatio(plan.presentationRect, MonitorGuideAspect.CINEMA.ratio)
+        assertEquals(setOf(MonitorGuideAspect.VERTICAL, MonitorGuideAspect.CINEMA), plan.guides)
+        assertEquals(696.25f, vertical.x)
+        assertEquals(60f, vertical.y)
+        assertEquals(40f, cinema.x)
+        assertEquals(198.32635f, cinema.y, absoluteTolerance = 0.001f)
         assertEquals(1_920f, plan.presentationRect.width)
         assertEquals(1_080f, plan.presentationRect.height)
     }
@@ -98,9 +94,9 @@ class FramingAssistsTest {
             )
 
         assertTrue(visible.drawsInverseGuideMask)
-        assertEquals(2, visible.guideFrames.size)
+        assertEquals(2, visible.guides.size)
         assertFalse(hidden.drawsInverseGuideMask)
-        assertTrue(hidden.guideFrames.isEmpty())
+        assertTrue(hidden.guides.isEmpty())
     }
 
     @Test
@@ -127,9 +123,9 @@ class FramingAssistsTest {
         assertTrue(live.drawsPhiGrid)
         assertTrue(live.drawsDiagonalGrid)
         assertTrue(live.drawsCenterCrosshair)
-        assertEquals(1, live.guideFrames.size)
+        assertEquals(1, live.guides.size)
         assertTrue(clean.drawsInverseGuideMask)
-        assertEquals(1, clean.guideFrames.size)
+        assertEquals(1, clean.guides.size)
         assertFalse(clean.drawsRuleOfThirds)
         assertFalse(clean.drawsPhiGrid)
         assertFalse(clean.drawsDiagonalGrid)
@@ -139,7 +135,7 @@ class FramingAssistsTest {
 
     @Test
     fun `portrait fill framing remains registered to the complete cropped feed`() {
-        val feed = FramingAssistRect(left = -333f, top = 0f, width = 1_067f, height = 600f)
+        val feed = MonitorScopeRect(-333f, 0f, 1_067f, 600f)
         val plan =
             localFramingRenderPlan(
                 feed = feed,
@@ -158,8 +154,11 @@ class FramingAssistsTest {
 
         // iOS scales the complete camera-pixel feed first and lets the screen
         // crop it. Rebasing this rectangle to 0...400 would move the guides.
-        assertEquals(FramingAssistRect(-66.25f, 0f, 533.5f, 600f), plan.presentationRect)
-        assertEquals(plan.presentationRect.width, plan.guideFrames.single().rect.width)
+        assertEquals(MonitorScopeRect(-66.25f, 0f, 533.5f, 600f), plan.presentationRect)
+        assertEquals(
+            plan.presentationRect.width,
+            MonitorGuideGeometry.rectForRatio(plan.presentationRect, plan.guides.single().ratio).width,
+        )
         assertTrue(plan.drawsInverseGuideMask)
         assertTrue(plan.drawsRuleOfThirds)
         assertTrue(plan.drawsCenterCrosshair)

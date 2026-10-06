@@ -173,7 +173,7 @@ vec3 sampleSourceForDisplay(vec2 coordinate) {
 // existing kernel is close to free; a second pass would not be.
 //
 // `vTexSamplingCoord` spans exactly the visible image rectangle: the caller sets the viewport to
-// `liveFeedContentRect` before drawing, so 0.5 is the middle of the IMAGE and letterbox, pillarbox
+// `nativeFeedContentRect` before drawing, so 0.5 is the middle of the IMAGE and letterbox, pillarbox
 // and chrome are all outside the quad entirely.
 //
 // Top/bottom uses the same display convention as the zebra block below — GL fragments count up, so

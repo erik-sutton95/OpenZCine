@@ -5,6 +5,7 @@ import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+import com.opencapture.opencine.runtime.NativeFeedContentRect
 
 /** One point in the feed composable's local pixel coordinate space. */
 internal data class FocusFeedPixelPoint(
@@ -107,7 +108,7 @@ internal data class FocusFeedGeometry(
  * remains unavailable.
  */
 internal fun focusFeedGeometry(
-    content: LiveFeedContentRect,
+    content: NativeFeedContentRect,
     horizontalPresentationScale: Float,
     verticalPresentationScale: Float = 1f,
     viewport: LiveOverlayRect,

@@ -171,14 +171,14 @@ internal object FeedEffectsRenderPlanFactory {
                 cameraInput.isoWireValue,
                 cameraInput.baseIso,
                 cameraInput.stillsToneMode,
-                configuration.peakingSensitivity.wireOrdinal,
-                configuration.peakingColor.wireOrdinal,
+                configuration.peakingSensitivity.ordinal,
+                configuration.peakingColor.ordinal,
                 configuration.zebraHighlightEnabled,
                 configuration.zebraHighlightIre,
-                configuration.zebraHighlightColor.wireOrdinal,
+                configuration.zebraHighlightColor.ordinal,
                 configuration.zebraMidtoneEnabled,
                 configuration.zebraMidtoneIre,
-                configuration.zebraMidtoneColor.wireOrdinal,
+                configuration.zebraMidtoneColor.ordinal,
             ),
         ) { "core rejected the effect configuration" }
             .let(FeedEffectsRenderConfiguration::parse)

@@ -35,6 +35,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 private const val SCREENSHOT_ARGUMENT = "ope91Screenshots"
 
@@ -125,7 +126,7 @@ class LegacyLiveFeedGlSurfaceTest {
         try {
             val content =
                 requireNotNull(
-                    liveFeedContentRect(
+                    nativeFeedContentRect(
                         output.width.toFloat(),
                         output.height.toFloat(),
                         source.width,
