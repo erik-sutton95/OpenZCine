@@ -100,13 +100,23 @@ The app also subscribes to MetricKit and retains a bounded set of Apple-delivere
 payloads plus predefined lifecycle events on the device. A tester can open **Operator Setup →
 System → Share Diagnostics**, review the generated text report, and choose where to send it. The
 report intentionally excludes camera frames, media names, camera identities, network addresses,
-Wi-Fi details, pairing data, credentials, and account identifiers. OpenZCine does not add a
-third-party analytics or crash-reporting SDK.
+Wi-Fi details, pairing data, credentials, and account identifiers. OpenZCine adds no analytics
+SDK; the only third-party SDK is Sentry for the opt-in reports below, as in OpenPocketCine.
 
-**Report a Problem** is a separate, explicit flow. A tester can choose an anonymous in-app report
-that sends entered text plus coarse app/platform context, and may opt into a closed
-privacy-filtered activity-event snapshot or selected screenshots, or choose a
-[signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) with richer
+On iOS, **Report a Problem** opens the problem report form OpenZCine shares with OpenPocketCine and
+OpenInstaCine (OpenCineAppKit): a description, optional technical details (the redacted journal and
+connect-attempt trace, shown before sending), optional photos or screenshots and an optional reply
+email. The report goes privately to OpenCapture through Sentry, not to a public GitHub issue, and
+sends once the phone has left camera Wi-Fi and has internet. Optional automatic crash and error
+reports (off by default, asked once at launch) take the same route. A build without a Sentry DSN
+(`SENTRY_DSN`, empty in the repository) shows both as unavailable. For a TestFlight build with
+reports, set `SENTRY_DSN` in `ios/Runner/Reliability.local.xcconfig` (see the `.example` file),
+as OpenPocketCine does.
+
+On Android, **Report a Problem** is a separate, explicit flow. A tester can choose an anonymous
+in-app report that sends entered text plus coarse app/platform context, and may opt into a closed
+privacy-filtered activity-event snapshot or selected screenshots, or choose a [signed-in GitHub
+issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) with richer
 optional details. Both create public GitHub issues. The anonymous route never uploads the local
 MetricKit report, raw breadcrumbs, arbitrary logs, original image bytes, or media. Its optional
 snapshot contains only closed event and incident codes. The relay renders fixed operational traces

@@ -299,8 +299,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
   preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and
   confirmed credentials enter encrypted storage only after a successful join.
-- **In-app bug reporting paths** (OPE-102, in progress) — iOS and Android offer an anonymous
-  report through a small GitHub-App relay or a
+- **In-app bug reporting paths** (OPE-102, in progress): iOS uses OpenCine's shared problem
+  report and opt-in automatic reports, sent privately through Sentry as in OpenPocketCine.
+  Android offers an anonymous report through a small GitHub-App relay or a
   [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) for richer
   optional details. Both create labelled public GitHub issues. The anonymous path has optional,
   user-selected screenshots re-rendered without embedded file metadata and a closed,
