@@ -57,7 +57,7 @@ class NativeReadableMovieExportTest {
             )
             for (container in MonitorMovieExportContainer.entries) {
                 val progress = Collections.synchronizedList(mutableListOf<Double>())
-                val prepared = preparer.prepare(artifact, FrameioDeliveryOptions(
+                val prepared = preparer.prepare(artifact, MediaDeliveryConfiguration(
                     bakeLut = true, exportContainer = container, selectedLut = FeedLutSelection.BuiltIn(FeedLut.MONO),
                 )) { progress += it }
                 try {

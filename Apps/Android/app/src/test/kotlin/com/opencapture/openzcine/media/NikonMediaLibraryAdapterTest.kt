@@ -5,6 +5,8 @@ import com.opencapture.opencine.core.CameraSessionID
 import com.opencapture.opencine.core.ControlEpoch
 import com.opencapture.opencine.media.MediaBrowseBinding
 import com.opencapture.opencine.media.MediaCatalog
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.createTempDirectory
@@ -200,7 +202,7 @@ class NikonMediaLibraryAdapterTest {
             val cache = MediaCacheStore(root); val old = clip(100)
             index.rememberCameraListing("SIMULATED", listOf(old))
             val codec = NikonMediaLibraryCodec("SIMULATED", null, cache, { index.favoriteIDs("SIMULATED") }, { false })
-            fun owner(row: MediaClipRecord) = MonitorMediaLibraryModel(
+            fun owner(row: NikonMediaClipRecord) = MonitorMediaLibraryModel(
                 MonitorMediaCache(MonitorMediaCacheDirectory(root.toFile()), codec,
                     eligibility = MonitorMediaOriginalEligibility.ExactSize, preservedMetadata = emptyList(),
                     catalogAddress = index.catalogByteStore("SIMULATED").namespace,
@@ -493,9 +495,9 @@ class NikonMediaLibraryAdapterTest {
         }
     }
 
-    private fun clip(size: Long) = MediaClipRecord(handle = 4, storageId = 65_537, sizeBytes = size,
+    private fun clip(size: Long) = NikonMediaClipRecord(handle = 4, storageId = 65_537, sizeBytes = size,
         captureDate = "20261004T120000", pixelWidth = 3840, pixelHeight = 2160,
-        filename = "Göteborg.MOV", contentKind = MediaContentKind.PLAYABLE_PROXY, stillPhoto = null)
+        filename = "Göteborg.MOV", contentKind = NikonMediaContentKind.PLAYABLE_PROXY, stillPhoto = null)
     private class Preferences : MediaLibraryPreferences {
         private val values = mutableMapOf<String, String>()
         var writes = 0

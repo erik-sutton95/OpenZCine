@@ -471,7 +471,7 @@ internal class FrameioDeliveryController(
      */
     suspend fun deliver(
         artifacts: List<FrameioDeliveryArtifact>,
-        options: FrameioDeliveryOptions = FrameioDeliveryOptions(),
+        options: MediaDeliveryConfiguration = MediaDeliveryConfiguration(),
         onDeliveryState: (FrameioDeliveryState) -> Unit = {},
     ) {
         val rejoinAfterDelivery = isInternetHopActive
@@ -622,7 +622,7 @@ internal class FrameioDeliveryController(
         config: FrameioPublicConfiguration,
         destination: FrameioDestination,
         artifact: FrameioDeliveryArtifact,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
         itemIndex: Int,
         itemCount: Int,
         publishDeliveryState: (FrameioDeliveryState) -> Unit,

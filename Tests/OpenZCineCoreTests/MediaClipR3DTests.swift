@@ -107,7 +107,7 @@ import Testing
 
 @Test func resolutionBucketUsesSourceDimensionsForProxies() {
     // 1080p proxy linked to 6K R3D should bucket as 6K, not HD.
-    let bucket = MediaResolutionBucket.classify(
+    let bucket = NikonMediaResolutionBucket.classify(
         filename: "A002.MP4",
         pixelWidth: 1920,
         sourcePixelWidth: 6048)
@@ -116,18 +116,18 @@ import Testing
 
 @Test func resolutionBucketFallsBackToProxyPixelsThenFilename() {
     #expect(
-        MediaResolutionBucket.classify(
+        NikonMediaResolutionBucket.classify(
             filename: "clip.MP4", pixelWidth: 3840, sourcePixelWidth: nil) == .fourK)
     #expect(
-        MediaResolutionBucket.classify(
+        NikonMediaResolutionBucket.classify(
             filename: "SHOT_6K.MP4", pixelWidth: nil, sourcePixelWidth: nil) == .sixK)
 }
 
 @Test func resolutionBucketWidthThresholds() {
-    #expect(MediaResolutionBucket.from(pixelWidth: 1920) == .hd)
-    #expect(MediaResolutionBucket.from(pixelWidth: 3840) == .fourK)
-    #expect(MediaResolutionBucket.from(pixelWidth: 5456) == .fiveFourK)
-    #expect(MediaResolutionBucket.from(pixelWidth: 6048) == .sixK)
+    #expect(NikonMediaResolutionBucket.from(pixelWidth: 1920) == .hd)
+    #expect(NikonMediaResolutionBucket.from(pixelWidth: 3840) == .fourK)
+    #expect(NikonMediaResolutionBucket.from(pixelWidth: 5456) == .fiveFourK)
+    #expect(NikonMediaResolutionBucket.from(pixelWidth: 6048) == .sixK)
 }
 
 @Test func r3dHeaderParserReadsRED1Dimensions() throws {

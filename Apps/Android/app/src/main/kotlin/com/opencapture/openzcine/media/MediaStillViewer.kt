@@ -53,6 +53,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.layout.ContentScale
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -103,13 +106,13 @@ private const val PROGRESSIVE_DECODE_STEP_BYTES = 256L * 1_024L
  */
 @Composable
 internal fun MediaStillViewer(
-    clip: MediaClipRecord,
+    clip: NikonMediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
     /** Native connection owner every camera call is addressed to; null reaches no camera. */
     connectionOwner: Long?,
     /** The grid item hides this same-stem RAW behind the JPEG (delete removes both). */
-    rawSibling: MediaClipRecord? = null,
+    rawSibling: NikonMediaClipRecord? = null,
     /** Camera-card deletion offered only while the camera source is live. */
     deleteAvailable: Boolean = false,
     /** Plan-derived confirm copy naming everything the deletion touches (null = local fallback). */
@@ -121,11 +124,11 @@ internal fun MediaStillViewer(
     /** Burst-series hosting: the scrubber strip rendered along the bottom edge. */
     filmstrip: (@Composable () -> Unit)? = null,
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
-    onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
-    onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)? = null,
+    onRatingMirrored: (NikonMediaClipRecord, Int) -> Unit = { _, _ -> },
+    onCaptureRatingCompletion: ((NikonMediaClipRecord) -> NikonMediaRatingCompletion)? = null,
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
-    onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
+    onResolvedObjectSize: (NikonMediaClipRecord, Long) -> Unit = { _, _ -> },
     /**
      * De-squeeze configuration; only this screen knows the decoded size, so the ratio is derived
      * here. A display transform — the camera original is never touched, and share/export are
@@ -143,7 +146,7 @@ internal fun MediaStillViewer(
     val displayClip = stillViewerDisplaySide(clip, rawSibling, showingRaw)
     val classification =
         displayClip.stillPhoto
-            ?: StillPhotoClassification("Photo", StillPreviewStrategy.THUMBNAIL_ONLY)
+            ?: NikonStillPhotoClassification("Photo", NikonStillPreviewStrategy.THUMBNAIL_ONLY)
     val cacheStore =
         remember(context) {
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
@@ -484,7 +487,7 @@ internal fun MediaStillViewer(
 
 private suspend fun observeStillPreview(
     entry: MediaCacheEntry,
-    classification: StillPhotoClassification,
+    classification: NikonStillPhotoClassification,
     loadGate: StillViewerLoadGate,
     requestGeneration: Long,
     hasThumbnail: () -> Boolean,
@@ -501,7 +504,7 @@ private suspend fun observeStillPreview(
             MediaCacheState.ACTIVE -> {
                 showState(StillPreviewStates.downloading(classification, entry.progress))
                 if (
-                    classification.previewStrategy == StillPreviewStrategy.PROGRESSIVE &&
+                    classification.previewStrategy == NikonStillPreviewStrategy.PROGRESSIVE &&
                         downloadedBytes > 0 &&
                         (lastDecodeBytes < 0 ||
                             downloadedBytes - lastDecodeBytes >= PROGRESSIVE_DECODE_STEP_BYTES)

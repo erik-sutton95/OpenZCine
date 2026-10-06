@@ -1,5 +1,8 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
+
 /** The text-and-chrome state of one Android still-photo viewer request. */
 internal sealed interface StillPreviewUiState {
     /** The camera thumbnail is being requested before any payload transfer. */
@@ -29,35 +32,35 @@ internal object StillPreviewStates {
     fun initial(): StillPreviewUiState = StillPreviewUiState.Preparing
 
     fun downloading(
-        classification: StillPhotoClassification,
+        classification: NikonStillPhotoClassification,
         progress: Double,
     ): StillPreviewUiState.Downloading {
         val message =
             when (classification.previewStrategy) {
-                StillPreviewStrategy.PROGRESSIVE ->
+                NikonStillPreviewStrategy.PROGRESSIVE ->
                     "Loading full ${classification.formatLabel} preview…"
-                StillPreviewStrategy.COMPLETE_FILE ->
+                NikonStillPreviewStrategy.COMPLETE_FILE ->
                     "Downloading ${classification.formatLabel} image…"
                 // The RAW side of a pair transfers for sharing even though it
                 // never claims a decoded full preview.
-                StillPreviewStrategy.THUMBNAIL_ONLY ->
+                NikonStillPreviewStrategy.THUMBNAIL_ONLY ->
                     "Downloading ${classification.formatLabel} file…"
             }
         return StillPreviewUiState.Downloading(progress.coerceIn(0.0, 1.0), message)
     }
 
     fun decoderUnavailable(
-        classification: StillPhotoClassification,
+        classification: NikonStillPhotoClassification,
         hasThumbnail: Boolean,
     ): StillPreviewUiState.ThumbnailFallback =
         StillPreviewUiState.ThumbnailFallback(
             buildString {
                 append(
                     when (classification.previewStrategy) {
-                        StillPreviewStrategy.THUMBNAIL_ONLY ->
+                        NikonStillPreviewStrategy.THUMBNAIL_ONLY ->
                             "${classification.formatLabel} files are not decoded for a full preview on Android."
-                        StillPreviewStrategy.PROGRESSIVE,
-                        StillPreviewStrategy.COMPLETE_FILE,
+                        NikonStillPreviewStrategy.PROGRESSIVE,
+                        NikonStillPreviewStrategy.COMPLETE_FILE,
                         ->
                             "This ${classification.formatLabel} image could not be decoded for a full preview on this Android device."
                     },

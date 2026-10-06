@@ -11,7 +11,7 @@ public struct PlaybackAudioMeterWire: Equatable, Sendable {
     public static let scalarCount = 6
 
     /// Shared-core stereo levels represented by this wire value.
-    public let levels: AudioMeterLevels
+    public let levels: MonitorAudioMeterLevels
 
     /// A silent meter state suitable for starting or restarting a polling loop.
     public static let silent = PlaybackAudioMeterWire(levels: .silent)
@@ -21,18 +21,18 @@ public struct PlaybackAudioMeterWire: Equatable, Sendable {
         guard payload.count == Self.scalarCount, payload.allSatisfy(\.isFinite) else {
             return nil
         }
-        let left = AudioMeterChannel(
+        let left = MonitorAudioMeterChannel(
             levelDB: Double(payload[0]),
             peakDB: Double(payload[1]),
             peakAge: Double(payload[2])
         )
-        let right = AudioMeterChannel(
+        let right = MonitorAudioMeterChannel(
             levelDB: Double(payload[3]),
             peakDB: Double(payload[4]),
             peakAge: Double(payload[5])
         )
         guard Self.isValid(left), Self.isValid(right) else { return nil }
-        levels = AudioMeterLevels(left: left, right: right)
+        levels = MonitorAudioMeterLevels(left: left, right: right)
     }
 
     /// Advances both channels through the shared dBFS conversion and ballistics policy.
@@ -51,10 +51,10 @@ public struct PlaybackAudioMeterWire: Equatable, Sendable {
         let leftPeak = leftPeakLinear.isFinite ? Double(leftPeakLinear) : 0
         let rightPeak = rightPeakLinear.isFinite ? Double(rightPeakLinear) : 0
         return PlaybackAudioMeterWire(
-            levels: AudioMeterLevels(
-                left: AudioMeterBallistics.step(
+            levels: MonitorAudioMeterLevels(
+                left: MonitorAudioMeterBallistics.step(
                     previous.levels.left, peakLinear: leftPeak, dt: dt),
-                right: AudioMeterBallistics.step(
+                right: MonitorAudioMeterBallistics.step(
                     previous.levels.right, peakLinear: rightPeak, dt: dt)
             )
         )
@@ -72,12 +72,12 @@ public struct PlaybackAudioMeterWire: Equatable, Sendable {
         ]
     }
 
-    private init(levels: AudioMeterLevels) {
+    private init(levels: MonitorAudioMeterLevels) {
         self.levels = levels
     }
 
-    private static func isValid(_ channel: AudioMeterChannel) -> Bool {
-        channel.levelDB >= AudioMeterBallistics.floorDB
+    private static func isValid(_ channel: MonitorAudioMeterChannel) -> Bool {
+        channel.levelDB >= MonitorAudioMeterBallistics.floorDB
             && channel.levelDB <= 0
             && channel.peakDB >= channel.levelDB
             && channel.peakDB <= 0

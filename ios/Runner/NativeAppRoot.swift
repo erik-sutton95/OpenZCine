@@ -2000,7 +2000,7 @@ final class NativeAppModel {
         if let roll = metadata.levelRoll { cameraLevelRoll = roll }
         if let pitch = metadata.levelPitch { cameraLevelPitch = pitch }
         if let sound = metadata.sound {
-            liveAudioLevels = AudioMeterLevels(
+            liveAudioLevels = MonitorAudioMeterLevels(
                 cameraIndicator: PTPLiveViewSoundIndicator(
                     peakLeft: sound.peakLeft, peakRight: sound.peakRight,
                     currentLeft: sound.currentLeft, currentRight: sound.currentRight))
@@ -2204,7 +2204,7 @@ final class NativeAppModel {
     @ObservationIgnored private var lastFocusCoordinateSpace: (width: Int, height: Int)?
     /// Camera-reported audio levels from the live-view header's sound indicator (bytes 824–827),
     /// mapped onto the meter's dBFS scale for the audio-levels panel. Silent until frames carry it.
-    var liveAudioLevels: AudioMeterLevels = .silent
+    var liveAudioLevels: MonitorAudioMeterLevels = .silent
     /// How the body is held, from the live-view header's rotation byte (839). The body's own
     /// orientation always lands here so flipping Auto-Rotate Feed back on can restore it.
     /// Only the camera's own stream ever sets this; HDMI capture stays `.landscape`.
@@ -2570,11 +2570,11 @@ final class NativeAppModel {
         }
     }
     var mediaFormatFilters: Set<MediaFormatChip> = []
-    var mediaResolutionFilters: Set<MediaResolutionBucket> = []
+    var mediaResolutionFilters: Set<NikonMediaResolutionBucket> = []
     /// Still L/M/S size chips — ranked against the sizes present, so this is stills-only.
-    var mediaPhotoSizeFilters: Set<MediaPhotoSizeClass> = []
+    var mediaPhotoSizeFilters: Set<NikonMediaPhotoSizeClass> = []
     /// Single relative capture-date window; the windows nest, so they are mutually exclusive.
-    var mediaDateWindow: MediaDateWindow?
+    var mediaDateWindow: NikonMediaDateWindow?
     var mediaStorageSlotFilter: UInt32?
     var mediaSortOrder: MediaSortOrder = PreferencesStore.loadMediaSortOrder() {
         didSet { PreferencesStore.saveMediaSortOrder(mediaSortOrder) }
@@ -4501,7 +4501,7 @@ final class NativeAppModel {
         /// Seeds a representative camera-owned stereo meter and manual sensitivity for simulator
         /// layout verification. Release builds contain neither this helper nor the demo harness.
         func demoSeedAudioMonitor() {
-            liveAudioLevels = AudioMeterLevels(
+            liveAudioLevels = MonitorAudioMeterLevels(
                 cameraIndicator: PTPLiveViewSoundIndicator(
                     peakLeft: 12, peakRight: 10, currentLeft: 9, currentRight: 7))
             cameraPropertySnapshot = cameraPropertySnapshot.applying(
@@ -7450,7 +7450,7 @@ final class NativeAppModel {
         // either way the live-view stream is only a carrier for its header, so ask for the
         // smallest frame the body offers.
         if streamsHeaderOnly || videoSource != .cameraLiveView {
-            return OperatorPreferences.StreamPreset.fast.liveViewImageSize
+            return LiveViewStreamPreset.fast.liveViewImageSize
         }
         return preferences.streamPreset.liveViewImageSize
     }
@@ -8341,7 +8341,7 @@ final class NativeAppModel {
         if renderedLiveAssistTools.contains(.audioMeters),
             let sound = frame.sound
         {
-            let levels = AudioMeterLevels(cameraIndicator: sound)
+            let levels = MonitorAudioMeterLevels(cameraIndicator: sound)
             if liveAudioLevels != levels { liveAudioLevels = levels }
         }
         // Record state (header byte 828). Suppress the override while a queued app command is in
@@ -12323,14 +12323,14 @@ final class NativeAppModel {
         preferences.toggleChrome(section, for: mode, capture: capture ?? captureLayoutMode)
     }
 
-    func setStreamPreset(_ preset: OperatorPreferences.StreamPreset) {
+    func setStreamPreset(_ preset: LiveViewStreamPreset) {
         guard preferences.streamPreset != preset else { return }
         preferences.streamPreset = preset
         recordActiveSetupStreamSettings(streamPreset: preset, qualityBias: nil)
         restartLiveViewForQualityChange()
     }
 
-    func setQualityBias(_ bias: OperatorPreferences.QualityBias) {
+    func setQualityBias(_ bias: LiveViewQualityBias) {
         guard preferences.qualityBias != bias else { return }
         preferences.qualityBias = bias
         recordActiveSetupStreamSettings(streamPreset: nil, qualityBias: bias)
@@ -12369,8 +12369,8 @@ final class NativeAppModel {
     /// starts there. No active session means no setup to write to — the pick still applies to the
     /// live value, it simply has nowhere durable to live.
     private func recordActiveSetupStreamSettings(
-        streamPreset: OperatorPreferences.StreamPreset?,
-        qualityBias: OperatorPreferences.QualityBias?
+        streamPreset: LiveViewStreamPreset?,
+        qualityBias: LiveViewQualityBias?
     ) {
         guard !isDemoSession, let host = cameraSession?.identity.host else { return }
         NativeCameraConnectionStore.shared.updateSavedCameraStreamSettings(
@@ -13506,7 +13506,7 @@ extension NativeAppModel {
         mediaClipStore.listAllCachedClips().contains { isClipDownloaded($0) }
     }
 
-    var mediaFilterOptions: MediaFilterOptions { mediaProjectionPass.filterOptions }
+    var mediaFilterOptions: NikonMediaFilterOptions { mediaProjectionPass.filterOptions }
     var filteredMediaClips: [MediaClip] {
         let pass = mediaProjectionPass
         mediaProjectionSnapshot = pass
@@ -13525,13 +13525,6 @@ extension NativeAppModel {
     /// Unfiltered source pairing remains separate from visible grid representatives.
     func rawSibling(of clip: MediaClip) -> MediaClip? {
         NikonAppGalleryProjection.rawSibling(of: clip, in: mediaClips)
-    }
-
-    /// Short transport label for the Media browser status readout.
-    var mediaBrowserTransportLabel: String {
-        if isDemoSession { return "DEMO" }
-        guard isConnected else { return "OFFLINE" }
-        return "WIFI"
     }
 
     /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.
@@ -13578,16 +13571,16 @@ extension NativeAppModel {
         mediaFormatFilters.formSymmetricDifference([filter])
     }
 
-    func toggleMediaResolutionFilter(_ bucket: MediaResolutionBucket) {
+    func toggleMediaResolutionFilter(_ bucket: NikonMediaResolutionBucket) {
         mediaResolutionFilters.formSymmetricDifference([bucket])
     }
 
-    func toggleMediaPhotoSizeFilter(_ size: MediaPhotoSizeClass) {
+    func toggleMediaPhotoSizeFilter(_ size: NikonMediaPhotoSizeClass) {
         mediaPhotoSizeFilters.formSymmetricDifference([size])
     }
 
     /// Date windows nest, so selecting one replaces the other; tapping the active one clears it.
-    func toggleMediaDateWindow(_ window: MediaDateWindow) {
+    func toggleMediaDateWindow(_ window: NikonMediaDateWindow) {
         mediaDateWindow = mediaDateWindow == window ? nil : window
     }
 

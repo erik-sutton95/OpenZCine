@@ -6,7 +6,7 @@ import java.time.LocalDate
 
 /** Actual payload mapping only; the shared result owns visible IDs, groups and expansion. */
 internal class NikonAppGalleryProjection(
-    clips: List<MediaClipRecord>,
+    clips: List<NikonMediaClipRecord>,
     actualIDs: Map<String, MediaAssetID>,
     category: MediaLibraryCategory,
     favoriteIDs: Set<String>,
@@ -14,8 +14,8 @@ internal class NikonAppGalleryProjection(
     sortOrder: MediaLibrarySortOrder,
     filters: MediaLibraryFilters = MediaLibraryFilters(),
     today: LocalDate = LocalDate.now(),
-    libraryKey: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
-    private val ownerOf: (MediaClipRecord) -> String = { cameraID },
+    libraryKey: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) },
+    private val ownerOf: (NikonMediaClipRecord) -> String = { cameraID },
 ) {
     private val input = clips.map { clip ->
         val key = libraryKey(clip)
@@ -43,12 +43,12 @@ internal class NikonAppGalleryProjection(
         photoSizes = result.offered.photoSizes.mapNotNull { key -> MediaPhotoSizeFilter.entries.firstOrNull { it.title == key } },
         dateWindows = result.offered.dateWindows.mapNotNull { key -> MediaDateWindowFilter.entries.firstOrNull { it.title == key } })
     val legacyGroups get() = result.groups.map { group -> BurstSeries(group.members.mapNotNull(keysByID::get)) }
-    fun members(clip: MediaClipRecord, key: (MediaClipRecord) -> String): List<MediaClipRecord> =
+    fun members(clip: NikonMediaClipRecord, key: (NikonMediaClipRecord) -> String): List<NikonMediaClipRecord> =
         IDsByLegacy[key(clip)]?.let(result::group)?.members?.mapNotNull(byID::get).orEmpty()
-    fun expanded(clips: List<MediaClipRecord>, key: (MediaClipRecord) -> String): List<MediaClipRecord> {
-        fun suppliedID(clip: MediaClipRecord): MediaAssetID = IDsByLegacy[key(clip)]
+    fun expanded(clips: List<NikonMediaClipRecord>, key: (NikonMediaClipRecord) -> String): List<NikonMediaClipRecord> {
+        fun suppliedID(clip: NikonMediaClipRecord): MediaAssetID = IDsByLegacy[key(clip)]
             ?: NikonMediaLibraryAssets.asset(ownerOf(clip), key(clip), clip).id
-        val supplied = linkedMapOf<MediaAssetID, MediaClipRecord>()
+        val supplied = linkedMapOf<MediaAssetID, NikonMediaClipRecord>()
         for (clip in clips) supplied.putIfAbsent(suppliedID(clip), clip)
         return result.expansion(clips.map(::suppliedID), availableMemberIDs = byID.keys).mapNotNull { entry ->
             when (entry) {
@@ -57,12 +57,12 @@ internal class NikonAppGalleryProjection(
             }
         }
     }
-    fun selected(keys: Set<String>): List<MediaClipRecord> =
+    fun selected(keys: Set<String>): List<NikonMediaClipRecord> =
         result.selected(keys.mapNotNullTo(linkedSetOf(), IDsByLegacy::get)).mapNotNull(byID::get)
-    fun hasRawSibling(clip: MediaClipRecord, key: (MediaClipRecord) -> String): Boolean =
+    fun hasRawSibling(clip: NikonMediaClipRecord, key: (NikonMediaClipRecord) -> String): Boolean =
         IDsByLegacy[key(clip)]?.let(policy::rawCompanion) != null
     companion object {
-        fun sorted(clips: List<MediaClipRecord>, sort: MediaLibrarySortOrder): List<MediaClipRecord> {
+        fun sorted(clips: List<NikonMediaClipRecord>, sort: MediaLibrarySortOrder): List<NikonMediaClipRecord> {
             // Preserve duplicate payloads accepted by the original sorting API.
             return clips.sortedWith { left, right ->
                 NikonAndroidGalleryProjectionPolicy.compareClips(left, right, sort.projectionSort())

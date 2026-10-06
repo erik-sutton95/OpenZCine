@@ -41,6 +41,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -153,7 +154,6 @@ import com.opencapture.openzcine.settings.LiveViewQualityBias
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
-import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.settings.SetupStreamSettings
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
@@ -1409,7 +1409,7 @@ class MainActivity : ComponentActivity() {
                             frameioController = frameioController,
                             // iOS's startup Settings lands on Link; a debug
                             // intent can still force a specific tab.
-                            initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.LINK,
+                            initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,
                             systemSettingsActions = systemSettingsActions,
                             bugReportSubmitter = bugReportSubmitter,
                             bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,

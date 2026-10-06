@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -8,8 +10,8 @@ import kotlin.test.assertNull
 class MediaClipCellPresentationTest {
     @Test fun realIdentitySourceAndPreviewAdmissionLabelsStayGolden() {
         for ((kind, action) in listOf(
-            MediaContentKind.PLAYABLE_PROXY to "PLAY", MediaContentKind.STILL_PHOTO to "VIEW",
-            MediaContentKind.R3D_MASTER to "MASTER", MediaContentKind.UNSUPPORTED to "MEDIA",
+            NikonMediaContentKind.PLAYABLE_PROXY to "PLAY", NikonMediaContentKind.STILL_PHOTO to "VIEW",
+            NikonMediaContentKind.R3D_MASTER to "MASTER", NikonMediaContentKind.UNSUPPORTED to "MEDIA",
         )) {
             val clip = sample("01.MOV", kind)
             val value = mediaClipCellPresentation(clip, "SIMULATED-cell", false, false, null, false, false, false)
@@ -26,7 +28,7 @@ class MediaClipCellPresentationTest {
     }
 
     @Test fun actualPairBurstAndFavoriteFactsKeepCurrentNativeLabels() {
-        val clip = sample("01.JPG", MediaContentKind.STILL_PHOTO)
+        val clip = sample("01.JPG", NikonMediaContentKind.STILL_PHOTO)
         val value = mediaClipCellPresentation(clip, "SIMULATED-cell", true, true, 4, false, false, false)
         assertEquals("1MB · RAW+J", value.mediaBadge)
         assertEquals(4, value.burstCount)
@@ -40,7 +42,7 @@ class MediaClipCellPresentationTest {
     }
 
     @Test fun selectionSuffixIsCurrentAndListKeepsRealMetadata() {
-        val clip = sample("01.JPG", MediaContentKind.STILL_PHOTO)
+        val clip = sample("01.JPG", NikonMediaContentKind.STILL_PHOTO)
         val selected = mediaClipCellPresentation(clip, "SIMULATED-cell", false, true, 4, false, true, true)
         assertEquals("01.JPG, view, selected", selected.accessibilityDescription)
         assertNull(selected.selectionEntryLabel)
@@ -55,7 +57,7 @@ class MediaClipCellPresentationTest {
         assertNull(list.burstCount)
     }
 
-    private fun sample(filename: String, kind: MediaContentKind): MediaClipRecord = MediaClipRecord(
+    private fun sample(filename: String, kind: NikonMediaContentKind): NikonMediaClipRecord = NikonMediaClipRecord(
         handle = 1, storageId = 65_537, sizeBytes = 1_000_000, captureDate = "",
         pixelWidth = 0, pixelHeight = 0, filename = filename, contentKind = kind, stillPhoto = null,
     )

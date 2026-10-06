@@ -99,9 +99,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Shared navigation vocabulary; existing debug enum names remain unchanged. */
-public typealias OperatorSettingsTab = MonitorSettingsTab
-
 private enum class BugReportDestination {
     CHOOSER,
     ANONYMOUS,
@@ -150,7 +147,7 @@ internal fun OperatorSettingsScreen(
     onShowGuideNow: (() -> Unit)? = null,
     onShowGuideOnNextRealFrame: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
-    initialTab: OperatorSettingsTab = OperatorSettingsTab.LINK,
+    initialTab: MonitorSettingsTab = MonitorSettingsTab.LINK,
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
     relaySharingEnabled: Boolean = false,
     onRelayShareToggle: ((Boolean) -> Unit)? = null,
@@ -273,18 +270,18 @@ internal fun OperatorSettingsScreen(
             ) { tab ->
                 val scroll = LocalMonitorSettingsScrollContext.current
                 when (tab) {
-                    OperatorSettingsTab.SHARING -> SharingRows(
+                    MonitorSettingsTab.SHARING -> SharingRows(
                         session = session, sharing = relaySharing, settings = settings,
                         enabled = relaySharingEnabled, onShareToggle = onRelayShareToggle,
                         onInteraction = emitHaptic,
                     )
-                    OperatorSettingsTab.LINK -> LinkRows(
+                    MonitorSettingsTab.LINK -> LinkRows(
                         session, settings, linkHealth, liveViewSource, activeTransportLabel,
                         relayWatchUi, onDisconnect, onReconnect, emitHaptic,
                     )
-                    OperatorSettingsTab.ASSIST -> NikonViewAssistSettings(assists.shared, cameraInput, emitHaptic)
-                    OperatorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic)
-                    OperatorSettingsTab.DISPLAY -> NikonDisplaySettings(
+                    MonitorSettingsTab.ASSIST -> NikonViewAssistSettings(assists.shared, cameraInput, emitHaptic)
+                    MonitorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic)
+                    MonitorSettingsTab.DISPLAY -> NikonDisplaySettings(
                         settings, assists.shared, compact, toggleSetting, emitHaptic,
                         checkNotNull(scroll).scrollState, scroll.viewportBounds,
                         liveCaptureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties)) {
@@ -294,10 +291,10 @@ internal fun OperatorSettingsScreen(
                         },
                         onEditView = { mode -> settings.beginChromeEditing(mode); onClose() },
                     )
-                    OperatorSettingsTab.STORAGE -> StorageRows(
+                    MonitorSettingsTab.STORAGE -> StorageRows(
                         mediaCacheStore, frameioController, condensed, onCompletedMediaCacheCleared,
                     )
-                    OperatorSettingsTab.SYSTEM -> SystemRows(
+                    MonitorSettingsTab.SYSTEM -> SystemRows(
                         systemSettingsActions, requestReportProblem, liveViewGuideController,
                         onShowGuideNow, onShowGuideOnNextRealFrame,
                     )

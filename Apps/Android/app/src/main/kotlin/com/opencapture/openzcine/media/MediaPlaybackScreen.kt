@@ -2,6 +2,8 @@
 
 package com.opencapture.openzcine.media
 import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.NikonAssistChip
 import com.opencapture.openzcine.NikonAssistInspector
 import com.opencapture.openzcine.NikonAssistPalette
@@ -122,7 +124,6 @@ import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.rememberAndroidThermalTier
@@ -168,8 +169,8 @@ private sealed interface PlaybackSessionAction {
 internal fun MediaPlaybackScreen(
     library: MonitorMediaLibraryModel<NikonLibraryClip>?,
     playbackRecords: List<MonitorMediaRecord<NikonLibraryClip>>,
-    initialClip: MediaClipRecord,
-    filteredClips: List<MediaClipRecord>,
+    initialClip: NikonMediaClipRecord,
+    filteredClips: List<NikonMediaClipRecord>,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
     /** Native connection owner every camera call is addressed to; null reaches no camera. */
@@ -181,13 +182,13 @@ internal fun MediaPlaybackScreen(
     lutLibrary: AndroidLutLibrary?,
     frameioController: FrameioDeliveryController,
     mediaDeliveryCoordinator: MediaDeliveryCoordinator,
-    onToggleFavorite: (MediaClipRecord) -> Unit,
+    onToggleFavorite: (NikonMediaClipRecord) -> Unit,
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
-    onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
-    onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)? = null,
+    onRatingMirrored: (NikonMediaClipRecord, Int) -> Unit = { _, _ -> },
+    onCaptureRatingCompletion: ((NikonMediaClipRecord) -> NikonMediaRatingCompletion)? = null,
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
-    onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
+    onResolvedObjectSize: (NikonMediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ): Unit {
     if (library == null) {
@@ -212,7 +213,7 @@ internal fun MediaPlaybackScreen(
     }
     val activeClip = logicalState.active?.payload?.clip ?: initialClip
     DisposableEffect(session) { onDispose { session.owner.close() } }
-    val playableRecords = playbackRecords.filter { it.payload.clip.contentKind == MediaContentKind.PLAYABLE_PROXY }
+    val playableRecords = playbackRecords.filter { it.payload.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY }
     val activeIndex = playableRecords.indexOfFirst { it.asset.id == logicalState.active?.asset?.id }
     val previous = if (activeIndex > 0) playableRecords.getOrNull(activeIndex - 1) else null
     val next = if (activeIndex >= 0) playableRecords.getOrNull(activeIndex + 1) else null
@@ -257,7 +258,7 @@ private fun PlaybackClipSession(
     playback: MonitorMediaPlaybackModel<NikonLibraryClip, Unit>,
     native: NikonPlaybackNativePort,
     itemToken: MonitorPlaybackItemToken,
-    clip: MediaClipRecord,
+    clip: NikonMediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean,
     connectionOwner: Long?,
@@ -271,10 +272,10 @@ private fun PlaybackClipSession(
     frameioController: FrameioDeliveryController,
     mediaDeliveryCoordinator: MediaDeliveryCoordinator,
     onToggleFavorite: () -> Unit,
-    onRatingMirrored: (MediaClipRecord, Int) -> Unit,
-    onCaptureRatingCompletion: ((MediaClipRecord) -> NikonMediaRatingCompletion)?,
+    onRatingMirrored: (NikonMediaClipRecord, Int) -> Unit,
+    onCaptureRatingCompletion: ((NikonMediaClipRecord) -> NikonMediaRatingCompletion)?,
     onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit,
-    onResolvedObjectSize: (MediaClipRecord, Long) -> Unit,
+    onResolvedObjectSize: (NikonMediaClipRecord, Long) -> Unit,
     onNavigate: (MonitorMediaRecord<NikonLibraryClip>) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -434,7 +435,7 @@ private fun PlaybackClipSession(
         )
     }
 
-    fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
+    fun beginFrameioDelivery(options: MediaDeliveryConfiguration) {
         if (deliveryInProgress || actionInProgress) return
         val playbackPause = session.pauseForDelivery(activePlayer?.isPlaying == true)
         var deliveryTicket: NikonDeliveryPresentation.ExternalTicket? = null

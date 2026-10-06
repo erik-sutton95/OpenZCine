@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.nio.ByteBuffer
@@ -50,7 +51,7 @@ data class MediaCacheObjectIdentity(
     val filename: String,
 ) {
     /** Builds the identity directly from the Android media-list wire record. */
-    public constructor(clip: MediaClipRecord) : this(
+    public constructor(clip: NikonMediaClipRecord) : this(
         storageId = clip.storageId,
         handle = clip.handle,
         captureDate = clip.captureDate,

@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.openzcine.bridge.SwiftCore
 import java.io.IOException
 import kotlin.coroutines.CoroutineContext
@@ -120,7 +121,7 @@ internal class MediaTransferCoordinator(
 internal fun prepareMediaObjectTransfer(
     cacheStore: MediaCacheStore,
     cameraID: String,
-    clip: MediaClipRecord,
+    clip: NikonMediaClipRecord,
     objectLabel: String,
     bridge: MediaObjectTransferBridge,
     cameraTransferAvailable: Boolean = true,
@@ -179,7 +180,7 @@ internal fun prepareMediaObjectTransfer(
 /** One operator-selected clip, before the run knows whether its bytes are already local. */
 internal data class MediaDeliverySelection(
     val cameraID: String,
-    val clip: MediaClipRecord,
+    val clip: NikonMediaClipRecord,
 )
 
 /** What the delivery cache pre-pass produced, plus the clips the camera never handed over. */

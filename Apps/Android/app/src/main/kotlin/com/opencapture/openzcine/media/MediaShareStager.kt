@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -198,7 +200,7 @@ class MediaShareStager private constructor(
      * @param cancellationCheck Invoked between bounded I/O operations so callers
      * can stop staging before any share intent is launched.
      * @throws IncompleteMediaShareException when the progressive transfer is incomplete.
-     * The MIME family comes from [clip]'s shared-core [MediaContentKind], while
+     * The MIME family comes from [clip]'s shared-core [NikonMediaContentKind], while
      * its filename remains display metadata and a validated target suffix only.
      * Kotlin never selects a media action from a filename extension.
      *
@@ -207,7 +209,7 @@ class MediaShareStager private constructor(
      */
     fun stage(
         entry: MediaCacheEntry,
-        clip: MediaClipRecord,
+        clip: NikonMediaClipRecord,
         cancellationCheck: () -> Unit = {},
     ): StagedMediaShare =
         stage(
@@ -220,7 +222,7 @@ class MediaShareStager private constructor(
     /**
      * Stages a legacy caller's already-authorized display name with a generic
      * MIME type. New camera-media callers must use [stage] with a
-     * [MediaClipRecord] so the shared-core action determines the MIME family.
+     * [NikonMediaClipRecord] so the shared-core action determines the MIME family.
      */
     fun stage(
         entry: MediaCacheEntry,
@@ -609,12 +611,12 @@ class MediaShareStager private constructor(
         }
     }
 
-    private fun mimeTypeFor(contentKind: MediaContentKind): String =
+    private fun mimeTypeFor(contentKind: NikonMediaContentKind): String =
         when (contentKind) {
-            MediaContentKind.PLAYABLE_PROXY -> "video/*"
-            MediaContentKind.STILL_PHOTO -> "image/*"
-            MediaContentKind.R3D_MASTER,
-            MediaContentKind.UNSUPPORTED,
+            NikonMediaContentKind.PLAYABLE_PROXY -> "video/*"
+            NikonMediaContentKind.STILL_PHOTO -> "image/*"
+            NikonMediaContentKind.R3D_MASTER,
+            NikonMediaContentKind.UNSUPPORTED,
             -> GENERIC_MEDIA_MIME_TYPE
         }
 

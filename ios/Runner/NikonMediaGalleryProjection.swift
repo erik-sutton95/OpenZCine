@@ -13,8 +13,9 @@ struct NikonAppGalleryProjection {
     init(
         clips: [MediaClip], actualIDs: [String: MediaAssetID], category: MediaCategoryTab,
         sort: MediaSortOrder, formats: Set<MediaFormatChip>,
-        resolutions: Set<MediaResolutionBucket>,
-        photoSizes: Set<MediaPhotoSizeClass>, dateWindow: MediaDateWindow?, storage: UInt32?,
+        resolutions: Set<NikonMediaResolutionBucket>,
+        photoSizes: Set<NikonMediaPhotoSizeClass>, dateWindow: NikonMediaDateWindow?,
+        storage: UInt32?,
         requireLocal: Bool, downloaded: (MediaClip) -> Bool,
         now: Date = Date(), calendar: Calendar = .current
     ) {
@@ -37,13 +38,15 @@ struct NikonAppGalleryProjection {
                 storage: storage.map(String.init), requireLocal: requireLocal), policy: policy)
     }
     var gridClips: [MediaClip] { result.gridIDs.compactMap { rowsByID[$0] } }
-    var filterOptions: MediaFilterOptions {
+    var filterOptions: NikonMediaFilterOptions {
         .init(
             formats: result.offered.formats.compactMap(MediaFormatChip.init(rawValue:)),
             resolutions: result.offered.resolutions.compactMap(
-                MediaResolutionBucket.init(rawValue:)),
-            photoSizes: result.offered.photoSizes.compactMap(MediaPhotoSizeClass.init(rawValue:)),
-            dateWindows: result.offered.dateWindows.compactMap(MediaDateWindow.init(rawValue:)))
+                NikonMediaResolutionBucket.init(rawValue:)),
+            photoSizes: result.offered.photoSizes.compactMap(
+                NikonMediaPhotoSizeClass.init(rawValue:)),
+            dateWindows: result.offered.dateWindows.compactMap(NikonMediaDateWindow.init(rawValue:))
+        )
     }
     func series(for clip: MediaClip) -> BurstSeries? {
         guard let id = idsByLegacy[clip.id], let group = result.group(for: id) else { return nil }

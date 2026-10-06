@@ -88,8 +88,8 @@ final class NativeCameraConnectionStore {
     func updateSavedCameraStreamSettings(
         host: String,
         pathKind: CameraPath.Kind?,
-        streamPreset: OperatorPreferences.StreamPreset?,
-        qualityBias: OperatorPreferences.QualityBias?
+        streamPreset: LiveViewStreamPreset?,
+        qualityBias: LiveViewQualityBias?
     ) {
         saveSavedCameras(
             PTPIPSavedCameraRecords.updatingStreamSettings(

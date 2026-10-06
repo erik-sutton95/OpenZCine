@@ -414,10 +414,6 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
 
 /// Persistable operator settings for monitor controls and local view assists.
 public struct OperatorPreferences: Codable, Equatable, Sendable {
-    /// Live-view frame size and compression are Nikon property bytes (OpenCineNikon).
-    public typealias StreamPreset = LiveViewStreamPreset
-    public typealias QualityBias = LiveViewQualityBias
-
     public init(
         dispOrder: [DispMode],
         enabledDispModes: Set<DispMode>,
@@ -427,8 +423,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         hapticsEnabled: Bool,
         keepScreenAwake: Bool,
         autoRotateFeedEnabled: Bool = true,
-        streamPreset: StreamPreset,
-        qualityBias: QualityBias,
+        streamPreset: LiveViewStreamPreset,
+        qualityBias: LiveViewQualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
         scopeActivationOrder: [MonitorAssistTool] = [],
         cleanChrome: DisplayChromeVisibility = .cleanDefaults,
@@ -484,8 +480,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// picture in the camera's native landscape sensor orientation. Display only — the recording
     /// is never affected.
     public var autoRotateFeedEnabled: Bool
-    public var streamPreset: StreamPreset
-    public var qualityBias: QualityBias
+    public var streamPreset: LiveViewStreamPreset
+    public var qualityBias: LiveViewQualityBias
     /// Which aspect the portrait feed renders at (operator pinch, persisted).
     public var portraitFeedAspect: PortraitFeedAspect
     /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
@@ -621,8 +617,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         // shipped with vertical mode applies; an explicitly saved false is a real opt-out.
         autoRotateFeedEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .autoRotateFeedEnabled) ?? true
-        streamPreset = try container.decode(StreamPreset.self, forKey: .streamPreset)
-        qualityBias = try container.decode(QualityBias.self, forKey: .qualityBias)
+        streamPreset = try container.decode(LiveViewStreamPreset.self, forKey: .streamPreset)
+        qualityBias = try container.decode(LiveViewQualityBias.self, forKey: .qualityBias)
         portraitFeedAspect =
             try container.decodeIfPresent(PortraitFeedAspect.self, forKey: .portraitFeedAspect)
             ?? .fit16x9

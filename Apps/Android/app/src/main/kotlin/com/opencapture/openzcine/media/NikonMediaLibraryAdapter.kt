@@ -2,12 +2,13 @@ package com.opencapture.openzcine.media
 
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.media.*
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaLibraryAssets
 import com.opencapture.opencine.nikon.NikonMediaService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal data class NikonLibraryClip(val bucket: String, val clip: MediaClipRecord,
+internal data class NikonLibraryClip(val bucket: String, val clip: NikonMediaClipRecord,
     /** An immutable census candidate, stripped before publication. Not a source metadata fact. */
     val requiresLocalRetention: Boolean = false)
 
@@ -26,7 +27,7 @@ internal class NikonMediaLibraryCodec(
     private val source: NikonMediaService?,
     private val cache: MediaCacheStore,
     private val favoriteKeys: () -> Set<String>,
-    private val hasLocalCopy: (MediaClipRecord) -> Boolean,
+    private val hasLocalCopy: (NikonMediaClipRecord) -> Boolean,
 ) : MonitorMediaCatalogCodec<NikonLibraryClip> {
     private val listed = linkedSetOf<String>()
     fun beginListing() { listed.clear() }

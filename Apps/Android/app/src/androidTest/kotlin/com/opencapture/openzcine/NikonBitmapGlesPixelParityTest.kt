@@ -10,6 +10,7 @@ import android.opengl.GLES20
 import androidx.media3.common.util.GlUtil
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opencapture.opencine.media.MonitorLUTCube
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -99,7 +100,7 @@ class NikonBitmapGlesPixelParityTest {
         midtoneEnabled = zebra, midtoneCode = 0.3f, midtoneColor = floatArrayOf(1f, 0.72f, 0.2f),
     )
 
-    private fun cube(): FeedEffectsCube {
+    private fun cube(): MonitorLUTCube {
         val size = 2
         val rgba = ByteArray(size * size * size * 4)
         for (green in 0 until size) for (blue in 0 until size) for (red in 0 until size) {
@@ -109,7 +110,7 @@ class NikonBitmapGlesPixelParityTest {
             rgba[offset + 2] = (red * 255).toByte()
             rgba[offset + 3] = 0xff.toByte()
         }
-        return FeedEffectsCube(size, rgba)
+        return MonitorLUTCube(size, rgba)
     }
 
     private fun plans(): Map<String, FeedEffectsRenderPlan> = mapOf(

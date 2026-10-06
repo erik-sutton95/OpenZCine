@@ -12,6 +12,7 @@ import android.os.HandlerThread
 import android.view.Surface
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.MonitorZebraMaskPolicy
 import com.opencapture.opencine.runtime.bitmapVulkanUniforms
 import com.opencapture.openpocketcine.feed.OpcVulkan
@@ -202,7 +203,7 @@ class NikonBitmapVulkanPixelParityTest {
     )
 
     /** 2³ cube in the packed `(g·n² + b·n + r)·4` lattice; [map] gives the output per corner. */
-    private fun cube(map: (Int, Int, Int) -> Triple<Int, Int, Int>): FeedEffectsCube {
+    private fun cube(map: (Int, Int, Int) -> Triple<Int, Int, Int>): MonitorLUTCube {
         val size = 2
         val rgba = ByteArray(size * size * size * 4)
         for (green in 0 until size) for (blue in 0 until size) for (red in 0 until size) {
@@ -213,7 +214,7 @@ class NikonBitmapVulkanPixelParityTest {
             rgba[offset + 2] = (b * 255).toByte()
             rgba[offset + 3] = 0xff.toByte()
         }
-        return FeedEffectsCube(size, rgba)
+        return MonitorLUTCube(size, rgba)
     }
 
     private fun plans(): Map<String, FeedEffectsRenderPlan> {

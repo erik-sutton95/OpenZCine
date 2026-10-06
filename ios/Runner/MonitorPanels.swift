@@ -2867,7 +2867,7 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var linkRows: some View {
-        SettingsDashScale(
+        MonitorLinkHealthScale(
             title: "Link Health",
             caption: linkHealthCaption,
             score: model.linkHealth)
@@ -2941,10 +2941,10 @@ struct OperatorSettingsPanel: View {
                 showTopDivider: false
             ) {
                 NikonSettingsChoices(
-                    options: OperatorPreferences.StreamPreset.allCases.map(\.rawValue),
+                    options: LiveViewStreamPreset.allCases.map(\.rawValue),
                     selected: model.preferences.streamPreset.rawValue
                 ) { value in
-                    if let preset = OperatorPreferences.StreamPreset(rawValue: value) {
+                    if let preset = LiveViewStreamPreset(rawValue: value) {
                         model.setStreamPreset(preset)
                     }
                 }
@@ -2959,11 +2959,11 @@ struct OperatorSettingsPanel: View {
                 // Android wrote as `.latency`, i.e. one label meaning two different bytes across
                 // the two shells.
                 NikonSettingsChoices(
-                    options: OperatorPreferences.QualityBias.allCases.map(\.settingsLabel),
+                    options: LiveViewQualityBias.allCases.map(\.settingsLabel),
                     selected: model.preferences.qualityBias.settingsLabel
                 ) { value in
                     guard
-                        let bias = OperatorPreferences.QualityBias.allCases.first(where: {
+                        let bias = LiveViewQualityBias.allCases.first(where: {
                             $0.settingsLabel == value
                         })
                     else { return }

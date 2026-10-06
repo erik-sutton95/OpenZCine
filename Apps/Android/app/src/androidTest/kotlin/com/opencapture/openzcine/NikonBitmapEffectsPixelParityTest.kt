@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.MonitorZebraMaskPolicy
 import com.opencapture.opencine.runtime.MonitorBitmapEffects
 import java.io.ByteArrayOutputStream
@@ -53,7 +54,7 @@ class NikonBitmapEffectsPixelParityTest {
         midtoneColor = floatArrayOf(1f, 0.7f, 0.1f),
     )
 
-    private fun constantCube(red: Int, green: Int, blue: Int): FeedEffectsCube {
+    private fun constantCube(red: Int, green: Int, blue: Int): MonitorLUTCube {
         val bytes = ByteArray(2 * 2 * 2 * 4)
         for (i in bytes.indices step 4) {
             bytes[i] = red.toByte()
@@ -61,7 +62,7 @@ class NikonBitmapEffectsPixelParityTest {
             bytes[i + 2] = blue.toByte()
             bytes[i + 3] = 255.toByte()
         }
-        return FeedEffectsCube(2, bytes)
+        return MonitorLUTCube(2, bytes)
     }
 
     private fun pixels(bitmap: Bitmap): IntArray = IntArray(bitmap.width * bitmap.height).also {

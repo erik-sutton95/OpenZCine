@@ -13,8 +13,8 @@ import androidx.media3.common.util.GlUtil
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.openzcine.FeedEffects
-import com.opencapture.openzcine.FeedEffectsCube
 import com.opencapture.openzcine.FeedEffectsRenderConfiguration
 import com.opencapture.openzcine.FeedEffectsRenderPlan
 import java.nio.ByteBuffer
@@ -167,7 +167,7 @@ class PlaybackFeedEffectGlTest {
         }
     }
 
-    private fun identityPlan(baseCube: FeedEffectsCube? = null): FeedEffectsRenderPlan =
+    private fun identityPlan(baseCube: MonitorLUTCube? = null): FeedEffectsRenderPlan =
         FeedEffectsRenderPlan(
             effects = FeedEffects(),
             configuration =
@@ -222,7 +222,7 @@ class PlaybackFeedEffectGlTest {
             }
         }
 
-    private fun greenAxisCube(): FeedEffectsCube {
+    private fun greenAxisCube(): MonitorLUTCube {
         val size = 2
         val rgba = ByteArray(size * size * size * 4)
         for (green in 0 until size) {
@@ -237,10 +237,10 @@ class PlaybackFeedEffectGlTest {
                 }
             }
         }
-        return FeedEffectsCube(size, rgba)
+        return MonitorLUTCube(size, rgba)
     }
 
-    private fun identityCube(): FeedEffectsCube {
+    private fun identityCube(): MonitorLUTCube {
         val size = 2
         val rgba = ByteArray(size * size * size * 4)
         for (green in 0 until size) {
@@ -254,7 +254,7 @@ class PlaybackFeedEffectGlTest {
                 }
             }
         }
-        return FeedEffectsCube(size, rgba)
+        return MonitorLUTCube(size, rgba)
     }
 
     private fun releaseEgl(

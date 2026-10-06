@@ -2,6 +2,11 @@ package com.opencapture.openzcine.media
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -111,9 +116,9 @@ internal data class MediaLibraryFilters(
     /** Drops a stale card selection whenever the source or connected camera changes. */
     fun retainingAvailableStorage(
         source: MediaLibrarySource,
-        clips: List<MediaClipRecord>,
+        clips: List<NikonMediaClipRecord>,
     ): MediaLibraryFilters =
-        retainingAvailableStorage(source, clips.mapTo(linkedSetOf(), MediaClipRecord::storageId))
+        retainingAvailableStorage(source, clips.mapTo(linkedSetOf(), NikonMediaClipRecord::storageId))
 
     /** Drops a stale card selection against the authoritative connected-card generation. */
     fun retainingAvailableStorage(
@@ -224,8 +229,8 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      */
     fun rememberCameraListing(
         cameraID: String,
-        clips: List<MediaClipRecord>,
-        removedObjects: Collection<MediaObjectIdentity> = emptyList(),
+        clips: List<NikonMediaClipRecord>,
+        removedObjects: Collection<NikonMediaObjectIdentity> = emptyList(),
     ) {
         beginCameraListing(cameraID).apply {
             applyPage(clips, removedObjects)
@@ -274,7 +279,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      */
     fun rememberResolvedObjectSize(
         cameraID: String,
-        clip: MediaClipRecord,
+        clip: NikonMediaClipRecord,
         resolvedSizeBytes: Long,
     ) {
         require(resolvedSizeBytes >= 0) { "resolvedSizeBytes must not be negative." }
@@ -283,7 +288,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
     }
 
     /** Canonical action result admission shares the actual index lock; no native work runs here. */
-    fun mutateCapturedAction(cameraID: String, clip: MediaClipRecord, observed: MediaClipRecord?,
+    fun mutateCapturedAction(cameraID: String, clip: NikonMediaClipRecord, observed: NikonMediaClipRecord?,
         generation: Long, ifCurrent: () -> Boolean, mutate: () -> Unit): Boolean = synchronized(persistenceLock) {
         if (catalogGeneration != generation || !ifCurrent()) return@synchronized false
         val current = persistedClipsLocked(cameraID).firstOrNull { it.libraryKey(cameraID) == clip.libraryKey(cameraID) }
@@ -297,7 +302,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
     }
 
     /** Returns only records previously received from the shared-core listing wire. */
-    fun persistedClips(cameraID: String): List<MediaClipRecord> =
+    fun persistedClips(cameraID: String): List<NikonMediaClipRecord> =
         synchronized(persistenceLock) { persistedClipsLocked(cameraID) }
 
     /**
@@ -321,7 +326,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      * downloaded copy does not keep the row alive). Cache artifacts are the
      * [MediaCacheStore]'s side of the purge.
      */
-    fun purgeClip(cameraID: String, clip: MediaClipRecord, ifCurrent: () -> Boolean = { true }) {
+    fun purgeClip(cameraID: String, clip: NikonMediaClipRecord, ifCurrent: () -> Boolean = { true }) {
         val identity = clip.libraryKey(cameraID)
         synchronized(persistenceLock) {
             if (!ifCurrent()) return
@@ -341,7 +346,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         }
     }
 
-    private fun persistedClipsLocked(cameraID: String): List<MediaClipRecord> =
+    private fun persistedClipsLocked(cameraID: String): List<NikonMediaClipRecord> =
         preferences.getString(indexKey(cameraID))
             ?.let(MediaLibraryRecordCodec::decode)
             .orEmpty()
@@ -396,7 +401,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
             .orEmpty()
 
     /** Changes one favorite and returns the complete updated set for UI state. */
-    fun toggleFavorite(cameraID: String, clip: MediaClipRecord): Set<String> {
+    fun toggleFavorite(cameraID: String, clip: NikonMediaClipRecord): Set<String> {
         val updated = favoriteIDs(cameraID).toMutableSet()
         val identity = clip.libraryKey(cameraID)
         if (!updated.add(identity)) updated.remove(identity)
@@ -413,7 +418,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      * >= 1 star becomes a favorite so the Favorites tab — which reads this set, not the camera
      * property — agrees with shots starred during a shoot. iOS `mirrorRatingIntoIndex`.
      */
-    fun setFavorite(cameraID: String, clip: MediaClipRecord, favorite: Boolean): Set<String> {
+    fun setFavorite(cameraID: String, clip: NikonMediaClipRecord, favorite: Boolean): Set<String> {
         val updated = favoriteIDs(cameraID).toMutableSet()
         val identity = clip.libraryKey(cameraID)
         val changed = if (favorite) updated.add(identity) else updated.remove(identity)
@@ -492,10 +497,10 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
 /** One in-memory camera-listing transaction with a single durable commit. */
 internal class MediaLibraryListingCheckpoint(
     private val cameraID: String,
-    initialClips: List<MediaClipRecord>,
-    private val commitCatalog: (List<MediaClipRecord>, Boolean) -> List<MediaClipRecord>,
+    initialClips: List<NikonMediaClipRecord>,
+    private val commitCatalog: (List<NikonMediaClipRecord>, Boolean) -> List<NikonMediaClipRecord>,
 ) {
-    private val clipsByIdentity = LinkedHashMap<String, MediaClipRecord>()
+    private val clipsByIdentity = LinkedHashMap<String, NikonMediaClipRecord>()
     private val listedIdentities = LinkedHashSet<String>()
     private var dirty = false
     private var committed = false
@@ -506,8 +511,8 @@ internal class MediaLibraryListingCheckpoint(
 
     /** Applies additions and exact removals from one native page without disk I/O. */
     fun applyPage(
-        addedClips: Collection<MediaClipRecord>,
-        removedObjects: Collection<MediaObjectIdentity>,
+        addedClips: Collection<NikonMediaClipRecord>,
+        removedObjects: Collection<NikonMediaObjectIdentity>,
     ) {
         check(!committed) { "Camera listing checkpoint is already committed." }
         addedClips.forEach { incoming ->
@@ -544,8 +549,8 @@ internal class MediaLibraryListingCheckpoint(
      */
     fun commit(
         prunesUnlistedClips: Boolean = false,
-        hasLocalCopy: (MediaClipRecord) -> Boolean = { false },
-    ): List<MediaClipRecord> {
+        hasLocalCopy: (NikonMediaClipRecord) -> Boolean = { false },
+    ): List<NikonMediaClipRecord> {
         check(!committed) { "Camera listing checkpoint is already committed." }
         committed = true
         if (prunesUnlistedClips) {
@@ -569,24 +574,24 @@ internal class MediaLibraryListingCheckpoint(
 
 /** Legacy source callers delegate to the same captured neutral projection owner as the gallery. */
 internal object MediaLibraryFiltering {
-    fun categoryScoped(clips: List<MediaClipRecord>, category: MediaLibraryCategory,
+    fun categoryScoped(clips: List<NikonMediaClipRecord>, category: MediaLibraryCategory,
         favoriteIDs: Set<String>, cameraID: String,
-        libraryKey: (MediaClipRecord) -> String = { it.libraryKey(cameraID) }): List<MediaClipRecord> =
+        libraryKey: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) }): List<NikonMediaClipRecord> =
         NikonAppGalleryProjection(clips, emptyMap(), category, favoriteIDs, cameraID,
             MediaLibrarySortOrder.NEWEST, libraryKey = libraryKey).categoryClips
-    fun displayed(clips: List<MediaClipRecord>, category: MediaLibraryCategory,
+    fun displayed(clips: List<NikonMediaClipRecord>, category: MediaLibraryCategory,
         favoriteIDs: Set<String>, cameraID: String, sortOrder: MediaLibrarySortOrder,
         filters: MediaLibraryFilters = MediaLibraryFilters(), today: LocalDate = LocalDate.now(),
-        libraryKey: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
-        ownerOf: (MediaClipRecord) -> String = { cameraID }): List<MediaClipRecord> =
+        libraryKey: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) },
+        ownerOf: (NikonMediaClipRecord) -> String = { cameraID }): List<NikonMediaClipRecord> =
         NikonAppGalleryProjection(clips, emptyMap(), category, favoriteIDs, cameraID,
             sortOrder, filters, today, libraryKey, ownerOf).displayedClips
-    fun sort(clips: List<MediaClipRecord>, sortOrder: MediaLibrarySortOrder): List<MediaClipRecord> =
+    fun sort(clips: List<NikonMediaClipRecord>, sortOrder: MediaLibrarySortOrder): List<NikonMediaClipRecord> =
         NikonAppGalleryProjection.sorted(clips, sortOrder)
 }
 
 /** Legacy metadata helpers map pure Nikon-owned facts into existing UI values. */
-internal fun MediaClipRecord.formatFilter(): MediaFormatFilter? =
+internal fun NikonMediaClipRecord.formatFilter(): MediaFormatFilter? =
     com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.formatKey(this)?.let { key ->
         MediaFormatFilter.entries.firstOrNull { it.title == key }
     }
@@ -638,18 +643,18 @@ internal object MediaLibrarySelection {
 }
 
 /** Stable private favorite/index identity — never a filename-only key. */
-internal fun MediaClipRecord.libraryKey(cameraID: String): String =
+internal fun NikonMediaClipRecord.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageId, handle, captureDate, filename)
 
 /**
  * Bucket-independent object identity used to map offline multi-camera clips
  * back to their owning cache cameraID.
  */
-internal fun MediaClipRecord.offlineObjectKey(): String =
+internal fun NikonMediaClipRecord.offlineObjectKey(): String =
     listOf(storageId.toString(), handle.toString(), captureDate, filename)
         .joinToString(separator = "\u0000")
 
-internal fun MediaObjectIdentity.libraryKey(cameraID: String): String =
+internal fun NikonMediaObjectIdentity.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageID, handle, captureDate, filename)
 
 private fun mediaLibraryKey(
@@ -665,9 +670,9 @@ private fun mediaLibraryKey(
     )
 
 internal fun mergeAuthoritativeObjectSize(
-    existing: MediaClipRecord?,
-    incoming: MediaClipRecord,
-): MediaClipRecord =
+    existing: NikonMediaClipRecord?,
+    incoming: NikonMediaClipRecord,
+): NikonMediaClipRecord =
     if (
         incoming.sizeBytes == PTP_UINT32_SENTINEL &&
             existing != null &&
@@ -688,7 +693,7 @@ private object MediaLibraryRecordCodec {
     private const val LEGACY_MINIMUM_RECORD_BYTES = 39
     private const val CURRENT_MINIMUM_RECORD_BYTES = 47
 
-    fun encode(clips: List<MediaClipRecord>): String {
+    fun encode(clips: List<NikonMediaClipRecord>): String {
         val bytes =
             ByteArrayOutputStream().use { raw ->
                 DataOutputStream(raw).use { output ->
@@ -702,7 +707,7 @@ private object MediaLibraryRecordCodec {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 
-    fun decode(encoded: String): List<MediaClipRecord> =
+    fun decode(encoded: String): List<NikonMediaClipRecord> =
         try {
             val bytes = Base64.getUrlDecoder().decode(encoded)
             DataInputStream(ByteArrayInputStream(bytes)).use { input ->
@@ -725,7 +730,7 @@ private object MediaLibraryRecordCodec {
             emptyList()
         }
 
-    private fun writeClip(output: DataOutputStream, clip: MediaClipRecord) {
+    private fun writeClip(output: DataOutputStream, clip: NikonMediaClipRecord) {
         output.writeLong(clip.handle)
         output.writeLong(clip.storageId)
         output.writeLong(clip.sizeBytes)
@@ -744,7 +749,7 @@ private object MediaLibraryRecordCodec {
         }
     }
 
-    private fun readClip(input: DataInputStream, version: Int): MediaClipRecord {
+    private fun readClip(input: DataInputStream, version: Int): NikonMediaClipRecord {
         val handle = input.readLong()
         val storageID = input.readLong()
         val sizeBytes = input.readLong()
@@ -754,12 +759,12 @@ private object MediaLibraryRecordCodec {
         val sourcePixelWidth = if (version >= VERSION) input.readInt() else 0
         val sourcePixelHeight = if (version >= VERSION) input.readInt() else 0
         val filename = input.readUTF()
-        val contentKind = MediaContentKind.valueOf(input.readUTF())
+        val contentKind = NikonMediaContentKind.valueOf(input.readUTF())
         val stillPhoto =
             if (input.readBoolean()) {
                 val formatLabel = input.readUTF()
-                val previewStrategy = StillPreviewStrategy.valueOf(input.readUTF())
-                StillPhotoClassification(formatLabel, previewStrategy)
+                val previewStrategy = NikonStillPreviewStrategy.valueOf(input.readUTF())
+                NikonStillPhotoClassification(formatLabel, previewStrategy)
             } else {
                 null
             }
@@ -769,8 +774,8 @@ private object MediaLibraryRecordCodec {
         check(sourcePixelWidth >= 0)
         check(sourcePixelHeight >= 0)
         check(isSafePersistedFilename(filename))
-        check((contentKind == MediaContentKind.STILL_PHOTO) == (stillPhoto != null))
-        return MediaClipRecord(
+        check((contentKind == NikonMediaContentKind.STILL_PHOTO) == (stillPhoto != null))
+        return NikonMediaClipRecord(
             handle = handle,
             storageId = storageID,
             sizeBytes = sizeBytes,
@@ -861,13 +866,13 @@ private fun computeDigest(value: String): String {
 }
 
 /** Pure access to the exact legacy Base64/binary codec; no preference or registry side effects. */
-internal fun decodeMediaLibraryCatalogBytes(bytes: ByteArray): List<MediaClipRecord> =
+internal fun decodeMediaLibraryCatalogBytes(bytes: ByteArray): List<NikonMediaClipRecord> =
     MediaLibraryRecordCodec.decode(bytes.toString(Charsets.UTF_8))
-internal fun encodeMediaLibraryCatalogBytes(clips: List<MediaClipRecord>): ByteArray =
+internal fun encodeMediaLibraryCatalogBytes(clips: List<NikonMediaClipRecord>): ByteArray =
     MediaLibraryRecordCodec.encode(clips).toByteArray(Charsets.UTF_8)
 
 /** Same legacy cache identity; unknown size may strengthen, conflicting known bytes retire. */
-internal fun sameNikonActionContent(old: MediaClipRecord, current: MediaClipRecord): Boolean {
+internal fun sameNikonActionContent(old: NikonMediaClipRecord, current: NikonMediaClipRecord): Boolean {
     if (old.filename != current.filename || old.storageId != current.storageId || old.handle != current.handle) return false
     if (old.captureDate.isNotEmpty() && current.captureDate.isNotEmpty() && old.captureDate != current.captureDate) return false
     if (old.sizeBytes > 0 && current.sizeBytes > 0 &&

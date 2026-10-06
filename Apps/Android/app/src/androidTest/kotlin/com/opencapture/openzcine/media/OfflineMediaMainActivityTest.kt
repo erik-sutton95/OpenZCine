@@ -15,6 +15,8 @@ import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
@@ -62,7 +64,7 @@ class OfflineMediaMainActivityTest {
         savedCameraStore.replace(listOf(record))
 
         val clip =
-            MediaClipRecord(
+            NikonMediaClipRecord(
                 handle = 0xCAFE,
                 storageId = 0x0001_0001,
                 sizeBytes = 4,
@@ -70,7 +72,7 @@ class OfflineMediaMainActivityTest {
                 pixelWidth = 1_920,
                 pixelHeight = 1_080,
                 filename = CACHED_FILENAME,
-                contentKind = MediaContentKind.PLAYABLE_PROXY,
+                contentKind = NikonMediaContentKind.PLAYABLE_PROXY,
                 stillPhoto = null,
             )
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
