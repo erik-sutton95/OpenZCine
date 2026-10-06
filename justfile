@@ -193,7 +193,7 @@ check-vulkan-shaders:
 # Reject GLSL ES 1.00 reserved words in the GLES2 shaders. Nothing else compiles them before a
 # device does, and the live surface answers a compile failure by rendering the plain feed.
 check-gles-shaders:
-    ./scripts/check-gles-shaders.sh
+    ../OpenCine/scripts/check-gles-shaders.sh
 
 # Compile the Android instrumentation-test APK without requiring a device.
 # `android-check` includes this gate so UI-test source never silently rots in CI.
