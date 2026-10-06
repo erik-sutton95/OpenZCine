@@ -67,16 +67,16 @@ struct AndroidLiveViewPolicyWireTests {
         // Six values: Basic/Normal/Fine x size-priority/quality-priority. The steps have to
         // walk the GRADES — an earlier 1/2/3 mapping assumed three values, so the top setting
         // only ever reached Normal and the Fine grade was unreachable from the UI.
-        let bytes = OperatorPreferences.QualityBias.allCases.map(\.liveViewImageCompression)
+        let bytes = LiveViewQualityBias.allCases.map(\.liveViewImageCompression)
         #expect(bytes == bytes.sorted())
         #expect(Set(bytes).count == bytes.count)
         #expect(bytes.allSatisfy { (0...5).contains($0) })
-        #expect(OperatorPreferences.QualityBias.detail.liveViewImageCompression >= 4)
+        #expect(LiveViewQualityBias.detail.liveViewImageCompression >= 4)
         // …and the facade must accept it, having previously rejected anything outside 1...3.
-        for bias in OperatorPreferences.QualityBias.allCases {
+        for bias in LiveViewQualityBias.allCases {
             let resolved = AndroidLiveViewPolicyWire.resolve(
                 streamPresetRaw: 2,
-                qualityBiasRaw: OperatorPreferences.QualityBias.allCases.firstIndex(of: bias)!,
+                qualityBiasRaw: LiveViewQualityBias.allCases.firstIndex(of: bias)!,
                 thermalTierRaw: 0,
                 isRecording: false,
                 cameraOverheating: false)

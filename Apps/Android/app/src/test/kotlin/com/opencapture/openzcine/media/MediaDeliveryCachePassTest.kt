@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.bridge.SwiftCore
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.io.path.createTempDirectory
@@ -98,8 +100,8 @@ class MediaDeliveryCachePassTest {
         }
     }
 
-    private fun clip(handle: Long, filename: String): MediaClipRecord =
-        MediaClipRecord(
+    private fun clip(handle: Long, filename: String): NikonMediaClipRecord =
+        NikonMediaClipRecord(
             handle = handle,
             storageId = 0x0001_0001,
             sizeBytes = SAMPLE.size.toLong(),
@@ -107,7 +109,7 @@ class MediaDeliveryCachePassTest {
             pixelWidth = 1920,
             pixelHeight = 1080,
             filename = filename,
-            contentKind = MediaContentKind.PLAYABLE_PROXY,
+            contentKind = NikonMediaContentKind.PLAYABLE_PROXY,
             stillPhoto = null,
         )
 

@@ -35,7 +35,7 @@ class FrameioMediaPreparationTest {
             val prepared =
                 preparer.prepare(
                     artifact,
-                    FrameioDeliveryOptions(
+                    MediaDeliveryConfiguration(
                         bakeLut = true,
                         includeMetadata = false,
                         selectedLut = selection,
@@ -104,7 +104,7 @@ class FrameioMediaPreparationTest {
                 assertFailsWith<FrameioDeliveryException> {
                     preparer.prepare(
                         artifact(source, supportsLutBake = false),
-                        FrameioDeliveryOptions(
+                        MediaDeliveryConfiguration(
                             bakeLut = true,
                             selectedLut = FeedLutSelection.BuiltIn(FeedLut.MONO),
                         ),
@@ -172,7 +172,7 @@ class FrameioMediaPreparationTest {
                 assertFailsWith<kotlinx.coroutines.CancellationException> {
                     preparer.prepare(
                         artifact(source, supportsLutBake = true),
-                        FrameioDeliveryOptions(
+                        MediaDeliveryConfiguration(
                             bakeLut = true,
                             selectedLut = FeedLutSelection.BuiltIn(FeedLut.MONO),
                         ),
@@ -214,7 +214,7 @@ class FrameioMediaPreparationTest {
                 artifact,
                 prepared,
                 destination,
-                FrameioDeliveryOptions(includeMetadata = true),
+                MediaDeliveryConfiguration(includeMetadata = true),
             )
 
             val sidecar =

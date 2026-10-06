@@ -14,6 +14,7 @@ import android.graphics.Shader
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import androidx.annotation.RequiresApi
+import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import java.nio.ByteBuffer
 
@@ -319,7 +320,7 @@ class FrozenNikonFeedEffectsRenderer private constructor(
             shader: RuntimeShader,
             shaderName: String,
             sizeName: String,
-            cube: FeedEffectsCube?,
+            cube: MonitorLUTCube?,
         ) {
             if (cube != null) {
                 val bitmap =

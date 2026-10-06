@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -150,7 +151,7 @@ class FeedEffectsTest {
     fun `the plan splits only when the base cube is the operator's lut`() {
         val lut = FeedLutSelection.BuiltIn(FeedLut.MONO)
         val split = FeedSplitOrientation.VERTICAL
-        fun plan(effects: FeedEffects, cube: FeedEffectsCube? = testCube()) =
+        fun plan(effects: FeedEffects, cube: MonitorLUTCube? = testCube()) =
             FeedEffectsRenderPlan(
                 effects = effects,
                 configuration = testRenderConfiguration(),
@@ -189,7 +190,7 @@ class FeedEffectsTest {
         assertNull(plan(FeedEffects(lut = lut, splitComparison = split), cube = null).splitComparison)
     }
 
-    private fun testCube(): FeedEffectsCube = FeedEffectsCube(2, ByteArray(2 * 2 * 2 * 4))
+    private fun testCube(): MonitorLUTCube = MonitorLUTCube(2, ByteArray(2 * 2 * 2 * 4))
 
     private fun testRenderConfiguration(): FeedEffectsRenderConfiguration =
         FeedEffectsRenderConfiguration(

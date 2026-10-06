@@ -7,6 +7,7 @@ import com.opencapture.monitorui.MonitorParadeMode
 import com.opencapture.monitorui.MonitorVectorscopeZoom
 import com.opencapture.monitorui.MonitorWaveformMode
 import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.opencine.media.MonitorCrushClipCompensation
 import com.opencapture.opencine.media.MonitorPeakingSense
 import androidx.compose.ui.test.assertCountEquals
@@ -42,7 +43,6 @@ import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
-import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.settings.CaptureLayoutMode
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import java.nio.file.Files
@@ -66,7 +66,7 @@ class NikonOperatorSettingsComposeTest {
         val preferences = context.getSharedPreferences("z2-settings-page", Context.MODE_PRIVATE)
         preferences.edit().clear().putString("unrelated.operator.choice", "retained").commit()
         val settings = OperatorSettings(preferences)
-        show(settings, OperatorSettingsTab.CONTROLS)
+        show(settings, MonitorSettingsTab.CONTROLS)
 
         for (label in listOf("Record confirmation", "Keep screen awake", "Haptics", "Bluetooth Remote Shutter", "Auto-Rotate Feed")) {
             composeRule.onNodeWithContentDescription(label).performScrollTo().performClick()
@@ -85,7 +85,7 @@ class NikonOperatorSettingsComposeTest {
             assertFalse(preferences.getBoolean("controls.autoRotateFeed", true))
             assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
         }
-        for (tab in OperatorSettingsTab.entries) {
+        for (tab in MonitorSettingsTab.entries) {
             composeRule.onNodeWithTag("monitor.settings.tab.${tab.title}")
                 .performScrollTo().performClick().assertIsDisplayed()
         }
@@ -98,7 +98,7 @@ class NikonOperatorSettingsComposeTest {
         preferences.edit().clear().commit()
         val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "settings-read-only"))
         runBlocking { session.connect() }
-        show(OperatorSettings(preferences), OperatorSettingsTab.LINK, session)
+        show(OperatorSettings(preferences), MonitorSettingsTab.LINK, session)
         composeRule.onNodeWithText("Active link").assertIsDisplayed()
         composeRule.onNodeWithText("Disconnect").assertDoesNotExist()
         preferences.edit().clear().commit()
@@ -115,7 +115,7 @@ class NikonOperatorSettingsComposeTest {
             override fun openPrivacy(): Boolean { called += "privacy"; return true }
             override fun openTerms(): Boolean { called += "terms"; return true }
         }
-        show(OperatorSettings(preferences), OperatorSettingsTab.STORAGE, actions = actions)
+        show(OperatorSettings(preferences), MonitorSettingsTab.STORAGE, actions = actions)
         composeRule.onNodeWithText("Full Resolution Caching").assertDoesNotExist()
         composeRule.onNodeWithText("Local Media Cache").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("monitor.settings.tab.System").performScrollTo().performClick()
@@ -239,7 +239,7 @@ class NikonOperatorSettingsComposeTest {
         val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "settings-assists"))
         runBlocking { session.connect() }
         val originalParade = assist.paradeMode
-        show(settings, OperatorSettingsTab.ASSIST, session, assists = restoreAssists(stores).also { assistsShown = it })
+        show(settings, MonitorSettingsTab.ASSIST, session, assists = restoreAssists(stores).also { assistsShown = it })
         fun choose(card: String, text: String) {
             composeRule.onNode(hasText(text) and hasAnyAncestor(hasTestTag("settings.assist.$card")))
                 .performScrollTo().performClick()
@@ -305,7 +305,7 @@ class NikonOperatorSettingsComposeTest {
         val input = ExposureAssistCameraInput(codec = properties.codec, iso = properties.iso, baseIso = properties.baseIso)
         assertTrue("Actual numeric page requires the packaged Swift core", SwiftCore.isAvailable)
         assertNotNull(zebraEditorValue(input, FeedZebraUnit.IRE, zebra()))
-        show(settings, OperatorSettingsTab.ASSIST, session, assists = assists)
+        show(settings, MonitorSettingsTab.ASSIST, session, assists = assists)
         composeRule.onNodeWithTag("settings.zebra.threshold.Highlight", useUnmergedTree = true)
             .assertExists(composeRule.onRoot(useUnmergedTree = true).printToString())
         val threshold = hasAnyAncestor(hasTestTag("settings.zebra.threshold.Highlight"))
@@ -358,7 +358,7 @@ class NikonOperatorSettingsComposeTest {
         val settings = OperatorSettings(preferences)
         val videoRecord = settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.VIDEO).railRecord.value
         val photoRecord = settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO).railRecord.value
-        show(settings, OperatorSettingsTab.DISPLAY)
+        show(settings, MonitorSettingsTab.DISPLAY)
         composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
         composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").assertIsDisplayed()
         composeRule.onNodeWithText("Photo").performScrollTo().performClick()
@@ -382,7 +382,7 @@ class NikonOperatorSettingsComposeTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("z2-display-label-fit", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
-        show(OperatorSettings(preferences), OperatorSettingsTab.DISPLAY)
+        show(OperatorSettings(preferences), MonitorSettingsTab.DISPLAY)
         composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
         composeRule.onNodeWithText("Photo").performScrollTo().performClick()
         for ((id, label) in listOf("CAMERA_VALUES" to "Camera Values", "RESOLUTION_READOUT" to "RESOLUTION")) {
@@ -409,7 +409,7 @@ class NikonOperatorSettingsComposeTest {
         val settings = OperatorSettings(preferences)
         val stores = assistStores("z2-display-pins")
         val kept = restoreAssists(stores).shared.pinned
-        show(settings, OperatorSettingsTab.DISPLAY, assists = restoreAssists(stores))
+        show(settings, MonitorSettingsTab.DISPLAY, assists = restoreAssists(stores))
         composeRule.onNodeWithText("DISP 2 · Clean").performScrollTo().performClick()
         for (tool in kept) {
             composeRule.onNodeWithTag("monitor.settings.display.toggle.${tool.name}")
@@ -430,7 +430,7 @@ class NikonOperatorSettingsComposeTest {
     }
 
     private fun show(
-        settings: OperatorSettings, initial: OperatorSettingsTab, session: CameraSession? = null,
+        settings: OperatorSettings, initial: MonitorSettingsTab, session: CameraSession? = null,
         actions: SystemSettingsActions = NoExternalActions, assists: NikonAssists = idleNikonAssists(),
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()

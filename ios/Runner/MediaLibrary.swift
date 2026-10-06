@@ -183,8 +183,8 @@ extension MediaClip {
     }
 
     /// Best-effort resolution bucket: R3D source dimensions when linked, else proxy pixels, then filename.
-    var resolutionBucket: MediaResolutionBucket? {
-        MediaResolutionBucket.classify(
+    var resolutionBucket: NikonMediaResolutionBucket? {
+        NikonMediaResolutionBucket.classify(
             filename: filename,
             pixelWidth: pixelWidth,
             sourcePixelWidth: sourcePixelWidth)
@@ -265,9 +265,9 @@ enum MediaClipFormatting {
 enum MediaBrowserFilterMetrics {
     static func activeCount(
         formatFilters: Set<MediaFormatChip>,
-        resolutionFilters: Set<MediaResolutionBucket>,
-        photoSizeFilters: Set<MediaPhotoSizeClass>,
-        dateWindow: MediaDateWindow?,
+        resolutionFilters: Set<NikonMediaResolutionBucket>,
+        photoSizeFilters: Set<NikonMediaPhotoSizeClass>,
+        dateWindow: NikonMediaDateWindow?,
         storageSlotFilter: UInt32?
     ) -> Int {
         formatFilters.count + resolutionFilters.count + photoSizeFilters.count

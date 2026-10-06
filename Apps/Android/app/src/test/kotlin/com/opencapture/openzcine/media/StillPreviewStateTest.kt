@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -11,8 +13,8 @@ import kotlin.test.assertTrue
 class StillPreviewStateTest {
     @Test
     fun `HEIF and RAW fallbacks never claim a full preview`() {
-        val heif = StillPhotoClassification("HEIF", StillPreviewStrategy.COMPLETE_FILE)
-        val raw = StillPhotoClassification("NEF", StillPreviewStrategy.THUMBNAIL_ONLY)
+        val heif = NikonStillPhotoClassification("HEIF", NikonStillPreviewStrategy.COMPLETE_FILE)
+        val raw = NikonStillPhotoClassification("NEF", NikonStillPreviewStrategy.THUMBNAIL_ONLY)
 
         val heifFallback =
             assertIs<StillPreviewUiState.ThumbnailFallback>(
@@ -39,7 +41,7 @@ class StillPreviewStateTest {
     fun `progressive state carries bounded cache progress and JPEG copy`() {
         val state =
             StillPreviewStates.downloading(
-                StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE),
+                NikonStillPhotoClassification("JPEG", NikonStillPreviewStrategy.PROGRESSIVE),
                 progress = 1.7,
             )
 

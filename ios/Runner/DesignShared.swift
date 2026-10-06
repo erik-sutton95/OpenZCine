@@ -77,27 +77,3 @@ enum MonitorWindowControlsClearance {
         return abs(bounds.width - screen.width) <= 1 && abs(bounds.height - screen.height) <= 1
     }
 }
-
-extension OperatorPreferences.StreamPreset {
-    var next: OperatorPreferences.StreamPreset {
-        switch self {
-        case .fast: .balanced
-        case .balanced: .quality
-        case .quality: .fast
-        }
-    }
-}
-
-extension OperatorPreferences.QualityBias {
-    var next: OperatorPreferences.QualityBias {
-        switch self {
-        case .latency: .balanced
-        case .balanced: .detail
-        case .detail: .latency
-        }
-    }
-}
-
-// `liveViewImageSize` / `liveViewImageCompression` moved onto the shared-core enums
-// (`OperatorPreferences.StreamPreset` / `.QualityBias`) so both shells send the same bytes —
-// they had drifted as two independently maintained copies of the same table.

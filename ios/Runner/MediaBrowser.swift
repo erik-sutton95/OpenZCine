@@ -2079,7 +2079,7 @@ struct MediaPlayerView: View {
     }
     @State private var playbackScopeAssist: ScopeAssistBundle = .empty
     @State private var playbackScopeController = PlaybackScopeController()
-    @State private var playbackAudioLevels: AudioMeterLevels?
+    @State private var playbackAudioLevels: MonitorAudioMeterLevels?
     @State private var audioMeterController = MonitorPlaybackAudioMeterRuntime { status in
         Logger(subsystem: "OpenZCine", category: "media-playback-audio")
             .error("MTAudioProcessingTapCreate failed: \(status)")

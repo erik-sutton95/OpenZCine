@@ -2,13 +2,13 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.Intent
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.MonitorDisplayMode
-import com.opencapture.openzcine.settings.OperatorSettingsTab
 
 /**
  * Release stub — the demo harness does not exist outside debug builds. The
@@ -44,7 +44,7 @@ object DemoHarness {
     @Suppress("UNUSED_PARAMETER")
     internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? = null
 
-    internal fun settingsTab(intent: Intent): OperatorSettingsTab? = null
+    internal fun settingsTab(intent: Intent): MonitorSettingsTab? = null
 
     /** Release builds cannot auto-open debug surfaces. */
     @Suppress("UNUSED_PARAMETER")

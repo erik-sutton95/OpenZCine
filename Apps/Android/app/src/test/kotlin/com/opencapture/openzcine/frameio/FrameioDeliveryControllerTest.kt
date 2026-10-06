@@ -536,7 +536,7 @@ class FrameioDeliveryControllerTest {
 
             controller.deliver(
                 listOf(FrameioDeliveryArtifact(StagedMediaShare(source, "C0008.MOV", "video/*"), 4)),
-                FrameioDeliveryOptions(
+                MediaDeliveryConfiguration(
                     bakeLut = true,
                     includeMetadata = true,
                     selectedLut =
@@ -1084,7 +1084,7 @@ class FrameioDeliveryControllerTest {
 
         override suspend fun prepare(
             artifact: FrameioDeliveryArtifact,
-            options: FrameioDeliveryOptions,
+            options: MediaDeliveryConfiguration,
             onProgress: suspend (Double) -> Unit,
         ): FrameioPreparedArtifact {
             val target = exportRoot.resolve("prepared.mp4")
@@ -1112,7 +1112,7 @@ class FrameioDeliveryControllerTest {
             artifact: FrameioDeliveryArtifact,
             prepared: FrameioPreparedArtifact,
             destination: FrameioDestination,
-            options: FrameioDeliveryOptions,
+            options: MediaDeliveryConfiguration,
         ) {
             calls += 1
             throw java.io.IOException("unit metadata failure")
