@@ -38,6 +38,7 @@ opencine-monitor-ui = { module = "com.opencapture.opencine:monitor-ui", version.
 opencine-multicam = { module = "com.opencapture.opencine:multicam", version.ref = "openCineCore" }
 opencine-nikon = { module = "com.opencapture.opencine:nikon", version.ref = "openCineCore" }
 opencine-appkit = { module = "com.opencapture.opencine:appkit", version.ref = "openCineCore" }
+opencine-camera-controls = { module = "com.opencapture.opencine:camera-controls", version.ref = "openCineCore" }
 opencine-native-runtime = { module = "com.opencapture.opencine:native-runtime", version.ref = "openCineCore" }
 opencine-vulkan = { module = "com.opencapture.opencine:vulkan", version.ref = "openCineCore" }
 opencine-platform = { module = "com.opencapture.opencine:platform", version.ref = "openCineCore" }

@@ -2954,7 +2954,10 @@ internal fun MonitorScreen(
                     )
                 }
             if (pickerFrame.width > 0f && pickerFrame.height >= 120f) {
-                CompositionLocalProvider(LocalMonitorGlass provides glass) {
+                CompositionLocalProvider(
+                    LocalMonitorGlass provides glass,
+                    com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait,
+                ) {
                     MonitorControlPickerPanel(
                         picker = picker,
                         frame = pickerFrame,

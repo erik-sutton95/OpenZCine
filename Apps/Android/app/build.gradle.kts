@@ -283,6 +283,8 @@ dependencies {
     implementation(libs.opencine.nikon)
     // The shared cameras page, connection model and saved-camera document (SHELL-02).
     implementation(libs.opencine.appkit)
+    // The shared capture sheets (LadderSheet) over the camera vocabulary.
+    implementation(libs.opencine.camera.controls)
     // Shared prepared PCM sampling and decoded-audio source lifetime.
     implementation(libs.opencine.native.runtime)
     // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.

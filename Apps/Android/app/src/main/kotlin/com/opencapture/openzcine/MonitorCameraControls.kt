@@ -1192,6 +1192,30 @@ internal fun MonitorControlPickerPanel(
                         nefOptions =
                             nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
                     )
+                } else if (currentPicker.kind in videoLadderKinds) {
+                    VideoLadderBody(
+                        picker = currentPicker,
+                        field = commonField,
+                        control = commonControl,
+                        controlsEnabled = controlsEnabled,
+                        error = feedback?.takeIf { it.isError }?.message,
+                        unavailable = stringResource(R.string.camera_controls_unavailable),
+                        fromTop = slideFromTop,
+                        onWrite = onSelect,
+                        onClose = onDismiss,
+                        onHold = if (currentPicker.kind == MonitorPickerKind.SHUTTER) onShutterLongPress else null,
+                        tintLabel = { tint ->
+                            WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta)
+                        },
+                        tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
+                            stringResource(R.string.camera_wb_tint_double_tap_help),
+                        footer = { _ ->
+                            if (currentPicker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
+                                MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 } else {
                     PickerPanelBody(
                         picker = currentPicker,
@@ -1217,7 +1241,7 @@ internal fun MonitorControlPickerPanel(
 
 /** Glass card body for one picker setting (header + drum/tint + mode bar). */
 @Composable
-private fun PickerPanelBody(
+internal fun PickerPanelBody(
     picker: MonitorPickerPresentation,
     frame: MonitorRect,
     commonControl: MonitorControlModel? = null,
