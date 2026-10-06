@@ -20,8 +20,6 @@ enum DemoHarness {
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
     /// first downloaded clip (read in `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
-    /// `ZC_DEMO_SPLIT=vertical|horizontal` stages the 50/50 Log-vs-LUT comparison.
-    static let splitComparison = value("ZC_DEMO_SPLIT")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
@@ -76,9 +74,6 @@ enum DemoHarness {
     static let blockSmoothStrength = value("ZC_DEMO_BLOCK_SMOOTH").flatMap(Double.init)
     static let blockSmoothGateLevels = value("ZC_DEMO_BLOCK_GATE").flatMap(Double.init)
     static let blockDitherLevels = value("ZC_DEMO_BLOCK_DITHER").flatMap(Double.init)
-    /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
-    /// rasterizer — the baseline for pixel-diff look-regression checks.
-    static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")
     /// `ZC_DEMO_WIFI_SCANNER=scan|manual` opens the Wi-Fi credential scanner for screenshots.
     static let cameraWiFiScannerMode = value("ZC_DEMO_WIFI_SCANNER")
     /// `ZC_DEMO_WIFI_OFF=1` makes the camera-AP flows treat the Wi-Fi radio as switched off, so

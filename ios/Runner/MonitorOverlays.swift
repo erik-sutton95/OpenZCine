@@ -7,10 +7,9 @@ import SwiftUI
 
 struct FeedAssistOverlayModule: View {
     @Environment(NativeAppModel.self) private var model
-    let safeArea: MonitorEdgeInsets
     let viewportWidth: Double
-    let canvasOffsetX: Double
-    var horizontalDirection: MonitorHorizontalLayoutDirection = .standard
+    /// The shared layout's picture rect, in this module's (viewport) space.
+    let picture: CGRect
     /// Suppresses the floating scope/false-colour `MovablePanel`s. Set by `MonitorShell`'s
     /// portrait branch: those panels bleed over the narrow portrait feed strip and are redundant
     /// there — `PortraitScopesStack` already shows scopes. Landscape never passes this.
@@ -21,18 +20,6 @@ struct FeedAssistOverlayModule: View {
         // ride into the photo chrome); the persisted set itself is untouched.
         let visible = model.renderedLiveAssistTools
         GeometryReader { proxy in
-            let feedFrame = MonitorFeedLayout.fullBleedFrame(
-                viewportWidth: viewportWidth,
-                viewportHeight: Double(proxy.size.height),
-                safeArea: safeArea,
-                horizontalDirection: horizontalDirection
-            )
-            let feedRect = CGRect(
-                x: CGFloat(feedFrame.x),
-                y: CGFloat(feedFrame.y),
-                width: CGFloat(feedFrame.width),
-                height: CGFloat(feedFrame.height)
-            )
             let screenBounds = CGRect(
                 x: 0, y: 0, width: CGFloat(viewportWidth), height: proxy.size.height)
             // Bands the inside-fallback anchors must clear: the status pill on top, the floating
@@ -40,7 +27,7 @@ struct FeedAssistOverlayModule: View {
             // `landscapeBottomBarHeight` in MonitorUnified.swift).
             let chromeClearance = EdgeInsets(
                 top: CGFloat(
-                    MonitorChromeLayout.insets(feedSafeArea: safeArea).clearingWindowControls.top
+                    MonitorEdgeInsets.chrome(for: .zero).clearingWindowControls.top
                         + MonitorLiveViewModuleLayout.topInfoDeckHeight),
                 leading: 0,
                 bottom: CGFloat(MonitorLiveViewModuleLayout.bottomBarBottomInset)
@@ -60,7 +47,7 @@ struct FeedAssistOverlayModule: View {
                         MovablePanel(
                             id: "audio", size: size,
                             defaultCenter: feedOutsideCenter(
-                                feedRect, size, .bottomTrailing,
+                                picture, size, .bottomTrailing,
                                 bounds: screenBounds, chromeClearance: chromeClearance),
                             bounds: screenBounds
                         ) {
@@ -92,7 +79,6 @@ struct FeedAssistOverlayModule: View {
                 height: proxy.size.height,
                 alignment: .topLeading
             )
-            .offset(x: CGFloat(canvasOffsetX))
         }
     }
 }
@@ -185,106 +171,48 @@ struct PlaybackAssistOverlayModule: View {
     }
 }
 
-/// Two-stroke L-corner resize affordance for a bottom-trailing exterior grip. The vertex sits at the
-/// rect's bottom-trailing corner (exterior); legs extend left and up back toward the panel corner.
-struct CornerResizeGrip: Shape {
-    func path(in rect: CGRect) -> Path {
-        let leg = min(rect.width, rect.height)
-        let vertex = CGPoint(x: rect.maxX, y: rect.maxY)
-        var path = Path()
-        path.move(to: vertex)
-        path.addLine(to: CGPoint(x: vertex.x - leg, y: vertex.y))
-        path.move(to: vertex)
-        path.addLine(to: CGPoint(x: vertex.x, y: vertex.y - leg))
-        return path
-    }
-}
-
 /// Long-press-and-drag wrapper for a floating panel (a scope or the false-colour reference). After a
 /// brief hold the panel lifts and follows the finger, clamped inside `bounds` and snapped to a coarse
 /// grid; a rigid tap fires on pick-up and a light tick on each snap, in keeping with the assist
 /// haptics. Positions persist across launches via `model.movablePanelPositions`.
 struct MovablePanel<Content: View>: View {
-    /// Optional uniform-resize support: a corner handle whose long-press-drag scales the panel. The
-    /// panel reads its current `size` from the caller (base × scale); the handle reports a new scale
-    /// back through `onChange`, and `baseSize`/`range` drive the drag-to-scale maths and clamp.
-    struct Resize {
-        var scale: Double
-        var range: ClosedRange<Double>
-        var baseSize: CGSize
-        var onChange: (Double) -> Void
-    }
-
     @Environment(NativeAppModel.self) private var model
     let id: String
     let size: CGSize
     let defaultCenter: CGPoint
     let bounds: CGRect
-    var resize: Resize? = nil
     @ViewBuilder var content: () -> Content
 
     @State private var dragOrigin: CGPoint?
     @State private var isDragging = false
     @State private var snapCell = 0
-    @State private var isResizing = false
-    @State private var resizeStartScale = 1.0
 
     // A fine position snap keeps the drag feeling smooth; the haptic ticks on a coarser interval so
     // it doesn't buzz continuously while moving.
     private let positionGrid: CGFloat = 4
     private let hapticGrid: CGFloat = 22
-    /// Minimum touch target for the exterior resize grip (HIG + operator margin).
-    private let gripHitSize: CGFloat = 56
-    /// Visible L-bracket leg length.
-    private let gripVisualSize: CGFloat = 14
     /// Invisible padding around the panel body for long-press drag pickup.
     private let dragHitPadding: CGFloat = 10
-    /// Clearance from the panel's bottom-trailing corner to the grip vertex.
-    private let gripExteriorGap: CGFloat = 2
-    /// Pulls the grip toward the panel corner while keeping the vertex outside.
-    private var gripCornerInset: CGFloat { gripVisualSize - gripExteriorGap }
 
     var body: some View {
         let center = clamp(resolvedCenter())
-        let gripPad = resize != nil ? gripHitSize - gripCornerInset : 0
-        // Expand layout bounds so the exterior grip stays hit-testable; shift `.position` to keep the
-        // scope panel itself anchored at `center`.
-        ZStack(alignment: .topLeading) {
-            content()
-                // Anchor the grip to the panel chrome's bottom-trailing corner (intrinsic bounds),
-                // not the outer layout frame — fixed-size scope innards otherwise drift from `size`.
-                .overlay(alignment: .bottomTrailing) {
-                    if let resize {
-                        resizeHandle(resize)
-                            .offset(x: gripExteriorGap, y: gripExteriorGap)
-                    }
-                }
-                .frame(width: size.width, height: size.height, alignment: .topLeading)
-                .padding(dragHitPadding)
-                .contentShape(Rectangle())
-                .padding(-dragHitPadding)
-                .gesture(panelDragGesture(center: center))
-        }
-        .frame(
-            width: size.width + gripPad,
-            height: size.height + gripPad,
-            alignment: .topLeading
-        )
-        .scaleEffect((isDragging || isResizing) ? 1.03 : 1)
-        .shadow(color: .black.opacity((isDragging || isResizing) ? 0.5 : 0), radius: 18, y: 8)
-        .position(x: center.x + gripPad / 2, y: center.y + gripPad / 2)
-        .sensoryFeedback(trigger: isDragging) { _, dragging in
-            dragging ? .impact(flexibility: .rigid, intensity: 1) : nil
-        }
-        .sensoryFeedback(.selection, trigger: snapCell)
-        .sensoryFeedback(trigger: isResizing) { _, resizing in
-            resizing ? .impact(flexibility: .rigid, intensity: 0.8) : nil
-        }
-        .animation(.easeOut(duration: 0.14), value: isDragging)
-        .animation(.easeOut(duration: 0.14), value: isResizing)
+        content()
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .padding(dragHitPadding)
+            .contentShape(Rectangle())
+            .padding(-dragHitPadding)
+            .gesture(panelDragGesture(center: center))
+            .scaleEffect(isDragging ? 1.03 : 1)
+            .shadow(color: .black.opacity(isDragging ? 0.5 : 0), radius: 18, y: 8)
+            .position(x: center.x, y: center.y)
+            .sensoryFeedback(trigger: isDragging) { _, dragging in
+                dragging ? .impact(flexibility: .rigid, intensity: 1) : nil
+            }
+            .sensoryFeedback(.selection, trigger: snapCell)
+            .animation(.easeOut(duration: 0.14), value: isDragging)
     }
 
-    /// Long-press then drag on the panel body to reposition (not applied to the resize grip).
+    /// Long-press then drag on the panel body to reposition.
     private func panelDragGesture(center: CGPoint) -> some Gesture {
         LongPressGesture(minimumDuration: 0.3)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
@@ -312,43 +240,6 @@ struct MovablePanel<Content: View>: View {
                 isDragging = false
                 dragOrigin = nil
             }
-    }
-
-    /// L-corner grip outside the panel's bottom-trailing corner; long-press then drag to scale uniformly.
-    private func resizeHandle(_ resize: Resize) -> some View {
-        let gripColor = isResizing ? LiveDesign.accent : LiveDesign.muted
-        return CornerResizeGrip()
-            .stroke(
-                gripColor,
-                style: StrokeStyle(lineWidth: 1.5, lineCap: .square)
-            )
-            // Vertex sits on the overlay anchor (panel bottom-trailing); legs extend inward.
-            .frame(width: gripVisualSize, height: gripVisualSize, alignment: .bottomTrailing)
-            // Touch target extends past the visible bracket along the exterior legs.
-            .frame(width: gripHitSize, height: gripHitSize, alignment: .bottomTrailing)
-            .contentShape(Rectangle())
-            .gesture(resizeGesture(resize))
-    }
-
-    private func resizeGesture(_ resize: Resize) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
-            .onChanged { value in
-                guard case .second(true, let drag) = value else { return }
-                if !isResizing {
-                    isResizing = true
-                    resizeStartScale = resize.scale
-                }
-                guard let drag else { return }
-                // Exterior bottom-trailing grip: drag down-right enlarges, up-left shrinks.
-                // Normalise by the base footprint so the feel is consistent at any current scale.
-                let reach = resize.baseSize.width + resize.baseSize.height
-                let delta = (drag.translation.width + drag.translation.height) / reach
-                let newScale = min(
-                    max(resizeStartScale + delta, resize.range.lowerBound), resize.range.upperBound)
-                resize.onChange(newScale)
-            }
-            .onEnded { _ in isResizing = false }
     }
 
     private func resolvedCenter() -> CGPoint {
