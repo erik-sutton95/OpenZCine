@@ -2867,7 +2867,7 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var linkRows: some View {
-        SettingsDashScale(
+        MonitorLinkHealthScale(
             title: "Link Health",
             caption: linkHealthCaption,
             score: model.linkHealth)
