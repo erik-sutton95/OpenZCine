@@ -763,9 +763,6 @@
     <string name="settings_layout_for_help">Video and photo keep separate layouts. This picks which one the sections below set up; the camera picks which one it renders.</string>
     <string name="settings_layout_for_other_side">Switch the camera to %1$s to arrange this on the monitor.</string>
     <string name="settings_disp_command_caption">The data dashboard — no feed, so no image assists. Only the side rail is on screen.</string>
-    <string name="settings_chrome_edit_title">Editing %1$s</string>
-    <string name="settings_chrome_edit_hint">Tap an eye to show or hide it</string>
-    <string name="settings_chrome_edit_done">Done</string>
     <string name="settings_clean_view_section_caption">Clean view (DISP 2) shows the image and nothing else. Anything switched on here stays on screen anyway.</string>
     <string name="settings_reset_clean_view">Reset clean view</string>
     <string name="settings_assist_toolbar">View Assist toolbar</string>

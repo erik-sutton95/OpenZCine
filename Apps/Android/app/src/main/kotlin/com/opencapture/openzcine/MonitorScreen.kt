@@ -37,10 +37,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -63,14 +59,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -112,6 +103,10 @@ import com.opencapture.opencine.appkit.commit
 import com.opencapture.opencine.appkit.quickControl
 import com.opencapture.opencine.appkit.MonitorCaptureDrum
 import com.opencapture.opencine.appkit.MonitorCaptureButton
+import com.opencapture.opencine.appkit.ChromeEditBadges
+import com.opencapture.opencine.appkit.ChromeEditDoneBanner
+import com.opencapture.opencine.appkit.ChromeEditHost
+import com.opencapture.opencine.appkit.chromeEditable
 import com.opencapture.monitorui.MonitorLayoutPolicy
 import com.opencapture.monitorui.monitorBottomInsetDp
 import com.opencapture.monitorui.monitorLeadingInsetDp
@@ -1498,10 +1493,16 @@ internal fun MonitorScreen(
         val statusBarVisible = mounts(ChromeSection.STATUS_BAR)
         val assistToolbarVisible = mounts(ChromeSection.ASSIST_TOOLBAR)
         val cameraValuesVisible = mounts(ChromeSection.CAMERA_VALUES)
-        val chromeEditBoxes = remember { mutableStateMapOf<ChromeSection, Rect>() }
-        val recordChromeEditBounds: (ChromeSection, Rect) -> Unit = { section, rect ->
+        val chromeEditBoxes = remember { mutableStateMapOf<ChromeSection, MonitorRect>() }
+        val recordChromeEditBounds: (ChromeSection, MonitorRect) -> Unit = { section, rect ->
             chromeEditBoxes[section] = rect
         }
+        // Done returns to where the operator came from, Display settings, not to the live monitor
+        // with no way back but the rail they may have just hidden.
+        val chromeEditHost =
+            remember(operatorSettings, captureLayoutMode, onOpenSettings) {
+                NikonChromeEditHost(operatorSettings, captureLayoutMode, onOpenSettings)
+            }
         LaunchedEffect(chromeEditorMode) {
             // Editing a mode means looking at it.
             chromeEditorMode?.let { displayMode = it }
@@ -2475,9 +2476,9 @@ internal fun MonitorScreen(
                             null
                         } else {
                             Modifier.chromeEditable(
+                                chromeEditHost,
                                 ChromeSection.FOCUS_BOX,
                                 chromeEditorMode,
-                                operatorSettings,
                                 recordChromeEditBounds,
                             )
                         },
@@ -2503,7 +2504,7 @@ internal fun MonitorScreen(
                 MonitorStatusChrome(fieldLayout, commonStatus,
                     showsRecording = !isPhotographyMode && mounts(ChromeSection.REC_READOUT),
                     showsTimecode = !isPhotographyMode && mounts(ChromeSection.TIMECODE_READOUT),
-                    modifier = Modifier.chromeEditable(ChromeSection.STATUS_BAR, chromeEditorMode, operatorSettings, recordChromeEditBounds),
+                    modifier = Modifier.chromeEditable(chromeEditHost, ChromeSection.STATUS_BAR, chromeEditorMode, recordChromeEditBounds),
                     storage = {
                         if (isPhotographyMode && mounts(ChromeSection.TIMECODE_READOUT)) {
                             ShotsRemainingReadout(cameraProperties.shotsRemaining, storage = cameraProperties.storage,
@@ -2539,13 +2540,13 @@ internal fun MonitorScreen(
             },
             power = { _ ->
                 BatteryRowStack(phoneBatteryReadout.percent, cameraReadouts.batteryPercent,
-                    Modifier.chromeEditable(ChromeSection.BATTERY_INDICATORS, chromeEditorMode, operatorSettings, recordChromeEditBounds),
+                    Modifier.chromeEditable(chromeEditHost, ChromeSection.BATTERY_INDICATORS, chromeEditorMode, recordChromeEditBounds),
                     phoneExternalPower = phoneBatteryReadout.externalPower, cameraExternalPower = cameraReadouts.externalPower)
             },
             capture = { accepts ->
                 MonitorCameraValues(values, enabled = accepts && commandControlsEnabled && !controlsSurrendered,
                     portrait = isPortrait, columns = if (isPortrait && !fieldLayout.tablet) { if (isPhotographyMode) 5 else 3 } else values.size,
-                    modifier = Modifier.chromeEditable(ChromeSection.CAMERA_VALUES, chromeEditorMode, operatorSettings, recordChromeEditBounds)
+                    modifier = Modifier.chromeEditable(chromeEditHost, ChromeSection.CAMERA_VALUES, chromeEditorMode, recordChromeEditBounds)
                         .onGloballyPositioned { coords ->
                             val r = coords.boundsInRoot()
                             with(density) { measuredCaptureBar = MonitorRect(r.left.toDp().value, r.top.toDp().value, r.width.toDp().value, r.height.toDp().value) }
@@ -3116,9 +3117,9 @@ internal fun MonitorScreen(
                 },
             )
             ChromeEditOverlay(
+                host = chromeEditHost,
                 mode = chromeEditorMode,
                 boxes = chromeEditBoxes,
-                settings = operatorSettings,
                 feed = effectiveFeed,
                 // Just clear of the bottom bars, whose top corners carry badges that straddle the
                 // edge — a bottom-centred banner sat on the tool bar's eye and swallowed the tap.
@@ -3128,12 +3129,6 @@ internal fun MonitorScreen(
                     } else {
                         fieldLayout.assists.y - 18f
                     },
-                onDone = {
-                    operatorSettings.endChromeEditing()
-                    // Done returns to where the operator came from — Display settings — not to the
-                    // live monitor with no way back but the rail they may have just hidden.
-                    onOpenSettings()
-                },
             )
         }
     }
@@ -3275,93 +3270,59 @@ internal fun nextDisplayModeInOrder(
 // MARK: - Edit view (per-DISP chrome)
 
 /**
- * Marks a monitor element as editable: while the Edit view is open on a mode that owns [section],
- * the element is outlined, dimmed to 30% when hidden, and publishes its **drawn** bounds through
- * [onBounds] so the badge layer can place one eye on it. A no-op outside the editor.
- *
- * Bounds are measured, never taken from the zone map: a zone frame is a layout budget and several
- * elements draw inset within theirs, so an outline off the budget would highlight the wrong thing.
- * Mirrors iOS `ChromeEditable`.
+ * The Edit view's host (iOS `NativeAppModel: ChromeEditHost`): this monitor's own sections and DISP
+ * modes, on the capture side the body reports. Ending the edit opens Display settings again.
  */
-@Composable
-internal fun Modifier.chromeEditable(
-    section: ChromeSection,
-    mode: MonitorDisplayMode?,
-    settings: OperatorSettings,
-    onBounds: (ChromeSection, Rect) -> Unit,
-): Modifier {
-    if (mode == null || !section.isConfigurableIn(mode)) return this
-    val on = settings.chrome(mode)[section].value
-    val outline =
-        if (on) LiveDesign.accent.copy(alpha = 0.75f) else LiveDesign.muted.copy(alpha = 0.75f)
-    return this
-        .onGloballyPositioned { onBounds(section, it.boundsInRoot()) }
-        // Drawn outside the alpha layer so a hidden element's outline stays readable at 30%.
-        .drawWithContent {
-            drawContent()
-            drawRoundRect(
-                color = outline,
-                cornerRadius = CornerRadius(8.dp.toPx()),
-                style =
-                    Stroke(
-                        width = 1.dp.toPx(),
-                        pathEffect =
-                            PathEffect.dashPathEffect(
-                                floatArrayOf(3.dp.toPx(), 3.dp.toPx()),
-                            ),
-                    ),
-            )
-        }
-        .alpha(if (on) 1f else 0.3f)
+internal class NikonChromeEditHost(
+    private val settings: OperatorSettings,
+    private val capture: CaptureLayoutMode,
+    private val onEnded: () -> Unit,
+) : ChromeEditHost<ChromeSection, MonitorDisplayMode> {
+    override val chromeEditSections: List<ChromeSection> = PLACEMENT_ORDER
+    override fun chromeSectionTitle(section: ChromeSection): String = section.title
+    override fun chromeSectionID(section: ChromeSection): String = section.key
+    override fun chromeModeTitle(mode: MonitorDisplayMode): String = mode.label
+    override fun isChromeConfigurable(section: ChromeSection, mode: MonitorDisplayMode): Boolean =
+        section.isConfigurableIn(mode)
+    override fun isChromeVisible(section: ChromeSection, mode: MonitorDisplayMode): Boolean =
+        settings.chrome(mode, capture)[section].value
+    override fun toggleChrome(section: ChromeSection, mode: MonitorDisplayMode) {
+        settings.toggleChrome(section, mode, capture)
+    }
+    override fun endChromeEditing() {
+        settings.endChromeEditing()
+        onEnded()
+    }
+
+    companion object {
+        /**
+         * The lock and batteries first: on a portrait phone they share the status bar's top corner,
+         * where the edge inset leaves room for one eye, so the long status bar takes a spot along
+         * its own edge instead of stacking on theirs.
+         */
+        val PLACEMENT_ORDER: List<ChromeSection> =
+            listOf(ChromeSection.LOCK_BUTTON, ChromeSection.BATTERY_INDICATORS) +
+                ChromeSection.entries.filter { it != ChromeSection.LOCK_BUTTON && it != ChromeSection.BATTERY_INDICATORS }
+    }
 }
 
 /**
- * Everything the Edit view puts on top of the monitor: one eye badge per measured element, and the
- * banner that names the mode and gets the operator back out.
- *
- * Placement comes from [ChromeEditLayout], which mirrors the core, so both shells agree.
+ * Everything the Edit view puts on top of the monitor: the shared eye badges over every measured
+ * element, and the shared banner that names the mode and gets the operator back out.
  */
 @Composable
 private fun ChromeEditOverlay(
+    host: NikonChromeEditHost,
     mode: MonitorDisplayMode,
-    boxes: Map<ChromeSection, Rect>,
-    settings: OperatorSettings,
-    /** The image area the banner centres on — not the screen; the rails sit outside it. */
+    boxes: Map<ChromeSection, MonitorRect>,
+    /** The image area the banner centres on, not the screen; the rails sit outside it. */
     feed: MonitorRect,
     /** Where the banner's bottom edge sits, in the same dp space as [feed]. */
     bannerBottomDp: Float,
-    onDone: () -> Unit,
 ) {
-    val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val widthDp = maxWidth.value
-        val heightDp = maxHeight.value
-        val placements =
-            ChromeEditLayout.badgeFrames(
-                ChromeSection.entries.mapNotNull { section ->
-                    boxes[section]?.let { rect ->
-                        with(density) {
-                            ChromeEditBox(
-                                section = section,
-                                left = rect.left.toDp().value,
-                                top = rect.top.toDp().value,
-                                width = rect.width.toDp().value,
-                                height = rect.height.toDp().value,
-                            )
-                        }
-                    }
-                },
-                viewportWidth = widthDp,
-                viewportHeight = heightDp,
-            )
-        placements.forEach { (section, placement) ->
-            ChromeEditBadge(
-                section = section,
-                mode = mode,
-                settings = settings,
-                modifier = Modifier.offset(placement.left.dp, placement.top.dp),
-            )
-        }
+        // The 26 dp disc sits over live chrome, so its tap area is grown to the tap-target floor.
+        ChromeEditBadges(host, mode, boxes, maxWidth.value, maxHeight.value, touchTarget = MIN_TAP_TARGET_DP)
         // Anchored by its BOTTOM edge and centred on the feed, so the banner's own height never
         // matters and it never lands on a badge (iOS `MonitorShell`'s banner overlay).
         Box(
@@ -3369,87 +3330,7 @@ private fun ChromeEditOverlay(
                 .size(feed.width.dp, (bannerBottomDp - feed.y).coerceAtLeast(0f).dp),
             contentAlignment = Alignment.BottomCenter,
         ) {
-            ChromeEditBanner(mode = mode, onDone = onDone)
+            ChromeEditDoneBanner(host, mode)
         }
-    }
-}
-
-/**
- * One eye badge. Tapping it shows or hides that element **for the DISP mode being edited**.
- *
- * A hidden element keeps rendering at 30% for as long as the editor is open, and keeps this badge,
- * which is the whole point: switching something off must never put it out of reach of switching
- * back on.
- */
-@Composable
-private fun ChromeEditBadge(
-    section: ChromeSection,
-    mode: MonitorDisplayMode,
-    settings: OperatorSettings,
-    modifier: Modifier = Modifier,
-) {
-    val on = settings.chrome(mode)[section].value
-    val description = "${section.title}: ${if (on) "shown" else "hidden"}"
-    Box(
-        modifier
-            // The 26dp disc is under the 48dp minimum and sits over live chrome, so the touch
-            // target is grown around it rather than relying on the disc itself.
-            .size(ChromeEditLayout.BADGE_SIZE_DP.dp)
-            .background(
-                if (on) LiveDesign.accent else Color.Black.copy(alpha = 0.9f),
-                CircleShape,
-            )
-            .border(1.dp, LiveDesign.text.copy(alpha = 0.55f), CircleShape)
-            .chromeClickable { settings.toggleChrome(section, mode) }
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = if (on) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-            contentDescription = null,
-            tint = if (on) LiveDesign.background else LiveDesign.text,
-            modifier = Modifier.size(14.dp),
-        )
-    }
-}
-
-/** Names the mode being edited and gets the operator back out (iOS `ChromeEditBanner`). */
-@Composable
-private fun ChromeEditBanner(
-    mode: MonitorDisplayMode,
-    onDone: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier
-            .glass(CircleShape)
-            .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column {
-            Text(
-                stringResource(
-                    R.string.settings_chrome_edit_title,
-                    stringResource(mode.labelResource()),
-                ),
-                style = chromeStyle(11.5f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-            )
-            Text(
-                stringResource(R.string.settings_chrome_edit_hint),
-                style = chromeStyle(10f, FontWeight.Normal),
-                color = LiveDesign.muted,
-            )
-        }
-        Text(
-            stringResource(R.string.settings_chrome_edit_done),
-            style = chromeStyle(11.5f, FontWeight.Bold),
-            color = LiveDesign.background,
-            modifier =
-                Modifier.background(LiveDesign.accent, CircleShape)
-                    .chromeClickable(onDone)
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
-        )
     }
 }
