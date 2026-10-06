@@ -2,7 +2,6 @@ package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.LiveFrameSource
-import com.opencapture.openzcine.settings.ChromeSection
 
 /**
  * Returns the monitor-owned live source only while a preview-bearing monitor
@@ -38,107 +37,6 @@ internal fun monitorTimecodeFrameSource(source: LiveFrameSource?): LiveFrameSour
  */
 internal fun previewPolicyRecordingActive(state: CameraRecordingState): Boolean =
     state == CameraRecordingState.RECORDING || state == CameraRecordingState.STOPPING
-
-/** One element the Edit view can badge, at its real drawn bounds in pixels. */
-internal data class ChromeEditBox(
-    val section: ChromeSection,
-    val left: Float,
-    val top: Float,
-    val width: Float,
-    val height: Float,
-)
-
-/** A placed eye badge: the top-left of its [ChromeEditLayout.BADGE_SIZE_DP] square. */
-internal data class ChromeEditBadgePlacement(val left: Float, val top: Float)
-
-/**
- * Where the Edit view puts each element's eye badge. Mirrors the shared core's
- * `MonitorChromeEditLayout` (`Sources/OpenZCineCore/AssistToolActivation.swift`) exactly, so both
- * shells place badges the same way.
- *
- * A fixed corner per element does not work: the monitor's elements sit edge to edge and some nest
- * inside others (the four readouts live in the status bar), so constants put badges on top of one
- * another and some of them out of reach. This picks, per element, the first corner of its measured
- * box that is clear of every badge already placed, clamping each candidate on screen first so an
- * element flush against an edge still gets a reachable badge.
- */
-internal object ChromeEditLayout {
-    /** Diameter of the badge itself, in the same unit as the boxes. */
-    const val BADGE_SIZE_DP: Float = 26f
-
-    /** Breathing room between two badges, and between a badge and the viewport edge. */
-    const val BADGE_GAP_DP: Float = 3f
-
-    /**
-     * Badge frames keyed by section, in the same coordinate space as [boxes].
-     *
-     * [boxes] order is the placement priority: earlier elements get their preferred corner, later
-     * ones move to the next free one. Unmeasured (zero-sized) boxes are skipped.
-     */
-    fun badgeFrames(
-        boxes: List<ChromeEditBox>,
-        viewportWidth: Float,
-        viewportHeight: Float,
-        badgeSize: Float = BADGE_SIZE_DP,
-    ): Map<ChromeSection, ChromeEditBadgePlacement> {
-        val placed = mutableListOf<ChromeEditBadgePlacement>()
-        val result = LinkedHashMap<ChromeSection, ChromeEditBadgePlacement>()
-
-        for (box in boxes) {
-            if (box.width <= 1f || box.height <= 1f) continue
-            val candidates =
-                corners(box, badgeSize).map {
-                    clamp(it, viewportWidth, viewportHeight, badgeSize)
-                }
-            val choice =
-                candidates.firstOrNull { candidate ->
-                    placed.none { overlaps(it, candidate, badgeSize) }
-                } ?: candidates.first()
-            placed += choice
-            result[box.section] = choice
-        }
-        return result
-    }
-
-    /**
-     * The four corner positions, centred on the corner so the badge straddles the element's edge:
-     * top-trailing first (least likely to sit over content), then top-leading, bottom-trailing,
-     * bottom-leading.
-     */
-    private fun corners(box: ChromeEditBox, badgeSize: Float): List<ChromeEditBadgePlacement> {
-        val half = badgeSize / 2f
-        return listOf(
-            ChromeEditBadgePlacement(box.left + box.width - half, box.top - half),
-            ChromeEditBadgePlacement(box.left - half, box.top - half),
-            ChromeEditBadgePlacement(box.left + box.width - half, box.top + box.height - half),
-            ChromeEditBadgePlacement(box.left - half, box.top + box.height - half),
-        )
-    }
-
-    private fun clamp(
-        placement: ChromeEditBadgePlacement,
-        viewportWidth: Float,
-        viewportHeight: Float,
-        badgeSize: Float,
-    ): ChromeEditBadgePlacement {
-        val maxX = maxOf(BADGE_GAP_DP, viewportWidth - badgeSize - BADGE_GAP_DP)
-        val maxY = maxOf(BADGE_GAP_DP, viewportHeight - badgeSize - BADGE_GAP_DP)
-        return ChromeEditBadgePlacement(
-            left = minOf(maxOf(placement.left, BADGE_GAP_DP), maxX),
-            top = minOf(maxOf(placement.top, BADGE_GAP_DP), maxY),
-        )
-    }
-
-    private fun overlaps(
-        a: ChromeEditBadgePlacement,
-        b: ChromeEditBadgePlacement,
-        badgeSize: Float,
-    ): Boolean =
-        a.left < b.left + badgeSize + BADGE_GAP_DP &&
-            b.left < a.left + badgeSize + BADGE_GAP_DP &&
-            a.top < b.top + badgeSize + BADGE_GAP_DP &&
-            b.top < a.top + badgeSize + BADGE_GAP_DP
-}
 
 /**
  * Whether the on-feed focus dial can drive the lens in the body's current focus mode.
