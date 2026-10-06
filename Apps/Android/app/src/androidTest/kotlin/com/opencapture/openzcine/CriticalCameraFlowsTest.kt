@@ -59,6 +59,26 @@ class CriticalCameraFlowsTest {
     }
 
     @Test
+    fun networkStepShowsTheCameraAndPhoneInstructionsOnTheSharedPage() {
+        relaunch(
+            launchMainActivity()
+                .putExtra(EXTRA_PAIRING_STEP, "network")
+                .putExtra(EXTRA_PAIRING_PATH, "ap"),
+        )
+        val context = instrumentation.targetContext
+        for (copy in listOf(
+            R.string.pairing_network_ap,
+            R.string.pairing_network_ap_camera_1,
+            R.string.pairing_network_ap_phone_1,
+        )) {
+            device.waitForText(context.getString(copy), CONNECTING_TIMEOUT_MILLIS)
+        }
+        // The shared instruction card titles its device in capitals.
+        device.waitForText(context.getString(R.string.pairing_on_camera).uppercase(), CONNECTING_TIMEOUT_MILLIS)
+        device.waitForText(context.getString(R.string.pairing_on_phone).uppercase(), CONNECTING_TIMEOUT_MILLIS)
+    }
+
+    @Test
     fun fakeCameraActivatesLiveView() {
         relaunch(launchMainActivity().putExtra(EXTRA_DEMO_FEED, true))
 
@@ -127,6 +147,7 @@ class CriticalCameraFlowsTest {
         const val EXTRA_GLASS_TIER = "zc.glass.tier"
         const val GLASS_TIER_FULL = "full"
         const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
+        const val EXTRA_PAIRING_PATH = "zc.demo.pairingPath"
         const val PAIRING_CONNECTING = "connecting"
         const val LIVE_VIEW = "Live view active"
         const val CAMERA_CONNECTED = "Camera connected"

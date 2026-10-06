@@ -60,6 +60,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.opencapture.monitorui.MonitorPairingInstruction
+import com.opencapture.monitorui.MonitorPairingInstructionIcon
 import com.opencapture.monitorui.MonitorPairingPresentation
 import com.opencapture.monitorui.MonitorPairingStep
 import com.opencapture.opencine.appkit.CamerasModel
@@ -1371,7 +1373,9 @@ public fun PairingExperience(
                     steps = steps.map { MonitorPairingStep(stringResource(PairingCopy.stepTitle(it)), "") },
                     currentStep = flow.displayStepNumber - 1,
                     title = stringResource(PairingCopy.stepTitle(flow.step)),
-                    body = "", target = "Nikon Z", hint = "",
+                    body = if (flow.step == PairingStep.NETWORK) stringResource(PairingCopy.networkSubtitle(flow.path)) else "",
+                    target = "Nikon Z", hint = "",
+                    instructions = if (flow.step == PairingStep.NETWORK) networkInstructions(flow.path) else emptyList(),
                     primaryAction = primary,
                     primaryActionEnabled = !busy && (flow.step != PairingStep.PERMISSIONS ||
                         permissionGranted && isCameraPermissionSatisfied(cameraRequired, cameraPermissionGranted)),
@@ -1447,7 +1451,7 @@ public fun PairingExperience(
                             onOpenWatcherList = onOpenWatcherList,
                         )
                         PairingStep.PREPARE -> NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
-                        PairingStep.NETWORK -> NetworkBody(path = flow.path)
+                        PairingStep.NETWORK -> Unit
                         PairingStep.DISCOVER -> DiscoverBody(
                             path = flow.path, cameras = cameras, usbCameras = usbCameras,
                             onConnectCamera = { connect(it.host) }, onConnectUsbCamera = ::connectUsb,
@@ -1908,117 +1912,38 @@ private fun NumberedCards(steps: List<String>) {
 }
 
 /**
- * The network step is instruction-only on every path (iOS
- * `StartupWizardNetworkStep`): the camera-AP flow is scanner-first — the
- * "Connect my camera" primary opens the scanner, never a typed credential form.
+ * The network step is instruction-only on every path (iOS `StartupWizardNetworkStep`): the
+ * camera-AP flow is scanner-first, so the "Connect my camera" primary opens the scanner, never a
+ * typed credential form. The shared page draws these as its camera and phone instruction cards.
  */
 @Composable
-private fun NetworkBody(path: PairingPath) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            stringResource(PairingCopy.networkSubtitle(path)),
-            color = StartupColors.muted,
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
+private fun networkInstructions(path: PairingPath): List<MonitorPairingInstruction> {
+    val camera = stringResource(R.string.pairing_on_camera)
+    val phone = stringResource(R.string.pairing_on_phone)
+    @Composable
+    fun card(title: String, icon: MonitorPairingInstructionIcon, vararg lines: Int) =
+        MonitorPairingInstruction(title, icon, lines.map { stringResource(it) })
+    return when (path) {
+        PairingPath.CAMERA_ACCESS_POINT -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA, R.string.pairing_network_ap_camera_1),
+            card(phone, MonitorPairingInstructionIcon.PHONE, R.string.pairing_network_ap_phone_1),
         )
-        when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> {
-                DeviceInstructionCard(
-                    glyph = MonitorIcon.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps = listOf(stringResource(R.string.pairing_network_ap_camera_1)),
-                )
-                DeviceInstructionCard(
-                    glyph = MonitorIcon.SMARTPHONE,
-                    label = stringResource(R.string.pairing_on_phone),
-                    steps = listOf(stringResource(R.string.pairing_network_ap_phone_1)),
-                )
-            }
-            PairingPath.PHONE_HOTSPOT ->
-                DeviceInstructionCard(
-                    glyph = MonitorIcon.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps = PairingCopy.hotspotCameraSteps.map { stringResource(it) },
-                )
-            PairingPath.USB_C -> {
-                DeviceInstructionCard(
-                    glyph = MonitorIcon.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps =
-                        listOf(
-                            stringResource(R.string.pairing_network_usb_camera_1),
-                            stringResource(R.string.pairing_network_usb_camera_2),
-                        ),
-                )
-                DeviceInstructionCard(
-                    glyph = MonitorIcon.SMARTPHONE,
-                    label = stringResource(R.string.pairing_on_phone),
-                    steps = listOf(stringResource(R.string.pairing_network_usb_phone_1)),
-                )
-            }
-            // Unreachable: the HDMI sequence carries no NETWORK step (PairingFlowState).
-            PairingPath.HDMI_CAPTURE -> Unit
-            PairingPath.WIFI_NETWORK -> {
-                // Nothing to join from here: both devices are already on someone else's network,
-                // so this step is a check rather than an action.
-                DeviceInstructionCard(
-                    glyph = MonitorIcon.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps = listOf(stringResource(R.string.pairing_network_router_camera_1)),
-                )
-                DeviceInstructionCard(
-                    glyph = MonitorIcon.SMARTPHONE,
-                    label = stringResource(R.string.pairing_on_phone),
-                    steps = listOf(stringResource(R.string.pairing_network_router_phone_1)),
-                )
-            }
-        }
-    }
-}
-
-/** Device-labelled numbered instruction card (iOS `StartupWizardDeviceInstructionCard`). */
-@Composable
-private fun DeviceInstructionCard(
-    glyph: MonitorIcon,
-    label: String,
-    steps: List<String>,
-) {
-    Column(
-        Modifier.fillMaxWidth()
-            .startupInstructionCard()
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            MonitorIcon(glyph, null, Modifier.size(16.dp), StartupColors.accent)
-            Text(
-                label,
-                color = StartupColors.ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-        steps.forEachIndexed { index, step ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(R.string.step_number, index + 1),
-                    color = StartupColors.muted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.width(14.dp),
-                )
-                Text(
-                    step,
-                    color = StartupColors.ink,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 17.sp,
-                )
-            }
-        }
+        PairingPath.PHONE_HOTSPOT -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA, *PairingCopy.hotspotCameraSteps.toIntArray()),
+        )
+        PairingPath.USB_C -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA,
+                R.string.pairing_network_usb_camera_1, R.string.pairing_network_usb_camera_2),
+            card(phone, MonitorPairingInstructionIcon.PHONE, R.string.pairing_network_usb_phone_1),
+        )
+        // Unreachable: the HDMI sequence carries no NETWORK step (PairingFlowState).
+        PairingPath.HDMI_CAPTURE -> emptyList()
+        // Nothing to join from here: both devices are already on someone else's network,
+        // so this step is a check rather than an action.
+        PairingPath.WIFI_NETWORK -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA, R.string.pairing_network_router_camera_1),
+            card(phone, MonitorPairingInstructionIcon.PHONE, R.string.pairing_network_router_phone_1),
+        )
     }
 }
 
