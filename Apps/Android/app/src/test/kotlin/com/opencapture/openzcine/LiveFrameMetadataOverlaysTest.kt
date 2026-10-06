@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class LiveFrameMetadataOverlaysTest {
     @Test
@@ -84,7 +85,7 @@ class LiveFrameMetadataOverlaysTest {
 
     @Test
     fun `focus coordinates map into exact aspect-fit content rather than monitor zone`() {
-        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        val content = nativeFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
         assertNotNull(content)
         assertEquals(0, content.left)
         assertEquals(219, content.top)
@@ -117,7 +118,7 @@ class LiveFrameMetadataOverlaysTest {
 
     @Test
     fun `mirrored focus boxes fold across the feed the way the picture does`() {
-        val content = requireNotNull(liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080))
+        val content = requireNotNull(nativeFeedContentRect(1_000f, 1_000f, 1_920, 1_080))
         val feed = requireNotNull(liveOverlayFeedRect(content, horizontalPresentationScale = 1f))
         val focus =
             LiveFocusInfo(
@@ -143,7 +144,7 @@ class LiveFrameMetadataOverlaysTest {
 
     @Test
     fun `vertical desqueeze keeps focus and level geometry centred in the rendered feed`() {
-        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        val content = nativeFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
         assertNotNull(content)
 
         val feed =

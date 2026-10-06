@@ -21,6 +21,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class MonitorCameraControlsTest {
     private val strings = PhoneStringResolver { resource, _ -> resource.toString() }
@@ -680,8 +681,8 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `fill content rect centre crops the exact visible feed`() {
-        val fit = liveFeedContentRect(400f, 600f, 1_920, 1_080)
-        val fill = liveFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true)
+        val fit = nativeFeedContentRect(400f, 600f, 1_920, 1_080)
+        val fill = nativeFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true)
 
         assertNotNull(fit)
         assertNotNull(fill)

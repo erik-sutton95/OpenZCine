@@ -30,6 +30,7 @@ import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import kotlin.math.roundToInt
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 /** The pure layout decisions made by [LocalFramingAssistOverlay], in the hosting monitor's local pixels. */
 internal data class LocalFramingRenderPlan(
@@ -120,7 +121,7 @@ internal fun localDesqueezePresentationRect(
  * Feed-aligned local framing overlays for the Android monitor.
  *
  * [presentationState] carries the decoded frame dimensions used by
- * [LiveFeedView], so the live monitor resolves the same `LiveFeedContentRect`
+ * [LiveFeedView], so the live monitor resolves the same `NativeFeedContentRect`
  * rather than estimating against its enclosing zone. [feedRect] is the exact
  * pixel-space seam for callers such as Media3 playback that already own the
  * decoded image's aspect-fit rectangle.
@@ -155,7 +156,7 @@ internal fun LocalFramingAssistOverlay(
                 if (presentationState == null) {
                     null
                 } else {
-                    liveFeedContentRect(
+                    nativeFeedContentRect(
                         containerWidth = maxWidth.toPx(),
                         containerHeight = maxHeight.toPx(),
                         sourceWidth = sourceWidth,

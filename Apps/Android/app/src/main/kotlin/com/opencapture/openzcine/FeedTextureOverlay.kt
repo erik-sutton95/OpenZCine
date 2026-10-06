@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 /** Source dimensions retained independently from per-frame presentation state. */
 @Immutable
@@ -71,7 +72,7 @@ internal fun feedTextureVisibleRect(
     verticalPresentationScale: Float,
 ): LiveOverlayRect? {
     val content =
-        liveFeedContentRect(
+        nativeFeedContentRect(
             containerWidth = containerWidth,
             containerHeight = containerHeight,
             sourceWidth = sourceWidth,

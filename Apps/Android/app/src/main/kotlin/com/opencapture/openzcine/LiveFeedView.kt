@@ -62,11 +62,10 @@ import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 private const val TAG = "ZCLiveFeed"
 
@@ -95,46 +94,6 @@ private const val FALSE_COLOR_REFERENCE_WIDTH = 264f
 private const val FALSE_COLOR_REFERENCE_HEIGHT = 52f
 private const val FALSE_COLOR_REFERENCE_GAP = 10f
 private const val FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE = 14f + LiveDesign.CONTROL_HEIGHT_DP
-
-/** The exact integer destination rectangle used by the feed Canvas. */
-internal data class LiveFeedContentRect(
-    val left: Int,
-    val top: Int,
-    val width: Int,
-    val height: Int,
-)
-
-/**
- * Resolves the same pixel-rounded fit or fill rectangle the feed renderer
- * draws. Feed overlays call this instead of estimating against the monitor
- * zone, which can contain letterbox space or a centre-cropped image.
- */
-internal fun liveFeedContentRect(
-    containerWidth: Float,
-    containerHeight: Float,
-    sourceWidth: Int,
-    sourceHeight: Int,
-    aspectFill: Boolean = false,
-): LiveFeedContentRect? {
-    if (containerWidth <= 0f || containerHeight <= 0f || sourceWidth <= 0 || sourceHeight <= 0) {
-        return null
-    }
-    val scale =
-        if (aspectFill) {
-            max(containerWidth / sourceWidth, containerHeight / sourceHeight)
-        } else {
-            min(containerWidth / sourceWidth, containerHeight / sourceHeight)
-        }
-    val width = (sourceWidth * scale).roundToInt()
-    val height = (sourceHeight * scale).roundToInt()
-    if (width <= 0 || height <= 0) return null
-    return LiveFeedContentRect(
-        left = ((containerWidth - width) / 2f).roundToInt(),
-        top = ((containerHeight - height) / 2f).roundToInt(),
-        width = width,
-        height = height,
-    )
-}
 
 /**
  * Presentation data paired with the bitmap that the feed actually accepted
@@ -543,8 +502,7 @@ fun LiveFeedView(
         if (BuildConfig.DEBUG) {
             Log.d(
                 TAG,
-                "hardware MJPEG decoder available: ${LiveFeedMjpegHardware.isAvailable()} " +
-                    "gpuBackend=${gpuBackend.kind} composablePresent=$preferComposablePresentation",
+                "gpuBackend=${gpuBackend.kind} composablePresent=$preferComposablePresentation",
             )
         }
         // Always decode the frame at its native size.
@@ -629,7 +587,7 @@ fun LiveFeedView(
                     ?: fallbackFrame.value?.asAndroidBitmap()
                     ?: return@Canvas
             val content =
-                liveFeedContentRect(
+                nativeFeedContentRect(
                     containerWidth = size.width,
                     containerHeight = size.height,
                     sourceWidth = androidBitmap.width,

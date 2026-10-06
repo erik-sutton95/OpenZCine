@@ -176,6 +176,7 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 /** Gives the live quick-settings panel first refusal on the system Back action. */
 @Composable
@@ -2014,7 +2015,7 @@ internal fun MonitorScreen(
             }
         }
         val feedContent =
-            liveFeedContentRect(
+            nativeFeedContentRect(
                 containerWidth = feedPointerSize.width.toFloat(),
                 containerHeight = feedPointerSize.height.toFloat(),
                 sourceWidth = liveFeedPresentation.sourceWidth,

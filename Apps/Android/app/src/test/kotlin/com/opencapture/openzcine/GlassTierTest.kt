@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 /** Pure-JVM checks of the glass tier resolution and the auto-degrade counter. */
 class GlassTierTest {
@@ -85,8 +86,8 @@ class GlassTierTest {
 
     @Test
     fun backdropUsesTheFeedRenderersFitAndFillTransforms() {
-        val fit = requireNotNull(liveFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = false))
-        val fill = requireNotNull(liveFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true))
+        val fit = requireNotNull(nativeFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = false))
+        val fill = requireNotNull(nativeFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true))
 
         assertTrue(fit.top > 0)
         assertEquals(400, fit.width)

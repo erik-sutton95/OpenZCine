@@ -69,6 +69,8 @@ import kotlin.math.atan2
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import com.opencapture.opencine.runtime.NativeFeedContentRect
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 /** A floating-point feed-local rectangle used by focus and level overlay math. */
 internal data class LiveOverlayRect(
@@ -158,7 +160,7 @@ internal fun levelGaugeBounds(
  * rectangle used by [LiveFeedView], never the broader monitor zone map.
  */
 internal fun liveOverlayFeedRect(
-    content: LiveFeedContentRect,
+    content: NativeFeedContentRect,
     horizontalPresentationScale: Float,
     verticalPresentationScale: Float = 1f,
 ): LiveOverlayRect? {
@@ -374,7 +376,7 @@ internal fun LiveFrameMetadataOverlay(
             }
         val content =
             with(density) {
-                liveFeedContentRect(
+                nativeFeedContentRect(
                     containerWidth = maxWidth.toPx(),
                     containerHeight = maxHeight.toPx(),
                     sourceWidth = presentationState.sourceWidth,

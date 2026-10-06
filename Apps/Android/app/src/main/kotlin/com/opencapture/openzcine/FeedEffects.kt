@@ -95,7 +95,7 @@ internal object ExposureCurveOrdinals {
  * core's `SplitComparisonOrientation`.
  *
  * The boundary is the centre of the **visible image rectangle**, never of the surface: every
- * backend already sets its viewport to the fitted content rect (`liveFeedContentRect` on GLES,
+ * backend already sets its viewport to the fitted content rect (`nativeFeedContentRect` on GLES,
  * the letterbox clamp in `live_feed_vk_renderer.cpp`), so splitting at the halfway line of feed
  * space excludes pillarbox, letterbox and monitor chrome by construction.
  */
