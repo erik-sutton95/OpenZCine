@@ -2,8 +2,8 @@ package com.opencapture.openzcine.media
 
 import android.content.ContentResolver
 import android.content.ContentValues
-import android.os.Environment
 import android.provider.MediaStore
+import com.opencapture.opencine.appkit.MediaStoreInsertPolicy
 import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -104,7 +104,7 @@ internal class AndroidMediaGalleryGateway(
     private val failNextWrite = AtomicBoolean(failureInjection == MediaGalleryFailureInjection.WRITE_ONCE)
 
     override fun createPending(artifact: MediaGalleryArtifact): PendingMediaGalleryItem {
-        val isImage = artifact.mimeType.startsWith("image/")
+        val isImage = MediaStoreInsertPolicy.isImage(artifact.mimeType)
         val collection =
             if (isImage) {
                 MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -115,14 +115,7 @@ internal class AndroidMediaGalleryGateway(
             ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, artifact.displayName)
                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(
-                    MediaStore.MediaColumns.RELATIVE_PATH,
-                    "${if (isImage) {
-                        Environment.DIRECTORY_PICTURES
-                    } else {
-                        Environment.DIRECTORY_MOVIES
-                    }}/$GALLERY_DIRECTORY",
-                )
+                put(MediaStore.MediaColumns.RELATIVE_PATH, GALLERY_POLICY.relativePath(artifact.mimeType))
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
                 artifact.captureTimestampMillis?.let { timestamp ->
                     put(
@@ -179,7 +172,7 @@ internal class AndroidMediaGalleryGateway(
     }
 
     private companion object {
-        const val GALLERY_DIRECTORY = "OpenZCine"
+        val GALLERY_POLICY = MediaStoreInsertPolicy("OpenZCine")
 
         /** Generic MIME retried when a provider rejects an exact raw-photo type. */
         const val FALLBACK_MIME_TYPE = "application/octet-stream"
