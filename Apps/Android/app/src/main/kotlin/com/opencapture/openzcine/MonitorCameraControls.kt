@@ -250,12 +250,6 @@ internal fun monitorTopPillPickers(
     ).toMap()
 }
 
-/** The shared-zone anchor used by an in-monitor control panel. */
-internal enum class MonitorPickerAnchor {
-    CAPTURE_STRIP,
-    CONTROLS_GRID,
-}
-
 /**
  * Projects the same typed command presentation used by DISP 3 into the five
  * controls surrounding live view.
@@ -970,7 +964,6 @@ internal fun monitorPickerFrame(
     viewport: MonitorRect,
     layout: MonitorFieldLayout,
     isPortrait: Boolean,
-    anchor: MonitorPickerAnchor,
     measuredCaptureBar: MonitorRect? = null,
 ): MonitorRect {
     val outerMargin = if (isPortrait) 12f else 8f
@@ -987,13 +980,12 @@ internal fun monitorPickerFrame(
         } else {
             viewport.y + outerMargin
         }
-    // Both anchors are the shared camera values slot; they differ in how the panel seats.
+    // The picker seats against the shared camera values slot.
     val zoneAnchor = layout.values
     // iOS uses the measured GlassPanel (`captureBarFrame`), not the zone slot.
     val measuredBar =
         measuredCaptureBar?.takeIf {
             !isPortrait &&
-                anchor == MonitorPickerAnchor.CAPTURE_STRIP &&
                 it.width > 1f &&
                 it.height > 1f
         }
@@ -1007,8 +999,7 @@ internal fun monitorPickerFrame(
     val landscapeStripTop = measuredBar?.y ?: min(layout.values.y, layout.assists.y)
     val bottomLimit =
         when {
-            isPortrait && anchor == MonitorPickerAnchor.CAPTURE_STRIP -> zoneAnchor.y - barGap
-            isPortrait -> layout.system.y - barGap
+            isPortrait -> zoneAnchor.y - barGap
             else -> landscapeStripTop - barGap
         }
     val availableHeight = max(0f, bottomLimit - topLimit)
