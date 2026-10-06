@@ -6,8 +6,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The camera-AP gate in front of Operator Setup's two in-process internet actions (the anonymous
- * bug report and Adobe sign-in). Inverting it is silent: the button still renders, the request
+ * The camera-AP gate in front of Operator Setup's in-process internet action (the Adobe
+ * sign-in). Inverting it is silent: the button still renders, the request
  * just dies against a Wi-Fi network with no route out.
  */
 class SettingsInternetHopTest {

@@ -91,38 +91,29 @@ class DiagnosticsFileProviderTest {
 
         assertFalse(actions.openSupport())
         assertFalse(actions.requestFeature())
-        assertFalse(actions.openGitHubBugReport())
-        assertFalse(actions.openSecurityAdvisory())
         assertFalse(actions.openSource())
         assertFalse(actions.openPrivacy())
         assertFalse(actions.openTerms())
     }
 
     @Test
-    fun githubBugReportUsesTheCanonicalIssueForm() {
+    fun problemReportTextCarriesClosedCodesAndKeepsOnlyNikonNetworksReadable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        val store =
+            DiagnosticEventStore(File(context.filesDir, "diagnostics-manual-${System.nanoTime()}/events.log"))
+        store.record(AndroidDiagnosticEvent.CONNECTION_CONNECTED)
+        store.recordConnectTrace("join ssid=NIKON_Z6III_1234 ok")
+        store.recordConnectTrace("join ssid=Home-Router-5G failed")
         val diagnostics =
-            AndroidAppDiagnostics.createForTest(
-                context = context,
-                store =
-                    DiagnosticEventStore(
-                        File(context.filesDir, "diagnostics-github-bug-report/events.log"),
-                    ),
-                exitReader = HistoricalProcessExitReader { emptyList() },
-            )
-        var launchedIntent: Intent? = null
-        val actions =
-            AndroidSystemSettingsActions(
-                context = context,
-                diagnostics = diagnostics,
-                intentLauncher = { intent ->
-                    launchedIntent = intent
-                    true
-                },
-            )
+            AndroidAppDiagnostics.createForTest(context, store, HistoricalProcessExitReader { emptyList() })
 
-        assertTrue(actions.openGitHubBugReport())
-        assertEquals(Intent.ACTION_VIEW, launchedIntent?.action)
-        assertEquals(AndroidSupportLinks.BUG_REPORT, launchedIntent?.dataString)
+        val text = diagnostics.boundedDiagnosticText(cameraModel = "Z 6III", phase = "connected")
+
+        assertTrue(text.contains("OpenZCine"))
+        assertTrue(text.contains("Z 6III"))
+        assertTrue(text.contains(AndroidDiagnosticEvent.CONNECTION_CONNECTED.wireValue))
+        assertTrue(text.contains("ssid=NIKON_Z6III_1234"))
+        assertFalse(text.contains("Home-Router-5G"))
+        assertTrue(text.toByteArray(Charsets.UTF_8).size <= 128 * 1_024)
     }
 }

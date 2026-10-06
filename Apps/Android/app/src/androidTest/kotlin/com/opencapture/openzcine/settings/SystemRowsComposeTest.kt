@@ -6,6 +6,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
@@ -72,6 +74,9 @@ class SystemRowsComposeTest {
             assertEquals(1, actions.privacy)
             assertEquals(1, actions.terms)
         }
+        // OpenCine's reporting rows: the automatic-reports row and the reporting privacy link.
+        compose.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Reporting Privacy").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -123,7 +128,6 @@ class SystemRowsComposeTest {
     private class RecordingSystemSettingsActions : SystemSettingsActions {
         var support = 0
         var feature = 0
-        var security = 0
         var source = 0
         var privacy = 0
         var terms = 0
@@ -132,10 +136,6 @@ class SystemRowsComposeTest {
         override fun openSupport(): Boolean = true.also { support += 1 }
 
         override fun requestFeature(): Boolean = true.also { feature += 1 }
-
-        override fun openGitHubBugReport(): Boolean = true
-
-        override fun openSecurityAdvisory(): Boolean = true.also { security += 1 }
 
         override fun openSource(): Boolean = true.also { source += 1 }
 

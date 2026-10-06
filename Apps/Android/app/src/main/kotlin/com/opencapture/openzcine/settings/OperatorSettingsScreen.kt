@@ -9,6 +9,8 @@ import com.opencapture.monitorui.settings.MonitorConnectionSettings
 import com.opencapture.monitorui.settings.MonitorLinkHealthScale
 import com.opencapture.monitorui.settings.MonitorSupportAction
 import com.opencapture.monitorui.settings.MonitorSupportSettings
+import com.opencapture.monitorui.settings.MonitorReportStatus
+import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportDelivery
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
@@ -83,9 +85,7 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioNetworkState
-import com.opencapture.openzcine.diagnostics.BugReportPathChooser
-import com.opencapture.openzcine.diagnostics.BugReportScreen
-import com.opencapture.openzcine.diagnostics.BugReportSubmitter
+import com.opencapture.openzcine.diagnostics.AppDiagnostics
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
@@ -99,18 +99,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class BugReportDestination {
-    CHOOSER,
-    ANONYMOUS,
-}
-
 /**
  * Whether an internet-backed Operator Setup action has to leave the camera's access point first
  * (iOS `requestInternetDestination`, MonitorPanels.swift:4755).
  *
- * The in-app bug report and the Adobe sign-in both transact from THIS process, and the process
- * is bound to a Wi-Fi network that has no internet at all — so they cannot reach anything until
- * the consented hop runs. External links are unaffected: the browser is a different process and
+ * The Adobe sign-in transacts from THIS process, and the process is bound to a Wi-Fi network
+ * that has no internet at all, so it cannot reach anything until the consented hop runs. External links are unaffected: the browser is a different process and
  * never sees our binding.
  */
 internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolean =
@@ -141,8 +135,7 @@ internal fun OperatorSettingsScreen(
     onDisconnect: (() -> Unit)? = null,
     onReconnect: (() -> Unit)? = null,
     systemSettingsActions: SystemSettingsActions,
-    bugReportSubmitter: BugReportSubmitter,
-    bugReportActivityLogProvider: () -> List<String> = { emptyList() },
+    onReportProblem: () -> Unit,
     liveViewGuideController: LiveViewGuideController,
     onShowGuideNow: (() -> Unit)? = null,
     onShowGuideOnNextRealFrame: () -> Unit,
@@ -193,14 +186,9 @@ internal fun OperatorSettingsScreen(
         }
     }
     var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
-    var bugReportDestination by remember { mutableStateOf<BugReportDestination?>(null) }
-    val panelScope = rememberCoroutineScope()
-    // Whether this phone is still process-bound to the camera's no-internet AP. The Storage tab
-    // reads it too, but Report a Problem is on System, so refresh once for the whole surface.
-    LaunchedEffect(frameioController) { frameioController?.refresh() }
-    // The camera rejoin runs when Operator Setup is dismissed, not when the report or the Adobe
-    // browser round trip ends: both outlive the row that started the hop (iOS re-hosts the
-    // panel as a standalone cover for the same reason — MonitorPanels.swift:4919-4943).
+    // The camera rejoin runs when Operator Setup is dismissed, not when the Adobe browser round
+    // trip ends: it outlives the row that started the hop (iOS re-hosts the panel as a standalone
+    // cover for the same reason, MonitorPanels.swift:4919-4943).
     DisposableEffect(frameioController) {
         onDispose {
             val controller = frameioController
@@ -209,166 +197,70 @@ internal fun OperatorSettingsScreen(
             }
         }
     }
-    var pendingReportHop by remember { mutableStateOf(false) }
-    var reportHopBusy by remember { mutableStateOf(false) }
-    var hopFailureMessage by remember { mutableStateOf<String?>(null) }
-    val hopFailureFallback = stringResource(R.string.settings_hop_failed_message)
-    // iOS `requestInternetDestination(.reportProblem)`: consent, hop, then the report.
-    val requestReportProblem: () -> Unit = {
-        if (!reportHopBusy) {
-            if (settingsActionNeedsInternetHop(frameioController?.networkState)) {
-                pendingReportHop = true
-            } else {
-                bugReportDestination = BugReportDestination.CHOOSER
-            }
-        }
-    }
 
-    when (bugReportDestination) {
-        BugReportDestination.CHOOSER ->
-            BugReportPathChooser(
-                onChooseAnonymous = { bugReportDestination = BugReportDestination.ANONYMOUS },
-                onContinueWithGitHub = systemSettingsActions::openGitHubBugReport,
-                onClose = { bugReportDestination = null },
-            )
-        BugReportDestination.ANONYMOUS ->
-            BugReportScreen(
-                submitter = bugReportSubmitter,
-                activityLogProvider = bugReportActivityLogProvider,
-                onOpenSecurityAdvisory = systemSettingsActions::openSecurityAdvisory,
-                onClose = { bugReportDestination = null },
-            )
-        null -> BoxWithConstraints(
-            Modifier.fillMaxSize()
-                .background(LiveDesign.background)
-                .pointerInput(Unit) { detectTapGestures {} }
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-        ) {
-            val compact = maxWidth < 600.dp
-            val condensed = maxHeight < 300.dp
-            val disconnected = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
-            val state by (session?.state ?: disconnected).collectAsState()
-            val linked = state is CameraSessionState.Connected
-            val phase = when (val current = state) {
-                is CameraSessionState.Connected ->
-                    linkHealth?.presentation?.detail?.takeIf { it.isNotBlank() }
-                        ?: "${current.identity.name} · ${activeTransportLabel ?: "Wi-Fi"}"
-                CameraSessionState.Connecting -> stringResource(R.string.camera_connecting_short)
-                CameraSessionState.Disconnected -> stringResource(R.string.settings_local_only)
-            }
-            MonitorSettingsPage(
-                brand = "OpenZCine",
-                selection = selectedTab,
-                onSelect = { selectedTab = it },
-                isLive = linked,
-                phaseLabel = phase,
-                disconnect = onDisconnect,
-                feedback = emitHaptic,
-                sharingSubtitle = stringResource(R.string.settings_subtitle_sharing),
-                sharingRail = "Broadcast & watchers",
-                modifier = Modifier.padding(start = 61.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
-            ) { tab ->
-                val scroll = LocalMonitorSettingsScrollContext.current
-                when (tab) {
-                    MonitorSettingsTab.SHARING -> SharingRows(
-                        session = session, sharing = relaySharing, settings = settings,
-                        enabled = relaySharingEnabled, onShareToggle = onRelayShareToggle,
-                        onInteraction = emitHaptic,
-                    )
-                    MonitorSettingsTab.LINK -> LinkRows(
-                        session, settings, linkHealth, liveViewSource, activeTransportLabel,
-                        relayWatchUi, onDisconnect, onReconnect, emitHaptic,
-                    )
-                    MonitorSettingsTab.ASSIST -> NikonViewAssistSettings(assists.shared, cameraInput, emitHaptic)
-                    MonitorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic)
-                    MonitorSettingsTab.DISPLAY -> NikonDisplaySettings(
-                        settings, assists.shared, compact, toggleSetting, emitHaptic,
-                        checkNotNull(scroll).scrollState, scroll.viewportBounds,
-                        liveCaptureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties)) {
-                            CaptureLayoutMode.PHOTO
-                        } else {
-                            CaptureLayoutMode.VIDEO
-                        },
-                        onEditView = { mode -> settings.beginChromeEditing(mode); onClose() },
-                    )
-                    MonitorSettingsTab.STORAGE -> StorageRows(
-                        mediaCacheStore, frameioController, condensed, onCompletedMediaCacheCleared,
-                    )
-                    MonitorSettingsTab.SYSTEM -> SystemRows(
-                        systemSettingsActions, requestReportProblem, liveViewGuideController,
-                        onShowGuideNow, onShowGuideOnNextRealFrame,
-                    )
-                }
-            }
-            Box(Modifier.padding(start = 16.dp, top = 22.dp)) { PanelCloseButton(onClick = onClose) }
+    BoxWithConstraints(
+        Modifier.fillMaxSize()
+            .background(LiveDesign.background)
+            .pointerInput(Unit) { detectTapGestures {} }
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+    ) {
+        val compact = maxWidth < 600.dp
+        val condensed = maxHeight < 300.dp
+        val disconnected = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
+        val state by (session?.state ?: disconnected).collectAsState()
+        val linked = state is CameraSessionState.Connected
+        val phase = when (val current = state) {
+            is CameraSessionState.Connected ->
+                linkHealth?.presentation?.detail?.takeIf { it.isNotBlank() }
+                    ?: "${current.identity.name} · ${activeTransportLabel ?: "Wi-Fi"}"
+            CameraSessionState.Connecting -> stringResource(R.string.camera_connecting_short)
+            CameraSessionState.Disconnected -> stringResource(R.string.settings_local_only)
         }
-    }
-
-    // iOS "Leave camera Wi-Fi?" (MonitorPanels.swift:3910-3925) — consent first, hop second,
-    // report third. Declining leaves the camera session exactly as it was.
-    if (pendingReportHop) {
-        val controller = frameioController
-        AlertDialog(
-            onDismissRequest = { pendingReportHop = false },
-            title = { Text(stringResource(R.string.settings_report_hop_title)) },
-            text = { Text(stringResource(R.string.settings_report_hop_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingReportHop = false
-                        if (controller == null) {
-                            hopFailureMessage = hopFailureFallback
-                        } else {
-                            reportHopBusy = true
-                            panelScope.launch {
-                                val online =
-                                    try {
-                                        controller.beginInternetHop()
-                                    } catch (_: Exception) {
-                                        false
-                                    }
-                                reportHopBusy = false
-                                if (online) {
-                                    bugReportDestination = BugReportDestination.CHOOSER
-                                } else {
-                                    hopFailureMessage =
-                                        controller.errorMessage ?: hopFailureFallback
-                                }
-                            }
-                        }
+        MonitorSettingsPage(
+            brand = "OpenZCine",
+            selection = selectedTab,
+            onSelect = { selectedTab = it },
+            isLive = linked,
+            phaseLabel = phase,
+            disconnect = onDisconnect,
+            feedback = emitHaptic,
+            sharingSubtitle = stringResource(R.string.settings_subtitle_sharing),
+            sharingRail = "Broadcast & watchers",
+            modifier = Modifier.padding(start = 61.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
+        ) { tab ->
+            val scroll = LocalMonitorSettingsScrollContext.current
+            when (tab) {
+                MonitorSettingsTab.SHARING -> SharingRows(
+                    session = session, sharing = relaySharing, settings = settings,
+                    enabled = relaySharingEnabled, onShareToggle = onRelayShareToggle,
+                    onInteraction = emitHaptic,
+                )
+                MonitorSettingsTab.LINK -> LinkRows(
+                    session, settings, linkHealth, liveViewSource, activeTransportLabel,
+                    relayWatchUi, onDisconnect, onReconnect, emitHaptic,
+                )
+                MonitorSettingsTab.ASSIST -> NikonViewAssistSettings(assists.shared, cameraInput, emitHaptic)
+                MonitorSettingsTab.CONTROLS -> ControlsRows(settings, emitHaptic)
+                MonitorSettingsTab.DISPLAY -> NikonDisplaySettings(
+                    settings, assists.shared, compact, toggleSetting, emitHaptic,
+                    checkNotNull(scroll).scrollState, scroll.viewportBounds,
+                    liveCaptureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties)) {
+                        CaptureLayoutMode.PHOTO
+                    } else {
+                        CaptureLayoutMode.VIDEO
                     },
-                ) {
-                    Text(stringResource(R.string.action_continue))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingReportHop = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-    // Leaving an AP and waiting for a validated route takes seconds, not milliseconds. Without
-    // this the Report pill looks dead and gets tapped again.
-    if (reportHopBusy) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text(stringResource(R.string.frameio_switching_networks)) },
-            text = { Text(stringResource(R.string.settings_hop_progress_message)) },
-            confirmButton = {},
-        )
-    }
-    hopFailureMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = { hopFailureMessage = null },
-            title = { Text(stringResource(R.string.settings_hop_failed_title)) },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { hopFailureMessage = null }) {
-                    Text(stringResource(R.string.action_ok))
-                }
-            },
-        )
+                    onEditView = { mode -> settings.beginChromeEditing(mode); onClose() },
+                )
+                MonitorSettingsTab.STORAGE -> StorageRows(
+                    mediaCacheStore, frameioController, condensed, onCompletedMediaCacheCleared,
+                )
+                MonitorSettingsTab.SYSTEM -> SystemRows(
+                    systemSettingsActions, onReportProblem, liveViewGuideController,
+                    onShowGuideNow, onShowGuideOnNextRealFrame, emitHaptic,
+                )
+            }
+        }
+        Box(Modifier.padding(start = 16.dp, top = 22.dp)) { PanelCloseButton(onClick = onClose) }
     }
 }
 
@@ -949,6 +841,7 @@ internal fun SystemRows(
     guideController: LiveViewGuideController,
     onShowGuideNow: (() -> Unit)?,
     onShowGuideOnNextRealFrame: () -> Unit,
+    feedback: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val unavailableMessage = stringResource(R.string.system_action_unavailable)
@@ -962,9 +855,22 @@ internal fun SystemRows(
         }
     }
 
+    var automaticReports by remember { mutableStateOf(AppDiagnostics.reporting.isOptedIn) }
+    val report by AppDiagnostics.manualReport.snapshot.collectAsState()
     MonitorSupportSettings(
+        automaticReports = automaticReports,
+        available = AppDiagnostics.reporting.isAvailable,
+        automaticHelp = stringResource(R.string.help_system_automatic_reports),
+        unavailableHelp = stringResource(R.string.help_system_automatic_reports_unavailable),
+        onAutomaticReports = { automaticReports = it; AppDiagnostics.reporting.setConsent(it) },
+        privacy = { runAction(actions::openPrivacy) },
+        status = if (report.delivery == ManualProblemReportDelivery.IDLE) null else
+            MonitorReportStatus(report.statusLabel,
+                report.detail ?: "This phone keeps one report until Sentry accepts it or you discard it.", report.eventId),
+        discard = if (report.allowsDiscard) ({ AppDiagnostics.manualReport.discard() }) else null,
+        feedback = feedback,
         reportTitle = stringResource(R.string.system_report_problem),
-        reportHelp = "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue.",
+        reportHelp = stringResource(R.string.help_system_report_problem),
         reportActionTitle = stringResource(R.string.action_report),
         report = onReportProblem,
         actions = listOf(

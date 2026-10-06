@@ -113,17 +113,9 @@ reports (off by default, asked once at launch) take the same route. A build with
 reports, set `SENTRY_DSN` in `ios/Runner/Reliability.local.xcconfig` (see the `.example` file),
 as OpenPocketCine does.
 
-On Android, **Report a Problem** is a separate, explicit flow. A tester can choose an anonymous
-in-app report that sends entered text plus coarse app/platform context, and may opt into a closed
-privacy-filtered activity-event snapshot or selected screenshots, or choose a [signed-in GitHub
-issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) with richer
-optional details. Both create public GitHub issues. The anonymous route never uploads the local
-MetricKit report, raw breadcrumbs, arbitrary logs, original image bytes, or media. Its optional
-snapshot contains only closed event and incident codes. The relay renders fixed operational traces
-for incidents without receiving raw stacks, exception messages, paths, addresses, or timestamps.
-Selected screenshots are re-rendered to remove embedded file metadata but their visible content
-remains public. Testers must not include passwords, pairing codes, private media, or security
-vulnerabilities in either route.
+Android uses the same form and automatic reports. For a Play build with reports, set the
+`SENTRY_DSN_ANDROID` repository secret (the Play Internal workflow passes it to Gradle) or, locally,
+`SENTRY_DSN_ANDROID` in the environment or in `.local/reliability.properties`.
 
 ## GitHub Actions (fallback)
 
