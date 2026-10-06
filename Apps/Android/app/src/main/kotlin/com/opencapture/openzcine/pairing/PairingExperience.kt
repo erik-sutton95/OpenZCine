@@ -107,6 +107,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.monitorui.MonitorIcon
 
 /** Saved camera-AP credential surface the wizard needs (real: [CameraWifiCredentialStore]). */
 public interface PairingCredentials {
@@ -1653,11 +1654,7 @@ private fun PermissionsBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                StartupGlyph(
-                    StartupGlyphKind.SHIELD,
-                    tint = StartupColors.accent,
-                    modifier = Modifier.size(13.dp),
-                )
+                MonitorIcon(MonitorIcon.LOCK, null, Modifier.size(13.dp), StartupColors.accent)
                 Text(
                     stringResource(R.string.pairing_permissions_group),
                     color = StartupColors.muted,
@@ -1667,7 +1664,7 @@ private fun PermissionsBody(
             }
             if (cameraRequired) {
                 PermissionRow(
-                    glyph = StartupGlyphKind.CAMERA,
+                    glyph = MonitorIcon.CAMERA,
                     title = stringResource(R.string.pairing_permission_camera),
                     detail = stringResource(R.string.pairing_permission_camera_detail),
                     granted = cameraGranted,
@@ -1682,7 +1679,7 @@ private fun PermissionsBody(
                 )
             }
             PermissionRow(
-                glyph = StartupGlyphKind.WIFI,
+                glyph = MonitorIcon.WIFI,
                 title = stringResource(PairingCopy.permissionTitle),
                 detail = stringResource(PairingCopy.permissionDetail),
                 granted = nearbyGranted,
@@ -1703,7 +1700,7 @@ private fun PermissionsBody(
 
 @Composable
 private fun PermissionRow(
-    glyph: StartupGlyphKind,
+    glyph: MonitorIcon,
     title: String,
     detail: String,
     granted: Boolean,
@@ -1722,7 +1719,7 @@ private fun PermissionRow(
                 .background(StartupColors.accent.copy(alpha = 0.14f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(15.dp))
+            MonitorIcon(glyph, null, Modifier.size(15.dp), StartupColors.accent)
         }
         Column(Modifier.weight(1f)) {
             Text(
@@ -1854,14 +1851,15 @@ private fun PathChoiceCard(
                 .background(StartupColors.accent.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
-            StartupGlyph(
-                kind =
+            MonitorIcon(
+                icon =
                     when (card) {
-                        PairingCard.WIRELESS -> StartupGlyphKind.ANTENNA
-                        PairingCard.CABLE_LINK -> StartupGlyphKind.CABLE
+                        PairingCard.WIRELESS -> MonitorIcon.RADIO
+                        PairingCard.CABLE_LINK -> MonitorIcon.CABLE
                     },
-                tint = StartupColors.accent,
+                contentDescription = null,
                 modifier = Modifier.size(if (tight) 15.dp else 19.dp),
+                tint = StartupColors.accent,
             )
         }
         Spacer(Modifier.height(if (tight) 5.dp else 10.dp))
@@ -2025,25 +2023,25 @@ private fun NetworkBody(path: PairingPath) {
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> {
                 DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
+                    glyph = MonitorIcon.APERTURE,
                     label = stringResource(R.string.pairing_on_camera),
                     steps = listOf(stringResource(R.string.pairing_network_ap_camera_1)),
                 )
                 DeviceInstructionCard(
-                    glyph = StartupGlyphKind.PHONE,
+                    glyph = MonitorIcon.SMARTPHONE,
                     label = stringResource(R.string.pairing_on_phone),
                     steps = listOf(stringResource(R.string.pairing_network_ap_phone_1)),
                 )
             }
             PairingPath.PHONE_HOTSPOT ->
                 DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
+                    glyph = MonitorIcon.APERTURE,
                     label = stringResource(R.string.pairing_on_camera),
                     steps = PairingCopy.hotspotCameraSteps.map { stringResource(it) },
                 )
             PairingPath.USB_C -> {
                 DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
+                    glyph = MonitorIcon.APERTURE,
                     label = stringResource(R.string.pairing_on_camera),
                     steps =
                         listOf(
@@ -2052,7 +2050,7 @@ private fun NetworkBody(path: PairingPath) {
                         ),
                 )
                 DeviceInstructionCard(
-                    glyph = StartupGlyphKind.PHONE,
+                    glyph = MonitorIcon.SMARTPHONE,
                     label = stringResource(R.string.pairing_on_phone),
                     steps = listOf(stringResource(R.string.pairing_network_usb_phone_1)),
                 )
@@ -2063,12 +2061,12 @@ private fun NetworkBody(path: PairingPath) {
                 // Nothing to join from here: both devices are already on someone else's network,
                 // so this step is a check rather than an action.
                 DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
+                    glyph = MonitorIcon.APERTURE,
                     label = stringResource(R.string.pairing_on_camera),
                     steps = listOf(stringResource(R.string.pairing_network_router_camera_1)),
                 )
                 DeviceInstructionCard(
-                    glyph = StartupGlyphKind.PHONE,
+                    glyph = MonitorIcon.SMARTPHONE,
                     label = stringResource(R.string.pairing_on_phone),
                     steps = listOf(stringResource(R.string.pairing_network_router_phone_1)),
                 )
@@ -2080,7 +2078,7 @@ private fun NetworkBody(path: PairingPath) {
 /** Device-labelled numbered instruction card (iOS `StartupWizardDeviceInstructionCard`). */
 @Composable
 private fun DeviceInstructionCard(
-    glyph: StartupGlyphKind,
+    glyph: MonitorIcon,
     label: String,
     steps: List<String>,
 ) {
@@ -2094,7 +2092,7 @@ private fun DeviceInstructionCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(16.dp))
+            MonitorIcon(glyph, null, Modifier.size(16.dp), StartupColors.accent)
             Text(
                 label,
                 color = StartupColors.ink,
@@ -2194,7 +2192,7 @@ private fun DiscoverBody(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
             EmptyDiscoveryCard(
-                glyph = StartupGlyphKind.ANTENNA,
+                glyph = MonitorIcon.RADIO,
                 title = stringResource(R.string.pairing_looking_for_cameras),
                 // A diagnosis the moment the search has one. "Still looking" is honest only
                 // while nothing is known; once a sweep has proved the subnet silent, or proved
@@ -2224,11 +2222,7 @@ private fun DiscoverBody(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    StartupGlyph(
-                        StartupGlyphKind.CAMERA,
-                        tint = StartupColors.accent,
-                        modifier = Modifier.size(20.dp),
-                    )
+                    MonitorIcon(MonitorIcon.CAMERA, null, Modifier.size(20.dp), StartupColors.accent)
                     Column(Modifier.weight(1f)) {
                         Text(
                             camera.name,
@@ -2279,7 +2273,7 @@ private fun HdmiDiscoverBody(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!captureReady) {
             EmptyDiscoveryCard(
-                glyph = StartupGlyphKind.CABLE,
+                glyph = MonitorIcon.CABLE,
                 title = stringResource(R.string.pairing_waiting_hdmi),
                 detail = stringResource(R.string.pairing_waiting_hdmi_detail),
             )
@@ -2292,11 +2286,7 @@ private fun HdmiDiscoverBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                StartupGlyph(
-                    StartupGlyphKind.CABLE,
-                    tint = StartupColors.accent,
-                    modifier = Modifier.size(20.dp),
-                )
+                MonitorIcon(MonitorIcon.CABLE, null, Modifier.size(20.dp), StartupColors.accent)
                 Column(Modifier.weight(1f)) {
                     Text(
                         stringResource(R.string.pairing_hdmi_device_title),
@@ -2333,7 +2323,7 @@ private fun UsbDiscoverBody(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
             EmptyDiscoveryCard(
-                glyph = StartupGlyphKind.CABLE,
+                glyph = MonitorIcon.CABLE,
                 title = stringResource(R.string.pairing_waiting_usb),
                 detail = stringResource(R.string.pairing_waiting_usb_detail),
             )
@@ -2400,7 +2390,7 @@ private fun UsbDiscoverBody(
 
 /** Centered icon + copy card while discovery waits (iOS `StartupEmptyDiscoveryCard`). */
 @Composable
-private fun EmptyDiscoveryCard(glyph: StartupGlyphKind, title: String, detail: String) {
+private fun EmptyDiscoveryCard(glyph: MonitorIcon, title: String, detail: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Column(
             Modifier.fillMaxWidth()
@@ -2409,7 +2399,7 @@ private fun EmptyDiscoveryCard(glyph: StartupGlyphKind, title: String, detail: S
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(26.dp))
+            MonitorIcon(glyph, null, Modifier.size(26.dp), StartupColors.accent)
             Text(
                 title,
                 color = StartupColors.ink,
