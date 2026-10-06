@@ -794,7 +794,7 @@ internal fun cameraWifiScannerFailure(fault: CameraWifiRecognizerFault): CameraW
  *
  * The category and the exception's own stack are exactly what a beta tester can
  * pull with `adb logcat -s OpenZCineWifiScan`; the closed breadcrumb the caller
- * raises is what reaches an anonymous report.
+ * raises is what reaches a diagnostics or problem report.
  */
 internal fun logCameraWifiRecognizerFault(stage: String, cause: Throwable) {
     // A diagnostic must never be able to take the scanner down with it (and

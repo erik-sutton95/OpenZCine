@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- PTP-IP camera sockets stay local. The only public request is an
-      operator-initiated anonymous bug report sent to the HTTPS relay. -->
+    <!-- PTP-IP camera sockets stay local. Public requests are Frame.io delivery, a problem
+      report the operator sends, and automatic error reports after consent (both to Sentry). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Camera-AP join: WifiNetworkSpecifier requestNetwork + bindProcessToNetwork. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
@@ -117,6 +117,10 @@
                     android:host="${frameioRedirectHost}" />
             </intent-filter>
         </activity>
+        <!-- Manual Sentry init only after consent + DSN. Never auto-start. -->
+        <meta-data
+            android:name="io.sentry.auto-init"
+            android:value="false" />
     </application>
 
 </manifest>

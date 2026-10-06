@@ -44,12 +44,6 @@ fun frameioValue(property: String, environment: String): String =
 
 val frameioClientID = frameioValue("frameio.clientId", "FRAMEIO_CLIENT_ID")
 val frameioRedirectURI = frameioValue("frameio.redirectUri", "FRAMEIO_REDIRECT_URI")
-// The anonymous-report relay is public by design: GitHub App credentials stay
-// server-side. Builds may override the URL for a reviewed staging relay, but a
-// fresh clone always targets the production endpoint.
-val bugReportEndpoint =
-    (findProperty("bugReport.endpoint") as? String)
-        ?: "https://reports.openzcine.app/v1/bug-reports"
 val frameioRedirect = runCatching { URI(frameioRedirectURI) }.getOrNull()
 val configuredFrameioScheme = frameioRedirect?.scheme?.takeIf { scheme ->
     scheme.matches(Regex("[A-Za-z][A-Za-z0-9+.-]*"))
@@ -104,7 +98,8 @@ android {
             "FRAMEIO_REDIRECT_SCHEME",
             quotedBuildConfig(frameioRedirectScheme),
         )
-        buildConfigField("String", "BUG_REPORT_ENDPOINT", quotedBuildConfig(bugReportEndpoint))
+        // Empty unless a build supplies one (below); without a DSN no report can be sent.
+        buildConfigField("String", "SENTRY_DSN_ANDROID", "\"\"")
 
         ndk {
             abiFilters += supportedAndroidAbi
@@ -295,6 +290,9 @@ dependencies {
     // Keystore sealing for the camera Wi-Fi keys.
     implementation(libs.opencine.platform)
     implementation(project(":wear-relay"))
+    // Sentry adapters for the shared problem report and reliability reporting (as Pocket).
+    implementation(libs.okhttp)
+    implementation(libs.sentry.android)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -337,4 +335,40 @@ dependencies {
     androidTestImplementation(project(":frozen-vulkan-donor"))
 
     debugImplementation(libs.compose.ui.test.manifest)
+}
+
+// Non-empty SENTRY_DSN_ANDROID wins; otherwise optional ignored repo-root properties (as Pocket).
+val sentryDsnAndroidField =
+    providers.environmentVariable("SENTRY_DSN_ANDROID")
+        .orElse("")
+        .zip(
+            providers.of(LocalReliabilityDsnValueSource::class.java) {
+                parameters.propertiesFile.set(repositoryRoot.resolve(".local/reliability.properties"))
+            },
+        ) { env, file ->
+            val raw = env.trim().ifEmpty { file.trim() }
+            val escaped = raw.replace("\\", "\\\\").replace("\"", "\\\"")
+            com.android.build.api.variant.BuildConfigField("String", "\"$escaped\"", "optional Sentry Android DSN")
+        }
+
+androidComponents {
+    onVariants { variant -> variant.buildConfigFields?.put("SENTRY_DSN_ANDROID", sentryDsnAndroidField) }
+}
+
+abstract class LocalReliabilityDsnValueSource :
+    ValueSource<String, LocalReliabilityDsnValueSource.Params> {
+    interface Params : ValueSourceParameters {
+        @get:org.gradle.api.tasks.Optional
+        @get:InputFile
+        @get:PathSensitive(PathSensitivity.NONE)
+        val propertiesFile: RegularFileProperty
+    }
+
+    override fun obtain(): String {
+        val file = parameters.propertiesFile.orNull?.asFile ?: return ""
+        if (!file.isFile) return ""
+        val props = Properties()
+        file.inputStream().use { props.load(it) }
+        return props.getProperty("SENTRY_DSN_ANDROID")?.trim().orEmpty()
+    }
 }

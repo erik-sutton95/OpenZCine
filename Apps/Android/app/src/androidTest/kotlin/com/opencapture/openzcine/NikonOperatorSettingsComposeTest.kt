@@ -38,7 +38,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.FakeCameraSession
-import com.opencapture.openzcine.diagnostics.BugReportSubmitter
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.settings.OperatorSettings
@@ -442,7 +441,7 @@ class NikonOperatorSettingsComposeTest {
                     session = session, assists = assists,
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,
-                    bugReportSubmitter = BugReportSubmitter { error("This page fixture never submits a report") },
+                    onReportProblem = {},
                     liveViewGuideController = guide, onShowGuideOnNextRealFrame = {},
                     initialTab = initial, onClose = {},
                 )
@@ -464,8 +463,6 @@ class NikonOperatorSettingsComposeTest {
     private object NoExternalActions : SystemSettingsActions {
         override fun openSupport(): Boolean = false
         override fun requestFeature(): Boolean = false
-        override fun openGitHubBugReport(): Boolean = false
-        override fun openSecurityAdvisory(): Boolean = false
         override fun openSource(): Boolean = false
         override fun openPrivacy(): Boolean = false
         override fun openTerms(): Boolean = false

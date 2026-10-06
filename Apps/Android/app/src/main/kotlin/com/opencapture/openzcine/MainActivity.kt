@@ -72,7 +72,9 @@ import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
-import com.opencapture.openzcine.diagnostics.AndroidBugReportClient
+import com.opencapture.openzcine.diagnostics.AppDiagnostics
+import com.opencapture.opencine.appkit.diagnostics.AutomaticReportsPrompt
+import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportDialog
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 import com.opencapture.openzcine.media.AndroidMediaGalleryGateway
@@ -203,6 +205,7 @@ class MainActivity : ComponentActivity() {
         SwiftCore.isAvailable
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
         diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
+        AppDiagnostics.install(applicationContext)
         publishFrameioRedirect(intent)
         if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
         // Camera-monitor chrome owns the whole panel, like the iOS shell:
@@ -411,10 +414,7 @@ class MainActivity : ComponentActivity() {
                     remember {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
                     }
-                val bugReportSubmitter =
-                    remember {
-                        AndroidBugReportClient(applicationContext)
-                    }
+                var showProblemReport by remember { mutableStateOf(false) }
                 LaunchedEffect(debugLiveGuideStep) {
                     debugLiveGuideStep?.let(liveViewGuide::forceForDebug)
                 }
@@ -849,9 +849,7 @@ class MainActivity : ComponentActivity() {
                                 // moment the row exists to report (iOS `linkRows`).
                                 relayWatchUi = watchUi,
                                 systemSettingsActions = systemSettingsActions,
-                                bugReportSubmitter = bugReportSubmitter,
-                                bugReportActivityLogProvider =
-                                    diagnostics::privacyFilteredActivityLog,
+                                onReportProblem = { showProblemReport = true },
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =
                                     liveViewGuide::replayOnNextRealFrame,
@@ -989,7 +987,10 @@ class MainActivity : ComponentActivity() {
                         }
                         DisposableEffect(active) {
                             diagnostics.record(AndroidDiagnosticEvent.MONITOR_PRESENTED)
+                            // Automatic reports and a queued problem report wait while a session is held.
+                            AppDiagnostics.reporting.setCameraSessionActive(true)
                             onDispose {
+                                AppDiagnostics.reporting.setCameraSessionActive(false)
                                 liveViewGuide.onRealFrameUnavailable()
                                 diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED)
                             }
@@ -1304,8 +1305,7 @@ class MainActivity : ComponentActivity() {
                                                 { disconnectToSavedCameraHome(true) }
                                             },
                                         systemSettingsActions = systemSettingsActions,
-                                        bugReportSubmitter = bugReportSubmitter,
-                                        bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
+                                        onReportProblem = { showProblemReport = true },
                                         liveViewGuideController = liveViewGuide,
                                         onShowGuideNow = {
                                             liveViewGuide.replayNow()
@@ -1408,8 +1408,7 @@ class MainActivity : ComponentActivity() {
                             // intent can still force a specific tab.
                             initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,
                             systemSettingsActions = systemSettingsActions,
-                            bugReportSubmitter = bugReportSubmitter,
-                            bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
+                            onReportProblem = { showProblemReport = true },
                             liveViewGuideController = liveViewGuide,
                             onShowGuideOnNextRealFrame =
                                 liveViewGuide::replayOnNextRealFrame,
@@ -1427,7 +1426,7 @@ class MainActivity : ComponentActivity() {
                         PairingExperience(
                             environment = pairingEnvironment,
                             camerasModel = camerasModel,
-                            onReportProblem = { systemSettingsActions.openGitHubBugReport() },
+                            onReportProblem = { showProblemReport = true },
                             script = pairingScript,
                             onPaired = ::acceptPairedCamera,
                             onPairingProfilePrepared = ::persistPairedCameraProfile,
@@ -1479,7 +1478,7 @@ class MainActivity : ComponentActivity() {
                         actions =
                             ShellActions(
                                 diagnostics = { systemSettingsActions.shareDiagnostics() },
-                                reportProblem = { systemSettingsActions.openGitHubBugReport() },
+                                reportProblem = { showProblemReport = true },
                                 multiview = if (MulticamCoordinator.TILES > 1) multicam::begin else null,
                                 integrationAction = { cameraID, action ->
                                     when (action) {
@@ -1617,6 +1616,23 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         LaunchSplashOverlay(visible = launchSplashVisible)
+                        var showAutomaticPrompt by remember {
+                            mutableStateOf(AppDiagnostics.consent.shouldOfferAutomaticPrompt())
+                        }
+                        if (!launchSplashVisible && !multicam.presented && showAutomaticPrompt) {
+                            AutomaticReportsPrompt(
+                                product = AppDiagnostics.host.product,
+                                onPrivacy = { systemSettingsActions.openPrivacy() },
+                                onEnable = {
+                                    AppDiagnostics.reporting.setConsent(true)
+                                    showAutomaticPrompt = false
+                                },
+                                onNotNow = {
+                                    AppDiagnostics.reporting.setConsent(false)
+                                    showAutomaticPrompt = false
+                                },
+                            )
+                        }
                     }
                 }
                 // Global delivery progress (iOS MediaDeliveryGlobalOverlay) — survives
@@ -1645,6 +1661,26 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.align(Alignment.BottomCenter),
                     )
                 }
+                if (showProblemReport) {
+                    ManualProblemReportDialog(
+                        AppDiagnostics.manualReport,
+                        diagnosticText = {
+                            val state = monitorSession?.state?.value
+                            diagnostics.boundedDiagnosticText(
+                                cameraModel = (state as? CameraSessionState.Connected)?.identity?.model ?: "none",
+                                phase = when (state) {
+                                    is CameraSessionState.Connected -> "connected"
+                                    CameraSessionState.Connecting -> "connecting"
+                                    else -> "disconnected"
+                                },
+                            )
+                        },
+                        // The platform 48 dp minimum touch target, as on Nikon's settings pills.
+                        actionMinimumTouchTarget = true,
+                        onClose = { showProblemReport = false },
+                        onPrivacy = { systemSettingsActions.openPrivacy() },
+                    )
+                }
                 } // app-root Box
                 } // LocalOperatorHaptics
             } // OpenZCineTheme
@@ -1667,7 +1703,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         if (::mediaRemoteShutter.isInitialized) mediaRemoteShutter.disarm()
+        AppDiagnostics.manualReport.setForeground(false)
         super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppDiagnostics.manualReport.setForeground(true)
     }
 
     override fun onStart() {

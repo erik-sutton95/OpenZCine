@@ -204,7 +204,7 @@ public class PairingEnvironment(
  * Production [PairingEnvironment] over the real platform services.
  *
  * [phaseLogger] receives progress and failure phases. Callers must discard or
- * privately handle the detail value rather than placing it in an anonymous
+ * privately handle the detail value rather than placing it in a shared
  * report. Safe phases are also written to logcat.
  */
 public fun realPairingEnvironment(
