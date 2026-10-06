@@ -27,8 +27,8 @@ internal object AppDiagnostics {
             sourceRevision = "unknown",
             reportingDsn = BuildConfig.SENTRY_DSN_ANDROID,
             reportingClient = "openzcine-android",
-            // No support mailbox exists; the shared copy names it only when a report cannot be sent.
-            supportEmail = AndroidSupportLinks.SUPPORT,
+            // iOS ReliabilityDiagnostics.supportEmail (unconfirmed); named only when a report cannot be sent.
+            supportEmail = "support@opencapture.org",
             preferencesName = "openzcine.operator-settings",
             redact = PrivacyRedactor::redact,
         )
