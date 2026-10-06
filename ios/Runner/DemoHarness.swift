@@ -672,7 +672,7 @@ enum DemoHarness {
                     // the shell is mounted) so the self-dissolving capsule can be captured headlessly.
                     Task { @MainActor in
                         try? await Task.sleep(for: .seconds(0.5))
-                        model.scopeCapNotice += 1
+                        model.showMonitorNotice(model.scopeCapNoticeText)
                     }
                 }
                 if env["ZC_DEMO_FOCUSLOCK"] == "1" { model.focusPointLocked = true }
