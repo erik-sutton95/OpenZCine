@@ -1,31 +1,22 @@
 package com.opencapture.openzcine.media
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -33,13 +24,12 @@ import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
 import com.opencapture.openzcine.LiveDesign
-import com.opencapture.openzcine.chromeClickable
-import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
 import java.util.Locale
 import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import com.opencapture.monitorui.monitorChromeClickable
+import com.opencapture.monitorui.MonitorConfirmPopup
 
 /**
  * Camera-card deletion policy and the star-rating chrome shared by the still
@@ -316,8 +306,8 @@ internal fun ratingRefusalMessage(code: Int): String =
 private fun ratingCodeHex(code: Int): String = "0x%04X".format(code)
 
 /**
- * Destructive camera-card deletion confirmation on the media glass style —
- * matching iOS's confirmation dialog rather than a Material alert.
+ * Destructive camera-card deletion confirmation: the shared confirm card in its own window, so it
+ * sits over every overlay and Back dismisses it.
  */
 @Composable
 internal fun MediaDeleteConfirmDialog(
@@ -325,63 +315,14 @@ internal fun MediaDeleteConfirmDialog(
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
-                .chromeClickable(onClick = onDismiss),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                Modifier
-                    .padding(horizontal = 20.dp)
-                    .widthIn(max = 400.dp)
-                    .fillMaxWidth()
-                    .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                    .chromeClickable(onClick = {}) // absorb taps so the backdrop doesn't dismiss
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Text(
-                    message,
-                    style = chromeStyle(14f, FontWeight.Medium),
-                    color = LiveDesign.text,
-                )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Cancel",
-                        style = chromeStyle(13f, FontWeight.SemiBold),
-                        color = LiveDesign.muted,
-                        modifier =
-                            Modifier.glass(CircleShape)
-                                .semantics {
-                                    contentDescription = "Cancel deletion"
-                                    role = Role.Button
-                                }.chromeClickable(onClick = onDismiss)
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                    )
-                    Text(
-                        "Delete",
-                        style = chromeStyle(13f, FontWeight.SemiBold),
-                        color = Color(0xFFFF5A54),
-                        modifier =
-                            Modifier.glass(CircleShape)
-                                .semantics {
-                                    contentDescription = "Delete from the camera card"
-                                    role = Role.Button
-                                }.chromeClickable(onClick = onDelete)
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                    )
-                }
-            }
-        }
+    val haptics = LocalOperatorHaptics.current
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        MonitorConfirmPopup(
+            title = message,
+            confirmTitle = "Delete",
+            onDismiss = onDismiss,
+            onConfirm = onDelete,
+            onClickFeedback = { haptics.selection() },
+        )
     }
 }
