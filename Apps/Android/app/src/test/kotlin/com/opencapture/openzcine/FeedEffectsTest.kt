@@ -1,8 +1,12 @@
 package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorZebraUnit
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.media.MonitorLUTCube
+import com.opencapture.opencine.media.MonitorPeakingColor
+import com.opencapture.opencine.media.MonitorPeakingSense
+import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -218,5 +222,10 @@ class FeedEffectsTest {
         assertEquals(0, FeedFalseColorScale.STOPS.wireOrdinal)
         assertEquals(1, FeedFalseColorScale.IRE.wireOrdinal)
         assertEquals(2, FeedFalseColorScale.LIMITS.wireOrdinal)
+        // Peaking.Sensitivity / Peaking.Color / Zebra.StripeColor / zebra unit: the shared enum ordinal is the wire value.
+        assertEquals(listOf("LOW", "MED", "HIGH"), MonitorPeakingSense.entries.map { it.name })
+        assertEquals(listOf("WHITE", "BLUE", "RED", "GREEN"), MonitorPeakingColor.entries.map { it.name })
+        assertEquals(listOf("WHITE", "AMBER", "RED", "CYAN", "GREEN"), MonitorZebraPaint.entries.map { it.name })
+        assertEquals(listOf("NATIVE", "IRE"), MonitorZebraUnit.entries.map { it.name })
     }
 }

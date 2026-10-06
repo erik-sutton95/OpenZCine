@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorZebraUnit
 import com.opencapture.openzcine.bridge.SwiftCore
 
 /**
@@ -235,7 +236,7 @@ fun resolveFalseColorReference(
 /** Returns a camera-aware editor value; `null` preserves a valid saved setting on bridge failure. */
 fun zebraEditorValue(
     input: ExposureAssistCameraInput,
-    unit: FeedZebraUnit,
+    unit: MonitorZebraUnit,
     monitorPercent: Float,
 ): Float? {
     if (!SwiftCore.isAvailable) return null
@@ -244,17 +245,17 @@ fun zebraEditorValue(
         input.isoWireValue,
         input.baseIso,
         input.stillsToneMode,
-        unit.wireOrdinal,
+        unit.ordinal,
         monitorPercent,
     )
-    val maximum = if (unit == FeedZebraUnit.NATIVE) 255f else 100f
+    val maximum = if (unit == MonitorZebraUnit.NATIVE) 255f else 100f
     return value.takeIf { it.isFinite() && it in 0f..maximum }
 }
 
 /** Converts a user editor value through Swift without locally duplicating its mapping policy. */
 fun zebraMonitorPercent(
     input: ExposureAssistCameraInput,
-    unit: FeedZebraUnit,
+    unit: MonitorZebraUnit,
     editorValue: Float,
 ): Float? {
     if (!SwiftCore.isAvailable) return null
@@ -263,7 +264,7 @@ fun zebraMonitorPercent(
         input.isoWireValue,
         input.baseIso,
         input.stillsToneMode,
-        unit.wireOrdinal,
+        unit.ordinal,
         editorValue,
     ).takeIf { it.isFinite() && it in 0f..100f }
 }
