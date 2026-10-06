@@ -1443,7 +1443,6 @@ class MainActivity : ComponentActivity() {
                                         getString(R.string.pairing_hdmi_device_title)
                                     )
                             },
-                            onOpenSettings = { shell.open(ShellModel.Cover.SETTINGS) },
                             onShowSavedCameras =
                                 if (savedCameras.isEmpty()) {
                                     null

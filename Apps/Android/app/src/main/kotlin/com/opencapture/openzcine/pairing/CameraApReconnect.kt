@@ -125,9 +125,8 @@ private suspend fun awaitPtpPortBriefly(host: String, maxWaitMillis: Long = 2_50
  * Post-Confirm reconnect loop — My-cameras shape:
  * 1. Force-join the camera AP (release + specifier) at least once
  * 2. Settle
- * 3. Wait for PTP port
- * 4. Restore-profile-then-pair connect with short retries
- * 5. Force rejoin again after repeated Init failures
+ * 3. Restore-profile-then-pair connect with short retries
+ * 4. Force rejoin again after repeated Init failures
  */
 internal suspend fun reconnectCameraApAfterConfirm(
     rejoinSsid: String?,
@@ -138,14 +137,11 @@ internal suspend fun reconnectCameraApAfterConfirm(
     connectSavedProfile: suspend () -> Boolean,
     onPhaseReconnecting: () -> Unit,
     alwaysForceJoinFirst: Boolean = true,
-    /** Optional learned dialable host for PTP readiness; null skips the fixed-IP probe. */
-    probeHost: String? = null,
     timeoutMillis: Long = FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS,
 ): Boolean =
     withTimeoutOrNull(timeoutMillis) {
         var consecutiveInitFailures = 0
         var didInitialForceJoin = false
-        val dialableProbe = probeHost?.takeIf { CameraDiscovery.isDialableHost(it) }
         while (true) {
             onPhaseReconnecting()
             if (rejoinSsid != null) {
@@ -182,19 +178,6 @@ internal suspend fun reconnectCameraApAfterConfirm(
                     }
                     delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                 }
-            }
-            // Prefer waiting for the port before a full Init attempt when we know a host.
-            if (dialableProbe != null &&
-                !withContext(Dispatchers.IO) { probePtpIpReachable(dialableProbe) }
-            ) {
-                delay(CAMERA_AP_PTP_PROBE_INTERVAL_MILLIS)
-                consecutiveInitFailures =
-                    if (isProcessBound()) consecutiveInitFailures else 0
-                // If we never joined, force-join on next loop.
-                if (!isProcessBound() && rejoinSsid != null) {
-                    didInitialForceJoin = false
-                }
-                continue
             }
             val ok = connectSavedProfile()
             if (ok) return@withTimeoutOrNull true
